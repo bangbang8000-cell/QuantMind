@@ -1,0 +1,355 @@
+# QuantMind OSS Edition - Docker Compose
+# 单镜像部署，所有服务运行在一个容器内
+
+name: quantmind
+
+services:
+  # 1. 数据库 (PostgreSQL)
+  db:
+    image: postgres:15-alpine
+    container_name: quantmind-db
+    shm_size: 256mb
+    environment:
+      - POSTGRES_DB=${DB_NAME:-quantmind}
+      - POSTGRES_USER=${DB_USER:-quantmind}
+      - POSTGRES_PASSWORD=${DB_PASSWORD:-quantmind2026}
+      - TZ=Asia/Shanghai
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+    ports:
+      - "5432:5432"
+    networks:
+      - quantmind-net
+
+  # 2. 缓存 (Redis) - 统一实例
+  redis:
+    image: redis:7-alpine
+    container_name: quantmind-redis
+    ports:
+      - "6379:6379"
+    command: redis-server --appendonly yes --maxmemory 512mb --maxmemory-policy allkeys-lru --databases 16 --bind 0.0.0.0
+    volumes:
+      - redis-data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+    networks:
+      - quantmind-net
+
+  # 3. QuantMind 核心服务 (单镜像运行所有后端服务)
+  quantmind:
+    image: quantmind-oss:latest
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.oss
+    platform: linux/amd64
+    container_name: quantmind
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    ports:
+      - "8000:8000"  # API Gateway
+      - "8001:8001"  # Engine (Qlib回测)
+      - "8002:8002"  # Trade (交易服务)
+      - "8003:8003"  # Stream (实时行情)
+    environment:
+      # 应用配置
+      - APP_EDITION=oss
+      - APP_ENV=production
+      - SERVICE_MODE=all
+      - TZ=Asia/Shanghai
+      - PYTHONPATH=/app
+      - HOST_PROJECT_PATH=${PROJECT_ROOT:-.}
+
+      # 安全配置
+      - SECRET_KEY=${SECRET_KEY:-cbe2c739fa3a59798800aede60f68b87205653395175097802931c12858c2c52}
+      - JWT_SECRET_KEY=${JWT_SECRET_KEY:-cbe2c739fa3a59798800aede60f68b87205653395175097802931c12858c2c52}
+
+      # 数据库配置
+      - DB_DRIVER=asyncpg
+      - DB_HOST=db
+      - DB_PORT=5432
+      - DB_NAME=${DB_NAME:-quantmind}
+      - DB_USER=${DB_USER:-quantmind}
+      - DB_PASSWORD=${DB_PASSWORD:-quantmind2026}
+      - DATABASE_URL=postgresql+asyncpg://quantmind:quantmind2026@db:5432/quantmind
+
+      # 远程数据源配置（用于从官方数据库拉取增量数据）
+      - SOURCE_DATABASE_URL=${SOURCE_DATABASE_URL:-postgresql://readonly_sync:quantmind_sync_2026@139.199.75.121:5432/quantmind}
+
+      # Redis 配置
+      - REDIS_HOST=redis
+      - REDIS_PORT=6379
+      - REDIS_PASSWORD=
+
+      # 存储配置 (本地存储)
+      - STORAGE_MODE=local
+      - STORAGE_ROOT=/data
+
+      # 融资融券股票池文件路径（容器内）
+      - MARGIN_STOCK_POOL_PATH=/data/融资融券.json
+
+      # 服务端口
+      - API_PORT=8000
+      - ENGINE_PORT=8001
+      - TRADE_PORT=8002
+      - STREAM_PORT=8003
+
+      # 服务 Workers 配置
+      # AI-IDE 执行日志状态当前保存在 engine worker 进程内存中，
+      # OSS 部署需保持单 worker，避免 /start 与 /execute/logs/{job_id}
+      # 落到不同 worker 时出现 "Job not found"。
+      - API_WORKERS=1
+      - ENGINE_WORKERS=${ENGINE_WORKERS:-1}
+      - TRADE_WORKERS=1
+      - STREAM_WORKERS=1
+
+      # 服务间通信 (OSS单镜像模式使用localhost)
+      - TRADE_SERVICE_URL=http://127.0.0.1:8002
+      - ENGINE_SERVICE_URL=http://127.0.0.1:8001
+      - AI_IDE_SERVICE_URL=http://127.0.0.1:8001
+      - STREAM_SERVICE_URL=http://127.0.0.1:8003
+      - MARKET_DATA_SERVICE_URL=http://127.0.0.1:8003
+      - STRATEGY_SERVICE_URL=http://127.0.0.1:8001
+      - PORTFOLIO_SERVICE_URL=http://127.0.0.1:8002
+      - USER_SERVICE_URL=http://127.0.0.1:8002
+      - REAL_TRADING_SERVICE_URL=http://127.0.0.1:8002
+
+      # 调试配置
+      - DEBUG=false
+      - LOG_LEVEL=INFO
+
+      # 策略模板目录
+      - STRATEGY_TEMPLATES_DIR=/app/strategy_templates
+
+      # 回测结果存储目录（使用共享卷）
+      - QLIB_BACKTEST_RESULT_DIR=/data/backtest_results
+
+      # 本地 Docker 训练编排（模型训练）
+      - INTERNAL_CALL_SECRET=${INTERNAL_CALL_SECRET:-quantmind-internal-secret}
+      - TRAINING_IMAGE=${TRAINING_IMAGE:-quantmind-oss:latest}
+      - TRAINING_DOCKER_NETWORK=${TRAINING_DOCKER_NETWORK:-quantmind_quantmind-net}
+      - HOST_PROJECT_PATH=${PROJECT_ROOT:-.}
+      - QUANTMIND_API_BASE_URL=${QUANTMIND_API_BASE_URL:-http://quantmind:8000}
+
+      # Qwen/DashScope API (用于 AI 策略功能)
+      # 使用 mock key 允许服务启动，用户需在个人中心配置真实 API key
+      - DASHSCOPE_API_KEY=${DASHSCOPE_API_KEY:-mock-api-key-not-configured}
+      - QWEN_API_KEY=${QWEN_API_KEY:-mock-api-key-not-configured}
+
+      # AI-IDE Chat LLM 配置（默认 DeepSeek）
+      - AI_IDE_LLM_BASE_URL=${AI_IDE_LLM_BASE_URL:-https://api.deepseek.com}
+      - AI_IDE_LLM_MODEL=${AI_IDE_LLM_MODEL:-deepseek-v4-pro}
+      - AI_IDE_LLM_API_KEY=${AI_IDE_LLM_API_KEY:-mock-api-key-not-configured}
+
+      # 市值单位配置：数据库存储单位为元，1亿=100,000,000
+      - AI_STRATEGY_TOTAL_MV_PER_YI=100000000.0
+
+      # QuantBot 代理（QwenPaw 机器人集成）
+      # qwenpaw 容器已加入同一网络，通过 http://qwenpaw:8088 访问
+      - COPAW_BASE_URL=${COPAW_BASE_URL:-http://qwenpaw:8088}
+      - QWENPAW_BASE_URL=${QWENPAW_BASE_URL:-http://qwenpaw:8088}
+      # QwenPaw 上游认证信息（按需配置）
+      - QWENPAW_AUTH_USERNAME=${QWENPAW_AUTH_USERNAME:-}
+      - QWENPAW_AUTH_PASSWORD=${QWENPAW_AUTH_PASSWORD:-}
+      # QwenPaw 共享文件目录
+      - QWENPAW_SHARED_FILES_DIR=/qwenpaw-shared
+    volumes:
+      # 运行时数据
+      - ./data:/data
+      # AI 模型文件 (按需下载)
+      - ./models:/app/models
+      # Qlib 历史数据 (按需下载)
+      - ./db:/app/db
+      # 日志
+      - ./logs:/app/logs
+      # 后端代码 (外挂载解决热更新问题)
+      - ./backend:/app/backend
+      - ./config:/app/config
+      - ./scripts:/app/scripts
+      # 策略模板
+      - ./strategy_templates:/app/strategy_templates
+      # 用户股票池文件 (AI策略生成)
+      - ./user_pools_local:/app/user_pools_local
+      # RD-Agent 源码（宿主已安装 editable mode，需读写以支持 editable install）
+      - ./rd-agent:/app/rd-agent
+      # 允许 API 容器调用宿主机 Docker 启动训练容器
+      - /var/run/docker.sock:/var/run/docker.sock
+      # QwenPaw 共享文件目录
+      - qwenpaw-shared:/qwenpaw-shared
+    restart: unless-stopped
+    networks:
+      - quantmind-net
+
+  # 4. Celery Worker (Qlib 回测任务)
+  celery-worker:
+    image: quantmind-oss:latest
+    platform: linux/amd64
+    container_name: quantmind-celery
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    environment:
+      # 应用配置
+      - APP_EDITION=oss
+      - APP_ENV=production
+      - TZ=Asia/Shanghai
+      - PYTHONPATH=/app
+
+      # 数据库配置
+      - DB_DRIVER=asyncpg
+      - DB_HOST=db
+      - DB_PORT=5432
+      - DB_NAME=${DB_NAME:-quantmind}
+      - DB_USER=${DB_USER:-quantmind}
+      - DB_PASSWORD=${DB_PASSWORD:-quantmind2026}
+      - DATABASE_URL=postgresql+asyncpg://quantmind:quantmind2026@db:5432/quantmind
+
+      # Redis 配置
+      - REDIS_HOST=redis
+      - REDIS_PORT=6379
+      - REDIS_PASSWORD=
+
+      # 存储配置
+      - STORAGE_MODE=local
+      - STORAGE_ROOT=/data
+
+      # 融资融券股票池文件路径（容器内）
+      - MARGIN_STOCK_POOL_PATH=/data/融资融券.json
+
+      # 策略模板目录
+      - STRATEGY_TEMPLATES_DIR=/app/strategy_templates
+
+      # 回测结果存储目录（使用共享卷）
+      - QLIB_BACKTEST_RESULT_DIR=/data/backtest_results
+
+      # 本地 Docker 训练编排（模型训练）
+      - INTERNAL_CALL_SECRET=${INTERNAL_CALL_SECRET:-quantmind-internal-secret}
+      - TRAINING_IMAGE=${TRAINING_IMAGE:-quantmind-oss:latest}
+      - TRAINING_DOCKER_NETWORK=${TRAINING_DOCKER_NETWORK:-quantmind_quantmind-net}
+      - HOST_PROJECT_PATH=${PROJECT_ROOT:-.}
+      - QUANTMIND_API_BASE_URL=${QUANTMIND_API_BASE_URL:-http://quantmind:8000}
+
+      # 回测进度回调地址（OSS 模式使用 quantmind 容器名）
+      - BACKTEST_PROGRESS_URL=http://quantmind:8001
+
+      # Qwen/DashScope API (mock key 允许启动，用户需配置真实 key)
+      - DASHSCOPE_API_KEY=${DASHSCOPE_API_KEY:-mock-api-key-not-configured}
+      - QWEN_API_KEY=${QWEN_API_KEY:-mock-api-key-not-configured}
+
+      # AI-IDE Chat LLM 配置
+      - AI_IDE_LLM_BASE_URL=${AI_IDE_LLM_BASE_URL:-https://api.deepseek.com}
+      - AI_IDE_LLM_MODEL=${AI_IDE_LLM_MODEL:-deepseek-v4-pro}
+      - AI_IDE_LLM_API_KEY=${AI_IDE_LLM_API_KEY:-mock-api-key-not-configured}
+    volumes:
+      # 运行时数据
+      - ./data:/data
+      # AI 模型文件
+      - ./models:/app/models
+      # Qlib 历史数据
+      - ./db:/app/db
+      # 日志
+      - ./logs:/app/logs
+      # 后端代码
+      - ./backend:/app/backend
+      - ./config:/app/config
+      - ./scripts:/app/scripts
+      # 策略模板
+      - ./strategy_templates:/app/strategy_templates
+      # 用户股票池文件 (AI策略生成)
+      - ./user_pools_local:/app/user_pools_local
+    command: celery -A backend.services.engine.qlib_app.celery_config:celery_app worker -Q ${QLIB_CELERY_QUEUE:-qlib_backtest_srv} --loglevel=info --concurrency=4
+    healthcheck:
+      test: ["CMD-SHELL", "pgrep -f 'celery.*worker' || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+    restart: unless-stopped
+    networks:
+      - quantmind-net
+
+  # 5. QwenPaw (QuantBot 聊天机器人)
+  qwenpaw:
+    image: agentscope/qwenpaw:latest
+    container_name: qwenpaw
+    ports:
+      - "127.0.0.1:8089:8088"
+    networks:
+      quantmind-net:
+        aliases:
+          - copaw
+    environment:
+      # QuantMind 代码库和数据库访问（与 quantmind 容器一致）
+      - PYTHONPATH=/app
+      - DB_DRIVER=asyncpg
+      - DB_HOST=db
+      - DB_PORT=5432
+      - DB_NAME=${DB_NAME:-quantmind}
+      - DB_USER=${DB_USER:-quantmind}
+      - DB_PASSWORD=${DB_PASSWORD:-quantmind2026}
+      - DATABASE_URL=postgresql+asyncpg://quantmind:quantmind2026@db:5432/quantmind
+      - REDIS_HOST=redis
+      - REDIS_PORT=6379
+      - REDIS_PASSWORD=
+      - STORAGE_MODE=local
+      - STORAGE_ROOT=/data
+      - MARGIN_STOCK_POOL_PATH=/data/融资融券.json
+      - STRATEGY_TEMPLATES_DIR=/app/strategy_templates
+      - QLIB_BACKTEST_RESULT_DIR=/data/backtest_results
+      - INTERNAL_CALL_SECRET=${INTERNAL_CALL_SECRET:-quantmind-internal-secret}
+      - QUANTMIND_API_BASE_URL=http://quantmind:8000
+      - QWENPAW_SHARED_FILES_DIR=/qwenpaw-shared
+      # 远程数据源（用于数据同步脚本）
+      - SOURCE_DATABASE_URL=${SOURCE_DATABASE_URL:-postgresql://readonly_sync:quantmind_sync_2026@139.199.75.121:5432/quantmind}
+      - SYNC_MAX_DAYS=30
+      - TZ=Asia/Shanghai
+    volumes:
+      # QwenPaw 自有数据
+      - qwenpaw-data:/app/working
+      - qwenpaw-secrets:/app/working.secret
+      - qwenpaw-backups:/app/working.backups
+      # QuantMind 代码库（只读，避免误修改）
+      - ./backend:/app/backend:ro
+      - ./config:/app/config:ro
+      - ./scripts:/app/scripts:ro
+      - ./strategy_templates:/app/strategy_templates:ro
+      - ./CLAUDE.md:/app/CLAUDE.md:ro
+      # RD-Agent 源码（只读）
+      # RD-Agent 源码（只读）
+      - ./rd-agent:/app/rd-agent:ro
+      # QuantMind 数据（读写）
+      - ./data:/data
+      - ./db:/app/db
+      - ./models:/app/models
+      - ./logs:/app/logs
+      - ./user_pools_local:/app/user_pools_local
+      # 共享文件目录
+      - qwenpaw-shared:/qwenpaw-shared
+      # 允许调用宿主机 Docker（启动训练容器等）
+      - /var/run/docker.sock:/var/run/docker.sock
+    restart: unless-stopped
+
+networks:
+  quantmind-net:
+    driver: bridge
+
+volumes:
+  postgres-data:
+  redis-data:
+  qwenpaw-data:
+  qwenpaw-secrets:
+  qwenpaw-backups:
+  qwenpaw-shared:
