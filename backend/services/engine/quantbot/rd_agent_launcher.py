@@ -9,9 +9,6 @@ from pathlib import Path
 from typing import Any
 
 from backend.services.engine.quantbot.task_store import QuantBotTaskStore
-from backend.services.engine.qlib_app.services.rd_agent_persistence import (
-    RDAgentFactorPersistence,
-)
 
 logger = logging.getLogger(__name__)
 
@@ -34,7 +31,6 @@ class RDAgentLauncher:
 
     def __init__(self):
         self.task_store = QuantBotTaskStore()
-        self.factor_persistence = RDAgentFactorPersistence()
         self._running_tasks: dict[str, asyncio.Task] = {}
 
     async def launch_evolution(
@@ -55,10 +51,17 @@ class RDAgentLauncher:
 
                 await self.task_store.update_status(task_id, "running", progress="正在启动因子演化循环...")
 
-                # 2. 确定 RD-Agent 工作目录
+                # 2. 确认 rdagent 模块已安装
                 rd_agent_dir = self._find_rd_agent_dir()
-                if not rd_agent_dir:
-                    raise RuntimeError("RD-Agent 目录未找到，请确认 rd-agent 已正确部署")
+                if rd_agent_dir is None:
+                    # Check if rdagent is importable
+                    try:
+                        import importlib
+                        importlib.import_module("rdagent")
+                    except ImportError:
+                        raise RuntimeError(
+                            "rdagent 模块未安装。请在 Dockerfile 中执行: pip install ./rd-agent"
+                        )
 
                 # 3. 构建命令行
                 loop_n = request.get("constraints", {}).get("loop_n", 5)
@@ -69,7 +72,7 @@ class RDAgentLauncher:
                 ]
 
                 env = os.environ.copy()
-                env["PYTHONPATH"] = f"{rd_agent_dir}:{env.get('PYTHONPATH', '')}"
+                # rdagent is pip installed, no need to modify PYTHONPATH
 
                 await self.task_store.update_status(
                     task_id, "running", progress=f"演化循环进行中 (共 {loop_n} 轮)..."
@@ -80,7 +83,7 @@ class RDAgentLauncher:
                     *cmd,
                     stdout=subprocess.PIPE,
                     stderr=subprocess.STDOUT,
-                    cwd=rd_agent_dir,
+                    cwd="/tmp",  # Run from /tmp since rdagent is globally installed
                     env=env,
                 )
 
@@ -153,17 +156,12 @@ class RDAgentLauncher:
         return seed_path
 
     def _find_rd_agent_dir(self) -> str | None:
-        """查找 RD-Agent 目录"""
-        candidates = [
-            "/app/rd-agent",           # 容器内路径
-            "/opt/quantmind/rd-agent", # 宿主机路径
-            Path(__file__).parent.parent.parent.parent.parent / "rd-agent",
-        ]
-        for p in candidates:
-            p = Path(p) if isinstance(p, str) else p
-            if (p / "rdagent").exists() or (p / "pyproject.toml").exists():
-                return str(p)
-        return None
+        """确认 rdagent 模块可用（已 pip install）"""
+        try:
+            import rdagent  # noqa: F401
+            return None  # Module is globally available, no specific dir needed
+        except ImportError:
+            return None
 
     async def _collect_results(self) -> list[dict[str, Any]]:
         """从 rd_agent_factors 表收集最新生成的因子"""

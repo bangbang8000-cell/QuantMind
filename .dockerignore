@@ -5,6 +5,29 @@
 .idea
 .DS_Store
 
+# rd-agent git subdirectory (rd-agent source is needed, but not its .git)
+rd-agent/.git
+rd-agent/.github/
+rd-agent/.vscode/
+rd-agent/.bumpversion.cfg
+rd-agent/.commitlintrc.js
+rd-agent/.env
+rd-agent/.env.example
+rd-agent/.readthedocs.yaml
+rd-agent/docs/
+rd-agent/tests/
+rd-agent/CHANGELOG.md
+rd-agent/CODE_OF_CONDUCT.md
+rd-agent/CONTRIBUTING.md
+rd-agent/SECURITY.md
+rd-agent/SUPPORT.md
+rd-agent/TODO.md
+rd-agent/Makefile
+rd-agent/log/
+rd-agent/pickle_cache/
+rd-agent/git_ignore_folder/
+rd-agent/selector.log
+
 # Virtual Environments
 .venv
 venv
