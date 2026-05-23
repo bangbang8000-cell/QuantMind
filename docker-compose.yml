@@ -153,6 +153,12 @@ services:
       - AI_IDE_LLM_MODEL=${AI_IDE_LLM_MODEL:-deepseek-v4-pro}
       - AI_IDE_LLM_API_KEY=${AI_IDE_LLM_API_KEY:-mock-api-key-not-configured}
 
+      # RD-Agent 使用 OpenAI 兼容 API（复用 AI_IDE 配置）
+      # RD-Agent 默认用 gpt-4-turbo，通过 chat_model_map 映射到 DeepSeek
+      - CHAT_MODEL=deepseek-chat
+      - OPENAI_API_KEY=${AI_IDE_LLM_API_KEY:-mock-api-key-not-configured}
+      - OPENAI_API_BASE=${AI_IDE_LLM_BASE_URL:-https://api.deepseek.com}
+
       # 市值单位配置：数据库存储单位为元，1亿=100,000,000
       - AI_STRATEGY_TOTAL_MV_PER_YI=100000000.0
 
