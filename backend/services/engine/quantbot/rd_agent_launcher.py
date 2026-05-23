@@ -13,17 +13,91 @@ from backend.services.engine.quantbot.task_store import QuantBotTaskStore
 logger = logging.getLogger(__name__)
 
 
-# Alpha191 seed factor 模板（简化版）
-ALPHA191_SEED_TEMPLATE = (
-    "import pandas as pd\n"
-    "import numpy as np\n"
-    "from qlib.contrib.data.handler import Alpha158\n"
-    "\n"
-    "class SeedFactor:\n"
-    '    """Seed factor generated from user request: {description}"""\n'
-    "    def __call__(self, df: pd.DataFrame) -> pd.Series:\n"
-    "        return df[\"$close\"].rolling({window}).mean() / df[\"$close\"] - 1\n"
-)
+# Alpha191 seed factor 模板（多类型支持）
+SEED_FACTOR_TEMPLATES = {
+    "value": '''
+import pandas as pd
+import numpy as np
+
+class SeedValueFactor:
+    """Seed value factor: 低估值因子"""
+    name = "seed_value"
+    def __call__(self, df: pd.DataFrame) -> pd.DataFrame:
+        result = pd.DataFrame(index=df.index)
+        result["value"] = 1.0 / (df["$close"] / df["$factor"] / (df.get("$high", df["$close"]) - df.get("$low", df["$close"])) + 1e-8)
+        return result
+''',
+    "momentum": '''
+import pandas as pd
+import numpy as np
+
+class SeedMomentumFactor:
+    """Seed momentum factor: 动量因子"""
+    name = "seed_momentum"
+    def __call__(self, df: pd.DataFrame) -> pd.DataFrame:
+        result = pd.DataFrame(index=df.index)
+        result["momentum"] = df["$close"].rolling({window}).mean() / df["$close"].rolling({long_window}).mean() - 1
+        return result
+''',
+    "volatility": '''
+import pandas as pd
+import numpy as np
+
+class SeedVolatilityFactor:
+    """Seed volatility factor: 低波动因子"""
+    name = "seed_volatility"
+    def __call__(self, df: pd.DataFrame) -> pd.DataFrame:
+        result = pd.DataFrame(index=df.index)
+        returns = df["$close"].pct_change()
+        result["vol"] = returns.rolling({window}).std()
+        result["vol"] = -result["vol"]  # Low vol is preferred
+        return result
+''',
+    "technical": '''
+import pandas as pd
+import numpy as np
+
+class SeedTechnicalFactor:
+    """Seed technical factor: 技术指标因子"""
+    name = "seed_technical"
+    def __call__(self, df: pd.DataFrame) -> pd.DataFrame:
+        result = pd.DataFrame(index=df.index)
+        ma_short = df["$close"].rolling({window}).mean()
+        ma_long = df["$close"].rolling({long_window}).mean()
+        result["tech"] = (ma_short - ma_long) / ma_long
+        return result
+''',
+    "quality": '''
+import pandas as pd
+import numpy as np
+
+class SeedQualityFactor:
+    """Seed quality factor: 质量因子"""
+    name = "seed_quality"
+    def __call__(self, df: pd.DataFrame) -> pd.DataFrame:
+        result = pd.DataFrame(index=df.index)
+        returns = df["$close"].pct_change()
+        vol = returns.rolling({window}).std()
+        mean_ret = returns.rolling({window}).mean()
+        result["quality"] = mean_ret / (vol + 1e-8)
+        return result
+''',
+    "综合": '''
+import pandas as pd
+import numpy as np
+
+class SeedCompositeFactor:
+    """Seed composite factor: 综合因子"""
+    name = "seed_composite"
+    def __call__(self, df: pd.DataFrame) -> pd.DataFrame:
+        result = pd.DataFrame(index=df.index)
+        ret = df["$close"].pct_change()
+        ma = df["$close"].rolling({window}).mean()
+        vol = ret.rolling({window}).std()
+        result["composite"] = (ma / df["$close"] - 1) / (vol + 1e-8)
+        return result
+''',
+}
 
 
 class RDAgentLauncher:

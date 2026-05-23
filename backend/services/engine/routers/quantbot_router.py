@@ -7,7 +7,7 @@ from typing import Any
 
 import httpx
 from fastapi import APIRouter, HTTPException, Request
-from fastapi.responses import StreamingResponse
+from fastapi.responses import JSONResponse, StreamingResponse
 from pydantic import BaseModel
 
 from backend.services.engine.quantbot.intent_parser import parse_intent
@@ -48,7 +48,8 @@ async def chat(request: Request, item: ChatRequest):
     intent = await parse_intent(item.message, history)
 
     if intent.get("intent") == "factor_evolution":
-        return await _handle_factor_evolution(item, user_id, intent)
+        result = await _handle_factor_evolution(item, user_id, intent)
+        return JSONResponse(content=result)
     else:
         return await _handle_chat_stream(item, history)
 

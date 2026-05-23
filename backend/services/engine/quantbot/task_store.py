@@ -68,8 +68,8 @@ class QuantBotTaskStore:
         error_message: str | None = None,
         factor_ids: list[str] | None = None,
     ) -> None:
-        """更新任务状态"""
-        fields = {"status": status, "updated_at": datetime.now()}
+        """更新任务状态（动态构建 UPDATE，避免覆盖已有字段）"""
+        fields: dict[str, Any] = {"status": status, "updated_at": datetime.now()}
         if progress is not None:
             fields["progress"] = progress
         if result is not None:
@@ -81,29 +81,14 @@ class QuantBotTaskStore:
         if status in ("completed", "failed"):
             fields["completed_at"] = datetime.now()
 
+        set_clause = ", ".join(f"{k} = :{k}" for k in fields)
         async with get_session() as session:
             await session.execute(
-                text("""
-                    UPDATE quantbot_tasks SET
-                      status = :status,
-                      updated_at = :updated_at,
-                      progress = :progress,
-                      result_json = :result_json,
-                      error_message = :error_message,
-                      factor_ids = :factor_ids,
-                      completed_at = :completed_at
+                text(f"""
+                    UPDATE quantbot_tasks SET {set_clause}
                     WHERE task_id = :task_id
                     """),
-                {
-                    "task_id": task_id,
-                    "status": status,
-                    "updated_at": fields["updated_at"],
-                    "progress": fields.get("progress"),
-                    "result_json": fields.get("result_json"),
-                    "error_message": fields.get("error_message"),
-                    "factor_ids": fields.get("factor_ids"),
-                    "completed_at": fields.get("completed_at"),
-                },
+                {**fields, "task_id": task_id},
             )
 
     async def get_task(self, task_id: str, user_id: str | None = None) -> dict[str, Any] | None:

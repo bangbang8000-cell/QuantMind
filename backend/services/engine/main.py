@@ -92,9 +92,6 @@ async def lifespan(app: FastAPI):
     except Exception as e:
         logger.warning(f"⚠️ VectorizedMatcher startup skipped: {e}")
 
-    # --- 此处 Yield，之后代码在启动后运行 ---
-    yield
-
     # 启动预热向量解析/字段检索（2026-05-03：暂时关闭强制预热以加快启动速度）
     warmup_enabled = os.getenv("AI_STRATEGY_WARMUP", "false").strip().lower() not in ("0", "false", "no", "off")
     if warmup_enabled:
@@ -107,6 +104,9 @@ async def lifespan(app: FastAPI):
             logger.error(f"❌ AI Strategy Warmup failed: {e}")
     else:
         logger.info("AI Strategy Warmup disabled by env")
+
+    # --- 此处 Yield，之后代码在 shutdown 时运行 ---
+    yield
 
     # --- 停止逻辑 ---
     if vm_task and not vm_task.done():
