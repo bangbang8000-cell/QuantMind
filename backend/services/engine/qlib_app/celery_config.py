@@ -75,7 +75,7 @@ CELERY_TASK_ACKS_LATE = os.getenv("CELERY_TASK_ACKS_LATE", "true").lower() == "t
 CELERY_TASK_REJECT_ON_WORKER_LOST = os.getenv("CELERY_TASK_REJECT_ON_WORKER_LOST", "true").lower() == "true"
 CELERY_RESULT_EXPIRES = int(os.getenv("CELERY_RESULT_EXPIRES", "86400"))
 
-CELERY_QUEUE = os.getenv("QLIB_CELERY_QUEUE", "qlib_backtest").strip() or "qlib_backtest"
+CELERY_QUEUE = os.getenv("QLIB_CELERY_QUEUE", "qlib_backtest_srv").strip() or "qlib_backtest_srv"
 CELERY_EXCHANGE = os.getenv("QLIB_CELERY_EXCHANGE", "qlib")
 CELERY_ROUTING_KEY = os.getenv("QLIB_CELERY_ROUTING_KEY", "qlib.backtest")
 AUTO_INFERENCE_ENABLED = os.getenv("AUTO_INFERENCE_ENABLED", "true").lower() == "true"
