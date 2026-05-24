@@ -30,20 +30,85 @@ export const NaturalTextInput: React.FC<{ onNext: () => void }> = ({ onNext }) =
   const [loading, setLoading] = useState(false);
   const [preview, setPreview] = useState<{ dsl?: string; mapping?: any; suggestions?: string[] }>({});
   const [matchedCount, setMatchedCount] = useState<number | null>(null);
+  const [templateCategory, setTemplateCategory] = useState<string>('all');
 
   const useTemplate = (t: string) => {
     setText(t);
   };
 
-  const templates = [
-    { label: '全部股票', value: '全市场股票' },
-    { label: '排除ST', value: '排除ST和*ST股票' },
-    { label: '沪深300', value: '沪深300成分股' },
-    { label: '中证1000', value: '中证1000成分股' },
-    { label: '小市值', value: '总市值在10亿到100亿之间' },
-    { label: '金融股', value: '金融股' },
-    { label: '低估值', value: '市盈率小于20，市净率小于2' }
-  ];
+  // 按类别组织的快速模板（覆盖宽基/规模/行业/价值/成长/技术/资金/主题 8 大维度）
+  const templateGroups: Record<string, { label: string; value: string }[]> = {
+    宽基指数: [
+      { label: '全部A股', value: '全市场A股，剔除停牌和退市股票' },
+      { label: '沪深300', value: '沪深300成分股' },
+      { label: '中证500', value: '中证500成分股' },
+      { label: '中证800', value: '中证800成分股' },
+      { label: '中证1000', value: '中证1000成分股' },
+      { label: '中证2000', value: '中证2000成分股' },
+      { label: '上证50', value: '上证50成分股' },
+      { label: '科创50', value: '科创50成分股' },
+      { label: '创业板指', value: '创业板指数成分股' },
+      { label: '北证50', value: '北证50成分股' },
+    ],
+    规模与流动性: [
+      { label: '排除ST', value: '排除ST、*ST和退市风险警示股' },
+      { label: '剔除新股', value: '上市满180天的股票' },
+      { label: '小市值', value: '总市值10亿到100亿之间，剔除ST' },
+      { label: '中市值', value: '总市值100亿到500亿之间' },
+      { label: '大市值', value: '总市值大于500亿的蓝筹股' },
+      { label: '高流动性', value: '日均成交额大于2亿元，换手率大于2%' },
+    ],
+    行业板块: [
+      { label: '金融股', value: '银行、证券、保险板块' },
+      { label: '医药生物', value: '医药生物行业，剔除ST' },
+      { label: '消费白马', value: '食品饮料和家电行业，ROE大于15%' },
+      { label: '新能源车', value: '新能源汽车产业链相关股票' },
+      { label: '半导体', value: '半导体和电子元器件行业' },
+      { label: '人工智能', value: 'AI、算力、大模型概念股' },
+      { label: '军工', value: '国防军工行业' },
+      { label: '光伏储能', value: '光伏、储能、风电相关公司' },
+      { label: '券商', value: '证券行业，剔除ST' },
+      { label: '银行股', value: '银行业，市净率小于1.5' },
+    ],
+    价值与成长: [
+      { label: '低估值', value: '市盈率小于20，市净率小于2，剔除亏损' },
+      { label: '深度价值', value: 'PE小于15，PB小于1.5，股息率大于3%' },
+      { label: '高分红', value: '股息率大于4%，连续3年分红' },
+      { label: '高ROE', value: 'ROE连续3年大于15%，资产负债率小于60%' },
+      { label: '成长股', value: '净利润同比增长大于30%，营收增长大于20%' },
+      { label: 'GARP', value: 'PE小于25且净利润增速大于20%，PEG小于1' },
+      { label: '现金奶牛', value: '经营现金流净额连续3年为正，毛利率大于40%' },
+    ],
+    技术形态: [
+      { label: '突破新高', value: '近20日创60日新高，成交量放大' },
+      { label: '均线多头', value: '5日均线>10日均线>20日均线>60日均线' },
+      { label: 'MACD金叉', value: 'MACD金叉，DIF穿越DEA向上' },
+      { label: '超跌反弹', value: 'RSI小于30且近5日上涨' },
+      { label: '回踩均线', value: '股价回踩20日均线企稳' },
+      { label: '强势股', value: '近20日涨幅前10%，剔除ST' },
+    ],
+    资金趋势: [
+      { label: '北向加仓', value: '近5日北向资金净流入排名前100' },
+      { label: '主力流入', value: '主力资金净流入连续3日为正' },
+      { label: '机构重仓', value: '机构持股比例大于30%' },
+      { label: '融资买入', value: '融资余额近5日持续增加' },
+    ],
+    主题热点: [
+      { label: '高ROE+低估值', value: 'ROE大于15%且PE小于20，市值大于100亿' },
+      { label: '低估蓝筹', value: '沪深300且PE小于15且股息率大于3%' },
+      { label: '困境反转', value: '近1季度净利润同比扭亏，PB小于2' },
+      { label: '小盘成长', value: '市值小于100亿，营收增长大于30%' },
+      { label: 'AI算力', value: '云计算、IDC、服务器相关，市值大于50亿' },
+    ],
+  };
+
+  const flatTemplates = Object.entries(templateGroups).flatMap(([cat, items]) =>
+    items.map((t) => ({ ...t, category: cat })),
+  );
+  const visibleTemplates =
+    templateCategory === 'all'
+      ? flatTemplates
+      : flatTemplates.filter((t) => t.category === templateCategory);
 
   const analyze = async () => {
     if (!text.trim()) {
@@ -208,12 +273,34 @@ export const NaturalTextInput: React.FC<{ onNext: () => void }> = ({ onNext }) =
                           <div className="flex items-center gap-2 mb-3">
                             <Text type="secondary" className="text-xs font-medium uppercase tracking-wider">快速模版</Text>
                             <div className="h-px flex-1 bg-gray-100" />
+                            <Text type="secondary" className="text-[10px]">{visibleTemplates.length} 个</Text>
                           </div>
-                          <div className="flex flex-wrap gap-2">
-                            {templates.map(t => (
+                          {/* 分类筛选条 */}
+                          <div className="flex flex-wrap gap-1.5 mb-3">
+                            {['all', ...Object.keys(templateGroups)].map((cat) => (
                               <button
-                                key={t.label}
+                                key={cat}
+                                onClick={() => setTemplateCategory(cat)}
+                                className={`px-2.5 py-1 rounded-md text-[11px] font-semibold transition-all ${
+                                  templateCategory === cat
+                                    ? 'bg-blue-600 text-white shadow-sm'
+                                    : 'bg-gray-50 text-gray-600 border border-gray-200 hover:bg-gray-100'
+                                }`}
+                              >
+                                {cat === 'all' ? '全部' : cat}
+                              </button>
+                            ))}
+                          </div>
+                          {/* 模板按钮（最多 250px 高度，可滚动） */}
+                          <div
+                            className="flex flex-wrap gap-2 overflow-y-auto pr-1"
+                            style={{ maxHeight: 250 }}
+                          >
+                            {visibleTemplates.map((t) => (
+                              <button
+                                key={`${t.category}-${t.label}`}
                                 onClick={() => useTemplate(t.value)}
+                                title={t.value}
                                 className="px-3 py-1.5 rounded-lg text-sm font-medium transition-all duration-200
                                   bg-blue-50 text-blue-600 border border-blue-100 hover:bg-blue-600 hover:text-white hover:border-blue-600
                                   active:scale-95 shadow-sm"

@@ -55,7 +55,7 @@ const TopBar: React.FC<TopBarProps> = ({ accountInfo, isConnected, strategyStatu
         ? '沙箱'
         : (runMode === 'REAL' || runMode === 'SHADOW'
             ? (orchestrationMode === 'docker' ? 'Docker' : (orchestrationMode === 'k8s' ? 'Kubernetes' : '容器'))
-            : '未识别');
+            : '待部署');
     const deployChannelTone = runMode === 'SHADOW' ? 'bg-violet-50 text-violet-800 border-violet-200'
         : (runMode === 'REAL' ? 'bg-blue-50 text-blue-800 border-blue-200'
             : (runMode === 'SIMULATION' ? 'bg-amber-50 text-amber-800 border-amber-200' : 'bg-gray-50 text-gray-500 border-gray-100'));

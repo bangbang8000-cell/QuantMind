@@ -116,5 +116,12 @@ async def _proxy(request: Request, user: dict | None = None) -> Response:
     "/api/v1/stocks/{p:path}", methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"], include_in_schema=False
 )
 @router.api_route("/api/v1/stocks", methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"], include_in_schema=False)
+@router.api_route(
+    "/api/v1/rd-agent/{p:path}", methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"], include_in_schema=False
+)
+@router.api_route("/api/v1/rd-agent", methods=["GET", "POST", "OPTIONS"], include_in_schema=False)
+@router.api_route(
+    "/api/v1/quantbot/{p:path}", methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"], include_in_schema=False
+)
 async def engine_catch_all(request: Request, user: dict | None = Depends(get_optional_user)):
     return await _proxy(request, user)

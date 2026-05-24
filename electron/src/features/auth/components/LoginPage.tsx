@@ -260,27 +260,34 @@ const LoginPage: React.FC = () => {
       return;
     }
 
-    // 自动补全为 http://{ip}:8000
-    const fullUrl = `http://${ip}:8000`;
+    // 仅在 Electron 桌面端补 :8000（直连后端）；
+    // Web 浏览器模式必须经 Nginx 代理（默认 :3080）以避免后端 CORS 拦截。
+    const isRealElectron =
+      typeof navigator !== 'undefined' && /Electron\//i.test(navigator.userAgent || '');
+    const port = isRealElectron ? 8000 : 3080;
+    const fullUrl = `http://${ip}:${port}`;
 
     setConfigLoading(true);
     try {
       setDynamicServerUrl(fullUrl);
 
-      if (isElectron && (window as any).electronAPI) {
-        const result = await (window as any).electronAPI.setServerUrl(fullUrl);
-        if (result.success) {
-          message.success('服务器地址已保存');
-          setShowServerConfig(false);
-        } else {
-          message.error('保存失败：' + (result.error || '未知错误'));
+      // Electron 真环境才走 electronAPI；浏览器里 compat 层不可靠，吞掉错误即可
+      if (isRealElectron && (window as any).electronAPI?.setServerUrl) {
+        try {
+          const result = await (window as any).electronAPI.setServerUrl(fullUrl);
+          if (result && result.success === false) {
+            message.warning('保存到桌面配置失败：' + (result.error || '未知错误') + '（已保存到本地）');
+          }
+        } catch (innerErr) {
+          console.warn('[server-config] electronAPI.setServerUrl failed (ignored):', innerErr);
         }
-      } else {
-        message.success('服务器地址已保存');
-        setShowServerConfig(false);
       }
-    } catch (e) {
-      message.error('保存配置时发生错误');
+
+      message.success(`服务器地址已保存：${fullUrl}`);
+      setShowServerConfig(false);
+    } catch (e: any) {
+      console.error('[server-config] save failed:', e);
+      message.error('保存配置时发生错误：' + (e?.message || String(e)));
     } finally {
       setConfigLoading(false);
     }
@@ -717,7 +724,8 @@ const LoginPage: React.FC = () => {
       >
         <div style={{ marginBottom: '16px' }}>
           <Text type="secondary">
-            请输入服务器 IP 地址，系统将自动补全为 http://{'{IP}'}:8000
+            请输入服务器 IP 地址。<br />
+            桌面端自动补 <code>:8000</code>，浏览器端自动补 <code>:3080</code>（经 Nginx 代理，避免 CORS）
           </Text>
         </div>
         <Input

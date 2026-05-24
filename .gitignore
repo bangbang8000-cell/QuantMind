@@ -156,3 +156,19 @@ db/csmar
 db20260528.tar.gz
 website/
 db/db.zip
+
+# Large data / model / experiment directories — too big for git
+/data/
+/db/
+/models/
+/rd-agent/
+/mlruns/
+/results/
+/results_v*/
+/log/
+/electron/src/data/
+/.cache/
+/.venv*/
+/Untitled*.ipynb
+*.tar.gz
+*.deb

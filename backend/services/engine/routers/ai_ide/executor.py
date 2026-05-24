@@ -1105,7 +1105,7 @@ async def run_process(job_id: str, file_path: str):
             volumes=volumes,
             network=_NETWORK,
             environment=_build_runner_environment(user_id, request_meta),
-            mem_limit="2g",
+            mem_limit="16g",
             cpu_quota=100000,  # 1 CPU
         )
 

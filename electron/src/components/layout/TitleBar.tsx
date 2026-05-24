@@ -3,8 +3,14 @@ import { Minus, X, RefreshCw, Download, AlertCircle } from 'lucide-react';
 
 type UpdateState = 'idle' | 'checking' | 'available' | 'downloading' | 'downloaded' | 'error';
 
+// 仅在真实 Electron 运行时为 true；compat 层在 web 也会注入 window.electronAPI，
+// 因此不能用它判定环境。UA 是 main 进程注入的，最可靠。
+const IS_REAL_ELECTRON =
+  typeof navigator !== 'undefined' &&
+  /Electron\//i.test(navigator.userAgent || '');
+
 export const TitleBar: React.FC = () => {
-  const [isElectron, setIsElectron] = useState(() => !!(window as any).electronAPI);
+  const [isElectron] = useState(IS_REAL_ELECTRON);
   const [platform, setPlatform] = useState<string>(() => (window as any).electronAPI?.getPlatform?.() || '');
   const [updateState, setUpdateState] = useState<UpdateState>('idle');
   const [downloadProgress, setDownloadProgress] = useState<number>(0);
@@ -12,7 +18,7 @@ export const TitleBar: React.FC = () => {
   const [errorMessage, setErrorMessage] = useState<string>('');
 
   useEffect(() => {
-    const isElectronEnv = !!(window as any).electronAPI;
+    const isElectronEnv = IS_REAL_ELECTRON;
     if (!isElectronEnv) return;
     
     // 确保平台信息最新

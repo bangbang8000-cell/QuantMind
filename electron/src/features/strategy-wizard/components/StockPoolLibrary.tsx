@@ -33,6 +33,7 @@ import { useWizardV2Store } from '../store/wizardV2Store';
 // 使用按需导入以避免与其他模块的静态/动态导入冲突
 import { loadFeaturesBySymbolsInBatches } from '../utils/featureEnrichment';
 import { getWizardUserId } from '../utils/userId';
+import { SERVICE_ENDPOINTS } from '../../../config/services';
 import dayjs from 'dayjs';
 
 const { Text, Title } = Typography;
@@ -96,32 +97,46 @@ export const StockPoolLibrary: React.FC = () => {
     if (loadingId) return;
     setLoadingId('all-market');
     try {
-      message.loading({ content: '正在初始化全市场 5205 只标的...', key: 'allMarket', duration: 0 });
-      const response = await fetch('/data/stocks/stocks_index.json');
+      message.loading({ content: '正在加载全市场 A 股标的（含核心字段）...', key: 'allMarket', duration: 0 });
+      // 后端 /api/v1/stocks/all 直接读 stock_daily_latest，10 分钟缓存
+      // enrich=true 一次性带回 close/pe/pb/marketCap/pctChange 等核心字段，无需再次批量补充
+      const url = `${SERVICE_ENDPOINTS.USER_SERVICE}/stocks/all?market=A&enrich=true`;
+      const response = await fetch(url);
+      if (!response.ok) throw new Error(`HTTP ${response.status}`);
       const data = await response.json();
-      const items = data.items || [];
-      const symbols = items.map((s: any) => s.symbol);
-      const itemMap = new Map<string, any>(items.map((s: any) => [s.symbol, s]));
+      const items: any[] = data.items || [];
+      if (items.length === 0) {
+        throw new Error('后端返回空列表，检查 stock_daily_latest 表');
+      }
 
-      const richData = await loadFeaturesBySymbolsInBatches(symbols, 800, { lite: true });
-      const richMap = new Map(richData.map((item) => [item.code, item]));
-      const fullStocks = symbols.map((symbol: string) => {
-        const item = richMap.get(symbol);
-        return {
-          symbol,
-          name: item?.name || itemMap.get(symbol)?.name || symbol,
-          marketCap: item?.marketCap,
-          pe: (item as any)?.pe ?? (item as any)?.pe_ttm ?? (item as any)?.peTtm,
-          roe: item?.roe,
-          price: item?.closePrice,
-        };
-      });
+      const fullStocks = items.map((it: any) => ({
+        symbol: it.symbol,
+        name: it.name || it.symbol,
+        marketCap: it.marketCap ?? null,
+        floatMarketCap: it.floatMarketCap ?? null,
+        pe: it.pe ?? null,
+        pb: it.pb ?? null,
+        roe: null, // ROE 需走研究服务，可后续按需补
+        price: it.close ?? null,
+        pctChange: it.pctChange ?? null,
+        turnoverRate: it.turnoverRate ?? null,
+        isSt: !!it.isSt,
+      }));
 
       setCurrentPoolName('全市场 (A股)');
       setWorkingPool(fullStocks as any);
-      message.success({ content: `已载入全市场 ${fullStocks.length} 只标的（最新交易日核心字段）`, key: 'allMarket' });
-    } catch (err) {
-      message.error({ content: '加载全市场标的失败', key: 'allMarket' });
+      const validPE = fullStocks.filter((s) => s.pe != null && s.pe > 0).length;
+      message.success({
+        content: `已载入全市场 ${fullStocks.length} 只标的（${validPE} 个含PE/PB/市值字段）`,
+        key: 'allMarket',
+      });
+    } catch (err: any) {
+      console.error('[StockPool] handleSelectAllMarket failed:', err);
+      message.error({
+        content: `加载全市场标的失败: ${err?.message || err}`,
+        key: 'allMarket',
+        duration: 5,
+      });
     } finally {
       setLoadingId(null);
     }

@@ -14,7 +14,8 @@ import {
     ThunderboltOutlined,
     ApiOutlined,
     SwapOutlined,
-    GlobalOutlined
+    GlobalOutlined,
+    ExperimentOutlined
 } from '@ant-design/icons';
 import { useNavigate, useLocation, Outlet } from 'react-router-dom';
 
@@ -47,6 +48,7 @@ const AdminPage: React.FC = () => {
             label: '推理引擎',
             children: [
                 { key: 'models', label: '模型管理' },
+                { key: 'rd-agent', label: 'RD因子挖掘' },
                 { key: 'inference', label: '推理监控' },
             ]
         },
@@ -59,13 +61,14 @@ const AdminPage: React.FC = () => {
                 { key: 'risk', label: '风险控制' },
             ]
         },
-        { 
-            key: 'stream-service', 
-            icon: <GlobalOutlined />, 
+        {
+            key: 'stream-service',
+            icon: <GlobalOutlined />,
             label: '实时数据流',
             children: [
                 { key: 'data', label: '数据管理' },
                 { key: 'quotes', label: '行情源监控' },
+                { key: 'news', label: '资讯监控' },
             ]
         },
         { type: 'divider' as const },
@@ -140,8 +143,15 @@ const AdminPage: React.FC = () => {
                 </header>
 
                 {/* Content Container */}
-                <main className="flex-1 overflow-y-auto p-8 bg-slate-50/50">
-                    <div className="max-w-[1200px] mx-auto animate-in fade-in slide-in-from-bottom-4 duration-500">
+                <main className="flex-1 overflow-y-auto p-6 bg-slate-50/50">
+                    {/* 资讯监控 / RD 因子挖掘等大屏页面用全宽，其余保留 1400px 阅读宽度 */}
+                    <div
+                        className={
+                            ['news', 'rd-agent', 'inference'].includes(currentKey)
+                                ? 'w-full animate-in fade-in slide-in-from-bottom-4 duration-500'
+                                : 'max-w-[1400px] mx-auto animate-in fade-in slide-in-from-bottom-4 duration-500'
+                        }
+                    >
                         <Outlet />
                     </div>
                 </main>

@@ -47,7 +47,12 @@ class ResolvedModel:
 
 class ModelRegistryService:
     def __init__(self) -> None:
-        self.user_models_root = Path(os.getenv("USER_MODELS_ROOT", "models/users"))
+        raw_user_models_root = Path(os.getenv("USER_MODELS_ROOT", "models/users"))
+        self.user_models_root = (
+            raw_user_models_root
+            if raw_user_models_root.is_absolute()
+            else Path("/app") / raw_user_models_root
+        )
         self.primary_model_id = os.getenv("PRIMARY_MODEL_ID", "model_qlib")
         self.fallback_model_id = os.getenv("FALLBACK_MODEL_ID", "alpha158")
         self.primary_model_dir = str(os.getenv("MODELS_PRODUCTION", "/app/models/production/model_qlib"))
@@ -1411,23 +1416,46 @@ class ModelRegistryService:
         model_id: str,
         target_dir: Path,
     ) -> tuple[str, str, str]:
-        # 1. 优先检查本地是否已经有训练产出的模型（热路径）
-        # 兼容 LocalDockerOrchestrator 的挂载路径
-        required = ["model.lgb", "metadata.json"]
-        local_exists = all((target_dir / f).exists() for f in required)
+        artifact_names = [
+            "model.lgb",
+            "model.txt",
+            "model.bin",
+            "metadata.json",
+            "pred.parquet",
+            "pred.pkl",
+            "config.yaml",
+            "result.json",
+            "inference.py",
+            "shap_summary.csv",
+        ]
 
-        if local_exists:
-            logger.info(f"Model {model_id} already exists locally in {target_dir}, skipping COS sync.")
-            model_file = "model.lgb"
+        copied: list[str] = []
+        for source_dir in (target_dir, Path("/data") / "training_jobs" / run_id):
+            if not source_dir.exists() or not source_dir.is_dir():
+                continue
+            for filename in artifact_names:
+                src = source_dir / filename
+                if not src.is_file():
+                    continue
+                dest = target_dir / filename
+                if src.resolve() == dest.resolve():
+                    continue
+                dest.parent.mkdir(parents=True, exist_ok=True)
+                shutil.copy2(src, dest)
+                copied.append(filename)
+
+        model_file = ""
+        for candidate in ("model.lgb", "model.txt", "model.bin"):
+            if (target_dir / candidate).exists():
+                model_file = candidate
+                break
+
+        if (target_dir / "metadata.json").exists() and model_file:
             return "ready", "", model_file
 
-        # 2. 如果本地没有，则尝试从 COS 同步（原逻辑备份）
         cos = get_cos_service()
         source_prefix = f"models/candidates/{run_id}/"
-        required_all = ["model.lgb", "model.txt", "metadata.json", "pred.pkl", "config.yaml", "result.json", "shap_summary.csv"]
-        copied: list[str] = []
-
-        for filename in required_all:
+        for filename in artifact_names:
             key = f"{source_prefix}{filename}"
             try:
                 data = cos.get_object_bytes(key)
@@ -1440,14 +1468,13 @@ class ModelRegistryService:
             except Exception:
                 continue
 
-        model_file = ""
         for candidate in ("model.lgb", "model.txt", "model.bin"):
             if (target_dir / candidate).exists():
                 model_file = candidate
                 break
 
         if not copied:
-            return "failed", "no artifacts found in local or COS path", model_file
+            return "failed", "no artifacts found in local training workspace or COS path", model_file
 
         return "ready", "", model_file
 

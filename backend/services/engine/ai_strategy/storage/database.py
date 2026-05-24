@@ -341,7 +341,7 @@ def update_strategy_by_id(strategy_id: str, updates: dict[str, Any]) -> dict[str
             return {"success": False, "error": "策略不存在"}
 
         # 更新允许的字段
-        allowed_fields = ["name", "description", "market", "risk_level", "notes"]
+        allowed_fields = ["name", "description", "market", "risk_level", "notes", "code"]
         for field, value in updates.items():
             if field in allowed_fields and hasattr(strategy, field):
                 setattr(strategy, field, value)
@@ -364,6 +364,7 @@ def update_strategy_by_id(strategy_id: str, updates: dict[str, Any]) -> dict[str
                 "risk_controls": (json.loads(strategy.risk_controls) if strategy.risk_controls else []),
                 "assumptions": (json.loads(strategy.assumptions) if strategy.assumptions else []),
                 "notes": strategy.notes,
+                "code": strategy.code,
                 "created_at": strategy.created_at.isoformat(),
             },
         }

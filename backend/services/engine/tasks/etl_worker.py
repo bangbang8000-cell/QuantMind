@@ -7,8 +7,6 @@ import pandas as pd
 from sqlalchemy import inspect, select, text
 from sqlalchemy.orm import Session
 
-from backend.services.engine.models.market_data import MarketDataDaily
-
 logger = logging.getLogger(__name__)
 
 # 系统保留列，不作为特征列返回

@@ -48,6 +48,8 @@ const AdminUserTable = lazy(() => import('./features/admin/components/AdminUserT
 const AdminModelManagement = lazy(() => import('./features/admin/components/AdminModelManagement').then(m => ({ default: m.AdminModelManagement })));
 const AdminDataManagement = lazy(() => import('./features/admin/components/AdminDataManagement').then(m => ({ default: m.AdminDataManagement })));
 const AdminStrategyTemplates = lazy(() => import('./features/admin/components/AdminStrategyTemplates').then(m => ({ default: m.AdminStrategyTemplates })));
+const AdminNewsPage = lazy(() => import('./features/news/components/NewsPanel').then(m => ({ default: m.NewsPanel })));
+const AdminRDAgentFactors = lazy(() => import('./features/admin/components/AdminRDAgentFactors').then(m => ({ default: m.AdminRDAgentFactors })));
 
 // 主题切换hook
 // 主题管理已移除 - 应用统一使用浅色主题
@@ -488,6 +490,8 @@ export default function App() {
                     <Route path="models" element={<Suspense fallback={<Spin size="large" />}><AdminModelManagement /></Suspense>} />
                     <Route path="data" element={<Suspense fallback={<Spin size="large" />}><AdminDataManagement /></Suspense>} />
                     <Route path="strategies" element={<Suspense fallback={<Spin size="large" />}><AdminStrategyTemplates /></Suspense>} />
+                    <Route path="news" element={<Suspense fallback={<Spin size="large" />}><AdminNewsPage /></Suspense>} />
+                    <Route path="rd-agent" element={<Suspense fallback={<Spin size="large" />}><AdminRDAgentFactors /></Suspense>} />
                     {/* 待开发页面占位 */}
                     <Route path="inference" element={<div className="p-8 text-center text-slate-400">推理监控页面开发中...</div>} />
                     <Route path="orders" element={<div className="p-8 text-center text-slate-400">订单管理页面开发中...</div>} />

@@ -16,7 +16,7 @@ class RDAgentFactorPersistence:
     """管理 RD-Agent 生成的因子数据，供 QuantMind 回测读取共享"""
 
     async def ensure_tables(self) -> None:
-        """确保 rd_agent_factors 表存在"""
+        """确保 rd_agent_factors 表存在（含历史表向后兼容的列）"""
         stmt = """
         CREATE TABLE IF NOT EXISTS rd_agent_factors (
           factor_id TEXT PRIMARY KEY,
@@ -32,9 +32,13 @@ class RDAgentFactorPersistence:
           created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
           updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
         );
+        ALTER TABLE rd_agent_factors ADD COLUMN IF NOT EXISTS user_id TEXT;
+        ALTER TABLE rd_agent_factors ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ NOT NULL DEFAULT now();
+        CREATE INDEX IF NOT EXISTS idx_rd_agent_factors_user_id ON rd_agent_factors(user_id);
         """
         async with get_session() as session:
-            await session.execute(text(stmt))
+            for s in [x.strip() for x in stmt.split(";") if x.strip()]:
+                await session.execute(text(s))
         logger.info("rd_agent_factors table ensured")
 
     async def save_factor(

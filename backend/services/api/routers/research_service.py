@@ -95,7 +95,7 @@ async def _load_sdl_day_map(session, trade_date: date) -> dict[str, dict[str, An
             COALESCE(macd_hist, 0) AS macd_hist,
             COALESCE(volume_ratio_5, 0) AS volume_ratio_5,
             COALESCE(volume_ratio_20, 0) AS volume_ratio_20,
-            COALESCE(volume_trend_3d, 0) AS volume_trend_3d,
+            CASE WHEN COALESCE(volume_trend_3d, false) THEN 1 ELSE 0 END AS volume_trend_3d,
             COALESCE(main_flow, 0) AS main_flow,
             COALESCE(flow_net_amount, 0) AS flow_net_amount,
             COALESCE(inst_ownership, 0) AS inst_ownership,
@@ -227,7 +227,10 @@ _SDL_SELECT_BY_RUN_DATE = """
     COALESCE(sdl_run.macd_hist, 0) AS macd_hist,
     COALESCE(sdl_run.volume_ratio_5, 0) AS volume_ratio_5,
     COALESCE(sdl_run.volume_ratio_20, 0) AS volume_ratio_20,
-    COALESCE(sdl_run.volume_trend_3d, sdl_run.volume_trend_3d_calc) AS volume_trend_3d,
+    CASE
+        WHEN sdl_run.volume_trend_3d IS NOT NULL THEN CASE WHEN sdl_run.volume_trend_3d THEN 1.0 ELSE 0.0 END
+        ELSE sdl_run.volume_trend_3d_calc
+    END AS volume_trend_3d,
     COALESCE(sdl_run.main_flow, 0) AS main_flow,
     COALESCE(sdl_run.flow_net_amount, 0) AS flow_net_amount,
     COALESCE(sdl_run.inst_ownership, 0) AS inst_ownership,
@@ -318,7 +321,7 @@ _SDL_SELECT_SIMPLE = """
     COALESCE(sdl_latest.macd_hist, 0) AS macd_hist,
     COALESCE(sdl_latest.volume_ratio_5, 0) AS volume_ratio_5,
     COALESCE(sdl_latest.volume_ratio_20, 0) AS volume_ratio_20,
-    COALESCE(sdl_latest.volume_trend_3d, 0) AS volume_trend_3d,
+    CASE WHEN COALESCE(sdl_latest.volume_trend_3d, false) THEN 1 ELSE 0 END AS volume_trend_3d,
     COALESCE(sdl_latest.main_flow, 0) AS main_flow,
     COALESCE(sdl_latest.flow_net_amount, 0) AS flow_net_amount,
     COALESCE(sdl_latest.inst_ownership, 0) AS inst_ownership,

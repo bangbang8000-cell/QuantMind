@@ -199,7 +199,25 @@ docker exec quantmind python /app/scripts/daily_update.py --force
 
 ### Step 7: 访问系统
 
-服务启动后访问：`http://<服务器IP>`
+QuantMind 提供 **两种** 客户端访问方式，任选其一：
+
+#### 🌐 方式 A: 浏览器访问（推荐，无需安装）
+
+服务启动后直接打开浏览器访问：`http://<服务器IP>:3080`
+
+- `quantmind-web` 容器（nginx + React 静态资源）已随 `docker compose up -d` 一起启动
+- 默认端口 `3080`，可在 `.env` 中通过 `WEB_PORT=xxxx` 修改
+- 已内置 `/api/` 和 `/ws/` 反向代理，自动转发到后端 `quantmind:8000`
+- 适合服务器部署、多人共用、移动办公
+
+#### 🖥️ 方式 B: Electron 桌面客户端
+
+下载并安装 `.exe`（Windows）/ `.dmg`（macOS）/ `.AppImage`（Linux），双击启动。
+
+- 自带本地数据缓存与原生窗口控制
+- 适合个人独占式重度使用
+
+---
 
 **默认管理员账号**: `admin` / `admin123`
 
@@ -251,6 +269,7 @@ docker exec quantmind python /app/scripts/daily_update.py --force
 
 | 端口 | 服务 | 说明 |
 |------|------|------|
+| **3080** | Web 前端 (nginx) | 浏览器访问入口，反代 `/api/` `/ws/` 到 8000 |
 | **8000** | API Gateway | 用户认证、策略管理、社区、管理后台 |
 | **8001** | Engine | Qlib 回测、AI 策略生成、模型推理、RD-Agent |
 | **8002** | Trade | 订单管理、持仓、风控 |
@@ -263,7 +282,7 @@ docker exec quantmind python /app/scripts/daily_update.py --force
 
 | 层级 | 技术选型 |
 |------|----------|
-| **前端** | Electron + React 18 + TypeScript + Ant Design + Framer Motion |
+| **前端** | Electron + React 18 + TypeScript + Ant Design + Framer Motion（同代码同时构建为浏览器版 nginx 镜像 `quantmind-web`） |
 | **后端** | Python 3.10 + FastAPI + SQLAlchemy (asyncpg) |
 | **回测引擎** | Qlib + Pandas 双引擎 |
 | **AI 模型** | LightGBM + Qlib Model Framework + RD-Agent |

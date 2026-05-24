@@ -499,6 +499,35 @@ class LocalDockerOrchestrator:
                             run_id,
                             internal_model_dir,
                         )
+
+                        # 可选：同步到生产模型目录（系统内置模型）
+                        if payload.get("deploy_to_production"):
+                            try:
+                                prod_models_root = Path(
+                                    model_registry_service.production_models_root
+                                )
+                                if not prod_models_root.is_absolute():
+                                    prod_models_root = Path("/app") / prod_models_root
+                                prod_model_dir = prod_models_root / model_id
+                                prod_model_dir.mkdir(parents=True, exist_ok=True)
+
+                                for artifact in ("model.lgb", "metadata.json", "pred.parquet",
+                                                 "pred.pkl", "config.yaml", "result.json",
+                                                 "inference.py", "shap_summary.csv"):
+                                    src = container_work_dir / artifact
+                                    if src.exists():
+                                        shutil.copy2(str(src), str(prod_model_dir / artifact))
+
+                                logger.info(
+                                    "[%s] Production model artifacts copied to %s",
+                                    run_id,
+                                    prod_model_dir,
+                                )
+                            except Exception as prod_err:
+                                logger.warning(
+                                    "[%s] Failed to copy production artifacts: %s",
+                                    run_id, prod_err,
+                                )
                     except Exception as copy_err:
                         logger.warning("[%s] Failed to copy artifacts: %s", run_id, copy_err)
 

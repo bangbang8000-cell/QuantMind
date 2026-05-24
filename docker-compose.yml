@@ -147,6 +147,9 @@ services:
       # 使用 mock key 允许服务启动，用户需在个人中心配置真实 API key
       - DASHSCOPE_API_KEY=${DASHSCOPE_API_KEY:-mock-api-key-not-configured}
       - QWEN_API_KEY=${QWEN_API_KEY:-mock-api-key-not-configured}
+      # 选股意图解析复用 AI_IDE LLM 配置（DeepSeek）
+      - AI_IDE_LLM_API_KEY=${AI_IDE_LLM_API_KEY:-mock-api-key-not-configured}
+      - AI_IDE_LLM_BASE_URL=${AI_IDE_LLM_BASE_URL:-https://api.deepseek.com}
 
       # AI-IDE Chat LLM 配置（默认 DeepSeek）
       - AI_IDE_LLM_BASE_URL=${AI_IDE_LLM_BASE_URL:-https://api.deepseek.com}
@@ -171,6 +174,11 @@ services:
       - QWENPAW_AUTH_PASSWORD=${QWENPAW_AUTH_PASSWORD:-}
       # QwenPaw 共享文件目录
       - QWENPAW_SHARED_FILES_DIR=/qwenpaw-shared
+
+      # Huntly 资讯聚合 (后端代理调用)
+      - HUNTLY_BASE_URL=${HUNTLY_BASE_URL:-http://quantmind-huntly}
+      - HUNTLY_USERNAME=${HUNTLY_USERNAME:-admin}
+      - HUNTLY_PASSWORD=${HUNTLY_PASSWORD:-quantmind2026}
     volumes:
       # 运行时数据
       - ./data:/data
@@ -286,7 +294,86 @@ services:
     networks:
       - quantmind-net
 
-  # 5. QwenPaw (QuantBot 聊天机器人)
+  # 5. Web 前端 (浏览器访问，无需安装 Electron)
+  web:
+    image: quantmind-web:latest
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.web
+    container_name: quantmind-web
+    depends_on:
+      quantmind:
+        condition: service_healthy
+    ports:
+      - "${WEB_PORT:-3000}:80"
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1/health >/dev/null 2>&1 || exit 1"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+    restart: unless-stopped
+    networks:
+      - quantmind-net
+
+  # 6. Huntly (财经资讯/RSS/Twitter 聚合订阅源)
+  # 提供新闻流 + 可结构化的财务事件源
+  # 前端通过 QuantMind News 代理访问 (零 401 风险)
+  huntly:
+    image: lcomplete/huntly:latest
+    container_name: quantmind-huntly
+    ports:
+      - "${HUNTLY_PORT:-8090}:80"
+    volumes:
+      - ./data/huntly:/data
+    environment:
+      - TZ=Asia/Shanghai
+      # 默认管理员账号 (首次启动自动创建)
+      - HUNTLY_DEFAULT_USERNAME=${HUNTLY_USERNAME:-admin}
+      - HUNTLY_DEFAULT_PASSWORD=${HUNTLY_PASSWORD:-quantmind2026}
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS http://127.0.0.1/api/health >/dev/null 2>&1 || exit 1"]
+      interval: 30s
+      timeout: 5s
+      retries: 5
+      start_period: 60s
+    restart: unless-stopped
+    networks:
+      - quantmind-net
+
+  # 6b. RSSHub (为 Huntly 提供 RSS 源生成 — Twitter/微博/雪球/财经站点等)
+  # Huntly 端订阅地址示例：http://rsshub:1200/twitter/user/<handle>
+  rsshub:
+    image: diygod/rsshub:latest
+    container_name: quantmind-rsshub
+    ports:
+      - "${RSSHUB_PORT:-1200}:1200"
+    environment:
+      - NODE_ENV=production
+      - TZ=Asia/Shanghai
+      - CACHE_TYPE=redis
+      - REDIS_URL=redis://redis:6379/3
+      - CACHE_EXPIRE=300
+      - CACHE_CONTENT_EXPIRE=3600
+      - REQUEST_RETRY=2
+      - LISTEN_INADDR_ANY=1
+      - PUPPETEER_SKIP_DOWNLOAD=true
+      # 可选：填入 .env 后可启用 Twitter/微博等需登录的源
+      # - TWITTER_USERNAME=${TWITTER_USERNAME:-}
+      # - TWITTER_PASSWORD=${TWITTER_PASSWORD:-}
+    depends_on:
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:1200/healthz >/dev/null 2>&1 || exit 1"]
+      interval: 30s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+    restart: unless-stopped
+    networks:
+      - quantmind-net
+
+  # 7. QwenPaw (QuantBot 聊天机器人)
   qwenpaw:
     image: agentscope/qwenpaw:latest
     container_name: qwenpaw
@@ -345,6 +432,39 @@ services:
       - /var/run/docker.sock:/var/run/docker.sock
     restart: unless-stopped
 
+  # 8. RD-Agent 因子演化容器 (按需启动，不常驻)
+  # 通过 --profile rdagent 构建；launcher.py 用 docker SDK 启动单次任务实例
+  rdagent:
+    image: quantmind-rdagent:latest
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.rdagent
+      args:
+        BASE_IMAGE: quantmind-oss:latest
+    platform: linux/amd64
+    profiles: ["rdagent"]
+    # 默认不启动；运行 docker compose --profile rdagent up rdagent 才生效
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      - PYTHONPATH=/app
+      - QLIB_PROVIDER_URI=/app/db/qlib_data/cn_data
+      - DATABASE_URL=postgresql+asyncpg://quantmind:quantmind2026@db:5432/quantmind
+      - OPENAI_API_KEY=${AI_IDE_LLM_API_KEY:-mock-api-key-not-configured}
+      - OPENAI_API_BASE=${AI_IDE_LLM_BASE_URL:-https://api.deepseek.com}
+      - CHAT_MODEL=${AI_IDE_LLM_MODEL:-deepseek-chat}
+      - LOG_TRACE_PATH=/tmp/rdagent_logs
+    volumes:
+      - ./backend:/app/backend:ro
+      - ./scripts:/app/scripts:ro
+      - ./config:/app/config:ro
+      - ./db:/app/db:ro
+      - ./data:/data
+      - rdagent-logs:/tmp/rdagent_logs
+    networks:
+      - quantmind-net
+
 networks:
   quantmind-net:
     driver: bridge
@@ -356,3 +476,4 @@ volumes:
   qwenpaw-secrets:
   qwenpaw-backups:
   qwenpaw-shared:
+  rdagent-logs:

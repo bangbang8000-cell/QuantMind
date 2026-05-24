@@ -338,6 +338,16 @@ async def list_providers():
     return success({"providers": providers, "active": active})
 
 
+@router.get("/strategies/{strategy_id}")
+async def get_strategy_v1(strategy_id: str):
+    """获取策略详情（前端标准路径）"""
+    result = get_strategy_by_id(strategy_id)
+    if result["success"]:
+        return success(result["strategy"])
+    else:
+        return error(ErrorCode.NOT_FOUND, result["error"])
+
+
 @router.get("/legacy/strategies/{strategy_id}", include_in_schema=False)
 async def get_strategy(strategy_id: str):
     """获取策略详情"""
@@ -382,6 +392,36 @@ async def download_strategy_file(strategy_id: str):
     from fastapi.responses import RedirectResponse
 
     return RedirectResponse(url=result["cos_file_url"])
+
+
+@router.put("/strategies/{strategy_id}")
+async def update_strategy_v1(strategy_id: str, updates: dict):
+    """更新策略（前端标准路径）"""
+    try:
+        from ...storage.database import update_strategy_by_id
+
+        result = update_strategy_by_id(strategy_id, updates)
+        if result["success"]:
+            return success(result["strategy"])
+        else:
+            return error(ErrorCode.NOT_FOUND, result["error"])
+    except Exception as exc:
+        return error(ErrorCode.INTERNAL_ERROR, f"更新策略失败: {exc}")
+
+
+@router.delete("/strategies/{strategy_id}")
+async def delete_strategy_v1(strategy_id: str):
+    """删除策略（前端标准路径）"""
+    try:
+        from ...storage.database import delete_strategy_by_id
+
+        result = delete_strategy_by_id(strategy_id)
+        if result["success"]:
+            return success({"message": f"策略 {strategy_id} 已删除"})
+        else:
+            return error(ErrorCode.NOT_FOUND, result["error"])
+    except Exception as exc:
+        return error(ErrorCode.INTERNAL_ERROR, f"删除策略失败: {exc}")
 
 
 @router.put("/legacy/strategies/{strategy_id}", include_in_schema=False)

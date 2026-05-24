@@ -30,7 +30,10 @@ import {
     Bot,
     AlertCircle,
     HelpCircle,
-    CloudUpload
+    CloudUpload,
+    Sparkles,
+    Bug,
+    Search as SearchIcon,
 } from 'lucide-react';
 import { message, Modal, Input } from 'antd';
 import { clsx } from 'clsx';
@@ -148,6 +151,7 @@ const AIIDEPage: React.FC = () => {
     const [jobId, setJobId] = React.useState<string | null>(null);
     const [isSaving, setIsSaving] = React.useState(false);
     const [isAITyping, setIsAITyping] = React.useState(false);
+    const [assistantRole, setAssistantRole] = React.useState<'quant_analyst' | 'bug_fixer' | 'code_reviewer'>('quant_analyst');
     const [createMode, setCreateMode] = React.useState<'file' | 'folder' | null>(null);
     const [createName, setCreateName] = React.useState('');
     const [searchQuery, setSearchQuery] = React.useState('');
@@ -1603,6 +1607,7 @@ const AIIDEPage: React.FC = () => {
                     user_id: userId,
                     conversation_id: conversationId,
                     history: history,
+                    role: assistantRole,
                     extra_context: {
                         assistant_rules: AI_ASSISTANT_DEVELOPMENT_RULES,
                         assistant_mode: 'strict',
@@ -2613,10 +2618,43 @@ const AIIDEPage: React.FC = () => {
                             <Bot className="h-4 w-4 text-blue-600" />
                             AI 智能助手
                         </div>
-                        <div className="flex flex-wrap gap-1.5 text-[10px] text-blue-700">
-                            <span className="px-2 py-0.5 rounded-full bg-blue-50 border border-blue-100">先结论后细节</span>
-                            <span className="px-2 py-0.5 rounded-full bg-blue-50 border border-blue-100">代码先填输入框</span>
-                            <span className="px-2 py-0.5 rounded-full bg-blue-50 border border-blue-100">补充需求再发送</span>
+                        <div className="flex gap-1.5 text-[10px]">
+                            <button
+                                onClick={() => setAssistantRole('quant_analyst')}
+                                className={clsx(
+                                    "px-2 py-0.5 rounded-full border transition-all flex items-center gap-1",
+                                    assistantRole === 'quant_analyst'
+                                        ? "bg-blue-50 text-blue-700 border-blue-200 font-bold"
+                                        : "bg-gray-50 text-gray-400 border-gray-100 hover:text-gray-600"
+                                )}
+                                title="量化策略设计、因子推荐、回测分析"
+                            >
+                                <Sparkles size={10} />量化分析师
+                            </button>
+                            <button
+                                onClick={() => setAssistantRole('bug_fixer')}
+                                className={clsx(
+                                    "px-2 py-0.5 rounded-full border transition-all flex items-center gap-1",
+                                    assistantRole === 'bug_fixer'
+                                        ? "bg-amber-50 text-amber-700 border-amber-200 font-bold"
+                                        : "bg-gray-50 text-gray-400 border-gray-100 hover:text-gray-600"
+                                )}
+                                title="错误排查、堆栈分析、根因定位"
+                            >
+                                <Bug size={10} />Bug修复
+                            </button>
+                            <button
+                                onClick={() => setAssistantRole('code_reviewer')}
+                                className={clsx(
+                                    "px-2 py-0.5 rounded-full border transition-all flex items-center gap-1",
+                                    assistantRole === 'code_reviewer'
+                                        ? "bg-violet-50 text-violet-700 border-violet-200 font-bold"
+                                        : "bg-gray-50 text-gray-400 border-gray-100 hover:text-gray-600"
+                                )}
+                                title="代码审查、性能优化、安全检查"
+                            >
+                                <SearchIcon size={10} />代码审查
+                            </button>
                         </div>
                     </div>
                     <button

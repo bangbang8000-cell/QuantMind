@@ -36,6 +36,7 @@ class ChatRequest(BaseModel):
     conversation_id: str | None = None
     history: list[ChatMessage] | None = []
     extra_context: dict[str, Any] | None = None
+    role: str | None = None  # quant_analyst | bug_fixer | code_reviewer
 
 
 @router.post("/chat")
@@ -48,6 +49,12 @@ async def chat_completions(request: ChatRequest):
 
     if not agent.api_key:
         raise HTTPException(status_code=500, detail="尚未配置 AI Key，请在 AI-IDE 设置中填写后重试。")
+
+    # 角色切换
+    if request.role and request.role != agent.role:
+        agent.role = request.role
+        agent._system_prompt_base = agent._build_system_prompt_base()
+        agent._kb_context_cached = None  # 重置知识库缓存
 
     context = {
         "current_code": request.current_code,

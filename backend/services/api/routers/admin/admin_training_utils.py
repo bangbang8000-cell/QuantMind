@@ -343,6 +343,8 @@ def _normalize_payload(payload: dict[str, Any], allowed_features: list[str]) -> 
         raise HTTPException(status_code=422, detail="required_artifacts must be a string array")
     normalized["required_artifacts"] = [x.strip() for x in required_artifacts if x.strip()]
 
+    normalized["deploy_to_production"] = bool(payload.get("deploy_to_production", False))
+
     generated_at = str(payload.get("generated_at") or "").strip()
     if generated_at:
         normalized["generated_at"] = generated_at
