@@ -265,6 +265,7 @@ async def _fetch_latest_backtest_summaries(user_id: str, tenant_id: str) -> dict
 async def _perform_sync(user_id: str):
     """
     执行模板同步的内部逻辑：将内置模板同步到用户的个人策略数据库。
+    同步 DB 操作通过 asyncio.to_thread 避免阻塞事件循环。
     """
     svc = get_strategy_storage_service()
     from sqlalchemy import text
@@ -273,31 +274,36 @@ async def _perform_sync(user_id: str):
 
     # 彻底清理残留：如果用户已有"抗下行 Alpha 策略"，则将其移除
     # 避免因名称冲突导致的新模板(多空TopK)无法同步
-    try:
-        with get_db() as session:
-            # 1. 按名称清理
-            session.execute(
-                text("DELETE FROM strategies WHERE user_id = :uid AND name = '抗下行 Alpha 策略'"), {"uid": user_id}
-            )
-            # 2. 按内部参数 ID 清理
-            session.execute(
-                text("DELETE FROM strategies WHERE user_id = :uid AND parameters->>'strategy_type' = 'downside_alpha'"),
-                {"uid": user_id},
-            )
-            session.commit()
-            StructuredTaskLogger(logger, "user-strategies", {"user_id": user_id}).info(
-                "sync_cleanup", "清理旧模板", strategy="抗下行 Alpha 策略/downside_alpha"
-            )
-    except Exception as e:
+    def _cleanup_old_templates():
+        try:
+            with get_db() as session:
+                session.execute(
+                    text("DELETE FROM strategies WHERE user_id = :uid AND name = '抗下行 Alpha 策略'"), {"uid": user_id}
+                )
+                session.execute(
+                    text("DELETE FROM strategies WHERE user_id = :uid AND parameters->>'strategy_type' = 'downside_alpha'"),
+                    {"uid": user_id},
+                )
+                session.commit()
+            return True
+        except Exception:
+            return False
+
+    cleanup_ok = await asyncio.to_thread(_cleanup_old_templates)
+    if cleanup_ok:
+        StructuredTaskLogger(logger, "user-strategies", {"user_id": user_id}).info(
+            "sync_cleanup", "清理旧模板", strategy="抗下行 Alpha 策略/downside_alpha"
+        )
+    else:
         StructuredTaskLogger(logger, "user-strategies", {"user_id": user_id}).warning(
-            "sync_cleanup_failed", "Failed to cleanup obsolete strategy in sync", error=e
+            "sync_cleanup_failed", "Failed to cleanup obsolete strategy in sync"
         )
 
     templates = get_all_templates()
     synced_count = 0
     for t in templates:
-        # 检查是否已存在同名策略
-        existing = svc.list(user_id=user_id, search=t.name)
+        # 检查是否已存在同名策略 (同步 DB 调用，放线程池)
+        existing = await asyncio.to_thread(svc.list, user_id=user_id, search=t.name)
         if any(s["name"] == t.name for s in existing):
             continue
 
@@ -406,11 +412,11 @@ async def list_user_strategies(
         tag_list = tags.split(",") if tags else None
         tenant_id = _get_tenant_id(request)
 
-        items = svc.list(user_id=user_id, category=category, search=search, tags=tag_list)
+        items = await asyncio.to_thread(svc.list, user_id=user_id, category=category, search=search, tags=tag_list)
 
         if not items and not search and not tags:
             await _perform_sync(user_id)
-            items = svc.list(user_id=user_id)
+            items = await asyncio.to_thread(svc.list, user_id=user_id)
 
         backtest_summaries = await _fetch_latest_backtest_summaries(user_id=user_id, tenant_id=tenant_id)
         trading_status = await _fetch_real_trading_status(request)
