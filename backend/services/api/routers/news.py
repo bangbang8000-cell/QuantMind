@@ -28,9 +28,204 @@ logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/v1/news", tags=["News"])
 
 HUNTLY_BASE_URL = os.getenv("HUNTLY_BASE_URL", "http://quantmind-huntly").rstrip("/")
-HUNTLY_USERNAME = os.getenv("HUNTLY_USERNAME", "admin")
-HUNTLY_PASSWORD = os.getenv("HUNTLY_PASSWORD", "quantmind2026")
+HUNTLY_USERNAME = os.getenv("HUNTLY_USERNAME", "807133286")
+HUNTLY_PASSWORD = os.getenv("HUNTLY_PASSWORD", "199205181010")
 HUNTLY_TIMEOUT = float(os.getenv("HUNTLY_TIMEOUT_SECONDS", "20"))
+
+
+# ---------- enrichment ----------
+
+def _pg_conn():
+    import psycopg2
+    return psycopg2.connect(
+        host=os.getenv("POSTGRES_HOST", "quantmind-db"),
+        port=int(os.getenv("POSTGRES_PORT", "5432")),
+        user=os.getenv("POSTGRES_USER", "quantmind"),
+        password=os.getenv("POSTGRES_PASSWORD", "quantmind2026"),
+        dbname=os.getenv("POSTGRES_DB", "quantmind"),
+    )
+
+
+def _load_enrichments(page_ids: list[int]) -> dict[int, dict]:
+    if not page_ids:
+        return {}
+    try:
+        with _pg_conn() as conn, conn.cursor() as cur:
+            cur.execute(
+                "SELECT huntly_page_id, tickers, industries, event_tags, "
+                "sentiment_score, sentiment_label, sentiment_confidence, "
+                "countries, regions, key_terms, date_entities, entity_sentiments, "
+                "provinces, cities, politicians, visits, departments "
+                "FROM news_article_enrichment WHERE huntly_page_id = ANY(%s)",
+                (page_ids,),
+            )
+            rows = cur.fetchall()
+        out: dict[int, dict] = {}
+        for (pid, tickers, industries, ev, score, label, conf,
+             countries, regions, key_terms, date_entities, ent_sent,
+             provinces, cities, politicians, visits, departments) in rows:
+            out[int(pid)] = {
+                "tickers": list(tickers or []),
+                "industries": list(industries or []),
+                "event_tags": list(ev or []),
+                "sentiment_score": float(score) if score is not None else None,
+                "sentiment_label": label,
+                "sentiment_confidence": float(conf) if conf is not None else None,
+                "countries": list(countries or []),
+                "regions": list(regions or []),
+                "key_terms": list(key_terms or []),
+                "date_entities": list(date_entities or []),
+                "entity_sentiments": dict(ent_sent) if ent_sent else {},
+                "provinces": list(provinces or []),
+                "cities": list(cities or []),
+                "politicians": list(politicians or []),
+                "visits": list(visits or []),
+                "departments": list(departments or []),
+            }
+        return out
+    except Exception as e:
+        logger.warning("加载 enrichment 失败: %s", e)
+        return {}
+
+
+def _empty_enrichment() -> dict:
+    return {
+        "tickers": [],
+        "industries": [],
+        "event_tags": [],
+        "sentiment_score": None,
+        "sentiment_label": None,
+        "sentiment_confidence": None,
+        "countries": [],
+        "regions": [],
+        "key_terms": [],
+        "date_entities": [],
+        "entity_sentiments": {},
+        "provinces": [],
+        "cities": [],
+        "politicians": [],
+        "visits": [],
+        "departments": [],
+    }
+
+
+def _build_enrichment_where(
+    *,
+    want_tickers: set[str] | None = None,
+    want_industries: set[str] | None = None,
+    want_event_tags: set[str] | None = None,
+    want_sentiment: str | None = None,
+    strong_only: bool = False,
+    want_countries: set[str] | None = None,
+    want_regions: set[str] | None = None,
+    want_key_terms: set[str] | None = None,
+    want_date_entities: set[str] | None = None,
+    want_provinces: set[str] | None = None,
+    want_cities: set[str] | None = None,
+    want_politicians: set[str] | None = None,
+    want_visits: set[str] | None = None,
+    want_departments: set[str] | None = None,
+    only_ids: set[int] | None = None,
+) -> tuple[list[str], list]:
+    where: list[str] = []
+    params: list = []
+    if want_tickers:
+        where.append("tickers && %s"); params.append(list(want_tickers))
+    if want_industries:
+        where.append("industries && %s"); params.append(list(want_industries))
+    if want_event_tags:
+        where.append("event_tags && %s"); params.append(list(want_event_tags))
+    if want_countries:
+        where.append("countries && %s"); params.append(list(want_countries))
+    if want_regions:
+        where.append("regions && %s"); params.append(list(want_regions))
+    if want_key_terms:
+        where.append("key_terms && %s"); params.append(list(want_key_terms))
+    if want_date_entities:
+        where.append("date_entities && %s"); params.append(list(want_date_entities))
+    if want_provinces:
+        where.append("provinces && %s"); params.append(list(want_provinces))
+    if want_cities:
+        where.append("cities && %s"); params.append(list(want_cities))
+    if want_politicians:
+        where.append("politicians && %s"); params.append(list(want_politicians))
+    if want_visits:
+        where.append("visits && %s"); params.append(list(want_visits))
+    if want_departments:
+        where.append("departments && %s"); params.append(list(want_departments))
+    if want_sentiment:
+        where.append("sentiment_label = %s"); params.append(want_sentiment)
+    if strong_only:
+        where.append("abs(coalesce(sentiment_score, 0)) >= 0.5")
+    if only_ids is not None:
+        where.append("huntly_page_id = ANY(%s)"); params.append(list(only_ids))
+    return where, params
+
+
+def _query_enrichment_page_ids(
+    want_tickers: set[str],
+    want_industries: set[str],
+    want_event_tags: set[str],
+    want_sentiment: str | None,
+    strong_only: bool,
+    want_countries: set[str] | None = None,
+    want_regions: set[str] | None = None,
+    want_key_terms: set[str] | None = None,
+    want_date_entities: set[str] | None = None,
+    want_provinces: set[str] | None = None,
+    want_cities: set[str] | None = None,
+    want_politicians: set[str] | None = None,
+    want_visits: set[str] | None = None,
+    want_departments: set[str] | None = None,
+    keyword: str | None = None,
+    limit: int = 2000,
+) -> list[int]:
+    """根据 enrichment 表里的过滤条件，倒排查出所有命中文章的 huntly_page_id。
+
+    keyword: 同时匹配 tickers / industries / event_tags / countries / regions /
+             key_terms / provinces / cities / politicians / visits
+             (用户输入的关键词可能是股票代码、行业名、地名、人名 — 在这里一并模糊匹配)。
+             标题/内容的关键词搜索仍然走 Huntly 的 `q` 参数。
+    """
+    where, params = _build_enrichment_where(
+        want_tickers=want_tickers,
+        want_industries=want_industries,
+        want_event_tags=want_event_tags,
+        want_sentiment=want_sentiment,
+        strong_only=strong_only,
+        want_countries=want_countries,
+        want_regions=want_regions,
+        want_key_terms=want_key_terms,
+        want_date_entities=want_date_entities,
+        want_provinces=want_provinces,
+        want_cities=want_cities,
+        want_politicians=want_politicians,
+        want_visits=want_visits,
+        want_departments=want_departments,
+    )
+    if keyword:
+        # 在 enrichment 标签里也做关键词匹配 — array_to_string + ILIKE 简单粗暴够用
+        where.append(
+            "(array_to_string(tickers || industries || event_tags || countries || regions "
+            "|| key_terms || provinces || cities || politicians || visits || departments, ',') ILIKE %s)"
+        )
+        params.append(f"%{keyword}%")
+    if not where:
+        return []
+    sql = (
+        "SELECT huntly_page_id FROM news_article_enrichment "
+        "WHERE " + " AND ".join(where) + " "
+        "ORDER BY enriched_at DESC LIMIT %s"
+    )
+    params.append(int(limit))
+    try:
+        with _pg_conn() as conn, conn.cursor() as cur:
+            cur.execute(sql, tuple(params))
+            return [int(r[0]) for r in cur.fetchall()]
+    except Exception as e:
+        logger.warning("enrichment 倒排查询失败: %s", e)
+        return []
+
 
 # 财经事件关键词 (用于把普通文章打上 "financial_event" 标记)
 _FINANCIAL_EVENT_KEYWORDS = (
@@ -272,22 +467,305 @@ async def refresh_source(source_id: int):
     }
 
 
+# ---------------------------------------------------------------------------
+# Admin: RSS 源 CRUD (代理 Huntly /api/setting/{feeds,folder}/*)
+# ---------------------------------------------------------------------------
+
+def _huntly_error(r: httpx.Response, action: str) -> HTTPException:
+    detail = r.text[:300] if r.text else f"HTTP {r.status_code}"
+    return HTTPException(
+        status_code=502 if r.status_code >= 500 else r.status_code,
+        detail=f"Huntly {action} 失败: {detail}",
+    )
+
+
+@router.get("/admin/folders")
+async def admin_list_folders():
+    """列出所有文件夹（含其下的 connector 概览）
+
+    Huntly 的 /setting/folder/all 只返回文件夹元信息，connector 列表是空的。
+    需要再调一次 /connector/folder-connectors 把真实订阅源合并进来。
+    """
+    r1 = await _huntly_request("GET", "/api/setting/folder/all")
+    if r1.status_code != 200:
+        raise _huntly_error(r1, "folder/all")
+    folders = list(_unwrap(r1.json()) or [])
+
+    r2 = await _huntly_request("GET", "/api/connector/folder-connectors")
+    if r2.status_code != 200:
+        raise _huntly_error(r2, "connector/folder-connectors")
+    body2 = _unwrap(r2.json()) or {}
+    ffc = (
+        body2.get("folderFeedConnectors")
+        if isinstance(body2, dict)
+        else body2
+    ) or []
+
+    # 索引：folder_id -> connectors（folder_id=None 视为未分组）
+    conn_by_folder: dict[int | None, list[dict]] = {}
+    seen_folder_ids: set[int | None] = set()
+    for f in ffc:
+        fid = f.get("id")  # None = 未分组
+        conn_by_folder[fid] = list(f.get("connectorItems") or [])
+        seen_folder_ids.add(fid)
+
+    merged: list[dict] = []
+    have_ungrouped = False
+    for fdr in folders:
+        fid = fdr.get("id")
+        items = conn_by_folder.get(fid, [])
+        merged.append({**fdr, "connectors": items})
+        if fid is None:
+            have_ungrouped = True
+
+    # folder/all 不一定返回未分组占位；ffc 里若有 id=None 的桶就补一条
+    if not have_ungrouped and None in seen_folder_ids:
+        merged.insert(
+            0,
+            {
+                "id": None,
+                "name": None,
+                "displaySequence": None,
+                "createdAt": None,
+                "connectors": conn_by_folder[None],
+            },
+        )
+
+    # folder/all 也可能漏掉某个 ffc 文件夹（极少见），兜底补齐
+    known_ids = {f.get("id") for f in merged}
+    for fid, items in conn_by_folder.items():
+        if fid is None or fid in known_ids:
+            continue
+        merged.append(
+            {
+                "id": fid,
+                "name": f"#{fid}",
+                "displaySequence": None,
+                "createdAt": None,
+                "connectors": items,
+            }
+        )
+
+    return {"folders": merged}
+
+
+@router.post("/admin/folders")
+async def admin_create_folder(payload: dict):
+    """新建文件夹: body = {name}"""
+    name = (payload or {}).get("name", "").strip()
+    if not name:
+        raise HTTPException(status_code=400, detail="name 不能为空")
+    r = await _huntly_request("POST", "/api/setting/folder/save", json={"name": name})
+    if r.status_code != 200:
+        raise _huntly_error(r, "folder/save")
+    return _unwrap(r.json())
+
+
+@router.put("/admin/folders/{folder_id}")
+async def admin_rename_folder(folder_id: int, payload: dict):
+    """重命名文件夹: body = {name}"""
+    name = (payload or {}).get("name", "").strip()
+    if not name:
+        raise HTTPException(status_code=400, detail="name 不能为空")
+    r = await _huntly_request(
+        "POST", "/api/setting/folder/save", json={"id": folder_id, "name": name}
+    )
+    if r.status_code != 200:
+        raise _huntly_error(r, "folder/save")
+    return _unwrap(r.json())
+
+
+@router.delete("/admin/folders/{folder_id}")
+async def admin_delete_folder(folder_id: int):
+    """删除文件夹（其下 connector 会自动回到 未分组）"""
+    r = await _huntly_request(
+        "POST", "/api/setting/folder/delete", params={"folderId": folder_id}
+    )
+    if r.status_code != 200:
+        raise _huntly_error(r, "folder/delete")
+    return {"ok": True, "folder_id": folder_id}
+
+
+@router.get("/admin/preview")
+async def admin_preview_feed(subscribe_url: str = Query(..., alias="subscribe_url")):
+    """添加前预览订阅源元信息 (title / siteLink / subscribed)"""
+    r = await _huntly_request(
+        "GET", "/api/setting/feeds/preview", params={"subscribeUrl": subscribe_url}
+    )
+    if r.status_code != 200:
+        raise _huntly_error(r, "feeds/preview")
+    return _unwrap(r.json())
+
+
+@router.post("/admin/sources")
+async def admin_create_source(payload: dict):
+    """新增订阅源: body = {subscribe_url, folder_id?, name?}
+
+    Huntly /feeds/follow 仅接受 subscribeUrl，folder/name 需追加一次 updateSetting。
+    """
+    subscribe_url = (payload or {}).get("subscribe_url", "").strip()
+    if not subscribe_url:
+        raise HTTPException(status_code=400, detail="subscribe_url 不能为空")
+
+    r = await _huntly_request(
+        "POST", "/api/setting/feeds/follow", params={"subscribeUrl": subscribe_url}
+    )
+    if r.status_code != 200:
+        raise _huntly_error(r, "feeds/follow")
+    follow_data = _unwrap(r.json()) or {}
+    connector_id = follow_data.get("id") or follow_data.get("connectorId")
+
+    folder_id = (payload or {}).get("folder_id")
+    custom_name = (payload or {}).get("name")
+    if connector_id and (folder_id is not None or custom_name):
+        update_body: dict[str, Any] = {"connectorId": connector_id}
+        if folder_id is not None:
+            update_body["folderId"] = folder_id or None  # 0 视为未分组 → null
+        if custom_name:
+            update_body["name"] = custom_name
+        u = await _huntly_request(
+            "POST", "/api/setting/feeds/updateSetting", json=update_body
+        )
+        if u.status_code != 200:
+            logger.warning(
+                "feeds/updateSetting failed after follow: %s %s",
+                u.status_code, u.text[:200],
+            )
+
+    return {"ok": True, "connector_id": connector_id, "follow": follow_data}
+
+
+@router.put("/admin/sources/{connector_id}")
+async def admin_update_source(connector_id: int, payload: dict):
+    """编辑订阅源: body = {name?, folder_id?, fetch_interval_minutes?, enabled?, crawl_full_content?}"""
+    body: dict[str, Any] = {"connectorId": connector_id}
+    if "name" in payload:
+        body["name"] = payload["name"]
+    if "folder_id" in payload:
+        fid = payload["folder_id"]
+        body["folderId"] = None if fid in (0, None, "") else fid
+    if "fetch_interval_minutes" in payload:
+        body["fetchIntervalMinutes"] = payload["fetch_interval_minutes"]
+    if "enabled" in payload:
+        body["enabled"] = bool(payload["enabled"])
+    if "crawl_full_content" in payload:
+        body["crawlFullContent"] = bool(payload["crawl_full_content"])
+
+    r = await _huntly_request("POST", "/api/setting/feeds/updateSetting", json=body)
+    if r.status_code != 200:
+        raise _huntly_error(r, "feeds/updateSetting")
+    return {"ok": True, "connector_id": connector_id}
+
+
+@router.delete("/admin/sources/{connector_id}")
+async def admin_delete_source(connector_id: int):
+    """删除订阅源"""
+    r = await _huntly_request(
+        "POST", "/api/setting/feeds/delete", params={"connectorId": connector_id}
+    )
+    if r.status_code != 200:
+        raise _huntly_error(r, "feeds/delete")
+    return {"ok": True, "connector_id": connector_id}
+
+
+@router.get("/admin/sources/{connector_id}/setting")
+async def admin_get_source_setting(connector_id: int):
+    """查询单个订阅源的详细设置"""
+    r = await _huntly_request(
+        "GET", "/api/setting/feeds/setting", params={"connectorId": connector_id}
+    )
+    if r.status_code != 200:
+        raise _huntly_error(r, "feeds/setting")
+    return _unwrap(r.json())
+
+
 @router.get("/articles")
 async def list_articles(
     source_id: int | None = Query(None, description="按 connector(source) 过滤"),
     folder_id: int | None = Query(None, description="按 folder 过滤"),
     keyword: str | None = Query(None, description="标题关键词"),
     only_financial_event: bool = Query(False, description="仅返回财务事件"),
+    tickers: str | None = Query(None, description="股票 ticker, 逗号分隔 e.g. 600519.SH,000858.SZ"),
+    industries: str | None = Query(None, description="行业, 逗号分隔"),
+    sentiment: str | None = Query(None, description="情感: bullish/bearish/neutral"),
+    event_tags: str | None = Query(None, description="事件标签, 逗号分隔"),
+    countries: str | None = Query(None, description="国家, 逗号分隔 e.g. 美国,中国"),
+    regions: str | None = Query(None, description="地区, 逗号分隔 e.g. 欧盟,东南亚"),
+    key_terms: str | None = Query(None, description="关键词, 逗号分隔 e.g. AI,半导体"),
+    date_entities: str | None = Query(None, description="文章中提及的日期, 逗号分隔 e.g. 2026-05-25,2026-Q2"),
+    provinces: str | None = Query(None, description="中国省份, 逗号分隔 e.g. 广东,江苏"),
+    cities: str | None = Query(None, description="中国城市, 逗号分隔 e.g. 深圳,合肥"),
+    politicians: str | None = Query(None, description="政治人物, 逗号分隔 e.g. 李强,潘功胜"),
+    visits: str | None = Query(None, description="调研类动词, 逗号分隔 e.g. 调研,视察"),
+    departments: str | None = Query(None, description="国家部门, 逗号分隔 e.g. 央行,证监会"),
+    strong_only: bool = Query(False, description="仅返回强信号 |score|>=0.5"),
+    since: str | None = Query(None, description="起始时间 ISO 8601, e.g. 2026-05-20T00:00:00Z"),
+    until: str | None = Query(None, description="截止时间 ISO 8601"),
     page: int = Query(1, ge=1),
-    page_size: int = Query(30, ge=1, le=200),
+    page_size: int = Query(30, ge=1, le=500),
 ):
     """资讯文章列表 (代理 Huntly /api/page/list)
 
     Huntly 端是 GET，返回纯数组（按 connectedAt desc）。
+
+    过滤策略：
+      - 无 enrichment 过滤时：按旧逻辑直接代理 Huntly 分页结果
+      - 有 enrichment 过滤时：先在 PG enrichment 表里倒排查出命中的 huntly_page_id，
+        再从 Huntly 拉一个较大的 pool（500–1000 条），求交集 → 内存分页。
+        这样可以保证 "命中数=显示数"，避免分页吃掉过滤结果。
     """
+    def _split(s: str | None) -> list[str]:
+        return [x.strip() for x in (s or "").split(",") if x.strip()]
+
+    want_tickers = set(_split(tickers))
+    want_industries = set(_split(industries))
+    want_event_tags = set(_split(event_tags))
+    want_countries = set(_split(countries))
+    want_regions = set(_split(regions))
+    want_key_terms = set(_split(key_terms))
+    want_date_entities = set(_split(date_entities))
+    want_provinces = set(_split(provinces))
+    want_cities = set(_split(cities))
+    want_politicians = set(_split(politicians))
+    want_visits = set(_split(visits))
+    want_departments = set(_split(departments))
+    want_sentiment = (sentiment or "").strip().lower() or None
+    if want_sentiment and want_sentiment not in ("bullish", "bearish", "neutral"):
+        want_sentiment = None
+
+    has_enrichment_filter = bool(
+        want_tickers or want_industries or want_event_tags or want_sentiment
+        or strong_only or want_countries or want_regions or want_key_terms
+        or want_date_entities
+        or want_provinces or want_cities or want_politicians or want_visits
+        or want_departments
+    )
+    # keyword 也需要走"标签/内容"双路径
+    has_keyword = bool(keyword and keyword.strip())
+
+    # 解析时间过滤
+    def _parse_iso(s: str | None):
+        if not s:
+            return None
+        try:
+            from datetime import datetime
+            return datetime.fromisoformat(s.replace("Z", "+00:00"))
+        except Exception:
+            return None
+
+    since_dt = _parse_iso(since)
+    until_dt = _parse_iso(until)
+
+    if has_enrichment_filter or has_keyword:
+        # 过滤模式：拉一个大池子求交集
+        pool_size = max(page_size * page * 4, 500)
+        pool_size = min(pool_size, 1000)
+    else:
+        pool_size = page_size
+
     # Huntly v0.6.x 真实参数：count(总数) / sort(枚举) / isAsc / connectorId / folderId
     params: dict = {
-        "count": page_size,
+        "count": pool_size,
         "sort": "CONNECTED_AT",
         "isAsc": "false",
     }
@@ -295,7 +773,8 @@ async def list_articles(
         params["connectorId"] = source_id
     if folder_id is not None and folder_id > 0:
         params["folderId"] = folder_id
-    if keyword:
+    # has_keyword 模式下不传 Huntly q=, 在内存合并 (标题/正文 ∪ 标签) 命中, 否则会漏掉只标签命中的
+    if keyword and not (has_keyword or has_enrichment_filter):
         params["q"] = keyword
 
     r = await _huntly_request("GET", "/api/page/list", params=params)
@@ -308,18 +787,93 @@ async def list_articles(
     body = _unwrap(r.json())
     if isinstance(body, list):
         raw_pages = body
-        total_hint = len(raw_pages)
     elif isinstance(body, dict):
         raw_pages = body.get("items") or body.get("content") or body.get("data") or []
-        total_hint = body.get("total") or body.get("totalElements") or len(raw_pages)
     else:
-        raw_pages, total_hint = [], 0
+        raw_pages = []
 
     articles = [_normalize_page(p) for p in raw_pages]
     if only_financial_event:
         articles = [a for a in articles if a["is_financial_event"]]
 
-    # 计算最新一条同步时间，前端用于显示 "最新资讯 X 秒前"
+    # 时间过滤（基于 published_at, ISO 字符串）
+    if since_dt or until_dt:
+        from datetime import datetime, timezone
+        def _in_range(a: dict) -> bool:
+            t = a.get("published_at")
+            if not t:
+                return False
+            try:
+                d = datetime.fromisoformat(t.replace("Z", "+00:00"))
+                if d.tzinfo is None:
+                    d = d.replace(tzinfo=timezone.utc)
+            except Exception:
+                return False
+            if since_dt and d < since_dt:
+                return False
+            if until_dt and d > until_dt:
+                return False
+            return True
+        articles = [a for a in articles if _in_range(a)]
+
+    # 合并 enrichment
+    page_ids = [int(a["id"]) for a in articles if a.get("id")]
+    enrich_map = _load_enrichments(page_ids)
+
+    if has_enrichment_filter or has_keyword:
+        # 标签条件 (不含 keyword) 命中的 ids
+        tag_filter_ids: set[int] | None = None
+        if has_enrichment_filter:
+            tag_filter_ids = set(_query_enrichment_page_ids(
+                want_tickers, want_industries, want_event_tags, want_sentiment, strong_only,
+                want_countries=want_countries,
+                want_regions=want_regions,
+                want_key_terms=want_key_terms,
+                want_date_entities=want_date_entities,
+                want_provinces=want_provinces,
+                want_cities=want_cities,
+                want_politicians=want_politicians,
+                want_visits=want_visits,
+                want_departments=want_departments,
+                limit=5000,
+            ))
+
+        if has_keyword:
+            kw = (keyword or "").strip().lower()
+            # (a) 池子内: 标题/摘要 ILIKE keyword 命中 (Huntly q= 已被禁掉, 所以在内存里匹配)
+            content_hit_ids = {
+                int(a["id"])
+                for a in articles
+                if a.get("id") and (
+                    kw in (a.get("title") or "").lower()
+                    or kw in (a.get("summary") or "").lower()
+                )
+            }
+            # (b) 倒排表里: 标签/股票/行业等数组的字符串包含 keyword 命中 (跨全库, 不限池子)
+            tag_keyword_ids = set(_query_enrichment_page_ids(
+                set(), set(), set(), None, False,
+                keyword=keyword,
+                limit=5000,
+            ))
+            keyword_hit_ids = content_hit_ids | tag_keyword_ids
+            hit_ids = (keyword_hit_ids & tag_filter_ids) if tag_filter_ids is not None else keyword_hit_ids
+        else:
+            hit_ids = tag_filter_ids or set()
+
+        articles = [a for a in articles if a.get("id") and int(a["id"]) in hit_ids]
+        matched_total = len(hit_ids)
+    else:
+        matched_total = len(articles)
+
+    for a in articles:
+        a["enrichment"] = enrich_map.get(int(a["id"]), _empty_enrichment()) if a.get("id") else _empty_enrichment()
+
+    # 内存分页（已按 CONNECTED_AT desc 排序）
+    total = len(articles) if has_enrichment_filter or only_financial_event or since_dt or until_dt else matched_total
+    start = (page - 1) * page_size
+    end = start + page_size
+    page_slice = articles[start:end] if has_enrichment_filter else articles[:page_size]
+
     latest_at = None
     for a in articles:
         if a.get("published_at"):
@@ -327,10 +881,11 @@ async def list_articles(
             break
 
     return {
-        "articles": articles,
+        "articles": page_slice,
         "page": page,
         "page_size": page_size,
-        "total": total_hint,
+        "total": total,
+        "matched_total": matched_total,  # enrichment 全库命中数（可大于 articles 长度）
         "latest_published_at": latest_at,
         "server_time": __import__("datetime").datetime.utcnow().isoformat() + "Z",
     }
@@ -356,10 +911,17 @@ async def get_article(article_id: int):
         else:
             detail["content"] = page_obj.get("content") or ""
         detail["content_html"] = page_obj.get("contentHtml") or detail["content"]
-        return detail
-    detail = _normalize_page(page)
-    detail["content"] = page.get("content") or ""
-    detail["content_html"] = page.get("contentHtml") or ""
+    else:
+        detail = _normalize_page(page)
+        detail["content"] = page.get("content") or ""
+        detail["content_html"] = page.get("contentHtml") or ""
+
+    # 合并 enrichment
+    if detail.get("id"):
+        em = _load_enrichments([int(detail["id"])])
+        detail["enrichment"] = em.get(int(detail["id"]), _empty_enrichment())
+    else:
+        detail["enrichment"] = _empty_enrichment()
     return detail
 
 
@@ -394,6 +956,312 @@ async def list_financial_events(
         folder_id=None,
         keyword=None,
         only_financial_event=True,
+        tickers=None,
+        industries=None,
+        sentiment=None,
+        event_tags=None,
+        countries=None,
+        regions=None,
+        key_terms=None,
+        date_entities=None,
+        provinces=None,
+        cities=None,
+        politicians=None,
+        visits=None,
+        strong_only=False,
+        since=None,
+        until=None,
         page=page,
         page_size=page_size,
     )
+
+
+@router.get("/enrichment/stats")
+async def enrichment_stats(
+    tickers: str | None = Query(None),
+    industries: str | None = Query(None),
+    sentiment: str | None = Query(None),
+    event_tags: str | None = Query(None),
+    countries: str | None = Query(None),
+    regions: str | None = Query(None),
+    key_terms: str | None = Query(None),
+    date_entities: str | None = Query(None),
+    provinces: str | None = Query(None),
+    cities: str | None = Query(None),
+    politicians: str | None = Query(None),
+    visits: str | None = Query(None),
+    departments: str | None = Query(None),
+    strong_only: bool = Query(False),
+    keyword: str | None = Query(None),
+):
+    """聚合统计：返回 enrichment 表里出现频次最高的标签，用于前端 Filter Bar 下拉选项。
+
+    当传入任意 filter 参数时, 统计结果会限制在当前过滤后的子集内
+    (例如 sentiment_counts 会变成"在当前筛选结果中 利好/利空/中性 的分布")。
+    """
+    def _split(s: str | None) -> set[str]:
+        return {x.strip() for x in (s or "").split(",") if x.strip()}
+
+    want_tickers = _split(tickers)
+    want_industries = _split(industries)
+    want_event_tags = _split(event_tags)
+    want_countries = _split(countries)
+    want_regions = _split(regions)
+    want_key_terms = _split(key_terms)
+    want_date_entities = _split(date_entities)
+    want_provinces = _split(provinces)
+    want_cities = _split(cities)
+    want_politicians = _split(politicians)
+    want_visits = _split(visits)
+    want_departments = _split(departments)
+    want_sentiment = (sentiment or "").strip().lower() or None
+    if want_sentiment not in ("bullish", "bearish", "neutral"):
+        want_sentiment = None
+    has_filter = bool(
+        want_tickers or want_industries or want_event_tags or want_sentiment
+        or strong_only or want_countries or want_regions or want_key_terms
+        or want_date_entities or want_provinces or want_cities or want_politicians
+        or want_visits or want_departments or (keyword and keyword.strip())
+    )
+
+    try:
+        with _pg_conn() as conn, conn.cursor() as cur:
+            # 若有筛选, 先取符合条件的 huntly_page_id 集合 -> 后续所有 unnest 统计加 WHERE
+            subset_ids: list[int] | None = None
+            if has_filter:
+                subset_ids = _query_enrichment_page_ids(
+                    want_tickers, want_industries, want_event_tags, want_sentiment, strong_only,
+                    want_countries=want_countries,
+                    want_regions=want_regions,
+                    want_key_terms=want_key_terms,
+                    want_date_entities=want_date_entities,
+                    want_provinces=want_provinces,
+                    want_cities=want_cities,
+                    want_politicians=want_politicians,
+                    want_visits=want_visits,
+                    want_departments=want_departments,
+                    keyword=keyword,
+                    limit=10000,
+                )
+                if not subset_ids:
+                    return {
+                        "top_industries": [], "top_events": [], "top_tickers": [],
+                        "top_countries": [], "top_regions": [], "top_key_terms": [],
+                        "top_dates": [], "top_provinces": [], "top_cities": [],
+                        "top_politicians": [], "top_visits": [], "top_departments": [],
+                        "sentiment_counts": {},
+                    }
+
+            id_where = " AND huntly_page_id = ANY(%s)" if subset_ids is not None else ""
+            id_param: tuple = (subset_ids,) if subset_ids is not None else ()
+
+            def _topn(col: str, limit: int) -> list[dict]:
+                cur.execute(
+                    f"SELECT unnest({col}) AS v, COUNT(*) c "
+                    f"FROM news_article_enrichment "
+                    f"WHERE array_length({col}, 1) > 0{id_where} "
+                    f"GROUP BY v ORDER BY c DESC LIMIT %s;",
+                    id_param + (limit,),
+                )
+                return [{"name": r[0], "count": int(r[1])} for r in cur.fetchall()]
+
+            top_industries = _topn("industries", 50)
+            top_events = _topn("event_tags", 30)
+            top_countries = _topn("countries", 30)
+            top_regions = _topn("regions", 30)
+            top_key_terms = _topn("key_terms", 50)
+            top_dates = _topn("date_entities", 30)
+            top_provinces = _topn("provinces", 30)
+            top_cities = _topn("cities", 50)
+            top_politicians = _topn("politicians", 30)
+            top_visits = _topn("visits", 20)
+            top_departments = _topn("departments", 30)
+
+            cur.execute(
+                f"SELECT unnest(tickers) AS v, COUNT(*) c FROM news_article_enrichment "
+                f"WHERE array_length(tickers, 1) > 0{id_where} "
+                f"GROUP BY v ORDER BY c DESC LIMIT %s;",
+                id_param + (50,),
+            )
+            top_tickers_raw = cur.fetchall()
+
+            cur.execute(
+                f"SELECT sentiment_label, COUNT(*) FROM news_article_enrichment "
+                f"WHERE sentiment_label IS NOT NULL{id_where} "
+                f"GROUP BY sentiment_label;",
+                id_param,
+            )
+            sentiment_counts = {r[0]: int(r[1]) for r in cur.fetchall()}
+
+            tickers_only = [r[0] for r in top_tickers_raw]
+            name_map: dict[str, str] = {}
+            if tickers_only:
+                cur.execute("SELECT symbol, name FROM stocks WHERE symbol = ANY(%s)", (tickers_only,))
+                name_map = {r[0]: r[1] for r in cur.fetchall()}
+            top_tickers = [
+                {"ticker": t, "name": name_map.get(t, ""), "count": int(c)}
+                for t, c in top_tickers_raw
+            ]
+
+        return {
+            "top_industries": top_industries,
+            "top_events": top_events,
+            "top_tickers": top_tickers,
+            "top_countries": top_countries,
+            "top_regions": top_regions,
+            "top_key_terms": top_key_terms,
+            "top_dates": top_dates,
+            "top_provinces": top_provinces,
+            "top_cities": top_cities,
+            "top_politicians": top_politicians,
+            "top_visits": top_visits,
+            "top_departments": top_departments,
+            "sentiment_counts": sentiment_counts,
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"stats failed: {e}")
+
+
+@router.post("/enrichment/run")
+async def enrichment_run_now(limit: int = Query(200, ge=1, le=5000)):
+    """手动触发一次 enrich（同步执行，便于调试 / 首次回填）。"""
+    try:
+        from backend.services.api.news import run_enrichment_batch
+        n = await asyncio.to_thread(run_enrichment_batch, limit)
+        return {"ok": True, "written": n}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"enrich failed: {e}")
+
+
+# ---------------------------------------------------------------------------
+# Admin: 标签管理 (finance_lexicon CRUD)
+# ---------------------------------------------------------------------------
+
+
+@router.get("/admin/tags")
+async def admin_list_tags(
+    event_tag: str | None = Query(None, description="按 event_tag 分类筛选"),
+    keyword: str | None = Query(None, description="按 term 模糊搜索"),
+    kind: str | None = Query(None, description="按 kind 筛选"),
+    page: int = Query(1, ge=1),
+    page_size: int = Query(50, ge=1, le=200),
+):
+    """列出 finance_lexicon 词条（支持分页、筛选）"""
+    where: list[str] = []
+    params: list = []
+    if event_tag:
+        where.append("event_tag = %s"); params.append(event_tag)
+    if kind:
+        where.append("kind = %s"); params.append(kind)
+    if keyword:
+        where.append("term ILIKE %s"); params.append(f"%{keyword}%")
+    where_sql = (" WHERE " + " AND ".join(where)) if where else ""
+    offset = (page - 1) * page_size
+    try:
+        with _pg_conn() as conn, conn.cursor() as cur:
+            cur.execute(f"SELECT COUNT(*) FROM finance_lexicon{where_sql}", tuple(params))
+            total = int(cur.fetchone()[0])
+            cur.execute(
+                f"SELECT id, term, kind, event_tag, weight, note, enabled, created_at "
+                f"FROM finance_lexicon{where_sql} "
+                f"ORDER BY event_tag, term LIMIT %s OFFSET %s",
+                tuple(params) + (page_size, offset),
+            )
+            rows = cur.fetchall()
+        items = [
+            {
+                "id": r[0], "term": r[1], "kind": r[2], "event_tag": r[3],
+                "weight": float(r[4]) if r[4] else 1.0,
+                "note": r[5], "enabled": r[6],
+                "created_at": r[7].isoformat() if r[7] else None,
+            }
+            for r in rows
+        ]
+        return {"items": items, "total": total, "page": page, "page_size": page_size}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"list tags failed: {e}")
+
+
+@router.post("/admin/tags")
+async def admin_create_tag(payload: dict):
+    """新增词条: {term, kind, event_tag?, weight?, note?}"""
+    term = (payload or {}).get("term", "").strip()
+    kind = (payload or {}).get("kind", "").strip()
+    if not term or not kind:
+        raise HTTPException(status_code=400, detail="term 和 kind 不能为空")
+    event_tag = (payload or {}).get("event_tag") or None
+    weight = float((payload or {}).get("weight") or 1.0)
+    note = (payload or {}).get("note") or None
+    try:
+        with _pg_conn() as conn, conn.cursor() as cur:
+            cur.execute(
+                "INSERT INTO finance_lexicon (term, kind, event_tag, weight, note, enabled) "
+                "VALUES (%s, %s, %s, %s, %s, TRUE) RETURNING id",
+                (term, kind, event_tag, weight, note),
+            )
+            new_id = cur.fetchone()[0]
+            conn.commit()
+        return {"ok": True, "id": new_id}
+    except psycopg2.IntegrityError:
+        raise HTTPException(status_code=409, detail=f"词条 '{term}' (kind={kind}) 已存在")
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"create tag failed: {e}")
+
+
+@router.put("/admin/tags/{tag_id}")
+async def admin_update_tag(tag_id: int, payload: dict):
+    """编辑词条: {term?, kind?, event_tag?, weight?, note?}"""
+    fields: list[str] = []
+    params: list = []
+    for key in ("term", "kind", "event_tag", "note"):
+        if key in payload:
+            fields.append(f"{key} = %s"); params.append(payload[key])
+    if "weight" in payload:
+        fields.append("weight = %s"); params.append(float(payload["weight"]))
+    if not fields:
+        raise HTTPException(status_code=400, detail="无更新字段")
+    params.append(tag_id)
+    try:
+        with _pg_conn() as conn, conn.cursor() as cur:
+            cur.execute(
+                f"UPDATE finance_lexicon SET {', '.join(fields)} WHERE id = %s",
+                tuple(params),
+            )
+            conn.commit()
+        return {"ok": True, "id": tag_id}
+    except psycopg2.IntegrityError:
+        raise HTTPException(status_code=409, detail="词条冲突（term+kind 重复）")
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"update tag failed: {e}")
+
+
+@router.delete("/admin/tags/{tag_id}")
+async def admin_delete_tag(tag_id: int):
+    """删除词条"""
+    try:
+        with _pg_conn() as conn, conn.cursor() as cur:
+            cur.execute("DELETE FROM finance_lexicon WHERE id = %s", (tag_id,))
+            conn.commit()
+        return {"ok": True, "id": tag_id}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"delete tag failed: {e}")
+
+
+@router.patch("/admin/tags/{tag_id}/toggle")
+async def admin_toggle_tag(tag_id: int):
+    """启用/禁用词条"""
+    try:
+        with _pg_conn() as conn, conn.cursor() as cur:
+            cur.execute(
+                "UPDATE finance_lexicon SET enabled = NOT enabled WHERE id = %s RETURNING enabled",
+                (tag_id,),
+            )
+            row = cur.fetchone()
+            if not row:
+                raise HTTPException(status_code=404, detail="词条不存在")
+            conn.commit()
+        return {"ok": True, "id": tag_id, "enabled": row[0]}
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"toggle tag failed: {e}")
