@@ -208,8 +208,8 @@ function createWindow() {
       contextIsolation: true,
       nodeIntegration: false,
       sandbox: false,
-      webSecurity: true,
-      webviewTag: false
+      webSecurity: false, // Required: QwenPaw iframe loads from different origin (127.0.0.1:8089)
+      webviewTag: true
     }
   });
 
@@ -313,6 +313,10 @@ function createWindow() {
 
   // 在新窗口中打开外部链接
   mainWindow.webContents.setWindowOpenHandler((details) => {
+    // Allow QwenPaw internal navigation within its iframe (same-origin to the iframe's origin)
+    if (details.url.startsWith('http://127.0.0.1:8089') || details.url.startsWith('http://localhost:8089')) {
+      return { action: 'allow' };
+    }
     shell.openExternal(details.url);
     return { action: 'deny' };
   });
