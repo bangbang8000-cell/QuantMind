@@ -10,8 +10,8 @@ QuantMind is a quantitative trading platform with Python backend (FastAPI) and E
 
 | Service | Port | Responsibility |
 |---------|------|----------------|
-| api | 8000 | User auth, strategy management, community |
-| engine | 8001 | Qlib backtesting, AI strategy generation, model inference |
+| api | 8000 | User auth, strategy management, community, news proxy |
+| engine | 8001 | Qlib backtesting, AI strategy generation, model inference, Alpha Agent |
 | trade | 8002 | Order management, positions, risk control |
 | stream | 8003 | Real-time quotes, WebSocket push |
 
@@ -52,6 +52,13 @@ npm run dashboard:build  # Production build
 - **Redis DB allocation**: 0=general, 1=auth, 2=trade, 3=market, 4=backtest, 5=cache
 - **Shared modules**: `backend/shared/` contains cross-service code (DB manager, Redis client, config, logging)
 - **Strategy storage**: `backend/shared/strategy_storage.py` is the single entry point for all strategy CRUD operations
+- **Alpha Agent**: `backend/services/engine/alpha_agent/` - Factor evolution launcher, supports multi-market via RD-Agent
+- **RD-Agent Integration**: `backend/services/engine/rd_agent/` - Multi-market factor mining framework wrapping Microsoft RD-Agent
+  - `market_adapters/` - MarketAdapter pattern: a_share, crypto, hong_kong, us_stock
+  - `rd_loop_wrapper.py` - Wraps RD-Agent's FactorRDLoop for QuantMind
+  - `data_pipeline/` - Market-specific data download and format conversion
+- **Data Platform**: `backend/services/engine/data_platform/` - Multi-market data aggregation (A/HK/US), adapters for different data sources
+- **News/RSS**: Huntly + RSSHub for financial news aggregation, proxied through API service
 
 ## Stock Code Standardization
 
@@ -98,4 +105,12 @@ ssh quant-server "cd /opt/quantmind && git pull && docker-compose restart"
 - `backend/main_oss.py` - Unified entry point for all backend services
 - `backend/run_tests.py` - Test runner with multiple modes
 - `backend/shared/` - Shared modules across services
+- `backend/services/engine/alpha_agent/launcher.py` - Factor evolution launcher (supports market parameter)
+- `backend/services/engine/rd_agent/market_adapters/` - Market adapter registry (a_share, crypto, hong_kong, us_stock)
+- `backend/services/engine/rd_agent/rd_loop_wrapper.py` - RDLoop wrapper bridging RD-Agent and QuantMind
+- `backend/services/engine/routers/alpha_agent.py` - Alpha Agent API (includes /markets, /evolve with market param)
+- `scripts/alpha_agent/run_rd_agent.py` - RD-Agent multi-market runner script (subprocess entry point)
+- `backend/services/engine/data_platform/` - Multi-market data platform
+- `backend/services/api/routers/news.py` - News proxy router
+- `backend/services/api/routers/market_kline.py` - K-line market data router
 - `docker-compose.yml` - Local deployment configuration
