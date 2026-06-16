@@ -344,6 +344,26 @@ async def _perform_sync(user_id: str):
 # ============================================================================
 
 
+class StrategyCreateRequest(BaseModel):
+    """创建策略请求"""
+    name: str = Field(..., min_length=1, max_length=200, description="策略名称")
+    code: str = Field("", description="策略代码")
+    description: str = Field("", description="策略描述")
+    category: str = Field("strategy_lab", description="策略分类")
+    author: str = Field("", description="作者")
+    tags: list[str] = Field(default_factory=list, description="标签")
+    parameters: dict[str, Any] = Field(default_factory=dict, description="策略参数")
+
+
+class StrategyUpdateRequest(BaseModel):
+    """更新策略请求"""
+    name: str | None = Field(None, description="策略名称")
+    code: str | None = Field(None, description="策略代码")
+    description: str | None = Field(None, description="策略描述")
+    tags: list[str] | None = Field(None, description="标签")
+    parameters: dict[str, Any] | None = Field(None, description="策略参数")
+
+
 class StrategyListItem(BaseModel):
     id: str
     name: str
@@ -546,6 +566,95 @@ async def list_user_strategies(
 
 
 # --- 重要：静态路径必须放在动态路径 {strategy_id} 之前 ---
+
+
+@router.post("")
+async def create_strategy(request: Request, body: StrategyCreateRequest):
+    """创建新策略。"""
+    try:
+        user_id = _get_user_id(request)
+        if not user_id:
+            raise HTTPException(status_code=401, detail="未认证")
+
+        svc = get_strategy_storage_service()
+        result = await svc.save(
+            user_id=user_id,
+            name=body.name,
+            code=body.code,
+            metadata={
+                "description": body.description,
+                "tags": body.tags,
+                "status": "DRAFT",
+                "is_verified": False,
+                "parameters": body.parameters,
+            },
+        )
+        return {
+            "strategy_id": result["id"],
+            "id": result["id"],
+            "name": body.name,
+            "message": "策略创建成功",
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        StructuredTaskLogger(logger, "user-strategies").exception("create_failed", "创建策略失败", error=e)
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.put("/{strategy_id}")
+async def update_strategy(strategy_id: str, request: Request, body: StrategyUpdateRequest):
+    """更新策略。"""
+    try:
+        user_id = _get_user_id(request)
+        if not user_id:
+            raise HTTPException(status_code=401, detail="未认证")
+
+        svc = get_strategy_storage_service()
+
+        # 验证策略存在
+        try:
+            sid = int(strategy_id)
+        except ValueError:
+            sid = strategy_id
+
+        existing = await svc.get(sid, user_id=user_id)
+        if not existing:
+            raise HTTPException(status_code=404, detail="策略不存在")
+
+        # 合并更新字段
+        new_name = body.name if body.name is not None else existing.get("name", "")
+        new_code = body.code if body.code is not None else existing.get("code", "")
+        new_description = body.description if body.description is not None else existing.get("description", "")
+        new_tags = body.tags if body.tags is not None else existing.get("tags", [])
+        new_parameters = body.parameters if body.parameters is not None else existing.get("parameters", {})
+
+        result = await svc.save(
+            user_id=user_id,
+            strategy_id=strategy_id,
+            name=new_name,
+            code=new_code,
+            metadata={
+                "description": new_description,
+                "tags": new_tags,
+                "status": existing.get("status", "DRAFT"),
+                "is_verified": existing.get("is_verified", False),
+                "parameters": new_parameters,
+            },
+        )
+        return {
+            "strategy_id": result["id"],
+            "id": result["id"],
+            "name": new_name,
+            "message": "策略更新成功",
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        StructuredTaskLogger(logger, "user-strategies", {"strategy_id": strategy_id}).exception(
+            "update_failed", "更新策略失败", error=e
+        )
+        raise HTTPException(status_code=500, detail=str(e))
 
 
 @router.get("/templates")
