@@ -1,10 +1,10 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { Layout, Button, Tag, Space, message, Progress, Tooltip, Typography, Collapse, Input } from 'antd';
-import { PlayCircleOutlined, StopOutlined, FileTextOutlined, RobotOutlined, SearchOutlined } from '@ant-design/icons';
+import { Layout, Button, Tag, Space, message, Progress, Tooltip, Typography } from 'antd';
+import { PlayCircleOutlined, StopOutlined, RobotOutlined, SaveOutlined } from '@ant-design/icons';
 import { motion } from 'framer-motion';
 import Editor, { OnMount } from '@monaco-editor/react';
 import { strategyLabService } from '../services/strategyLabService';
-import { STRATEGY_LAB_SNIPPETS, SNIPPETS_BY_CATEGORY, CATEGORY_LABELS, type SnippetCategory } from '../components/snippets';
+import { STRATEGY_LAB_SNIPPETS } from '../components/snippets';
 import type {
   StrategyLabPhase,
   StrategyLabRunResult,
@@ -12,6 +12,7 @@ import type {
 import StrategyLabResultPanel from '../components/StrategyLabResultPanel';
 import StrategyLabAiDrawer from '../components/StrategyLabAiDrawer';
 import StrategyLabShell from '../components/StrategyLabShell';
+import StrategyLabSidebar from '../components/StrategyLabSidebar';
 
 const { Content } = Layout;
 const { Title, Text } = Typography;
@@ -40,8 +41,9 @@ const StrategyLabPage: React.FC = () => {
   const cancelPollRef = useRef<null | (() => void)>(null);
   const editorRef = useRef<any>(null);
   const [aiOpen, setAiOpen] = useState(false);
-  const [snippetQuery, setSnippetQuery] = useState('');
   const [drawnLines, setDrawnLines] = useState<Record<string, number>>({});
+  const [currentStrategyName, setCurrentStrategyName] = useState<string | null>(null);
+  const [currentStrategyId, setCurrentStrategyId] = useState<string | null>(null);
 
   const handleEditorMount: OnMount = useCallback((editor) => {
     editorRef.current = editor;
@@ -52,7 +54,42 @@ const StrategyLabPage: React.FC = () => {
     if (!s) return;
     setActiveSnippet(id);
     setCode(s.code);
+    setCurrentStrategyName(null);
+    setCurrentStrategyId(null);
   }, []);
+
+  const handleStrategyLoad = useCallback((loadedCode: string, name: string, id: string) => {
+    setCode(loadedCode);
+    setCurrentStrategyName(name);
+    setCurrentStrategyId(id);
+  }, []);
+
+  const handleNewStrategy = useCallback((name: string) => {
+    setCode('');
+    setCurrentStrategyName(name);
+    setCurrentStrategyId(null);
+  }, []);
+
+  const handleSave = useCallback(async () => {
+    if (!code.trim()) {
+      message.warning('请先输入策略代码');
+      return;
+    }
+    const name = currentStrategyName || `策略_${new Date().toISOString().slice(0, 10)}`;
+    try {
+      if (currentStrategyId) {
+        await strategyLabService.updateStrategy(currentStrategyId, { code, name });
+        message.success(`策略 "${name}" 已更新`);
+      } else {
+        const { id } = await strategyLabService.saveStrategy(name, code);
+        setCurrentStrategyId(id);
+        setCurrentStrategyName(name);
+        message.success(`策略 "${name}" 已保存`);
+      }
+    } catch (err: any) {
+      message.error(err?.message || '保存失败');
+    }
+  }, [code, currentStrategyId, currentStrategyName]);
 
   const stopPolling = useCallback(() => {
     if (cancelPollRef.current) {
@@ -127,84 +164,15 @@ const StrategyLabPage: React.FC = () => {
     message.info('已停止状态轮询（后端任务仍可能运行至完成）');
   }, [stopPolling]);
 
-  const sider = useMemo(() => {
-    const q = snippetQuery.trim().toLowerCase();
-    const matches = (s: { title: string; description: string; id: string }) =>
-      !q || s.title.toLowerCase().includes(q) || s.description.toLowerCase().includes(q) || s.id.toLowerCase().includes(q);
-
-    const renderSnippetItem = (item: typeof STRATEGY_LAB_SNIPPETS[0]) => (
-      <div
-        key={item.id}
-        onClick={() => handleSnippetSelect(item.id)}
-        style={{
-          cursor: 'pointer',
-          padding: '6px 8px',
-          marginBottom: 2,
-          background: activeSnippet === item.id ? '#e6f4ff' : 'transparent',
-          borderRadius: 4,
-          border: activeSnippet === item.id ? '1px solid #7dd3fc' : '1px solid transparent',
-        }}
-      >
-        <div style={{ fontSize: 12, fontWeight: 500 }}>{item.title}</div>
-        <div style={{ fontSize: 10, color: '#64748b', lineHeight: 1.4 }}>{item.description}</div>
-      </div>
-    );
-
-    const cats: SnippetCategory[] = ['basic', 'trend', 'reversal', 'timing', 'volume', 'cross', 'factor'];
-    const items = cats.flatMap((cat) => {
-      const list = SNIPPETS_BY_CATEGORY[cat].filter(matches);
-      if (list.length === 0) return [];
-      return [
-        {
-          key: cat,
-          label: (
-            <span style={{ fontSize: 12 }}>
-              {CATEGORY_LABELS[cat]} <Tag style={{ fontSize: 10, marginLeft: 4 }}>{list.length}</Tag>
-            </span>
-          ),
-          children: <div>{list.map(renderSnippetItem)}</div>,
-        },
-      ];
-    });
-
-    return (
-      <div style={{ height: '100%', overflowY: 'auto' }}>
-        <Title level={5} style={{ marginBottom: 8 }}>
-          <FileTextOutlined /> 示例策略 <Tag color="blue" style={{ fontSize: 10 }}>{STRATEGY_LAB_SNIPPETS.length}</Tag>
-        </Title>
-        <Input
-          allowClear
-          size="small"
-          placeholder="搜索示例…"
-          prefix={<SearchOutlined />}
-          value={snippetQuery}
-          onChange={(e) => setSnippetQuery(e.target.value)}
-          style={{ marginBottom: 8 }}
-        />
-        <Collapse
-          size="small"
-          ghost
-          defaultActiveKey={q ? cats : ['basic', 'trend']}
-          activeKey={q ? cats : undefined}
-          items={items}
-        />
-        {items.length === 0 && (
-          <Text type="secondary" style={{ fontSize: 11 }}>没有匹配的示例</Text>
-        )}
-        <div style={{ marginTop: 16, fontSize: 11, color: '#888' }}>
-          <p>示例覆盖 7 个类别（基础 / 趋势 / 反转 / 择时 / 量价 / 横截面 / 多因子）。</p>
-          <p>SDK：<code>ctx.universe / start / end / cash</code>，钩子：<code>setup / on_bar / on_universe</code>。</p>
-        </div>
-      </div>
-    );
-  }, [activeSnippet, handleSnippetSelect, snippetQuery]);
-
   return (
     <StrategyLabShell
       activeLabel="脚本编辑器"
       contentKey={running ? 'lab-running' : result ? 'lab-result' : 'lab-idle'}
       rightActions={
         <Space size="small">
+          <Button icon={<SaveOutlined />} onClick={handleSave} className="!rounded-xl" disabled={running}>
+            保存
+          </Button>
           <Button icon={<RobotOutlined />} onClick={() => setAiOpen(true)} className="!rounded-xl">
             AI 助手
           </Button>
@@ -223,17 +191,13 @@ const StrategyLabPage: React.FC = () => {
       }
     >
       <Layout style={{ height: '100%', background: 'transparent' }} hasSider>
-        <div style={{ width: 260, marginRight: 12 }}>
-          <motion.div
-            initial={{ opacity: 0, y: 8 }}
-            animate={{ opacity: 1, y: 0 }}
-            transition={{ duration: 0.25 }}
-            className="bg-white border border-gray-200 rounded-2xl shadow-sm h-full overflow-hidden"
-          >
-            <div style={{ padding: 12, height: '100%', overflowY: 'auto' }}>
-              {sider}
-            </div>
-          </motion.div>
+        <div style={{ width: 260, flexShrink: 0 }}>
+          <StrategyLabSidebar
+            activeSnippetId={activeSnippet}
+            onSnippetSelect={handleSnippetSelect}
+            onStrategyLoad={handleStrategyLoad}
+            onNewStrategy={handleNewStrategy}
+          />
         </div>
         <Layout style={{ background: 'transparent' }}>
           <Content style={{ padding: 0, display: 'flex', flexDirection: 'column', gap: 12 }}>

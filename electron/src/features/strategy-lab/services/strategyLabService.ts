@@ -105,6 +105,84 @@ export const strategyLabService = {
     return (await client.post('/scan/run-now', null, { params: { lookback_days: lookbackDays } })) as any;
   },
 
+  // ---------------------------------------------------------------------------
+  // Strategy CRUD — delegates to /api/v1/strategies on the engine service
+  // ---------------------------------------------------------------------------
+
+  /** List user's saved strategies. */
+  async listStrategies(): Promise<Array<{
+    id: string; name: string; description: string; code: string;
+    tags: string[]; language: string; created_at?: string; updated_at?: string;
+  }>> {
+    const base = String(SERVICE_URLS.ENGINE_SERVICE || '').replace(/\/+$/, '');
+    const resp = await client.get(`${base}/api/v1/strategies`);
+    const data = (resp as any)?.data ?? resp;
+    const items = Array.isArray(data?.strategies) ? data.strategies
+      : Array.isArray(data?.items) ? data.items
+      : Array.isArray(data) ? data : [];
+    return items.map((s: any) => ({
+      id: String(s.strategy_id ?? s.id ?? ''),
+      name: s.name ?? '',
+      description: s.description ?? '',
+      code: s.code ?? '',
+      tags: s.tags ?? [],
+      language: s.language ?? 'python',
+      created_at: s.created_at,
+      updated_at: s.updated_at,
+    }));
+  },
+
+  /** Load a single strategy by id (with code). */
+  async loadStrategy(strategyId: string): Promise<{
+    id: string; name: string; description: string; code: string; tags: string[];
+  }> {
+    const base = String(SERVICE_URLS.ENGINE_SERVICE || '').replace(/\/+$/, '');
+    const resp = await client.get(`${base}/api/v1/strategies/${strategyId}`, {
+      params: { resolve_code: true },
+    });
+    const data = (resp as any)?.data ?? resp;
+    return {
+      id: String(data?.strategy_id ?? data?.id ?? strategyId),
+      name: data?.name ?? '',
+      description: data?.description ?? '',
+      code: data?.code ?? '',
+      tags: data?.tags ?? [],
+    };
+  },
+
+  /** Save a new strategy. */
+  async saveStrategy(name: string, code: string, description = '', tags: string[] = []): Promise<{
+    id: string; name: string;
+  }> {
+    const base = String(SERVICE_URLS.ENGINE_SERVICE || '').replace(/\/+$/, '');
+    const resp = await client.post(`${base}/api/v1/strategies`, {
+      name,
+      code,
+      description,
+      category: 'strategy_lab',
+      author: '用户',
+      tags,
+      parameters: {},
+    });
+    const data = (resp as any)?.data ?? resp;
+    return {
+      id: String(data?.strategy_id ?? data?.id ?? ''),
+      name: data?.name ?? name,
+    };
+  },
+
+  /** Update an existing strategy. */
+  async updateStrategy(strategyId: string, updates: { name?: string; code?: string; description?: string }): Promise<void> {
+    const base = String(SERVICE_URLS.ENGINE_SERVICE || '').replace(/\/+$/, '');
+    await client.put(`${base}/api/v1/strategies/${strategyId}`, updates);
+  },
+
+  /** Delete a strategy. */
+  async deleteStrategy(strategyId: string): Promise<void> {
+    const base = String(SERVICE_URLS.ENGINE_SERVICE || '').replace(/\/+$/, '');
+    await client.delete(`${base}/api/v1/strategies/${strategyId}`);
+  },
+
   /**
    * SSE poller — Server-Sent Events with token auth via query param fallback.
    * Returns a cleanup function. The browser EventSource cannot set Authorization
