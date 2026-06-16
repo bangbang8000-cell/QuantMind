@@ -107,15 +107,28 @@ export const strategyLabService = {
 
   // ---------------------------------------------------------------------------
   // Strategy CRUD — delegates to /api/v1/strategies on the engine service
+  // Uses raw axios (not the `client` instance) because `client` has a baseURL
+  // interceptor that would double-prepend the path.
   // ---------------------------------------------------------------------------
+
+  /** Build full URL for strategy CRUD endpoints. */
+  strategiesUrl(path = ''): string {
+    const base = String(SERVICE_URLS.ENGINE_SERVICE || '').replace(/\/+$/, '');
+    return `${base}/api/v1/strategies${path}`;
+  },
+
+  /** Build auth headers for raw axios calls. */
+  authHeaders(): Record<string, string> {
+    const token = authService.getAccessToken();
+    return token ? { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' } : { 'Content-Type': 'application/json' };
+  },
 
   /** List user's saved strategies. */
   async listStrategies(): Promise<Array<{
     id: string; name: string; description: string; code: string;
     tags: string[]; language: string; created_at?: string; updated_at?: string;
   }>> {
-    const base = String(SERVICE_URLS.ENGINE_SERVICE || '').replace(/\/+$/, '');
-    const resp = await client.get(`${base}/api/v1/strategies`);
+    const resp = await axios.get(this.strategiesUrl(), { headers: this.authHeaders() });
     const data = (resp as any)?.data ?? resp;
     const items = Array.isArray(data?.strategies) ? data.strategies
       : Array.isArray(data?.items) ? data.items
@@ -136,8 +149,8 @@ export const strategyLabService = {
   async loadStrategy(strategyId: string): Promise<{
     id: string; name: string; description: string; code: string; tags: string[];
   }> {
-    const base = String(SERVICE_URLS.ENGINE_SERVICE || '').replace(/\/+$/, '');
-    const resp = await client.get(`${base}/api/v1/strategies/${strategyId}`, {
+    const resp = await axios.get(this.strategiesUrl(`/${strategyId}`), {
+      headers: this.authHeaders(),
       params: { resolve_code: true },
     });
     const data = (resp as any)?.data ?? resp;
@@ -154,8 +167,7 @@ export const strategyLabService = {
   async saveStrategy(name: string, code: string, description = '', tags: string[] = []): Promise<{
     id: string; name: string;
   }> {
-    const base = String(SERVICE_URLS.ENGINE_SERVICE || '').replace(/\/+$/, '');
-    const resp = await client.post(`${base}/api/v1/strategies`, {
+    const resp = await axios.post(this.strategiesUrl(), {
       name,
       code,
       description,
@@ -163,7 +175,7 @@ export const strategyLabService = {
       author: '用户',
       tags,
       parameters: {},
-    });
+    }, { headers: this.authHeaders() });
     const data = (resp as any)?.data ?? resp;
     return {
       id: String(data?.strategy_id ?? data?.id ?? ''),
@@ -173,14 +185,12 @@ export const strategyLabService = {
 
   /** Update an existing strategy. */
   async updateStrategy(strategyId: string, updates: { name?: string; code?: string; description?: string }): Promise<void> {
-    const base = String(SERVICE_URLS.ENGINE_SERVICE || '').replace(/\/+$/, '');
-    await client.put(`${base}/api/v1/strategies/${strategyId}`, updates);
+    await axios.put(this.strategiesUrl(`/${strategyId}`), updates, { headers: this.authHeaders() });
   },
 
   /** Delete a strategy. */
   async deleteStrategy(strategyId: string): Promise<void> {
-    const base = String(SERVICE_URLS.ENGINE_SERVICE || '').replace(/\/+$/, '');
-    await client.delete(`${base}/api/v1/strategies/${strategyId}`);
+    await axios.delete(this.strategiesUrl(`/${strategyId}`), { headers: this.authHeaders() });
   },
 
   /**
