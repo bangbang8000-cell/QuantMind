@@ -19,6 +19,9 @@ RUN node ../scripts/frontend/copy-monaco-assets.js && npx vite build
 
 FROM nginx:1.25-alpine
 
+# Remove the default server block that conflicts with our nginx.conf
+RUN rm -f /etc/nginx/conf.d/default.conf
+
 COPY docker/web/nginx.conf /etc/nginx/nginx.conf
 COPY --from=builder /app/electron/dist-react /usr/share/nginx/html
 
