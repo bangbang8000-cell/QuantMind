@@ -51,6 +51,17 @@ ALLOWED_MODULES: frozenset[str] = frozenset(
         "typing",
         "dataclasses",
         "enum",
+        # Path / environment (read-only use only; write operations blocked by
+        # Layer 2 sandbox: read-only FS, no network)
+        "os",
+        "os.path",
+        "pathlib",
+        # Logging (safe — no IO in sandbox)
+        "logging",
+        # Copy / deep copy
+        "copy",
+        # Hashing
+        "hashlib",
         # Indicators
         "talib",
         # Subset of qlib data layer (read-only data API; we still ban the
