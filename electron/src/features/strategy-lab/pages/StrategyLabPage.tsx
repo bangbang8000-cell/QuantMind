@@ -1,6 +1,6 @@
-import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { Layout, Button, Tag, Space, message, Progress, Tooltip, Typography } from 'antd';
-import { PlayCircleOutlined, StopOutlined, RobotOutlined, SaveOutlined } from '@ant-design/icons';
+import React, { Component, useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { Layout, Button, Tag, Space, message, Progress, Tooltip, Typography, Alert, Button as AntButton } from 'antd';
+import { PlayCircleOutlined, StopOutlined, RobotOutlined, SaveOutlined, ReloadOutlined } from '@ant-design/icons';
 import { motion } from 'framer-motion';
 import Editor, { OnMount } from '@monaco-editor/react';
 import { strategyLabService } from '../services/strategyLabService';
@@ -294,4 +294,45 @@ const StrategyLabPage: React.FC = () => {
   );
 };
 
-export default StrategyLabPage;
+// ErrorBoundary to catch render crashes (e.g. from Monaco or result panel)
+class StrategyLabErrorBoundary extends Component<
+  { children: React.ReactNode },
+  { hasError: boolean; error: Error | null }
+> {
+  state = { hasError: false, error: null as Error | null };
+
+  static getDerivedStateFromError(error: Error) {
+    return { hasError: true, error };
+  }
+
+  render() {
+    if (this.state.hasError) {
+      return (
+        <div style={{ padding: 24, textAlign: 'center' }}>
+          <Alert
+            type="error"
+            message="策略实验室渲染出错"
+            description={this.state.error?.message || '未知错误'}
+            showIcon
+            style={{ marginBottom: 16, textAlign: 'left' }}
+          />
+          <AntButton
+            icon={<ReloadOutlined />}
+            onClick={() => this.setState({ hasError: false, error: null })}
+          >
+            重试
+          </AntButton>
+        </div>
+      );
+    }
+    return this.props.children;
+  }
+}
+
+const StrategyLabPageSafe: React.FC = () => (
+  <StrategyLabErrorBoundary>
+    <StrategyLabPage />
+  </StrategyLabErrorBoundary>
+);
+
+export default StrategyLabPageSafe;

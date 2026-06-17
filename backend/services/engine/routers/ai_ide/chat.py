@@ -290,7 +290,7 @@ def on_finish(ctx):
                 base += f"\n\n{notes}"
 
         # Strategy Lab SDK 规则：当用户来自策略实验室时，注入 SDK 规范
-        source = str(context.get("extra_context", {}).get("source", "") or "").strip().lower()
+        source = str(context.get("source", "") or "").strip().lower()
         if source == "strategy_lab":
             base += "\n\n" + self._STRATEGY_LAB_SDK_PROMPT
 
