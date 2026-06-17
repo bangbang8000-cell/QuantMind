@@ -194,6 +194,76 @@ def get_strategy_config():
         ),
     }
 
+    # Strategy Lab SDK 规则：当用户从策略实验室发起对话时注入
+    _STRATEGY_LAB_SDK_PROMPT = """\
+## 策略实验室 (Strategy Lab) SDK 规范
+
+用户当前在**策略实验室**编辑器中，不是在 AI-IDE 的 Qlib 策略页面。
+你生成的代码必须遵循 Strategy Lab SDK 格式，而非 Qlib 策略类格式。
+
+### 必需结构
+每个策略脚本**必须**包含以下结构：
+
+```python
+import pandas as pd
+import numpy as np
+
+def setup(ctx):
+    \"\"\"初始化策略 — 必须定义，否则 AST 检查会拒绝。\"\"\"
+    ctx.universe = "csi300"   # 股票池: csi300, csi500, all_a, 或 list[str]
+    ctx.start = "2024-01-01"
+    ctx.end = "2024-12-31"
+    ctx.cash = 1_000_000
+
+def on_bar(ctx):
+    \"\"\"每日回调 — 核心策略逻辑写在这里。\"\"\"
+    # 读取今日持仓和信号
+    positions = ctx.positions
+    score = ctx.score          # dict[str, float] — 模型预测分数
+    bar = ctx.bar              # 当日行情数据
+
+    # 买入信号最高的 N 只
+    if score:
+        top10 = sorted(score, key=score.get, reverse=True)[:10]
+        for sym in top10:
+            if sym not in positions:
+                ctx.buy(sym, ratio=0.1)
+
+        # 卖出不在 top10 的持仓
+        for sym in list(positions):
+            if sym not in top10:
+                ctx.sell(sym)
+
+def on_universe(ctx):
+    \"\"\"可选 — 每月调仓日重新选股。\"\"\"
+    pass
+
+def on_finish(ctx):
+    \"\"\"可选 — 回测结束回调。\"\"\"
+    pass
+```
+
+### 关键规则
+1. **必须定义 `def setup(ctx):`** — 这是 AST 检查的硬性要求，缺少会报 E_HOOK_MISSING 错误
+2. **必须定义 `def on_bar(ctx):`** — 策略核心逻辑
+3. **不要**使用 Qlib 策略类（RedisTopkStrategy 等），那不是 Strategy Lab 的格式
+4. **不要**定义 `get_strategy_config()` — 那是 AI-IDE 的格式
+5. **允许 import 的模块**: numpy, pandas, scipy, math, statistics, datetime, json, os, pathlib, logging, copy, hashlib, talib, qlib, collections, itertools, functools, re, typing, enum, dataclasses
+6. **禁止 import**: sys, subprocess, socket, requests, http, asyncio, threading, multiprocessing, importlib, ctypes
+7. **禁止调用**: exec, eval, compile, open(写模式), __import__
+
+### ctx 对象 API
+- `ctx.universe` — 股票池 (str 或 list[str])
+- `ctx.start / ctx.end` — 回测日期
+- `ctx.cash` — 初始资金
+- `ctx.positions` — 当前持仓 dict
+- `ctx.score` — 当日模型预测分数 dict[str, float]
+- `ctx.bar` — 当日行情 DataFrame
+- `ctx.buy(symbol, ratio=0.05)` — 买入
+- `ctx.sell(symbol, ratio=1.0)` — 卖出
+- `ctx.log(msg)` — 输出日志
+"""
+
     def _get_system_prompt(self, user_input: str, context: dict) -> str:
         """根据用户输入动态构建 system prompt
 
@@ -218,6 +288,11 @@ def get_strategy_config():
             notes = self._MARKET_STRATEGY_NOTES.get(market, "")
             if notes:
                 base += f"\n\n{notes}"
+
+        # Strategy Lab SDK 规则：当用户来自策略实验室时，注入 SDK 规范
+        source = str(context.get("extra_context", {}).get("source", "") or "").strip().lower()
+        if source == "strategy_lab":
+            base += "\n\n" + self._STRATEGY_LAB_SDK_PROMPT
 
         return base
 

@@ -350,9 +350,15 @@ export const StrategyLabSidebar: React.FC<Props> = ({
                     key={s.id}
                     whileHover={{ x: 4 }}
                     whileTap={{ scale: 0.98 }}
-                    onClick={() => {
+                    onClick={async () => {
                       setActiveStrategyId(s.id);
-                      onStrategyLoad(s.code, s.name, s.id);
+                      // List API doesn't return code — fetch from detail endpoint
+                      try {
+                        const detail = await strategyLabService.loadStrategy(s.id);
+                        onStrategyLoad(detail.code || '', detail.name || s.name, s.id);
+                      } catch {
+                        onStrategyLoad(s.code || '', s.name, s.id);
+                      }
                     }}
                     className={`relative w-full text-left transition-colors group ${
                       activeStrategyId === s.id ? 'bg-blue-50' : 'hover:bg-gray-50'
