@@ -260,8 +260,19 @@ _SESSION_EXPIRES_AT: float = 0.0
 _SESSION_TTL = 30 * 60  # 30 分钟内复用
 
 
-async def _http() -> httpx.AsyncClient:
-    return httpx.AsyncClient(base_url=HUNTLY_BASE_URL, timeout=HUNTLY_TIMEOUT)
+# ── 全局 httpx 客户端（懒初始化，连接复用） ──
+_http_client: httpx.AsyncClient | None = None
+
+
+async def _get_http_client() -> httpx.AsyncClient:
+    """Return a shared httpx.AsyncClient singleton for Huntly requests."""
+    global _http_client
+    if _http_client is None or _http_client.is_closed:
+        _http_client = httpx.AsyncClient(
+            base_url=HUNTLY_BASE_URL,
+            timeout=HUNTLY_TIMEOUT,
+        )
+    return _http_client
 
 
 def _unwrap(body: Any) -> Any:
@@ -282,60 +293,60 @@ async def _ensure_session() -> str:
         if _SESSION_TOKEN and time.time() < _SESSION_EXPIRES_AT:
             return _SESSION_TOKEN
 
-        async with await _http() as client:
-            # 1. 探测是否已设置用户 — Huntly 返回 {"code":0, "data": <bool>}
-            user_set = False
+        client = await _get_http_client()
+        # 1. 探测是否已设置用户 — Huntly 返回 {"code":0, "data": <bool>}
+        user_set = False
+        try:
+            r = await client.get("/api/auth/isUserSet")
+            if r.status_code == 200:
+                user_set = bool(_unwrap(r.json()))
+        except Exception as exc:
+            logger.warning("huntly isUserSet probe failed: %s", exc)
+
+        # 2. 未设置则注册（已存在会返回 BusinessException 5101，忽略即可）
+        if not user_set:
             try:
-                r = await client.get("/api/auth/isUserSet")
-                if r.status_code == 200:
-                    user_set = bool(_unwrap(r.json()))
+                r = await client.post(
+                    "/api/auth/signup",
+                    json={"username": HUNTLY_USERNAME, "password": HUNTLY_PASSWORD},
+                )
+                logger.info(
+                    "huntly signup status=%s body=%s",
+                    r.status_code, r.text[:200],
+                )
             except Exception as exc:
-                logger.warning("huntly isUserSet probe failed: %s", exc)
+                logger.warning("huntly signup failed: %s", exc)
 
-            # 2. 未设置则注册（已存在会返回 BusinessException 5101，忽略即可）
-            if not user_set:
-                try:
-                    r = await client.post(
-                        "/api/auth/signup",
-                        json={"username": HUNTLY_USERNAME, "password": HUNTLY_PASSWORD},
-                    )
-                    logger.info(
-                        "huntly signup status=%s body=%s",
-                        r.status_code, r.text[:200],
-                    )
-                except Exception as exc:
-                    logger.warning("huntly signup failed: %s", exc)
-
-            # 3. 登录拿 JWT
-            r = await client.post(
-                "/api/auth/signin",
-                json={"username": HUNTLY_USERNAME, "password": HUNTLY_PASSWORD},
+        # 3. 登录拿 JWT
+        r = await client.post(
+            "/api/auth/signin",
+            json={"username": HUNTLY_USERNAME, "password": HUNTLY_PASSWORD},
+        )
+        if r.status_code >= 300:
+            raise HTTPException(
+                status_code=502,
+                detail=f"Huntly signin failed: HTTP {r.status_code} {r.text[:200]}",
             )
-            if r.status_code >= 300:
-                raise HTTPException(
-                    status_code=502,
-                    detail=f"Huntly signin failed: HTTP {r.status_code} {r.text[:200]}",
-                )
 
-            token = _unwrap(r.json()) if r.headers.get("content-type", "").startswith("application/json") else None
-            if not token:
-                # 回退到 Set-Cookie: auth_token=...
-                token = r.cookies.get("auth_token")
-            if not token:
-                set_cookie = r.headers.get("set-cookie", "")
-                if "auth_token=" in set_cookie:
-                    token = set_cookie.split("auth_token=", 1)[1].split(";", 1)[0]
+        token = _unwrap(r.json()) if r.headers.get("content-type", "").startswith("application/json") else None
+        if not token:
+            # 回退到 Set-Cookie: auth_token=...
+            token = r.cookies.get("auth_token")
+        if not token:
+            set_cookie = r.headers.get("set-cookie", "")
+            if "auth_token=" in set_cookie:
+                token = set_cookie.split("auth_token=", 1)[1].split(";", 1)[0]
 
-            if not token or not isinstance(token, str):
-                raise HTTPException(
-                    status_code=502,
-                    detail="Huntly signin succeeded but no JWT returned",
-                )
+        if not token or not isinstance(token, str):
+            raise HTTPException(
+                status_code=502,
+                detail="Huntly signin succeeded but no JWT returned",
+            )
 
-            _SESSION_TOKEN = token
-            _SESSION_EXPIRES_AT = time.time() + _SESSION_TTL
-            logger.info("huntly session established (jwt len=%d)", len(token))
-            return token
+        _SESSION_TOKEN = token
+        _SESSION_EXPIRES_AT = time.time() + _SESSION_TTL
+        logger.info("huntly session established (jwt len=%d)", len(token))
+        return token
 
 
 async def _huntly_request(
@@ -352,16 +363,16 @@ async def _huntly_request(
         "Authorization": f"Bearer {token}",
         "Cookie": f"auth_token={token}",
     }
-    async with await _http() as client:
-        r = await client.request(method, path, params=params, json=json, headers=headers)
-        if r.status_code in (401, 403) and retry_on_401:
-            global _SESSION_TOKEN, _SESSION_EXPIRES_AT
-            _SESSION_TOKEN = None
-            _SESSION_EXPIRES_AT = 0
-            return await _huntly_request(
-                method, path, params=params, json=json, retry_on_401=False
-            )
-        return r
+    client = await _get_http_client()
+    r = await client.request(method, path, params=params, json=json, headers=headers)
+    if r.status_code in (401, 403) and retry_on_401:
+        global _SESSION_TOKEN, _SESSION_EXPIRES_AT
+        _SESSION_TOKEN = None
+        _SESSION_EXPIRES_AT = 0
+        return await _huntly_request(
+            method, path, params=params, json=json, retry_on_401=False
+        )
+    return r
 
 
 def _is_financial_event(title: str | None, summary: str | None) -> bool:
@@ -683,8 +694,8 @@ def _normalize_page(page: dict) -> dict:
 async def news_health():
     """检查 Huntly 上游连通性 (无须登录)"""
     try:
-        async with await _http() as client:
-            r = await client.get("/api/health")
+        client = await _get_http_client()
+        r = await client.get("/api/health")
         return {
             "huntly_status": "up" if r.status_code == 200 else "down",
             "huntly_http_code": r.status_code,

@@ -9,6 +9,7 @@
  */
 
 import React, { useEffect, useMemo, useRef, useState, useCallback } from 'react';
+import { useDebounce } from '../../../hooks/useDebounce';
 import {
   Badge,
   Button,
@@ -56,11 +57,13 @@ import {
   newsService,
 } from '../services/newsService';
 import '../styles/news-panel.css';
+import { sanitizeHtml } from '../../../utils/sanitizeHtml';
 
 const { Text, Title, Paragraph } = Typography;
 const { RangePicker } = DatePicker;
 
-const POLL_INTERVAL_MS = 10_000;
+const POLL_ARTICLES_MS = 10_000;  // 文章列表 10s 轮询
+const POLL_SOURCES_MS = 60_000;  // 来源/未读数 60s 轮询（不需要高频）
 
 type FeedMode = 'all' | 'events' | 'starred';
 type SentimentFilter = 'any' | 'bullish' | 'bearish' | 'neutral';
@@ -101,6 +104,7 @@ export const NewsPanel: React.FC = () => {
   const [selection, setSelection] = useState<SelectionKey>('all');
   const [feedMode, setFeedMode] = useState<FeedMode>('all');
   const [keyword, setKeyword] = useState('');
+  const [debouncedKeyword] = useDebounce(keyword, 300);
 
   // enrichment 过滤
   const [sentimentFilter, setSentimentFilter] = useState<SentimentFilter>('any');
@@ -180,11 +184,12 @@ export const NewsPanel: React.FC = () => {
     setLoading(true);
     try {
       const params: any = {
-        keyword: keyword || undefined,
+        keyword: debouncedKeyword || undefined,
         only_financial_event: feedMode === 'events',
         page: currentPage,
         page_size: pageSize,
       };
+      if (feedMode === 'starred') params.starred = true;
       if (selection.startsWith('source-')) {
         params.source_id = Number(selection.slice('source-'.length));
       } else if (selection.startsWith('folder-')) {
@@ -207,10 +212,8 @@ export const NewsPanel: React.FC = () => {
       if (dateRange?.[0]) params.since = dateRange[0].startOf('day').toISOString();
       if (dateRange?.[1]) params.until = dateRange[1].endOf('day').toISOString();
       const r = await newsService.listArticles(params);
-      let list = r.articles ?? [];
-      if (feedMode === 'starred') list = list.filter((a) => a.starred);
-      setArticles(list);
-      setTotalArticles(r.total ?? list.length);
+      setArticles(r.articles ?? []);
+      setTotalArticles(r.total ?? (r.articles?.length ?? 0));
       setLatestPublishedAt(r.latest_published_at ?? null);
       setLastSyncTick(Date.now());
     } catch {
@@ -218,7 +221,7 @@ export const NewsPanel: React.FC = () => {
     } finally {
       setLoading(false);
     }
-  }, [selection, keyword, feedMode, sentimentFilter, industryFilter, tickerFilter, eventTagFilter, countryFilter, regionFilter, keyTermFilter, dateEntFilter, provinceFilter, cityFilter, politicianFilter, visitFilter, departmentFilter, strongOnly, dateRange, currentPage, pageSize]);
+  }, [selection, debouncedKeyword, feedMode, sentimentFilter, industryFilter, tickerFilter, eventTagFilter, countryFilter, regionFilter, keyTermFilter, dateEntFilter, provinceFilter, cityFilter, politicianFilter, visitFilter, departmentFilter, strongOnly, dateRange, currentPage, pageSize]);
 
   const loadStats = useCallback(async () => {
     try {
@@ -237,7 +240,7 @@ export const NewsPanel: React.FC = () => {
       if (visitFilter.length) params.visits = visitFilter.join(',');
       if (departmentFilter.length) params.departments = departmentFilter.join(',');
       if (strongOnly) params.strong_only = true;
-      if (keyword?.trim()) params.keyword = keyword.trim();
+      if (keyword?.trim()) params.keyword = debouncedKeyword.trim();
       if (dateRange?.[0]) params.since = dateRange[0].startOf('day').toISOString();
       if (dateRange?.[1]) params.until = dateRange[1].endOf('day').toISOString();
       const s = await newsService.enrichmentStats(params);
@@ -245,7 +248,7 @@ export const NewsPanel: React.FC = () => {
     } catch {
       setStats(null);
     }
-  }, [sentimentFilter, industryFilter, tickerFilter, eventTagFilter, countryFilter, regionFilter, keyTermFilter, dateEntFilter, provinceFilter, cityFilter, politicianFilter, visitFilter, departmentFilter, strongOnly, keyword, dateRange]);
+  }, [sentimentFilter, industryFilter, tickerFilter, eventTagFilter, countryFilter, regionFilter, keyTermFilter, dateEntFilter, provinceFilter, cityFilter, politicianFilter, visitFilter, departmentFilter, strongOnly, debouncedKeyword, dateRange]);
 
   const handleRebuildTags = useCallback(async () => {
     Modal.confirm({
@@ -363,18 +366,24 @@ export const NewsPanel: React.FC = () => {
     if (pollTimer.current) window.clearInterval(pollTimer.current);
     pollTimer.current = window.setInterval(() => {
       loadArticles();
-      loadSources();
-    }, POLL_INTERVAL_MS);
+    }, POLL_ARTICLES_MS);
     return () => {
       if (pollTimer.current) window.clearInterval(pollTimer.current);
       pollTimer.current = null;
     };
-  }, [loadArticles, loadSources]);
+  }, [loadArticles]);
+
+  // 来源/未读数低频刷新 (60s)
+  useEffect(() => {
+    loadSources();
+    const srcTimer = window.setInterval(loadSources, POLL_SOURCES_MS);
+    return () => window.clearInterval(srcTimer);
+  }, [loadSources]);
 
   // 筛选条件变化时重置到第 1 页
   useEffect(() => {
     setCurrentPage(1);
-  }, [selection, keyword, feedMode, sentimentFilter, industryFilter, tickerFilter, eventTagFilter, countryFilter, regionFilter, keyTermFilter, dateEntFilter, provinceFilter, cityFilter, politicianFilter, visitFilter, departmentFilter, strongOnly, dateRange]);
+  }, [selection, debouncedKeyword, feedMode, sentimentFilter, industryFilter, tickerFilter, eventTagFilter, countryFilter, regionFilter, keyTermFilter, dateEntFilter, provinceFilter, cityFilter, politicianFilter, visitFilter, departmentFilter, strongOnly, dateRange]);
 
   // 拖拽分隔条：mousemove / mouseup
   useEffect(() => {
@@ -563,7 +572,7 @@ export const NewsPanel: React.FC = () => {
             最新：{formatRelative(latestPublishedAt)}
           </Tag>
         </Tooltip>
-        <Tooltip title={`上次轮询：${new Date(lastSyncTick).toLocaleTimeString('zh-CN')}（每 ${POLL_INTERVAL_MS / 1000}s 自动）`}>
+        <Tooltip title={`上次轮询：${new Date(lastSyncTick).toLocaleTimeString('zh-CN')}（文章每 ${POLL_ARTICLES_MS / 1000}s / 来源每 ${POLL_SOURCES_MS / 1000}s）`}>
           <Text type="secondary" style={{ fontSize: 12 }}>
             同步 {formatRelative(new Date(lastSyncTick).toISOString())}
           </Text>
@@ -587,7 +596,6 @@ export const NewsPanel: React.FC = () => {
           placeholder="搜索: 标题/内容/股票代码/行业/标签..."
           value={keyword}
           onChange={(e) => setKeyword(e.target.value)}
-          onSearch={() => loadArticles()}
           style={{ width: 320 }}
         />
         <div style={{ flex: 1 }} />
@@ -1643,7 +1651,7 @@ export const NewsPanel: React.FC = () => {
                 <div
                   className="news-content news-detail-content"
                   style={{ fontSize: 15, lineHeight: 1.8 }}
-                  dangerouslySetInnerHTML={{ __html: articleDetail.content_html }}
+                  dangerouslySetInnerHTML={{ __html: sanitizeHtml(articleDetail.content_html) }}
                 />
               ) : (
                 <Paragraph className="news-detail-content" style={{ fontSize: 15, lineHeight: 1.8, whiteSpace: 'pre-wrap' }}>
