@@ -273,7 +273,7 @@ const StrategyLabPage: React.FC = () => {
                 transition={{ duration: 0.25, delay: 0.15 }}
                 style={{ flex: 1, minWidth: 0, overflow: 'auto' }}
               >
-                <StrategyLabResultPanel result={result} loading={running} code={code} prevResult={prevResult} onClearPrev={() => setPrevResult(null)} drawnLines={drawnLines} onDrawnLinesChange={setDrawnLines} />
+                <StrategyLabResultPanel result={result} loading={running} code={code} strategyId={currentStrategyId} strategyName={currentStrategyName} prevResult={prevResult} onClearPrev={() => setPrevResult(null)} drawnLines={drawnLines} onDrawnLinesChange={setDrawnLines} />
               </motion.div>
             </div>
           </Content>

@@ -90,6 +90,40 @@ async def get_backtest_trades(
     )
 
 
+@router.get("/history/me")
+async def get_my_backtest_history(
+    request: Request,
+    tenant_id: str | None = Query(None, description="租户ID（已废弃，自动使用认证身份）"),
+    include_optimization: bool = Query(False, description="是否包含参数优化产生的子回测记录"),
+    page: int = Query(1, ge=1, description="页码"),
+    page_size: int = Query(10, ge=1, le=100, description="每页数量"),
+    sort_by: str = Query("created_at", description="排序字段"),
+    sort_order: str = Query("desc", pattern="^(asc|desc)$", description="排序方向"),
+    status: str | None = Query(None, description="状态过滤"),
+    symbol: str | None = Query(None, description="股票代码过滤"),
+    strategy_name: str | None = Query(None, description="策略名称过滤"),
+    service: Any = Depends(get_qlib_service),
+):
+    """获取当前用户的回测历史 (支持分页和排序)。使用认证 token 自动识别用户。"""
+    auth_user_id, auth_tenant_id = _identity_from_request(
+        request,
+        provided_tenant_id=tenant_id,
+    )
+    return await _build_history_response(
+        service=service,
+        user_id=auth_user_id,
+        tenant_id=auth_tenant_id,
+        include_optimization=include_optimization,
+        page=page,
+        page_size=page_size,
+        sort_by=sort_by,
+        sort_order=sort_order,
+        status=status,
+        symbol=symbol,
+        strategy_name=strategy_name,
+    )
+
+
 @router.get("/history/{user_id}")
 async def get_backtest_history(
     request: Request,
@@ -102,6 +136,7 @@ async def get_backtest_history(
     sort_order: str = Query("desc", pattern="^(asc|desc)$", description="排序方向"),
     status: str | None = Query(None, description="状态过滤"),
     symbol: str | None = Query(None, description="股票代码过滤"),
+    strategy_name: str | None = Query(None, description="策略名称过滤"),
     service: Any = Depends(get_qlib_service),
 ):
     """获取回测历史 (支持分页和排序)"""
@@ -110,7 +145,37 @@ async def get_backtest_history(
         provided_user_id=user_id,
         provided_tenant_id=tenant_id,
     )
-    results = await service.list_history(auth_user_id, auth_tenant_id, limit=max(page * page_size * 5, 200))
+    return await _build_history_response(
+        service=service,
+        user_id=auth_user_id,
+        tenant_id=auth_tenant_id,
+        include_optimization=include_optimization,
+        page=page,
+        page_size=page_size,
+        sort_by=sort_by,
+        sort_order=sort_order,
+        status=status,
+        symbol=symbol,
+        strategy_name=strategy_name,
+    )
+
+
+async def _build_history_response(
+    service: Any,
+    user_id: str,
+    tenant_id: str,
+    *,
+    include_optimization: bool = False,
+    page: int = 1,
+    page_size: int = 10,
+    sort_by: str = "created_at",
+    sort_order: str = "desc",
+    status: str | None = None,
+    symbol: str | None = None,
+    strategy_name: str | None = None,
+) -> dict[str, Any]:
+    """Shared logic for building paginated backtest history response."""
+    results = await service.list_history(user_id, tenant_id, limit=max(page * page_size * 5, 200))
 
     def _field(item: Any, key: str, default: Any = None) -> Any:
         if isinstance(item, dict):
@@ -128,7 +193,7 @@ async def get_backtest_history(
 
     if not include_optimization:
         results = [r for r in results if _history_source(r) != "optimization"]
-        results = await _filter_optimization_sub_backtests(results, user_id=auth_user_id, tenant_id=auth_tenant_id)
+        results = await _filter_optimization_sub_backtests(results, user_id=user_id, tenant_id=tenant_id)
         results = _filter_legacy_optimization_clusters(results)
 
     if status:
@@ -136,6 +201,13 @@ async def get_backtest_history(
 
     if symbol:
         results = [r for r in results if _field(r, "symbol") == symbol]
+
+    if strategy_name:
+        results = [
+            r for r in results
+            if _field(r, "strategy_name") == strategy_name
+            or _field(r, "strategy_display_name") == strategy_name
+        ]
 
     reverse = sort_order == "desc"
     if sort_by == "created_at":

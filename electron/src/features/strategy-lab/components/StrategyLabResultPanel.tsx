@@ -18,6 +18,10 @@ interface Props {
   loading: boolean;
   /** Optional: original code; if present, enables 转模板 / 4 关卡 actions. */
   code?: string;
+  /** Current strategy ID for history lookup */
+  strategyId?: string | null;
+  /** Current strategy name for backtest history filtering */
+  strategyName?: string | null;
   /** Day 18: previous successful run, rendered as a dashed overlay on EquityChart. */
   prevResult?: StrategyLabRunResult | null;
   onClearPrev?: () => void;
@@ -36,12 +40,14 @@ const fmt = (v: number | null | undefined, digits = 2) => {
   return v.toFixed(digits);
 };
 
-export const StrategyLabResultPanel: React.FC<Props> = ({ result, loading, code, prevResult, onClearPrev, drawnLines, onDrawnLinesChange }) => {
+export const StrategyLabResultPanel: React.FC<Props> = ({ result, loading, code, strategyId, strategyName, prevResult, onClearPrev, drawnLines, onDrawnLinesChange }) => {
   const [explainTrade, setExplainTrade] = useState<StrategyLabTradeRecord | null>(null);
   const [overfitReport, setOverfitReport] = useState<any>(null);
   const [overfitLoading, setOverfitLoading] = useState(false);
   const [translateLoading, setTranslateLoading] = useState(false);
   const [watchLoading, setWatchLoading] = useState(false);
+  const [historyLoading, setHistoryLoading] = useState(false);
+  const [backtestHistory, setBacktestHistory] = useState<any[]>([]);
 
   const alpha = useMemo(() => {
     if (!result?.equity?.length) return null;
@@ -60,6 +66,25 @@ export const StrategyLabResultPanel: React.FC<Props> = ({ result, loading, code,
     const benchRet = first.benchmark ? last.benchmark / first.benchmark - 1 : 0;
     return stratRet - benchRet;
   }, [result]);
+
+  // Fetch backtest history when strategyName changes (server-side filter)
+  React.useEffect(() => {
+    if (!strategyName) {
+      setBacktestHistory([]);
+      return;
+    }
+    setHistoryLoading(true);
+    strategyLabService.getBacktestHistory({
+      page: 1,
+      pageSize: 20,
+      sortBy: 'created_at',
+      sortOrder: 'desc',
+      strategyName,
+    })
+      .then((data) => setBacktestHistory(data.backtests))
+      .catch(() => setBacktestHistory([]))
+      .finally(() => setHistoryLoading(false));
+  }, [strategyName]);
 
   if (loading && !result) {
     return (
@@ -292,6 +317,71 @@ export const StrategyLabResultPanel: React.FC<Props> = ({ result, loading, code,
             key: 'monthly',
             label: '月度热力',
             children: <MonthlyReturnsHeatmap equity={result.equity} />,
+          },
+          {
+            key: 'history',
+            label: `回测记录 (${backtestHistory.length})`,
+            children: historyLoading ? (
+              <Card loading />
+            ) : backtestHistory.length === 0 ? (
+              <Empty description="暂无回测记录" />
+            ) : (
+              <Table
+                size="small"
+                rowKey="backtest_id"
+                pagination={{ pageSize: 10, showSizeChanger: false }}
+                dataSource={backtestHistory}
+                columns={[
+                  {
+                    title: '回测时间',
+                    dataIndex: 'created_at',
+                    key: 'created_at',
+                    render: (v: string) => v ? new Date(v).toLocaleString('zh-CN') : '—',
+                  },
+                  {
+                    title: '状态',
+                    dataIndex: 'status',
+                    key: 'status',
+                    render: (s: string) => (
+                      <Tag color={s === 'completed' || s === 'success' ? 'green' : s === 'failed' ? 'red' : 'orange'}>
+                        {s === 'completed' ? '成功' : s === 'failed' ? '失败' : s}
+                      </Tag>
+                    ),
+                  },
+                  {
+                    title: '累计收益',
+                    dataIndex: 'total_return',
+                    key: 'total_return',
+                    render: (v: number) => v !== null && v !== undefined ? fmtPct(v) : '—',
+                  },
+                  {
+                    title: 'Sharpe',
+                    dataIndex: 'sharpe_ratio',
+                    key: 'sharpe',
+                    render: (v: number) => v !== null && v !== undefined ? fmt(v, 2) : '—',
+                  },
+                  {
+                    title: '最大回撤',
+                    dataIndex: 'max_drawdown',
+                    key: 'max_drawdown',
+                    render: (v: number) => v !== null && v !== undefined ? fmtPct(Math.abs(v)) : '—',
+                  },
+                  {
+                    title: '操作',
+                    key: 'action',
+                    render: (_, record) => (
+                      <Button
+                        size="small"
+                        type="link"
+                        onClick={() => message.info('查看回测详情功能开发中')}
+                      >
+                        查看
+                      </Button>
+                    ),
+                  },
+                ]}
+              />
+            ),
           },
           {
             key: 'yearly',

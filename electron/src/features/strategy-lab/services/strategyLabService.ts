@@ -193,6 +193,53 @@ export const strategyLabService = {
     await axios.delete(this.strategiesUrl(`/${strategyId}`), { headers: this.authHeaders() });
   },
 
+  // ---------------------------------------------------------------------------
+  // Backtest History — via /api/v1/qlib/history/{userId}
+  // ---------------------------------------------------------------------------
+
+  /** Get backtest history for current user. */
+  async getBacktestHistory(options?: {
+    page?: number;
+    pageSize?: number;
+    sortBy?: string;
+    sortOrder?: 'asc' | 'desc';
+    status?: string;
+    strategyName?: string;
+  }): Promise<{ page: number; page_size: number; total: number; backtests: Array<{
+    backtest_id: string;
+    task_id: string;
+    status: string;
+    created_at: string;
+    completed_at?: string;
+    total_return?: number;
+    sharpe_ratio?: number;
+    max_drawdown?: number;
+    strategy_name?: string;
+    strategy_display_name?: string;
+  }> }> {
+    const base = String(SERVICE_URLS.ENGINE_SERVICE || '').replace(/\/+$/, '');
+    const params = new URLSearchParams();
+    if (options?.page) params.set('page', String(options.page));
+    if (options?.pageSize) params.set('page_size', String(options.pageSize));
+    if (options?.sortBy) params.set('sort_by', options.sortBy);
+    if (options?.sortOrder) params.set('sort_order', options.sortOrder);
+    if (options?.status) params.set('status', options.status);
+    if (options?.strategyName) params.set('strategy_name', options.strategyName);
+
+    const url = `${base}/api/v1/qlib/history/me?${params.toString()}`;
+    const resp = await axios.get(url, { headers: this.authHeaders() });
+    return resp.data;
+  },
+
+  /** Get single backtest result by ID. */
+  async getBacktestResult(backtestId: string, excludeTrades = false): Promise<any> {
+    const base = String(SERVICE_URLS.ENGINE_SERVICE || '').replace(/\/+$/, '');
+    const params = excludeTrades ? '?exclude_trades=true' : '';
+    const url = `${base}/api/v1/qlib/results/${backtestId}${params}`;
+    const resp = await axios.get(url, { headers: this.authHeaders() });
+    return resp.data;
+  },
+
   /**
    * SSE poller — Server-Sent Events with token auth via query param fallback.
    * Returns a cleanup function. The browser EventSource cannot set Authorization
