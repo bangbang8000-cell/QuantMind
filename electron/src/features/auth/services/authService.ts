@@ -390,7 +390,9 @@ class AuthService {
           email: info.email ?? '',
           full_name: info.full_name ?? info.username ?? '',
           is_active: info.is_active ?? true,
-          is_admin: Array.isArray(info.roles) ? info.roles.includes('admin') : false,
+          is_admin: typeof info.is_admin === 'boolean'
+            ? info.is_admin
+            : Array.isArray(info.roles) ? info.roles.includes('admin') : false,
           created_at: info.created_at ?? '',
           updated_at: info.last_login ?? info.created_at ?? '',
         },

@@ -23,7 +23,7 @@ import { adminService } from '../services/adminService';
 import { authService } from '../../auth/services/authService';
 import { useAppDispatch } from '../../../store';
 import { logout } from '../../auth/store/authSlice';
-import { DashboardMetrics } from '../types';
+import { DashboardMetrics, DashboardServiceInfo } from '../types';
 
 const { Title, Text } = Typography;
 
@@ -107,13 +107,27 @@ export const AdminDashboard: React.FC = () => {
         </div>
     );
 
-    const serviceStats = metrics.services || [];
+    const serviceStats: DashboardServiceInfo[] = metrics.system?.services || [];
 
     const iconMap: Record<string, React.ReactNode> = {
         api: <ApiOutlined />,
         engine: <ThunderboltOutlined />,
         trade: <SwapOutlined />,
         stream: <GlobalOutlined />,
+    };
+
+    const serviceDescMap: Record<string, string> = {
+        api: '用户认证 · 策略管理 · 社区',
+        engine: 'Qlib回测 · AI策略 · 模型推理',
+        trade: '订单管理 · 持仓 · 风控',
+        stream: '实时行情 · WebSocket推送',
+    };
+
+    const servicePortMap: Record<string, string> = {
+        api: '8000',
+        engine: '8001',
+        trade: '8002',
+        stream: '8003',
     };
 
     return (
@@ -124,8 +138,8 @@ export const AdminDashboard: React.FC = () => {
                     <Title level={4} className="!m-0 !font-black !text-slate-800 text-lg">系统控制台</Title>
                     <Text className="text-slate-400 text-xs font-medium">基础设施节点监控与管理</Text>
                 </div>
-                <Button 
-                    icon={<ThunderboltOutlined />} 
+                <Button
+                    icon={<ThunderboltOutlined />}
                     onClick={loadMetrics}
                     className="rounded-xl font-bold bg-white text-slate-800 border-slate-200 hover:border-slate-800 hover:text-slate-800 shadow-sm h-10 px-6"
                 >
@@ -135,40 +149,46 @@ export const AdminDashboard: React.FC = () => {
 
             {/* Core Services Grid */}
             <Row gutter={[20, 20]}>
-                {serviceStats.map((s, idx) => (
-                    <Col xs={24} sm={12} lg={6} key={s.name || idx}>
-                        <Card className="rounded-2xl border-slate-200 shadow-sm hover:shadow-md transition-all">
-                            <div className="flex items-center justify-between mb-4">
-                                <div className="flex items-center gap-3">
-                                    <div className={`w-10 h-10 rounded-xl bg-slate-50 flex items-center justify-center text-slate-600 border border-slate-100`}>
-                                        {iconMap[s.icon] || <ApiOutlined />}
-                                    </div>
-                                    <div>
-                                        <div className="flex items-center gap-1.5">
-                                            <Text className="font-black text-slate-800 text-sm">{s.name}</Text>
-                                            <Badge status="processing" color="#10b981" />
+                {serviceStats.map((s, idx) => {
+                    const isHealthy = s.healthy && s.status === 'healthy';
+                    const isUnreachable = s.status === 'unreachable';
+                    return (
+                        <Col xs={24} sm={12} lg={6} key={s.service || idx}>
+                            <Card className="rounded-2xl border-slate-200 shadow-sm hover:shadow-md transition-all">
+                                <div className="flex items-center justify-between mb-4">
+                                    <div className="flex items-center gap-3">
+                                        <div className={`w-10 h-10 rounded-xl ${isHealthy ? 'bg-emerald-50' : isUnreachable ? 'bg-rose-50' : 'bg-amber-50'} flex items-center justify-center ${isHealthy ? 'text-emerald-600' : isUnreachable ? 'text-rose-500' : 'text-amber-500'} border ${isHealthy ? 'border-emerald-100' : isUnreachable ? 'border-rose-100' : 'border-amber-100'}`}>
+                                            {iconMap[s.service] || <ApiOutlined />}
                                         </div>
-                                        <Text className="text-[10px] text-slate-400 font-bold">端口 {s.port}</Text>
+                                        <div>
+                                            <div className="flex items-center gap-1.5">
+                                                <Text className="font-black text-slate-800 text-sm">{s.service.toUpperCase()}</Text>
+                                                <Badge status={isHealthy ? 'processing' : 'error'} color={isHealthy ? '#10b981' : '#ef4444'} />
+                                            </div>
+                                            <Text className="text-[10px] text-slate-400 font-bold">端口 {servicePortMap[s.service] || '—'}</Text>
+                                        </div>
                                     </div>
+                                    <Tag color={isHealthy ? 'success' : isUnreachable ? 'error' : 'warning'} className="m-0 border-none rounded-full px-2 text-[9px] font-black">
+                                        {isHealthy ? '运行中' : isUnreachable ? '不可达' : '异常'}
+                                    </Tag>
                                 </div>
-                                <Tag color="success" className="m-0 border-none rounded-full px-2 text-[9px] font-black bg-emerald-50 text-emerald-600">运行中</Tag>
-                            </div>
-                            <div className="space-y-1.5">
-                                <div className="flex justify-between items-center text-[10px] font-black mb-1">
-                                    <span className="text-slate-400">负载系数</span>
-                                    <span className={s.load > 80 ? "text-rose-500" : "text-slate-800"}>{s.load}%</span>
+                                <div className="space-y-1.5">
+                                    <div className="flex justify-between items-center text-[10px] font-black mb-1">
+                                        <span className="text-slate-400">健康评分</span>
+                                        <span className={s.score < 60 ? "text-rose-500" : s.score < 90 ? "text-amber-500" : "text-emerald-600"}>{s.score}%</span>
+                                    </div>
+                                    <div className="h-1.5 w-full bg-slate-100 rounded-full overflow-hidden">
+                                        <div
+                                            className={`h-full rounded-full transition-all duration-1000 ${s.score < 60 ? 'bg-rose-500' : s.score < 90 ? 'bg-amber-500' : 'bg-emerald-500'}`}
+                                            style={{ width: `${s.score}%` }}
+                                        />
+                                    </div>
+                                    <Text className="text-[10px] text-slate-400 font-medium block pt-1">{serviceDescMap[s.service] || s.url}</Text>
                                 </div>
-                                <div className="h-1.5 w-full bg-slate-100 rounded-full overflow-hidden">
-                                    <div 
-                                        className={`h-full rounded-full transition-all duration-1000 ${s.load > 80 ? 'bg-rose-500' : 'bg-slate-800'}`} 
-                                        style={{ width: `${s.load}%` }} 
-                                    />
-                                </div>
-                                <Text className="text-[10px] text-slate-400 font-medium block pt-1">{s.desc}</Text>
-                            </div>
-                        </Card>
-                    </Col>
-                ))}
+                            </Card>
+                        </Col>
+                    );
+                })}
             </Row>
 
             <Divider className="!m-0 border-slate-100" />
