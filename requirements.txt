@@ -1,6 +1,6 @@
-# 核心 Web 框架
 fastapi==0.110.0
-starlette>=0.36.3,<0.40.0
+starlette==0.36.3
+# 核心 Web 框架
 uvicorn
 pydantic
 pydantic[email]

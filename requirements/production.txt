@@ -1,9 +1,10 @@
+fastapi==0.110.0
+starlette==0.36.3
 # QuantMind 生产环境依赖（精简版）
 # 从113个依赖减少到~35个核心依赖
 # 预计减少Docker镜像体积60%
 
 # ============ Web Framework ============
-fastapi==0.110.0
 uvicorn[standard]==0.28.0
 python-multipart==0.0.9
 websockets==12.0

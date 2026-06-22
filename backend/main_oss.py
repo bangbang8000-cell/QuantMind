@@ -334,8 +334,83 @@ def run_all_services():
                 logger.warning(f"Force killed {name} service")
 
 
+def _ensure_database_schema():
+    """启动前自动检测并创建缺失的数据库表。
+
+    对于新部署（空库），确保所有业务表存在，避免 'relation does not exist' 错误。
+    使用 CREATE TABLE IF NOT EXISTS 保证幂等，不会影响已有数据。
+    """
+    import subprocess
+
+    init_sql = "/app/backend/shared/db_init.sql"
+    if not os.path.isfile(init_sql):
+        logger.warning("数据库初始化 SQL 未找到: %s，跳过自动建表", init_sql)
+        return
+
+    db_host = os.getenv("DB_HOST", os.getenv("POSTGRES_HOST", "db"))
+    db_port = os.getenv("DB_PORT", "5432")
+    db_name = os.getenv("DB_NAME", os.getenv("POSTGRES_DB", "quantmind"))
+    db_user = os.getenv("DB_USER", os.getenv("POSTGRES_USER", "quantmind"))
+    db_password = os.getenv("DB_PASSWORD", os.getenv("POSTGRES_PASSWORD", "quantmind2026"))
+
+    env = os.environ.copy()
+    env["PGPASSWORD"] = db_password
+
+    try:
+        result = subprocess.run(
+            ["psql", "-h", db_host, "-p", db_port, "-U", db_user, "-d", db_name,
+             "-f", init_sql, "--quiet", "-v", "ON_ERROR_STOP=0"],
+            env=env,
+            capture_output=True,
+            text=True,
+            timeout=60,
+        )
+        if result.returncode == 0:
+            logger.info("数据库表结构自检完成")
+        else:
+            # 部分表可能已存在，返回非零但无碍
+            logger.warning("数据库初始化有警告（可忽略，表可能已存在）: %s",
+                           result.stderr[:200] if result.stderr else "")
+    except FileNotFoundError:
+        # psql 客户端可能未安装在镜像中，回退到 Python 方式
+        logger.info("psql 未安装，使用 Python 执行数据库初始化")
+        _ensure_database_schema_python()
+    except Exception as e:
+        logger.warning("数据库自动建表失败（不影响启动，后续按需建表）: %s", e)
+
+
+def _ensure_database_schema_python():
+    """psql 不可用时的回退方案：用 Python psycopg2 执行初始化 SQL。"""
+    init_sql = "/app/backend/shared/db_init.sql"
+    if not os.path.isfile(init_sql):
+        return
+
+    db_host = os.getenv("DB_HOST", os.getenv("POSTGRES_HOST", "db"))
+    db_port = os.getenv("DB_PORT", "5432")
+    db_name = os.getenv("DB_NAME", os.getenv("POSTGRES_DB", "quantmind"))
+    db_user = os.getenv("DB_USER", os.getenv("POSTGRES_USER", "quantmind"))
+    db_password = os.getenv("DB_PASSWORD", os.getenv("POSTGRES_PASSWORD", "quantmind2026"))
+
+    try:
+        import psycopg2
+        conn = psycopg2.connect(host=db_host, port=db_port, dbname=db_name,
+                                user=db_user, password=db_password)
+        conn.autocommit = True
+        with open(init_sql, "r") as f:
+            sql = f.read()
+        with conn.cursor() as cur:
+            cur.execute(sql)
+        conn.close()
+        logger.info("数据库表结构自检完成 (Python psycopg2)")
+    except Exception as e:
+        logger.warning("数据库自动建表失败（不影响启动）: %s", e)
+
+
 def main():
     """主入口"""
+    # 启动前确保数据库表结构完整
+    _ensure_database_schema()
+
     service_mode = os.getenv("SERVICE_MODE", "all").lower().strip()
     ports = get_service_ports()
     workers_config = get_workers_config()

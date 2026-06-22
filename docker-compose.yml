@@ -16,6 +16,8 @@ services:
       - TZ=Asia/Shanghai
     volumes:
       - postgres-data:/var/lib/postgresql/data
+      # 首次创建数据库时自动初始化所有表结构（PostgreSQL 官方镜像支持 /docker-entrypoint-initdb.d/）
+      - ./db/sql:/docker-entrypoint-initdb.d
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
       interval: 10s
@@ -238,7 +240,7 @@ services:
       - qwenpaw-shared:/qwenpaw-shared
     # 启动时自动安装 TradingAgents（editable install，依赖保留在容器内）
     command: >
-      sh -c "pip install -e /app/TradingAgents-astock --quiet 2>/dev/null;
+      sh -c "pip install --no-deps -e /app/TradingAgents-astock --quiet 2>/dev/null;
              python backend/main_oss.py"
     # deploy:
     #   resources:

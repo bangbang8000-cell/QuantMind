@@ -36,7 +36,6 @@ bin
 lib
 share
 backend/services/ai_ide/.venv
-electron/node_modules
 
 # Data & Databases (Should be handled via volumes)
 db/
@@ -65,7 +64,6 @@ coverage.xml
 # Build Artifacts
 build/
 dist/
-dist-electron/
 node_modules/
 package-lock.json
 
@@ -79,12 +77,9 @@ AGENTS.md
 # Large non-essential directories
 models/
 alphaagent/
-daily_stock_analysis/
 go-stock/
 TradingAgents-astock/
 dexter-finance/
-dashboard/
 tools/
 openbb-cn/
 user_pools_local/
-electron/
