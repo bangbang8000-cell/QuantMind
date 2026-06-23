@@ -277,6 +277,7 @@ class RiskAnalyzer:
     def _compute_benchmark_return(benchmark: str, start_date: str, end_date: str) -> float | None:
         try:
             df = None
+            matched_candidate = None
             for candidate in benchmark_candidates(benchmark):
                 df = D.features(
                     [candidate],
@@ -285,8 +286,17 @@ class RiskAnalyzer:
                     end_time=end_date,
                 )
                 if df is not None and not df.empty:
+                    matched_candidate = candidate
                     break
             if df is None or df.empty:
+                task_logger.warning(
+                    "benchmark_data_not_found",
+                    "基准数据未找到",
+                    benchmark=benchmark,
+                    candidates=benchmark_candidates(benchmark),
+                    start_date=start_date,
+                    end_date=end_date,
+                )
                 return None
             df = df.droplevel(level="instrument")
             series = df["$close"].dropna()
@@ -316,6 +326,7 @@ class RiskAnalyzer:
         annual_return: float | None,
         risk_free_rate: float = 0.02,
     ) -> dict[str, float | None]:
+        _empty = {"alpha": None, "beta": None, "information_ratio": None, "benchmark_return": None}
         try:
             bm_df = None
             for candidate in benchmark_candidates(benchmark):
@@ -323,16 +334,28 @@ class RiskAnalyzer:
                 if bm_df is not None and not bm_df.empty:
                     break
             if bm_df is None or bm_df.empty:
-                return {"alpha": None, "beta": None, "information_ratio": None}
+                return _empty
 
             bm_df = bm_df.droplevel(level="instrument")
             bm_prices = bm_df["$close"].dropna()
             bm_daily_returns = bm_prices.pct_change().dropna()
 
+            # 同时计算基准收益率（复用已查到的数据，避免二次查询）
+            benchmark_return = None
+            if len(bm_prices) >= 2:
+                first = float(bm_prices.iloc[0])
+                last = float(bm_prices.iloc[-1])
+                if first > 0:
+                    benchmark_return = cls._clamp_unreasonable_metric(
+                        (last / first) - 1,
+                        abs_limit=10.0,
+                        metric_name="benchmark_return",
+                    )
+
             aligned = pd.concat([daily_returns, bm_daily_returns], axis=1, join="inner")
             aligned.columns = ["portfolio", "benchmark"]
             if len(aligned) < 5:
-                return {"alpha": None, "beta": None, "information_ratio": None}
+                return {**_empty, "benchmark_return": cls._clean_nan(benchmark_return)}
 
             port_r = aligned["portfolio"]
             bm_r = aligned["benchmark"]
@@ -370,10 +393,11 @@ class RiskAnalyzer:
                 "alpha": cls._clean_nan(alpha),
                 "beta": cls._clean_nan(beta),
                 "information_ratio": cls._clean_nan(ir),
+                "benchmark_return": cls._clean_nan(benchmark_return),
             }
         except Exception as exc:
             task_logger.warning("compute_risk_metrics_failed", "Risk metrics calculation failed", error=str(exc))
-            return {"alpha": None, "beta": None, "information_ratio": None}
+            return _empty
 
     @staticmethod
     def _extract_report_from_portfolio(portfolio_dict: dict[str, Any]) -> pd.DataFrame | None:
@@ -1046,10 +1070,8 @@ class RiskAnalyzer:
             task_logger.warning("empty_or_invalid_report", "Empty or invalid report")
 
         await report_progress(0.89, "正在对比基准指数收益...")
-        benchmark_return = cls._compute_benchmark_return(request.benchmark, request.start_date, request.end_date)
-        benchmark_return = cls._clean_nan(benchmark_return)
 
-        risk_metrics = {"alpha": None, "beta": None, "information_ratio": None}
+        risk_metrics = {"alpha": None, "beta": None, "information_ratio": None, "benchmark_return": None}
         if daily_returns is not None and annual_return is not None:
             risk_metrics = cls._compute_risk_metrics(
                 daily_returns=daily_returns,
@@ -1059,6 +1081,12 @@ class RiskAnalyzer:
                 annual_return=annual_return,
                 risk_free_rate=float(getattr(request, "risk_free_rate", 0.02)),
             )
+
+        # 基准收益：优先使用 _compute_risk_metrics 中已查到的数据（避免二次查询时序不一致）
+        benchmark_return = risk_metrics.pop("benchmark_return", None)
+        if benchmark_return is None:
+            benchmark_return = cls._compute_benchmark_return(request.benchmark, request.start_date, request.end_date)
+        benchmark_return = cls._clean_nan(benchmark_return)
 
         portfolio_metrics = None
         final_total_assets = request.initial_capital
