@@ -426,6 +426,10 @@ class RedisLongShortTopkStrategy(DynamicRiskMixin, WeightStrategyBase, RedisLogg
         if scores is None or scores.empty or target_exposure <= 0:
             return pd.Series(dtype=float)
 
+        # 防御性去重：同一股票若出现多次，保留首个（最高分）
+        if not scores.index.is_unique:
+            scores = scores[~scores.index.duplicated(keep="first")]
+
         abs_scores = scores.abs().astype(float)
         total = abs_scores.sum()
         if total <= 0:
@@ -478,6 +482,10 @@ class RedisLongShortTopkStrategy(DynamicRiskMixin, WeightStrategyBase, RedisLogg
         score = score.dropna()
         if score.empty:
             return {}
+
+        # 防御性去重：确保索引唯一，避免后续 reindex 报错
+        if not score.index.is_unique:
+            score = score[~score.index.duplicated(keep="first")]
 
         threshold = abs(float(self.min_score or 0.0))
         long_scores = score[score > threshold]
