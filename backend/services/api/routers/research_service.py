@@ -265,7 +265,7 @@ _SDL_SELECT_BY_RUN_DATE = """
             VALUES
               ('AI', COALESCE(sdl_run.concept_ai, 0)),
               ('芯片', COALESCE(sdl_run.concept_chip, 0)),
-              ('新能源', COALESCE(concept_new_energy, 0)),
+              ('新能源', COALESCE(sdl_run.concept_new_energy, 0)),
               ('光伏', COALESCE(sdl_run.concept_pv, 0)),
               ('锂电', COALESCE(sdl_run.concept_lithium, 0)),
               ('军工', COALESCE(sdl_run.concept_military, 0)),
@@ -577,7 +577,7 @@ async def _fetch_summary(
                 MAX(snap.updated_at) AS last_updated_at
             FROM qm_research_candidate_snapshot snap
             LEFT JOIN {sdl_tbl} sdl ON (
-                sdl.symbol = {_norm_symbol_sql("snap.symbol")}
+                {_norm_symbol_sql("sdl.symbol")} = {_norm_symbol_sql("snap.symbol")}
                 AND sdl.trade_date = snap.data_trade_date
             )
             WHERE {where}
@@ -722,7 +722,7 @@ async def _do_get_overview(
                 LEAD(sdl.close, 1) OVER (PARTITION BY sdl.symbol ORDER BY sdl.trade_date) AS close_next_1d,
                 LEAD(sdl.close, 3) OVER (PARTITION BY sdl.symbol ORDER BY sdl.trade_date) AS close_next_3d
             FROM {sdl_table} sdl
-            INNER JOIN snap_symbols ss ON ss.symbol = sdl.symbol
+            INNER JOIN snap_symbols ss ON {_norm_symbol_sql("ss.symbol")} = {_norm_symbol_sql("sdl.symbol")}
             CROSS JOIN snap_date_bounds b
             WHERE sdl.volume > 0
               AND sdl.trade_date >= (b.min_trade_date - INTERVAL '10 day')
@@ -731,7 +731,7 @@ async def _do_get_overview(
         SELECT snap.*, {_SDL_SELECT_BY_RUN_DATE}
         FROM snap_page snap
         LEFT JOIN sdl_run
-            ON sdl_run.symbol = {_norm_symbol_sql("snap.symbol")}
+            ON {_norm_symbol_sql("sdl_run.symbol")} = {_norm_symbol_sql("snap.symbol")}
            AND sdl_run.trade_date = snap.data_trade_date
         ORDER BY snap.score_rank ASC
         """
@@ -1008,7 +1008,7 @@ async def add_to_research_pool(
             text(
                 "INSERT INTO qm_user_research_pool "
                 "(tenant_id, user_id, symbol, stock_name, source_run_id, model_id, fusion_score, thesis_summary, features_snapshot, updated_at) "
-                "(VALUES (:tid, :uid, :s, :n, :rid, :mid, :fs, :ts, :f, NOW())) "
+                "VALUES (:tid, :uid, :s, :n, :rid, :mid, :fs, :ts, :f, NOW()) "
                 "ON CONFLICT (tenant_id, user_id, symbol) DO UPDATE SET features_snapshot = EXCLUDED.features_snapshot, updated_at = NOW()"
             ),
             {
