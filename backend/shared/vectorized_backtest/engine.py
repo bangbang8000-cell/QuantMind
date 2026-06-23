@@ -94,9 +94,9 @@ class VectorizedBacktestEngine:
             # Apply tradability: zero out scores for untradable stocks
             sig_wide = sig_wide.where(tradable, other=-np.inf)
 
-            # 3. Daily returns (next day return)
-            # Ret_{t+1} = (P_{t+1} / P_{t}) - 1
-            asset_returns = price_wide.pct_change().shift(-1)
+            # 3. Daily returns
+            # pct_change()[t] = P[t]/P[t-1] - 1 (T-1到T的日收益)
+            asset_returns = price_wide.pct_change()
 
             # 4. Target Weights (TopK equal weight)
             # Rank scores cross-sectionally (untradable stocks ranked last)
@@ -110,7 +110,16 @@ class VectorizedBacktestEngine:
             weight_sums = weights.sum(axis=1)
             weights = weights.div(weight_sums.where(weight_sums > 0, 1), axis=0)
 
+            # Signal lag: T日信号延迟1天生效 (T+1 settlement)
+            # T日收盘信号 → T+1日成交 → 持有到T+2
+            # 因此T日的权重应该配对T+1日的收益: weights[t] → asset_returns[t+1]
+            # 等价于将权重前移1天: weights_lagged[t+1] = weights[t]
+            weights = weights.shift(1).fillna(0)
+
             # 5. Calculate Portfolio Returns
+            # asset_returns[t] = close-to-close 日收益 (T-1到T)
+            # weights_lagged[t] = T-1日信号权重 (已延迟1天)
+            # portfolio_returns[t] = T-1信号 × T收益 = T+1 settlement
             portfolio_daily_returns = (weights * asset_returns).sum(axis=1).fillna(0)
 
             # 6. Transaction costs (buy-side + sell-side asymmetry)
