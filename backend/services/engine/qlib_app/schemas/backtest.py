@@ -121,10 +121,10 @@ class QlibBacktestRequest(BaseModel):
     )
 
     seed: int | None = Field(None, description="随机种子")
-    # deal_price="open" (默认): 使用次日开盘价成交，避免未来函数。
-    # deal_price="close" 存在严重的前视偏差 (Look-ahead Bias):
-    #   T 日信号 + deal_price=close → 以 T 日收盘价成交，
-    #   但 T 日收盘价在信号生成时已是已知信息，会大幅高估收益。
+    # A股交易时序: T-1收盘信号 → T日成交 → T+1开始计算收益
+    # deal_price="open": T日开盘价成交 (信号T-1收盘后可见, T开盘成交, ✅无未来函数)
+    # deal_price="close": T日收盘价成交 (信号T-1收盘后可见, T收盘成交, ✅无未来函数, 但成交价不确定性大)
+    # 两者均无前视偏差, 默认使用 open 更贴近实际下单
     deal_price: Literal["open", "close"] = Field("open", description="成交价格类型")
     signal_lag_days: int = Field(
         1,
