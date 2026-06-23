@@ -368,7 +368,7 @@ class SimpleSignal(Signal):
                 return pd.Series(dtype=float)
 
             dates = series.index.get_level_values("datetime")
-            target_date = dates.max() if len(dates) > 1 else dates.iloc[0]
+            target_date = dates.max() if len(dates) > 1 else dates[0]
             daily = series.xs(target_date, level="datetime")
             if daily.empty:
                 task_logger.info(
