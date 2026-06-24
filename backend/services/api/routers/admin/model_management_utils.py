@@ -126,6 +126,11 @@ def _load_feature_catalog_from_file(path: str = FEATURE_CATALOG_FALLBACK) -> dic
                     "formula": str(feat.get("formula") or ""),
                     "source_table_fields": str(feat.get("source") or feat.get("source_table_fields") or ""),
                     "enabled": bool(feat.get("enabled", True)),
+                    # default_selected：是否被前端默认勾选；缺失时按 enabled 兜底
+                    # （JSON 文件已统一写入 default_selected 字段，参见 config/features/）
+                    "default_selected": bool(
+                        feat.get("default_selected", feat.get("enabled", True))
+                    ),
                     "order_no": int(feat.get("order_no") or len(features) + 1),
                 }
             )
@@ -218,6 +223,9 @@ async def _load_feature_catalog_from_db() -> dict[str, Any] | None:
                     "formula": str(r["formula"] or ""),
                     "source_table_fields": str(r["source_table_fields"] or ""),
                     "enabled": bool(r["enabled"]),
+                    # DB schema 暂无 default_selected 字段，沿用 enabled 兜底；
+                    # 后续可加 qm_feature_set_item.default_selected 列再读出。
+                    "default_selected": bool(r["enabled"]),
                     "order_no": int(r["order_no"] or 0),
                 }
             )

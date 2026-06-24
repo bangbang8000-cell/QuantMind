@@ -15,7 +15,7 @@ import { modelTrainingService } from '../services/modelTrainingService';
 import { useAppSelector } from '../store';
 import { selectCurrentMarket } from '../store/slices/uiSlice';
 import { getMarketConfig } from '../config/marketConfig';
-import { TrainingTarget, TrainingParams, TrainingContext, TrainingStatus, TrainingDraft, SplitKey, TimePeriodMap, FeatureCategory, STORAGE_KEY, DEFAULT_FEATURE_CATEGORIES, PRESET_DEFAULT_FEATURES, MARKET_DEFAULT_FEATURES, getDefaultFeaturesForMarket, DEFAULT_TIME_PERIODS, DEFAULT_TARGET, DEFAULT_PARAMS, DEFAULT_CONTEXT, buildAutoDisplayName, buildLabelFormula, buildEffectiveTradeDate, daysBetween, toISOStringRange, restoreRange, shouldMigrateLegacyDraftPeriods, buildTrainingRequest, formatRange, toDynamicCategories, TrainingResult, buildBackendTrainingPayload, parseTrainingResult, parseSuggestedTimePeriods } from './training/trainingUtils';
+import { TrainingTarget, TrainingParams, TrainingContext, TrainingStatus, TrainingDraft, SplitKey, TimePeriodMap, FeatureCategory, STORAGE_KEY, DEFAULT_FEATURE_CATEGORIES, PRESET_DEFAULT_FEATURES, MARKET_DEFAULT_FEATURES, getDefaultFeaturesForMarket, resolveDefaultSelectedFeatures, DEFAULT_TIME_PERIODS, DEFAULT_TARGET, DEFAULT_PARAMS, DEFAULT_CONTEXT, buildAutoDisplayName, buildLabelFormula, buildEffectiveTradeDate, daysBetween, toISOStringRange, restoreRange, shouldMigrateLegacyDraftPeriods, buildTrainingRequest, formatRange, toDynamicCategories, TrainingResult, buildBackendTrainingPayload, parseTrainingResult, parseSuggestedTimePeriods } from './training/trainingUtils';
 import { AdminModelFeatureDataCoverage } from '../features/admin/types';
 import { FeatureSelector } from './training/FeatureSelector';
 import { TrainingTargetConfig } from './training/TrainingTargetConfig';
@@ -130,11 +130,9 @@ export const ModelTrainingPage: React.FC = () => {
         const dynamicCats = toDynamicCategories(catalog);
         setFeatureCategories(dynamicCats);
 
-        // Reset selected features to market-specific defaults that exist in catalog
-        const availableKeys = new Set(dynamicCats.flatMap(c => c.features.map(f => f.key)));
-        const marketDefaults = getDefaultFeaturesForMarket(currentMarket);
-        const validDefaults = marketDefaults.filter(f => availableKeys.has(f));
-        setSelectedFeatures(validDefaults.length > 0 ? validDefaults : marketDefaults);
+        // 默认勾选列表 = catalog.default_selected（truth source），
+        // 后端未下发时回落 PRESET 并 console.warn 提示。
+        setSelectedFeatures(resolveDefaultSelectedFeatures(dynamicCats, currentMarket));
       } catch (error) {
         if (active) message.warning('特征字典加载失败，已回退到内置字段');
       } finally {
@@ -295,9 +293,12 @@ export const ModelTrainingPage: React.FC = () => {
 
   const handleResetAll = () => {
     clearTimers();
-    // Use market-specific default features
-    const marketDefaults = getDefaultFeaturesForMarket(currentMarket);
-    setSelectedFeatures(marketDefaults);
+    // 重置默认勾选：优先用 catalog flag（truth source），catalog 未加载时回落 PRESET
+    setSelectedFeatures(
+      featureCategories.length > 0
+        ? resolveDefaultSelectedFeatures(featureCategories, currentMarket)
+        : getDefaultFeaturesForMarket(currentMarket),
+    );
     setTimePeriods(DEFAULT_TIME_PERIODS);
     setTarget(DEFAULT_TARGET);
     setParams(DEFAULT_PARAMS);

@@ -18,7 +18,7 @@ export type TimePeriodMap = Record<SplitKey, [Dayjs, Dayjs]>;
 
 // 模型类型定义
 export type ModelType = 'lightgbm' | 'xgboost' | 'catboost' | 'linear' | 'gru' | 'lstm' | 'alstm' | 'transformer' | 'tabnet' | 'tcn';
-export type ModelCategory = 'tree' | 'deep_learning';
+export type ModelCategory = 'tree' | 'linear' | 'deep_learning';
 
 export interface ModelTypeOption {
   value: ModelType;
@@ -33,7 +33,8 @@ export const MODEL_TYPE_OPTIONS: ModelTypeOption[] = [
   { value: 'lightgbm', label: 'LightGBM', category: 'tree', description: '速度快、效果稳，基线必备', framework: 'lightgbm' },
   { value: 'xgboost', label: 'XGBoost', category: 'tree', description: '与LGB异构，集成提升明显', framework: 'xgboost' },
   { value: 'catboost', label: 'CatBoost', category: 'tree', description: '类别特征友好，自带有序提升', framework: 'catboost' },
-  { value: 'linear', label: 'Ridge 线性', category: 'tree', description: '简单线性回归基线', framework: 'sklearn' },
+  // 线性基线模型
+  { value: 'linear', label: 'Ridge 线性', category: 'linear', description: '简单线性回归基线，sanity check 用', framework: 'sklearn' },
   // 深度学习模型
   { value: 'gru', label: 'GRU', category: 'deep_learning', description: '门控循环单元，时序建模性价比最高', framework: 'pytorch' },
   { value: 'lstm', label: 'LSTM', category: 'deep_learning', description: '长短期记忆网络', framework: 'pytorch' },
@@ -170,6 +171,8 @@ export interface TrainingDraft {
 export interface FeatureOption {
   key: string;
   label: string;
+  /** 后端 catalog 标记的默认勾选状态。新 schema 才有，老前端兼容性为可选。*/
+  defaultSelected?: boolean;
 }
 
 export interface FeatureCategory {
@@ -279,39 +282,41 @@ export const DEFAULT_FEATURE_CATEGORIES: FeatureCategory[] = [
 ];
 
 export const PRESET_DEFAULT_FEATURES = [
-  // OHLCV + 复权
-  'open', 'high', 'low', 'close', 'volume', 'factor',
-  // 动量 (16)
-  'mom_ret_1d', 'mom_ret_3d', 'mom_ret_5d', 'mom_ret_10d', 'mom_ret_20d', 'mom_ret_60d',
-  'mom_ma_gap_5', 'mom_ma_gap_10', 'mom_ma_gap_20', 'mom_ma_gap_60',
-  'mom_macd_dif', 'mom_macd_dea', 'mom_macd_hist',
-  'mom_rsi_14', 'mom_kdj_k', 'mom_breakout_20d',
-  // 波动率 (16)
-  'vol_std_5', 'vol_std_10', 'vol_std_20', 'vol_std_60',
-  'vol_atr_14', 'vol_atr_20', 'vol_parkinson_10', 'vol_parkinson_20',
-  'vol_gk_10', 'vol_gk_20', 'vol_rs_10', 'vol_rs_20',
+  // 基础行情 (6) - amount 已从 OHLCV 补算
+  'close', 'open', 'high', 'low', 'volume', 'amount',
+  // 动量 (11) - 已规范化为 mom_* 命名以对齐 catalog
+  'mom_ret_1d', 'mom_ret_5d', 'mom_ret_20d', 'mom_ret_60d',
+  'mom_ma_gap_5', 'mom_ma_gap_20',
+  'mom_macd_hist', 'mom_rsi_14', 'mom_kdj_k',
+  'mom_breakout_20d', 'mom_sharpe_20',
+  // 波动率 (8)
+  'vol_std_20', 'vol_atr_14',
+  'vol_parkinson_20', 'vol_downside_20', 'vol_upside_20',
   'vol_realized_rv', 'vol_realized_rrv',
-  'vol_downside_20', 'vol_upside_20',
-  // 流动性 (18)
-  'liq_volume', 'liq_amount', 'liq_turnover_os', 'liq_turnover_tl',
-  'liq_volume_ma_5', 'liq_volume_ma_10', 'liq_volume_ma_20',
-  'liq_volume_ratio_5', 'liq_volume_ratio_20',
-  'liq_amount_ma_5', 'liq_amount_ma_10', 'liq_amount_ma_20',
-  'liq_amount_ratio_5', 'liq_amount_ratio_20',
-  'liq_mfi_14', 'liq_amihud_20', 'liq_amihud_60', 'liq_accdist_20',
-  // 资金流 (8)
+  'vol_jump_zadj',
+  // 成交量 (6)
+  'liq_volume', 'liq_amount', 'liq_turnover_os',
+  'liq_volume_ratio_5', 'liq_mfi_14', 'liq_amihud_20',
+  // 资金流 (7)
   'flow_net_amount', 'flow_net_amount_ratio', 'flow_large_net_amount',
-  'flow_net_order_ratio', 'flow_pressure_index',
   'flow_vpin', 'flow_vpin_ma_5', 'flow_vpin_ma_20',
-  // 风格因子 (10)
-  'style_ln_mv_total', 'style_ln_mv_float', 'style_bp', 'style_ep_ttm',
-  'style_beta_20', 'style_beta_60', 'style_beta_120',
-  'style_idio_vol_20', 'style_idio_vol_60', 'style_residual_ret_20',
-  // 行业 (4)
-  'ind_ret_1d', 'ind_ret_20d', 'ind_strength_20', 'ind_momentum_rank_20',
-  // 价格形态 (7)
-  'ma_gap_20', 'ma_gap_5', 'price_position_20', 'price_position_60',
-  'dist_to_high_20', 'dist_to_low_20', 'pv_corr_20',
+  'flow_pressure_index',
+  // 风格因子 (7)
+  'style_ln_mv_total', 'style_ln_mv_float', 'style_beta_20',
+  'style_beta_60', 'style_idio_vol_20',
+  'style_bp', 'style_ep_ttm',
+  // 行业因子 (4)
+  'ind_ret_1d', 'ind_ret_20d', 'ind_strength_20',
+  'ind_momentum_rank_20',
+  // 技术形态 (8) - kline_k{up,low,sft} 已对齐 catalog 命名（去除尾部 "2"）
+  'kline_kmid', 'kline_klen', 'kline_kup', 'kline_klow',
+  'kline_ksft', 'prel_vwap0', 'tech_bollinger_position', 'tech_cci_20',
+  // Alpha因子 (7) - 已从 OHLCV 补算
+  'alpha_decay_ret_10', 'alpha_corr_cv_20', 'alpha_tsrank_ret_20',
+  'alpha_high_20d_ratio', 'alpha_close_open_gap',
+  // fund_pe_percentile, fund_pb_percentile 需要基本面数据（暂不可用）
+  // 趋势质量 (3)
+  'trend_r2_20', 'trend_slope_20', 'pv_corr_20',
 ];
 
 export const TRAINING_BASE_FEATURES = [
@@ -559,9 +564,46 @@ export const toDynamicCategories = (catalog: AdminModelFeatureCatalog): FeatureC
         .map((feature) => ({
           key: feature.key,
           label: feature.feature_name || feature.key,
+          // catalog 透传 default_selected（缺失/null 时按 undefined 处理，
+          // 由调用方决定 fallback 行为）
+          defaultSelected:
+            typeof (feature as { default_selected?: boolean }).default_selected === 'boolean'
+              ? (feature as { default_selected?: boolean }).default_selected
+              : undefined,
         })),
     }))
     .filter((category) => category.features.length > 0);
+};
+
+/**
+ * 从 catalog（已转 dynamic categories）算默认勾选列表。
+ *
+ * 优先用 catalog 自带的 `default_selected` flag（truth source）；当后端老版本不返
+ * 回该字段时，回落到硬编码的 PRESET 列表，并 console.warn 提示。
+ */
+export const resolveDefaultSelectedFeatures = (
+  categories: FeatureCategory[],
+  market: string,
+): string[] => {
+  const allFeatures = categories.flatMap((c) => c.features);
+  const hasAnyFlag = allFeatures.some((f) => typeof f.defaultSelected === 'boolean');
+
+  if (hasAnyFlag) {
+    return allFeatures.filter((f) => f.defaultSelected === true).map((f) => f.key);
+  }
+
+  // 兜底：后端没下发 default_selected，使用 PRESET 并过滤掉 catalog 没有的 key
+  const availableKeys = new Set(allFeatures.map((f) => f.key));
+  const preset = getDefaultFeaturesForMarket(market);
+  const valid = preset.filter((k) => availableKeys.has(k));
+  const missing = preset.filter((k) => !availableKeys.has(k));
+  if (missing.length > 0) {
+    console.warn(
+      `[trainingUtils] PRESET 默认特征中有 ${missing.length} 个在 catalog 里不存在，已过滤:`,
+      missing,
+    );
+  }
+  return valid.length > 0 ? valid : preset;
 };
 
 export const buildTrainingRequest = (

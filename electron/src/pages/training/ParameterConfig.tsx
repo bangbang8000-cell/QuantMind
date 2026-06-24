@@ -1,6 +1,6 @@
 import React from 'react';
 import { Card, Divider, Input, Button, Row, Col, InputNumber, Select, Alert, Typography, Tag } from 'antd';
-import { Settings2, MonitorPlay, TreePine, Cpu } from 'lucide-react';
+import { Settings2, MonitorPlay, TreePine, Cpu, Ruler } from 'lucide-react';
 import {
   TrainingParams,
   TrainingContext,
@@ -85,7 +85,7 @@ export const ParameterConfig: React.FC<ParameterConfigProps> = ({
           <Card className="rounded-2xl border-slate-200" size="small" title="模型类型">
             <div className="space-y-3">
               <div className="text-xs text-slate-500">
-                选择训练模型。树模型适合快速实验，深度学习模型在大数据集上潜力更大。
+                选择训练模型。树模型适合快速实验，线性模型作为基线 sanity check，深度学习模型在大数据集上潜力更大。
               </div>
               <Select
                 value={params.model_type}
@@ -95,6 +95,16 @@ export const ParameterConfig: React.FC<ParameterConfigProps> = ({
               >
                 <Select.OptGroup label={<span className="flex items-center gap-1"><TreePine size={12} /> 树模型</span>}>
                   {MODEL_TYPE_OPTIONS.filter(m => m.category === 'tree').map(m => (
+                    <Select.Option key={m.value} value={m.value} label={m.label}>
+                      <div className="flex items-center justify-between">
+                        <span>{m.label}</span>
+                        <span className="text-xs text-slate-400">{m.description}</span>
+                      </div>
+                    </Select.Option>
+                  ))}
+                </Select.OptGroup>
+                <Select.OptGroup label={<span className="flex items-center gap-1"><Ruler size={12} /> 线性基线</span>}>
+                  {MODEL_TYPE_OPTIONS.filter(m => m.category === 'linear').map(m => (
                     <Select.Option key={m.value} value={m.value} label={m.label}>
                       <div className="flex items-center justify-between">
                         <span>{m.label}</span>
