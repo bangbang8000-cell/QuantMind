@@ -243,6 +243,23 @@ class ResearchService {
     return resp.data.data.items || [];
   }
 
+  // ============ 风险评分卡接口 ============
+
+  async getRiskScore(symbol: string, tradeDate?: string | null): Promise<RiskScoreData | null> {
+    try {
+      const url = tradeDate
+        ? `/risk/score/${symbol}?trade_date=${encodeURIComponent(tradeDate)}`
+        : `/risk/score/${symbol}`;
+      const resp = await this.client.get<{ code: number; data: RiskScoreData | { symbol: string; error: string } }>(url);
+      const data = resp.data?.data;
+      if (!data || (data as { error?: string }).error) return null;
+      return data as RiskScoreData;
+    } catch (error) {
+      console.error('[ResearchService] getRiskScore failed:', error);
+      return null;
+    }
+  }
+
   // ============ 兼容方法（对接模型中心） ============
 
   async getAvailableModels(market?: string): Promise<ResearchModelOption[]> {
@@ -298,6 +315,26 @@ interface KlineResponse {
     items: KlineDataItem[];
     count: number;
   };
+}
+
+export type RiskDimensionKey = 'liquidity' | 'volatility' | 'trend' | 'overheat' | 'fundamental' | 'status';
+export type RiskLevel = '极低' | '低' | '中' | '高' | '极高';
+
+export interface RiskDimensionScore {
+  score: number;          // 0-100
+  reasons: string[];
+}
+
+export interface RiskScoreData {
+  symbol: string;
+  trade_date: string;
+  risk_score: number;     // 0-100，越大越危险
+  risk_level: RiskLevel;
+  veto: boolean;
+  veto_reasons: string[];
+  dimensions: Record<RiskDimensionKey, RiskDimensionScore>;
+  weights: Record<RiskDimensionKey, number>;
+  snapshot: Record<string, unknown>;
 }
 
 export interface WatchlistItem {

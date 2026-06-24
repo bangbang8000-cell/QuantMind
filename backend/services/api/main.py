@@ -28,6 +28,7 @@ from backend.services.api.routers.engine_proxy import router as engine_proxy_rou
 from backend.services.api.routers.files import router as files_router
 from backend.services.api.routers.model_training import router as model_training_router
 from backend.services.api.routers.research import router as research_router
+from backend.services.api.routers.risk_scoring import router as risk_scoring_router
 from backend.services.api.routers.market_kline import router as market_kline_router
 from backend.services.api.routers.stocks_search import router as stocks_search_router
 from backend.services.api.routers.trade_proxy import router as trade_proxy_router
@@ -150,6 +151,7 @@ app.include_router(
     model_training_router, prefix="/api/v1/models", tags=["ModelTraining"]
 )
 app.include_router(research_router)
+app.include_router(risk_scoring_router)
 app.include_router(market_kline_router)
 app.include_router(stocks_search_router)
 app.include_router(trading_calendar.router)

@@ -39,6 +39,7 @@ import type { ColumnsType } from 'antd/es/table';
 import { PAGE_LAYOUT } from '../config/pageLayout';
 import { modelTrainingService } from '../services/modelTrainingService';
 import { researchService, type ResearchRunOption } from '../services/researchService';
+import RiskScoreCard from '../components/Research/RiskScoreCard';
 import {
   BUTTON_STYLES,
   DEFAULT_RESEARCH_FILTERS,
@@ -198,6 +199,8 @@ export const ResearchPlatformPage: React.FC = () => {
   const [selectedStockKey, setSelectedStockKey] = React.useState<string | null>(null);
   const [klineData, setKlineData] = React.useState<any[]>([]);
   const [klineLoading, setKlineLoading] = React.useState<boolean>(false);
+  const [riskScore, setRiskScore] = React.useState<import('../services/researchService').RiskScoreData | null>(null);
+  const [riskLoading, setRiskLoading] = React.useState<boolean>(false);
   const [sortKey, setSortKey] = React.useState<SortKey>('score');
 
   // 分页状态
@@ -958,6 +961,41 @@ export const ResearchPlatformPage: React.FC = () => {
     void loadKline();
     return () => { cancelled = true; };
   }, [detailModalOpen, selectedStock?.code]);
+
+  // 推理批次日期：从 runId（形如 run_YYYYMMDD_xxx）解析，作为评分基准日
+  // 这样风险评分跟选股决策对齐到同一日，避免"用今天的状态评估当时的决策"
+  const inferenceDate = React.useMemo(() => {
+    if (!selectedRunId) return null;
+    const m = selectedRunId.match(/run_(\d{4})(\d{2})(\d{2})/);
+    return m ? `${m[1]}-${m[2]}-${m[3]}` : null;
+  }, [selectedRunId]);
+
+  // 加载风险评分卡
+  React.useEffect(() => {
+    if (!detailModalOpen || !selectedStock) {
+      setRiskScore(null);
+      return;
+    }
+    let cancelled = false;
+    const loadRisk = async () => {
+      setRiskLoading(true);
+      try {
+        const data = await researchService.getRiskScore(
+          normalizeSymbol(selectedStock.code),
+          inferenceDate,
+        );
+        if (cancelled) return;
+        setRiskScore(data);
+      } catch (error) {
+        console.error('[ResearchPlatformPage] load risk score failed:', error);
+        if (!cancelled) setRiskScore(null);
+      } finally {
+        if (!cancelled) setRiskLoading(false);
+      }
+    };
+    void loadRisk();
+    return () => { cancelled = true; };
+  }, [detailModalOpen, selectedStock?.code, inferenceDate]);
 
   // K 线图表配置
   const klineOption = React.useMemo(() => {
@@ -2637,6 +2675,8 @@ export const ResearchPlatformPage: React.FC = () => {
                 ))}
               </div>
             </div>
+
+            <RiskScoreCard data={riskScore} loading={riskLoading} requestedDate={inferenceDate} />
 
             <div className="p-5 border border-slate-100 rounded-3xl bg-white shadow-sm mt-3">
               <div className="text-[10px] font-black uppercase tracking-wider text-slate-500 mb-3">K 线走势 (近 60 日)</div>
