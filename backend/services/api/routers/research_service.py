@@ -1174,13 +1174,19 @@ async def get_stock_kline(symbol: str, days: int) -> dict[str, Any]:
     if cached is not None:
         return cached
 
+    # 表里 stock_daily_latest.symbol 实际可能是后缀格式（"600519.SH"）或前缀格式
+    # （"SH600519"）。统一两边都走 _norm_symbol_sql 归一化为前缀格式后再比较，
+    # 才能匹配上当前数据（5536 个股票全部为后缀格式存储）。
+    sql = f"""
+        SELECT trade_date, open, high, low, close, volume, adj_factor
+        FROM stock_daily_latest
+        WHERE {_norm_symbol_sql("symbol")} = {_norm_symbol_sql(":s")}
+        ORDER BY trade_date DESC LIMIT :l
+    """
+
     async with get_session(read_only=True) as session:
         res = await session.execute(
-            text(
-                "SELECT trade_date, open, high, low, close, volume, adj_factor FROM stock_daily_latest "
-                "WHERE symbol = (CASE WHEN :s ~* '^(SH|SZ|BJ)[0-9]{6}$' THEN UPPER(:s) ELSE :s END) "
-                "ORDER BY trade_date DESC LIMIT :l"
-            ),
+            text(sql),
             {"s": normalized_symbol, "l": days},
         )
         items = []
