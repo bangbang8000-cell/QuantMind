@@ -13,6 +13,7 @@ QuantMind 本地 Docker 训练编排器
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 import os
 import time
@@ -47,6 +48,23 @@ _DOCKER_NETWORK = os.getenv("TRAINING_DOCKER_NETWORK", "quantmind-network")
 
 _LOCAL_DATA_MOUNT_DIR = "/tmp/feature_snapshots"
 
+# ── 训练资源保护：训练期间临时停止其它容器，把内存腾给训练任务 ───────────────────
+# 通过 TRAINING_PAUSE_OTHERS=false 可关闭该行为
+_PAUSE_OTHERS_ENABLED = os.getenv("TRAINING_PAUSE_OTHERS", "true").strip().lower() not in {
+    "0", "false", "no", "off",
+}
+# 受保护的容器名前缀：训练期间永远不停。可通过环境变量覆盖（逗号分隔）。
+# 默认保护 quantmind 全家桶 + 训练容器自身 + 通用基础依赖。
+_DEFAULT_PROTECTED_PREFIXES = ("quantmind", "qm-train-")
+_PROTECTED_PREFIXES: tuple[str, ...] = tuple(
+    p.strip()
+    for p in (
+        os.getenv("TRAINING_PROTECTED_NAME_PREFIXES")
+        or ",".join(_DEFAULT_PROTECTED_PREFIXES)
+    ).split(",")
+    if p.strip()
+)
+
 # 宿主机 compose 工作目录
 _raw = (os.getenv("HOST_PROJECT_PATH") or "").strip()
 if _raw and _raw != ".":
@@ -76,6 +94,117 @@ class LocalDockerOrchestrator:
         ).strip()
         self.internal_secret = (os.getenv("INTERNAL_CALL_SECRET") or "").strip()
         self.log_stream = TrainingRunLogStream()
+
+    # ── 训练期间资源保护 ──────────────────────────────────────────────────────────
+    @staticmethod
+    def _is_protected(name: str) -> bool:
+        n = (name or "").lstrip("/")
+        return any(n.startswith(p) for p in _PROTECTED_PREFIXES)
+
+    def _pause_others(self, work_dir: Path, run_id: str) -> list[str]:
+        """停止所有非保护的运行中容器，把名字写到 work_dir/.paused_containers.json。
+
+        返回被停止的容器名列表。失败时记录 warning 但不抛出，保证训练能继续。
+        """
+        if not _PAUSE_OTHERS_ENABLED:
+            logger.info("[%s] TRAINING_PAUSE_OTHERS disabled, skip", run_id)
+            return []
+
+        paused: list[str] = []
+        try:
+            containers = self.docker.containers.list(filters={"status": "running"})
+        except Exception as exc:
+            logger.warning("[%s] list running containers failed: %s", run_id, exc)
+            return []
+
+        for c in containers:
+            name = c.name or ""
+            if self._is_protected(name):
+                continue
+            try:
+                # 用 stop 而不是 pause：pause 仍然占内存，stop 才能释放
+                c.stop(timeout=20)
+                paused.append(name)
+                logger.info("[%s] paused container: %s", run_id, name)
+            except Exception as exc:
+                logger.warning(
+                    "[%s] stop container %s failed: %s", run_id, name, exc
+                )
+
+        # 落盘，宿主重启 / 进程崩溃后也能从 work_dir 恢复
+        try:
+            state_path = Path(work_dir) / ".paused_containers.json"
+            state_path.write_text(
+                json.dumps(
+                    {
+                        "run_id": run_id,
+                        "paused_at": datetime.utcnow().isoformat(timespec="seconds"),
+                        "containers": paused,
+                        "protected_prefixes": list(_PROTECTED_PREFIXES),
+                    },
+                    ensure_ascii=False,
+                    indent=2,
+                ),
+                encoding="utf-8",
+            )
+        except Exception as exc:
+            logger.warning("[%s] write paused-state file failed: %s", run_id, exc)
+
+        if paused:
+            logger.info(
+                "[%s] paused %d containers to free memory for training: %s",
+                run_id,
+                len(paused),
+                paused,
+            )
+        return paused
+
+    def _resume_others(self, work_dir: Path, run_id: str) -> list[str]:
+        """恢复 _pause_others 停止的容器。幂等：状态文件不存在时直接返回。"""
+        state_path = Path(work_dir) / ".paused_containers.json"
+        if not state_path.exists():
+            return []
+
+        try:
+            data = json.loads(state_path.read_text(encoding="utf-8"))
+        except Exception as exc:
+            logger.warning("[%s] read paused-state file failed: %s", run_id, exc)
+            return []
+
+        names: list[str] = list(data.get("containers") or [])
+        resumed: list[str] = []
+        for name in names:
+            try:
+                c = self.docker.containers.get(name)
+                if c.status != "running":
+                    c.start()
+                resumed.append(name)
+                logger.info("[%s] resumed container: %s", run_id, name)
+            except docker.errors.NotFound:
+                logger.warning(
+                    "[%s] cannot resume %s: container no longer exists", run_id, name
+                )
+            except Exception as exc:
+                logger.warning("[%s] start container %s failed: %s", run_id, name, exc)
+
+        # 标记为已处理：保留文件但加 resumed_at，便于事后排查
+        try:
+            data["resumed_at"] = datetime.utcnow().isoformat(timespec="seconds")
+            data["resumed"] = resumed
+            state_path.write_text(
+                json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8"
+            )
+        except Exception:
+            pass
+
+        if resumed:
+            logger.info(
+                "[%s] resumed %d containers after training: %s",
+                run_id,
+                len(resumed),
+                resumed,
+            )
+        return resumed
 
     @staticmethod
     def _parse_docker_log_entry(raw_line: str) -> tuple[float, str]:
@@ -394,6 +523,25 @@ class LocalDockerOrchestrator:
         )
         logger.info("[%s] Final volumes config: %s", run_id, volumes)
 
+        # 启动训练容器之前：停掉其它非保护容器，把内存腾出来给训练
+        # 用 to_thread 包装：避免 docker.stop（含 SIGTERM 等待）阻塞主 event loop
+        try:
+            paused = await asyncio.to_thread(
+                self._pause_others, container_work_dir, run_id
+            )
+            if paused:
+                self.log_stream.append_log(
+                    run_id=run_id,
+                    tenant_id=tenant_id,
+                    user_id=user_id,
+                    line=f"[SYSTEM] Paused {len(paused)} containers to free memory: "
+                    + ", ".join(paused),
+                    status="provisioning",
+                    progress=10,
+                )
+        except Exception as pause_err:
+            logger.warning("[%s] pause others failed (continuing): %s", run_id, pause_err)
+
         try:
             # GPU 设备请求：请求所有可用 GPU
             device_requests = [
@@ -413,7 +561,7 @@ class LocalDockerOrchestrator:
                 network=_DOCKER_NETWORK,
                 detach=True,
                 name=f"qm-train-{run_id}",
-                mem_limit=os.getenv("TRAINING_MEM_LIMIT", "24g"),
+                # 训练容器不设 CPU/内存限制：宿主资源完全开放给训练任务
                 device_requests=device_requests,
             )
         except Exception as e:
@@ -438,6 +586,17 @@ class LocalDockerOrchestrator:
                 status="failed",
                 progress=100,
             )
+            # 启动失败，立刻恢复被暂停的容器
+            try:
+                await asyncio.to_thread(
+                    self._resume_others, container_work_dir, run_id
+                )
+            except Exception as resume_err:
+                logger.warning(
+                    "[%s] resume others after docker run failure failed: %s",
+                    run_id,
+                    resume_err,
+                )
             return
 
         logger.info("[%s] Container started: %s", run_id, container.id[:12])
@@ -463,16 +622,48 @@ class LocalDockerOrchestrator:
 
         asyncio.create_task(
             self._poll_container(
-                run_id, container.id, tenant_id=tenant_id, user_id=user_id
+                run_id,
+                container.id,
+                tenant_id=tenant_id,
+                user_id=user_id,
+                work_dir=container_work_dir,
             )
         )
 
     # ── 轮询容器状态 ─────────────────────────────────────────────────────────────
     async def _poll_container(
-        self, run_id: str, container_id: str, *, tenant_id: str, user_id: str
+        self,
+        run_id: str,
+        container_id: str,
+        *,
+        tenant_id: str,
+        user_id: str,
+        work_dir: Path | None = None,
     ) -> None:
         from backend.services.api.routers.admin.db import TrainingJobRecord
         from backend.shared.database_manager_v2 import get_session
+
+        async def _try_resume() -> None:
+            if work_dir is None:
+                return
+            try:
+                # docker start 可能阻塞数秒，丢到线程池避免卡住 event loop
+                resumed = await asyncio.to_thread(
+                    self._resume_others, work_dir, run_id
+                )
+                if resumed:
+                    self.log_stream.append_log(
+                        run_id=run_id,
+                        tenant_id=tenant_id,
+                        user_id=user_id,
+                        line=f"[SYSTEM] Resumed {len(resumed)} containers: "
+                        + ", ".join(resumed),
+                        status=None,
+                        progress=None,
+                        container_id=container_id[:12],
+                    )
+            except Exception as exc:
+                logger.warning("[%s] resume others failed: %s", run_id, exc)
 
         deadline = time.time() + 7200  # 最长 2h
         log_cursor_ts = max(0.0, time.time() - 2)
@@ -669,6 +860,7 @@ class LocalDockerOrchestrator:
                     c.remove(force=True, v=True)
                 except Exception:
                     pass
+                await _try_resume()
                 return
 
             except docker.errors.NotFound:
@@ -688,6 +880,7 @@ class LocalDockerOrchestrator:
                             progress=100,
                             container_id=container_id[:12],
                         )
+                await _try_resume()
                 return
             except Exception as e:
                 logger.warning("[%s] poll error: %s", run_id, e)
@@ -709,3 +902,4 @@ class LocalDockerOrchestrator:
                     progress=100,
                     container_id=container_id[:12],
                 )
+        await _try_resume()
