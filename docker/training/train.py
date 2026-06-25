@@ -441,35 +441,72 @@ def load_data(
                      df["trade_date"].min() if not df.empty else "N/A",
                      df["trade_date"].max() if not df.empty else "N/A")
     else:
-        # ── A 股：从年度 parquet 文件加载 ──
-        start_year = pd.Timestamp(train_start).year
-        ends = [train_end]
-        if valid_end: ends.append(valid_end)
-        if test_end: ends.append(test_end)
-        end_year = max(pd.Timestamp(e).year for e in ends)
+        # ── A 股：优先使用 core parquet（78列），回退到年度 parquet 文件 ──
+        core_parquet_path = local_root / "model_features_core.parquet"
 
-        chunks = []
-        for year in range(max(start_year - 1, 2016), end_year + 1):
-            df_year = _load_local_parquet(
-                local_root,
-                year,
-                required_columns=required_columns,
-                clip_start=range_start,
-                clip_end=range_end,
-            )
-            if df_year is not None:
-                if not df_year.empty:
-                    chunks.append(df_year)
-            else:
-                logger.warning(f"No data file found for year {year} in {local_root}, skipping")
+        if core_parquet_path.exists():
+            # 使用精简版 core parquet（78列，内存友好）
+            logger.info("Using core parquet (78 factors): %s", core_parquet_path)
 
-        if not chunks:
-            raise RuntimeError("No data loaded from local storage")
+            schema_cols = set(pq.ParquetFile(core_parquet_path).schema_arrow.names)
+            valid_cols = [c for c in required_columns if c in schema_cols]
+            missing_cols = [c for c in required_columns if c not in schema_cols]
+            if missing_cols:
+                logger.warning("Columns not in core parquet (skipped): %s", missing_cols)
 
-        df = pd.concat(chunks, axis=0, ignore_index=True)
-        df["trade_date"] = pd.to_datetime(df["trade_date"], errors="coerce")
-        df = df[df["trade_date"].notna()].copy()
-        logger.info(f"Raw concat size: {len(df)} rows. Date range: {df['trade_date'].min()} to {df['trade_date'].max()}")
+            if "trade_date" not in valid_cols or "symbol" not in valid_cols:
+                raise RuntimeError("Core parquet missing required columns: trade_date or symbol")
+
+            df = pd.read_parquet(core_parquet_path, columns=valid_cols, engine="pyarrow")
+            df["trade_date"] = pd.to_datetime(df["trade_date"], errors="coerce")
+            df = df[df["trade_date"].notna()].copy()
+
+            # 日期裁剪
+            mask = (df["trade_date"] >= range_start) & (df["trade_date"] <= range_end)
+            df = df.loc[mask].copy()
+
+            # 数值列统一降为 float32
+            for col in df.columns:
+                if col in {"trade_date", "symbol"}:
+                    continue
+                if pd.api.types.is_numeric_dtype(df[col]):
+                    df[col] = df[col].astype(np.float32, copy=False)
+
+            logger.info("Core parquet loaded: %d rows, date range: %s to %s",
+                       len(df),
+                       df["trade_date"].min() if not df.empty else "N/A",
+                       df["trade_date"].max() if not df.empty else "N/A")
+        else:
+            # 回退到年度 parquet 文件（197列，内存占用大）
+            logger.warning("Core parquet not found, falling back to yearly parquet files")
+            start_year = pd.Timestamp(train_start).year
+            ends = [train_end]
+            if valid_end: ends.append(valid_end)
+            if test_end: ends.append(test_end)
+            end_year = max(pd.Timestamp(e).year for e in ends)
+
+            chunks = []
+            for year in range(max(start_year - 1, 2016), end_year + 1):
+                df_year = _load_local_parquet(
+                    local_root,
+                    year,
+                    required_columns=required_columns,
+                    clip_start=range_start,
+                    clip_end=range_end,
+                )
+                if df_year is not None:
+                    if not df_year.empty:
+                        chunks.append(df_year)
+                else:
+                    logger.warning(f"No data file found for year {year} in {local_root}, skipping")
+
+            if not chunks:
+                raise RuntimeError("No data loaded from local storage")
+
+            df = pd.concat(chunks, axis=0, ignore_index=True)
+            df["trade_date"] = pd.to_datetime(df["trade_date"], errors="coerce")
+            df = df[df["trade_date"].notna()].copy()
+            logger.info(f"Raw concat size: {len(df)} rows. Date range: {df['trade_date'].min()} to {df['trade_date'].max()}")
 
         # 过滤北交所代码（4/8开头）——仅 A 股
         df["symbol"] = df["symbol"].astype(str).str.zfill(6)

@@ -962,3 +962,50 @@ html.platform-win32.os-win10 .module-grid-container {
 .ant-select-item-option-content {
   font-family: var(--font-secondary) !important;
 }
+
+/* Admin Menu Modern Style */
+.admin-menu-modern {
+  border-right: none !important;
+  background: transparent !important;
+}
+
+.admin-menu-modern .ant-menu-item {
+  border-radius: 12px;
+  margin: 4px 8px;
+  padding-left: 16px !important;
+  transition: all 0.25s cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+.admin-menu-modern .ant-menu-item:hover {
+  background: linear-gradient(90deg, rgba(99, 102, 241, 0.08), rgba(99, 102, 241, 0.02));
+}
+
+.admin-menu-modern .ant-menu-item-selected {
+  background: linear-gradient(90deg, rgba(99, 102, 241, 0.12), rgba(99, 102, 241, 0.04)) !important;
+  color: #4f46e5 !important;
+  font-weight: 600;
+}
+
+.admin-menu-modern .ant-menu-submenu-title {
+  border-radius: 12px;
+  margin: 4px 8px;
+  padding-left: 16px !important;
+}
+
+.admin-menu-modern .ant-menu-submenu-title:hover {
+  background: linear-gradient(90deg, rgba(99, 102, 241, 0.06), rgba(99, 102, 241, 0.01));
+}
+
+.admin-menu-modern .ant-menu-sub {
+  background: transparent !important;
+}
+
+.admin-menu-modern .ant-menu-sub .ant-menu-item {
+  padding-left: 40px !important;
+  font-size: 13px;
+}
+
+.admin-menu-modern .ant-menu-item-divider {
+  margin: 8px 16px;
+  border-color: rgba(148, 163, 184, 0.2);
+}

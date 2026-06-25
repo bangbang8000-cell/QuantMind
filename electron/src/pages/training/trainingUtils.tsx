@@ -281,42 +281,29 @@ export const DEFAULT_FEATURE_CATEGORIES: FeatureCategory[] = [
   },
 ];
 
+// PRESET：fallback 列表，当 catalog 没下发 default_selected 时使用
+// 数据驱动：基于 baseline_56 模型的 SHAP top-35（覆盖 96% 累积重要性）
+// 实证依据：data/training_jobs/train_baseline_56_v1/shap_summary.csv
 export const PRESET_DEFAULT_FEATURES = [
-  // 基础行情 (6) - amount 已从 OHLCV 补算
-  'close', 'open', 'high', 'low', 'volume', 'amount',
-  // 动量 (11) - 已规范化为 mom_* 命名以对齐 catalog
-  'mom_ret_1d', 'mom_ret_5d', 'mom_ret_20d', 'mom_ret_60d',
-  'mom_ma_gap_5', 'mom_ma_gap_20',
-  'mom_macd_hist', 'mom_rsi_14', 'mom_kdj_k',
-  'mom_breakout_20d', 'mom_sharpe_20',
-  // 波动率 (8)
-  'vol_std_20', 'vol_atr_14',
-  'vol_parkinson_20', 'vol_downside_20', 'vol_upside_20',
-  'vol_realized_rv', 'vol_realized_rrv',
-  'vol_jump_zadj',
-  // 成交量 (6)
-  'liq_volume', 'liq_amount', 'liq_turnover_os',
-  'liq_volume_ratio_5', 'liq_mfi_14', 'liq_amihud_20',
-  // 资金流 (7)
-  'flow_net_amount', 'flow_net_amount_ratio', 'flow_large_net_amount',
-  'flow_vpin', 'flow_vpin_ma_5', 'flow_vpin_ma_20',
-  'flow_pressure_index',
-  // 风格因子 (7)
-  'style_ln_mv_total', 'style_ln_mv_float', 'style_beta_20',
-  'style_beta_60', 'style_idio_vol_20',
-  'style_bp', 'style_ep_ttm',
-  // 行业因子 (4)
-  'ind_ret_1d', 'ind_ret_20d', 'ind_strength_20',
-  'ind_momentum_rank_20',
-  // 技术形态 (8) - kline_k{up,low,sft} 已对齐 catalog 命名（去除尾部 "2"）
-  'kline_kmid', 'kline_klen', 'kline_kup', 'kline_klow',
-  'kline_ksft', 'prel_vwap0', 'tech_bollinger_position', 'tech_cci_20',
-  // Alpha因子 (7) - 已从 OHLCV 补算
-  'alpha_decay_ret_10', 'alpha_corr_cv_20', 'alpha_tsrank_ret_20',
-  'alpha_high_20d_ratio', 'alpha_close_open_gap',
-  // fund_pe_percentile, fund_pb_percentile 需要基本面数据（暂不可用）
-  // 趋势质量 (3)
-  'trend_r2_20', 'trend_slope_20', 'pv_corr_20',
+  // 极强 (top 5)
+  'liq_turnover_os', 'liq_amount', 'style_idio_vol_20',
+  'ind_strength_20', 'mom_kdj_k',
+  // 强 (6-10)
+  'style_size_percentile', 'liq_volume_ratio_5', 'vol_upside_20',
+  'ind_ret_20d', 'vol_parkinson_20',
+  // 中强 (11-15)
+  'liq_amount_ma_5', 'style_bp', 'style_beta_20',
+  'flow_qsp', 'mom_ret_60d',
+  // 中 (16-20)
+  'style_ep_ttm', 'flow_vpin_ma_20', 'style_ln_mv_float',
+  'vol_downside_20', 'ind_relative_volume_20',
+  // 中弱 (21-25)
+  'liq_volume', 'ind_strength_60', 'ind_momentum_rank_20',
+  'mom_ma_gap_5', 'mom_ret_1d',
+  // 防御深度 (26-35)
+  'volume', 'mom_ret_20d', 'vol_realized_rv', 'liq_amihud_20',
+  'style_ln_mv_total', 'ind_ret_1d', 'liq_volume_ma_5',
+  'mom_breakout_20d', 'mom_rsi_14', 'vol_realized_rrv',
 ];
 
 export const TRAINING_BASE_FEATURES = [
