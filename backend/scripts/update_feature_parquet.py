@@ -71,8 +71,11 @@ ALL_DB_COLS = list(dict.fromkeys(
 ))
 
 
-async def fetch_data(since: date, until: date, lookback_days: int = 120) -> pd.DataFrame:
-    """从 stock_daily_latest 读取数据（含 lookback 窗口）。"""
+async def fetch_data(since: date, until: date, lookback_days: int = 180) -> pd.DataFrame:
+    """从 stock_daily_latest 读取数据（含 lookback 窗口）。
+
+    lookback_days=180: 确保 mom_ret_120d 等长期因子有足够数据计算。
+    """
     import asyncpg
 
     conn = await asyncpg.connect(DB_URL)
@@ -205,6 +208,17 @@ FEATURE_COLS = [
     "trend_r2_20", "trend_slope_20", "consecutive_updown_5",
     # 时序滞后
     "ret_1d_lag1", "ret_1d_lag2",
+    # ═══ 第六梯队新增因子 ═══
+    # 波动率曲面
+    "vol_smile_20", "vol_term_structure", "vol_of_vol",
+    # 技术形态
+    "tech_bollinger_position", "tech_williams_r_14", "tech_cci_20",
+    # Alpha101 风格
+    "alpha_decay_ret_10", "alpha_corr_cv_20", "alpha_tsrank_ret_20", "alpha_tsrank_volume_20",
+    # Alpha360 补充
+    "alpha_high_20d_ratio", "alpha_low_20d_ratio", "alpha_close_open_gap",
+    # 基本面补充
+    "fund_pe_percentile", "fund_pb_percentile",
     # 分类列 (keep as-is, no NaN fill needed)
     # "industry", "is_st", "listing_market",
 ]
@@ -319,7 +333,14 @@ def _compute_features_core(g: pd.DataFrame) -> pd.DataFrame:
     direction = np.sign(c.diff())
     g["flow_net_amount"] = (amt * direction).rolling(5, min_periods=1).sum()
     g["flow_net_amount_ratio"] = g["flow_net_amount"] / amt.rolling(20, min_periods=1).sum().clip(lower=1)
-    g["flow_large_net_amount"] = 0.0
+    # 大单净流入: 使用 DB 的 main_flow 列，或 fallback 用高金额交易日近似
+    if "main_flow" in g.columns:
+        g["flow_large_net_amount"] = pd.to_numeric(g["main_flow"], errors="coerce").fillna(0)
+    else:
+        # Fallback: 大单定义 - 单笔成交额 > 20日均值的 3 倍
+        amt_threshold = amt.rolling(20, min_periods=5).mean() * 3
+        is_large = amt > amt_threshold
+        g["flow_large_net_amount"] = (amt * direction * is_large).rolling(5, min_periods=1).sum()
     buy_vol = v * (c > c.shift()).astype(float)
     sell_vol = v * (c <= c.shift()).astype(float)
     g["flow_vpin"] = (buy_vol - sell_vol).abs().rolling(20, min_periods=5).sum() / v.rolling(20, min_periods=5).sum().clip(lower=1)
@@ -327,8 +348,26 @@ def _compute_features_core(g: pd.DataFrame) -> pd.DataFrame:
     g["flow_vpin_ma_20"] = g["flow_vpin"].rolling(20, min_periods=1).mean()
 
     # ── 风格因子 ──
-    g["style_ln_mv_total"] = np.log(amt.clip(lower=1))
-    g["style_ln_mv_float"] = g["style_ln_mv_total"] * 0.9
+    # 总市值: 使用 DB 的 total_mv，fallback 用成交额近似
+    if "total_mv" in g.columns:
+        total_mv = pd.to_numeric(g["total_mv"], errors="coerce")
+        g["style_ln_mv_total"] = np.where(
+            total_mv.notna() & (total_mv > 0),
+            np.log(total_mv.clip(lower=1)),
+            np.log(amt.clip(lower=1))
+        )
+    else:
+        g["style_ln_mv_total"] = np.log(amt.clip(lower=1))
+    # 流通市值: 使用 DB 的 float_mv，fallback 用 total_mv * 0.9
+    if "float_mv" in g.columns:
+        float_mv = pd.to_numeric(g["float_mv"], errors="coerce")
+        g["style_ln_mv_float"] = np.where(
+            float_mv.notna() & (float_mv > 0),
+            np.log(float_mv.clip(lower=1)),
+            g["style_ln_mv_total"] * 0.9
+        )
+    else:
+        g["style_ln_mv_float"] = g["style_ln_mv_total"] * 0.9
     # beta = cov(ret, market) / var(market); proxy: rolling mean / rolling std
     ret_ma20 = ret.rolling(20, min_periods=5).mean()
     ret_std20 = ret.rolling(20, min_periods=5).std().clip(lower=1e-12)
@@ -339,11 +378,11 @@ def _compute_features_core(g: pd.DataFrame) -> pd.DataFrame:
     g["style_idio_vol_20"] = log_ret.rolling(20, min_periods=5).std()
     g["style_residual_ret_20"] = ret.rolling(20, min_periods=5).mean()
 
-    # ── 行业 ──
-    g["ind_ret_1d"] = 0.0
-    g["ind_ret_20d"] = 0.0
-    g["ind_strength_20"] = 0.0
-    g["ind_momentum_rank_20"] = 0.5
+    # ── 行业因子（占位，实际计算在 compute_all_features 中跨股票聚合）──
+    g["ind_ret_1d"] = np.nan
+    g["ind_ret_20d"] = np.nan
+    g["ind_strength_20"] = np.nan
+    g["ind_momentum_rank_20"] = np.nan
 
     # ═══ 新增动量特征（纯 OHLCV 计算，不依赖后续变量） ═══
     g["mom_ret_3d"] = c.pct_change(3)
@@ -415,8 +454,22 @@ def _compute_features_core(g: pd.DataFrame) -> pd.DataFrame:
     ret_std120 = ret.rolling(120, min_periods=20).std().clip(lower=1e-12)
     g["style_beta_120"] = ret_ma120 / ret_std120
     g["style_idio_vol_60"] = log_ret.rolling(60, min_periods=10).std()
-    g["style_bp"] = g["bp"]  # alias
-    g["style_ep_ttm"] = g["ep_ttm"]  # alias
+    # style_bp: 账面市值比，优先用 bp，fallback 用 1/pb
+    if "bp" in g.columns:
+        bp_val = pd.to_numeric(g["bp"], errors="coerce")
+        pb_val = pd.to_numeric(g["pb"], errors="coerce") if "pb" in g.columns else pd.Series(np.nan, index=g.index)
+        g["style_bp"] = bp_val.fillna(1.0 / pb_val.replace(0, np.nan))
+    else:
+        pb_val = pd.to_numeric(g["pb"], errors="coerce") if "pb" in g.columns else pd.Series(np.nan, index=g.index)
+        g["style_bp"] = 1.0 / pb_val.replace(0, np.nan)
+    # style_ep_ttm: 盈利收益率，优先用 ep_ttm，fallback 用 1/pe_ttm
+    if "ep_ttm" in g.columns:
+        ep_val = pd.to_numeric(g["ep_ttm"], errors="coerce")
+        pe_val = pd.to_numeric(g["pe_ttm"], errors="coerce") if "pe_ttm" in g.columns else pd.Series(np.nan, index=g.index)
+        g["style_ep_ttm"] = ep_val.fillna(1.0 / pe_val.replace(0, np.nan))
+    else:
+        pe_val = pd.to_numeric(g["pe_ttm"], errors="coerce") if "pe_ttm" in g.columns else pd.Series(np.nan, index=g.index)
+        g["style_ep_ttm"] = 1.0 / pe_val.replace(0, np.nan)
 
     # ── 辅助列 ──
     g["factor"] = g["adj_factor"]
@@ -648,11 +701,161 @@ def _compute_features_core(g: pd.DataFrame) -> pd.DataFrame:
     g["ret_1d_lag1"] = ret_1d.shift(1)
     g["ret_1d_lag2"] = ret_1d.shift(2)
 
+    # ═══ 第六梯队: 新增高价值因子 ═══
+
+    # -- 波动率曲面 --
+    # vol_smile_20: 波动率微笑 (上行波动 / 下行波动)
+    g["vol_smile_20"] = pos_ret.rolling(20, min_periods=5).std() / neg_ret.rolling(20, min_periods=5).std().replace(0, np.nan)
+    g["vol_smile_20"] = g["vol_smile_20"].fillna(1.0)  # 对称时 = 1
+
+    # vol_term_structure: 波动率期限结构 (60日波动 / 20日波动)
+    vol_60 = log_ret.rolling(60, min_periods=10).std()
+    vol_20 = log_ret.rolling(20, min_periods=5).std()
+    g["vol_term_structure"] = vol_60 / vol_20.replace(0, np.nan)
+    g["vol_term_structure"] = g["vol_term_structure"].fillna(1.0)
+
+    # vol_of_vol: 波动率的波动率
+    daily_vol = log_ret.rolling(5, min_periods=2).std()
+    g["vol_of_vol"] = daily_vol.rolling(20, min_periods=5).std()
+
+    # -- 技术形态因子 --
+    # bollinger_position: 布林带位置 (close - mid) / (upper - lower)
+    bb_mid = c.rolling(20, min_periods=5).mean()
+    bb_std = c.rolling(20, min_periods=5).std()
+    bb_upper = bb_mid + 2 * bb_std
+    bb_lower = bb_mid - 2 * bb_std
+    g["tech_bollinger_position"] = (c - bb_mid) / (bb_upper - bb_lower).replace(0, np.nan)
+
+    # williams_r_14: Williams %R = (High14 - Close) / (High14 - Low14) * -100
+    high_14 = h.rolling(14, min_periods=1).max()
+    low_14 = lo.rolling(14, min_periods=1).min()
+    g["tech_williams_r_14"] = (high_14 - c) / (high_14 - low_14).replace(0, np.nan) * -100
+
+    # cci_20: 商品通道指标 = (TP - SMA(TP,20)) / (0.015 * MeanDev(TP,20))
+    tp_cci = (h + lo + c) / 3
+    tp_sma = tp_cci.rolling(20, min_periods=5).mean()
+    tp_mad = tp_cci.rolling(20, min_periods=5).apply(lambda x: np.mean(np.abs(x - x.mean())), raw=True)
+    g["tech_cci_20"] = (tp_cci - tp_sma) / (0.015 * tp_mad).replace(0, np.nan)
+
+    # -- Alpha101 风格因子 --
+    # alpha_decay_ret_10: 10日收益率线性衰减加权 (近期权重更大)
+    weights_10 = np.arange(10, 0, -1, dtype=float)
+    weights_10 = weights_10 / weights_10.sum()
+    g["alpha_decay_ret_10"] = ret_1d.rolling(10, min_periods=5).apply(
+        lambda x: np.dot(x, weights_10[:len(x)]), raw=True
+    )
+
+    # alpha_corr_cv_20: 收盘价与成交量的20日相关性
+    log_vol = np.log(v.clip(lower=1))
+    g["alpha_corr_cv_20"] = c.rolling(20, min_periods=10).corr(log_vol).clip(-1, 1).fillna(0)
+
+    # alpha_tsrank_ret_20: 20日收益率时序排名 (当前收益在过去20天中的位置)
+    g["alpha_tsrank_ret_20"] = ret_1d.rolling(20, min_periods=10).apply(
+        lambda x: (x[-1] >= x).mean() if len(x) > 0 else 0.5, raw=True
+    )
+
+    # alpha_tsrank_volume_20: 20日成交量时序排名
+    g["alpha_tsrank_volume_20"] = v.rolling(20, min_periods=10).apply(
+        lambda x: (x[-1] >= x).mean() if len(x) > 0 else 0.5, raw=True
+    )
+
+    # -- Alpha360 补充因子 --
+    # alpha_high_20d_ratio: 20日内创新高天数占比
+    high_20_max = h.rolling(20, min_periods=1).max()
+    is_new_high = (h >= high_20_max * 0.995).astype(float)  # 0.5% 容差
+    g["alpha_high_20d_ratio"] = is_new_high.rolling(20, min_periods=5).mean()
+
+    # alpha_low_20d_ratio: 20日内创新低天数占比
+    low_20_min = lo.rolling(20, min_periods=1).min()
+    is_new_low = (lo <= low_20_min * 1.005).astype(float)
+    g["alpha_low_20d_ratio"] = is_new_low.rolling(20, min_periods=5).mean()
+
+    # alpha_close_open_gap: 跳空缺口 (前日收盘 vs 今日开盘)
+    g["alpha_close_open_gap"] = (o - c.shift()) / c.shift().clip(lower=1e-8)
+
+    # -- 基本面因子补充 --
+    # pe_percentile: PE 历史分位数
+    if "pe_ttm" in g.columns:
+        pe_val = pd.to_numeric(g["pe_ttm"], errors="coerce")
+        g["fund_pe_percentile"] = pe_val.rolling(120, min_periods=20).apply(
+            lambda x: (x[-1] >= x).mean() if len(x) > 0 else 0.5, raw=True
+        )
+
+    # pb_percentile: PB 历史分位数
+    if "pb" in g.columns:
+        pb_val = pd.to_numeric(g["pb"], errors="coerce")
+        g["fund_pb_percentile"] = pb_val.rolling(120, min_periods=20).apply(
+            lambda x: (x[-1] >= x).mean() if len(x) > 0 else 0.5, raw=True
+        )
+
     return g
+
+
+def _normalize_industry(series: pd.Series) -> pd.Series:
+    """标准化行业名称，去除 CSRC 代码前缀等变体。"""
+    s = series.astype(str).str.strip()
+    # 去掉 CSRC 代码前缀 (C39计算机 → 计算机, A01农业 → 农业)
+    s = s.str.replace(r'^[A-Z]?\d{1,3}', '', regex=True)
+    # 去掉尾部罗马数字
+    s = s.str.replace(r'[ⅠⅡⅢIV]+$', '', regex=True)
+    # 去掉多余空格
+    s = s.str.strip()
+    # 映射空字符串回 NaN
+    s = s.replace({'': np.nan, 'nan': np.nan, 'None': np.nan, 'NoneType': np.nan})
+    return s
+
+
+def _compute_industry_features(all_feat: pd.DataFrame) -> pd.DataFrame:
+    """跨股票计算行业因子（需要在全部股票特征计算完成后执行）。"""
+    # 过滤无行业的行
+    valid_ind = all_feat["industry"].notna() & (all_feat["industry"] != "")
+    if valid_ind.sum() < 100:
+        _log("    行业数据不足，跳过行业因子计算")
+        return all_feat
+
+    # 1. 行业日收益 = 行业内所有股票当日收益的中位数
+    ind_daily = all_feat[valid_ind].groupby(["industry", "trade_date"]).agg(
+        ind_close=("close", "median"),
+        ind_flow=("flow_net_amount", "mean"),
+    ).reset_index()
+
+    ind_daily = ind_daily.sort_values(["industry", "trade_date"])
+
+    # 行业收益率
+    ind_daily["ind_ret_1d"] = ind_daily.groupby("industry")["ind_close"].pct_change()
+    ind_daily["ind_ret_20d"] = ind_daily.groupby("industry")["ind_close"].pct_change(20)
+
+    # 行业强度 (20日收益/波动)
+    ind_ret = ind_daily.groupby("industry")["ind_close"].pct_change()
+    ind_std = ind_ret.rolling(20, min_periods=5).std().clip(lower=1e-8)
+    ind_daily["ind_strength_20"] = ind_daily["ind_ret_20d"] / ind_std
+
+    # 行业内动量排名（截面排名）
+    ind_daily["ind_momentum_rank_20"] = ind_daily.groupby("trade_date")["ind_ret_20d"].rank(pct=True)
+
+    # Merge 回主表
+    merge_cols = ["industry", "trade_date", "ind_ret_1d", "ind_ret_20d", "ind_strength_20", "ind_momentum_rank_20"]
+    # 先删除主表中已有的占位列
+    for col in ["ind_ret_1d", "ind_ret_20d", "ind_strength_20", "ind_momentum_rank_20"]:
+        if col in all_feat.columns:
+            all_feat = all_feat.drop(columns=[col])
+
+    all_feat = all_feat.merge(
+        ind_daily[merge_cols],
+        on=["industry", "trade_date"],
+        how="left",
+    )
+
+    _log(f"    行业因子计算完成: {ind_daily['industry'].nunique()} 个行业")
+    return all_feat
 
 
 def compute_all_features(df: pd.DataFrame, target_dates: set) -> pd.DataFrame:
     """为所有股票计算特征，只返回 target_dates 中的数据。"""
+    # 标准化行业名称
+    if "industry" in df.columns:
+        df["industry"] = _normalize_industry(df["industry"])
+
     _log(f"  计算特征（{df['symbol'].nunique()} 只股票）...")
     results = []
     total = df["symbol"].nunique()
@@ -666,6 +869,11 @@ def compute_all_features(df: pd.DataFrame, target_dates: set) -> pd.DataFrame:
             _log(f"    进度: {done}/{total}")
 
     all_feat = pd.concat(results, ignore_index=True)
+
+    # 跨股票计算行业因子
+    _log("  计算行业因子...")
+    all_feat = _compute_industry_features(all_feat)
+
     all_feat = all_feat[all_feat["trade_date"].isin(target_dates)].copy()
     return all_feat
 
@@ -740,7 +948,25 @@ def main():
     existing_cols = set(existing.columns)
     new_cols = set(new_data.columns)
     all_cols = list(dict.fromkeys(list(existing.columns) + [c for c in new_data.columns if c not in existing_cols]))
-    new_data = new_data.reindex(columns=all_cols, fill_value=0)
+
+    # 类型感知的填充：string/object 列用 None/空字符串，数值列用 NaN（不是 0）
+    # 防止 industry 等字符串列被 fill_value=0 污染导致 pyarrow 写 parquet 失败
+    import numpy as np
+    for col in all_cols:
+        if col in new_data.columns:
+            continue
+        # new_data 缺这一列，需要补
+        if col in existing.columns:
+            dtype = existing[col].dtype
+            if dtype == object or pd.api.types.is_string_dtype(dtype):
+                new_data[col] = None
+            elif pd.api.types.is_integer_dtype(dtype):
+                new_data[col] = pd.NA  # 用 nullable Int
+            else:
+                new_data[col] = np.nan
+        else:
+            new_data[col] = np.nan
+    new_data = new_data[all_cols]
 
     # 合并
     if args.rebuild:
@@ -750,10 +976,19 @@ def main():
         if overlap_dates:
             _log(f"  发现重叠日期 {len(overlap_dates)} 天，将覆盖")
             existing = existing[~existing["trade_date"].isin(overlap_dates)]
-        # 对齐列
+        # 对齐列（已有数据缺少的新列：同样按类型填充）
         for c in all_cols:
             if c not in existing.columns:
-                existing[c] = 0
+                if c in new_data.columns:
+                    dtype = new_data[c].dtype
+                    if dtype == object or pd.api.types.is_string_dtype(dtype):
+                        existing[c] = None
+                    elif pd.api.types.is_integer_dtype(dtype):
+                        existing[c] = pd.NA
+                    else:
+                        existing[c] = np.nan
+                else:
+                    existing[c] = np.nan
         existing = existing[all_cols]
         combined = pd.concat([existing, new_data], ignore_index=True)
 

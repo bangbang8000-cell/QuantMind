@@ -1,28 +1,15 @@
 {
-  "version": "v2_core",
-  "version_name": "核心因子集 (78个)",
-  "description": "从197个因子中精选的78个核心因子，去冗余、高IC",
-  "feature_count": 78,
+  "version": "v1.1",
+  "version_name": "QM Feature Set v1.1 (post-parquet-replace 20260625)",
+  "description": "基于新 parquet schema (152 列统一 schema, qm_feature_set_v1_20260402) 重建",
+  "feature_count": 168,
   "categories": [
     {
-      "id": "基础行情",
+      "id": "ohlcv",
       "name": "基础行情",
-      "order": 0,
+      "order": 1,
       "feature_count": 6,
       "features": [
-        {
-          "feature_id": "feat_ohlcv_004",
-          "key": "close",
-          "description": "收盘价（复权）",
-          "formula": "ClosePrice",
-          "source": "股票历史日行情信息表后复权",
-          "enabled": true,
-          "markets": [
-            "CN"
-          ],
-          "order_no": 1,
-          "default_selected": true
-        },
         {
           "feature_id": "feat_ohlcv_001",
           "key": "open",
@@ -34,7 +21,8 @@
             "CN"
           ],
           "order_no": 2,
-          "default_selected": true
+          "default_selected": false,
+          "coverage_ratio": 1.0
         },
         {
           "feature_id": "feat_ohlcv_002",
@@ -47,7 +35,8 @@
             "CN"
           ],
           "order_no": 3,
-          "default_selected": true
+          "default_selected": false,
+          "coverage_ratio": 1.0
         },
         {
           "feature_id": "feat_ohlcv_003",
@@ -60,7 +49,22 @@
             "CN"
           ],
           "order_no": 4,
-          "default_selected": true
+          "default_selected": false,
+          "coverage_ratio": 1.0
+        },
+        {
+          "feature_id": "feat_ohlcv_004",
+          "key": "close",
+          "description": "收盘价（复权）",
+          "formula": "ClosePrice",
+          "source": "股票历史日行情信息表后复权",
+          "enabled": true,
+          "markets": [
+            "CN"
+          ],
+          "order_no": 1,
+          "default_selected": false,
+          "coverage_ratio": 1.0
         },
         {
           "feature_id": "feat_ohlcv_005",
@@ -73,25 +77,30 @@
             "CN"
           ],
           "order_no": 5,
-          "default_selected": true
+          "default_selected": true,
+          "coverage_ratio": 1.0
         },
         {
-          "key": "amount",
-          "name": "Amount",
-          "description": "核心因子: amount",
-          "enabled": true,
-          "order_no": 6,
+          "feature_id": "feat_ohlcv_005",
+          "key": "factor",
+          "description": "因子: factor",
           "formula": "",
-          "source": "parquet",
-          "default_selected": true
+          "source": "feature_snapshots/model_features_*.parquet",
+          "enabled": true,
+          "markets": [
+            "CN"
+          ],
+          "order_no": 6,
+          "default_selected": false,
+          "coverage_ratio": 1.0
         }
       ]
     },
     {
-      "id": "动量",
+      "id": "momentum",
       "name": "动量",
-      "order": 1,
-      "feature_count": 12,
+      "order": 2,
+      "feature_count": 24,
       "features": [
         {
           "feature_id": "feat_001",
@@ -105,7 +114,22 @@
             "CRYPTO"
           ],
           "order_no": 1,
-          "default_selected": true
+          "default_selected": true,
+          "coverage_ratio": 0.9999
+        },
+        {
+          "feature_id": "feat_momentum_001",
+          "key": "mom_ret_3d",
+          "description": "因子: mom_ret_3d",
+          "formula": "",
+          "source": "feature_snapshots/model_features_*.parquet",
+          "enabled": true,
+          "markets": [
+            "CN"
+          ],
+          "order_no": 2,
+          "default_selected": false,
+          "coverage_ratio": 0.9998
         },
         {
           "feature_id": "feat_003",
@@ -119,7 +143,22 @@
             "CRYPTO"
           ],
           "order_no": 2,
-          "default_selected": true
+          "default_selected": false,
+          "coverage_ratio": 0.9997
+        },
+        {
+          "feature_id": "feat_momentum_003",
+          "key": "mom_ret_10d",
+          "description": "因子: mom_ret_10d",
+          "formula": "",
+          "source": "feature_snapshots/model_features_*.parquet",
+          "enabled": true,
+          "markets": [
+            "CN"
+          ],
+          "order_no": 4,
+          "default_selected": false,
+          "coverage_ratio": 0.9993
         },
         {
           "feature_id": "feat_005",
@@ -134,7 +173,8 @@
             "CRYPTO"
           ],
           "order_no": 3,
-          "default_selected": true
+          "default_selected": true,
+          "coverage_ratio": 0.9986
         },
         {
           "feature_id": "feat_006",
@@ -148,7 +188,22 @@
             "US"
           ],
           "order_no": 4,
-          "default_selected": true
+          "default_selected": true,
+          "coverage_ratio": 0.9957
+        },
+        {
+          "feature_id": "feat_momentum_006",
+          "key": "mom_ret_120d",
+          "description": "因子: mom_ret_120d",
+          "formula": "",
+          "source": "feature_snapshots/model_features_*.parquet",
+          "enabled": true,
+          "markets": [
+            "CN"
+          ],
+          "order_no": 7,
+          "default_selected": false,
+          "coverage_ratio": 0.9917
         },
         {
           "feature_id": "feat_008",
@@ -163,7 +218,22 @@
             "CRYPTO"
           ],
           "order_no": 5,
-          "default_selected": true
+          "default_selected": true,
+          "coverage_ratio": 0.9997
+        },
+        {
+          "feature_id": "feat_momentum_008",
+          "key": "mom_ma_gap_10",
+          "description": "因子: mom_ma_gap_10",
+          "formula": "",
+          "source": "feature_snapshots/model_features_*.parquet",
+          "enabled": true,
+          "markets": [
+            "CN"
+          ],
+          "order_no": 9,
+          "default_selected": false,
+          "coverage_ratio": 0.9994
         },
         {
           "feature_id": "feat_010",
@@ -179,7 +249,8 @@
             "CRYPTO"
           ],
           "order_no": 6,
-          "default_selected": true
+          "default_selected": false,
+          "coverage_ratio": 0.9987
         },
         {
           "feature_id": "feat_011",
@@ -192,7 +263,78 @@
             "CN"
           ],
           "order_no": 7,
-          "default_selected": false
+          "default_selected": false,
+          "coverage_ratio": 0.9958
+        },
+        {
+          "feature_id": "feat_momentum_011",
+          "key": "mom_ma_gap_120",
+          "description": "因子: mom_ma_gap_120",
+          "formula": "",
+          "source": "feature_snapshots/model_features_*.parquet",
+          "enabled": true,
+          "markets": [
+            "CN"
+          ],
+          "order_no": 12,
+          "default_selected": false,
+          "coverage_ratio": 0.9918
+        },
+        {
+          "feature_id": "feat_momentum_012",
+          "key": "mom_ema_gap_12",
+          "description": "因子: mom_ema_gap_12",
+          "formula": "",
+          "source": "feature_snapshots/model_features_*.parquet",
+          "enabled": true,
+          "markets": [
+            "CN"
+          ],
+          "order_no": 13,
+          "default_selected": false,
+          "coverage_ratio": 0.9992
+        },
+        {
+          "feature_id": "feat_momentum_013",
+          "key": "mom_ema_gap_26",
+          "description": "因子: mom_ema_gap_26",
+          "formula": "",
+          "source": "feature_snapshots/model_features_*.parquet",
+          "enabled": true,
+          "markets": [
+            "CN"
+          ],
+          "order_no": 14,
+          "default_selected": false,
+          "coverage_ratio": 0.9983
+        },
+        {
+          "feature_id": "feat_momentum_014",
+          "key": "mom_macd_dif",
+          "description": "因子: mom_macd_dif",
+          "formula": "",
+          "source": "feature_snapshots/model_features_*.parquet",
+          "enabled": true,
+          "markets": [
+            "CN"
+          ],
+          "order_no": 15,
+          "default_selected": false,
+          "coverage_ratio": 0.9983
+        },
+        {
+          "feature_id": "feat_momentum_015",
+          "key": "mom_macd_dea",
+          "description": "因子: mom_macd_dea",
+          "formula": "",
+          "source": "feature_snapshots/model_features_*.parquet",
+          "enabled": true,
+          "markets": [
+            "CN"
+          ],
+          "order_no": 16,
+          "default_selected": false,
+          "coverage_ratio": 0.9977
         },
         {
           "feature_id": "feat_017",
@@ -205,7 +347,22 @@
             "CN"
           ],
           "order_no": 8,
-          "default_selected": true
+          "default_selected": false,
+          "coverage_ratio": 0.9977
+        },
+        {
+          "feature_id": "feat_momentum_017",
+          "key": "mom_rsi_6",
+          "description": "因子: mom_rsi_6",
+          "formula": "",
+          "source": "feature_snapshots/model_features_*.parquet",
+          "enabled": true,
+          "markets": [
+            "CN"
+          ],
+          "order_no": 18,
+          "default_selected": false,
+          "coverage_ratio": 0.9997
         },
         {
           "feature_id": "feat_019",
@@ -220,7 +377,8 @@
             "CRYPTO"
           ],
           "order_no": 9,
-          "default_selected": true
+          "default_selected": true,
+          "coverage_ratio": 0.9991
         },
         {
           "feature_id": "feat_020",
@@ -233,7 +391,50 @@
             "CN"
           ],
           "order_no": 10,
-          "default_selected": true
+          "default_selected": true,
+          "coverage_ratio": 0.9995
+        },
+        {
+          "feature_id": "feat_momentum_020",
+          "key": "mom_kdj_d",
+          "description": "因子: mom_kdj_d",
+          "formula": "",
+          "source": "feature_snapshots/model_features_*.parquet",
+          "enabled": true,
+          "markets": [
+            "CN"
+          ],
+          "order_no": 21,
+          "default_selected": false,
+          "coverage_ratio": 0.9995
+        },
+        {
+          "feature_id": "feat_momentum_021",
+          "key": "mom_kdj_j",
+          "description": "因子: mom_kdj_j",
+          "formula": "",
+          "source": "feature_snapshots/model_features_*.parquet",
+          "enabled": true,
+          "markets": [
+            "CN"
+          ],
+          "order_no": 22,
+          "default_selected": false,
+          "coverage_ratio": 0.9995
+        },
+        {
+          "feature_id": "feat_momentum_022",
+          "key": "mom_roc_12",
+          "description": "因子: mom_roc_12",
+          "formula": "",
+          "source": "feature_snapshots/model_features_*.parquet",
+          "enabled": true,
+          "markets": [
+            "CN"
+          ],
+          "order_no": 23,
+          "default_selected": false,
+          "coverage_ratio": 0.9992
         },
         {
           "feature_id": "feat_024",
@@ -247,26 +448,45 @@
             "CRYPTO"
           ],
           "order_no": 11,
-          "default_selected": true
-        },
-        {
-          "key": "mom_sharpe_20",
-          "name": "Mom Sharpe 20",
-          "description": "核心因子: mom_sharpe_20",
-          "enabled": true,
-          "order_no": 12,
-          "formula": "",
-          "source": "parquet",
-          "default_selected": true
+          "default_selected": true,
+          "coverage_ratio": 0.9987
         }
       ]
     },
     {
-      "id": "波动率",
+      "id": "volatility",
       "name": "波动率",
-      "order": 2,
-      "feature_count": 10,
+      "order": 3,
+      "feature_count": 22,
       "features": [
+        {
+          "feature_id": "feat_volatility_000",
+          "key": "vol_std_5",
+          "description": "因子: vol_std_5",
+          "formula": "",
+          "source": "feature_snapshots/model_features_*.parquet",
+          "enabled": true,
+          "markets": [
+            "CN"
+          ],
+          "order_no": 1,
+          "default_selected": false,
+          "coverage_ratio": 0.9997
+        },
+        {
+          "feature_id": "feat_volatility_001",
+          "key": "vol_std_10",
+          "description": "因子: vol_std_10",
+          "formula": "",
+          "source": "feature_snapshots/model_features_*.parquet",
+          "enabled": true,
+          "markets": [
+            "CN"
+          ],
+          "order_no": 2,
+          "default_selected": false,
+          "coverage_ratio": 0.9994
+        },
         {
           "feature_id": "feat_027",
           "key": "vol_std_20",
@@ -280,7 +500,8 @@
             "CRYPTO"
           ],
           "order_no": 1,
-          "default_selected": true
+          "default_selected": false,
+          "coverage_ratio": 0.9987
         },
         {
           "feature_id": "feat_028",
@@ -293,7 +514,8 @@
             "CN"
           ],
           "order_no": 2,
-          "default_selected": false
+          "default_selected": false,
+          "coverage_ratio": 0.9958
         },
         {
           "feature_id": "feat_029",
@@ -306,7 +528,50 @@
             "CN"
           ],
           "order_no": 3,
-          "default_selected": true
+          "default_selected": false,
+          "coverage_ratio": 0.9991
+        },
+        {
+          "feature_id": "feat_volatility_005",
+          "key": "vol_atr_20",
+          "description": "因子: vol_atr_20",
+          "formula": "",
+          "source": "feature_snapshots/model_features_*.parquet",
+          "enabled": true,
+          "markets": [
+            "CN"
+          ],
+          "order_no": 6,
+          "default_selected": false,
+          "coverage_ratio": 0.9987
+        },
+        {
+          "feature_id": "feat_volatility_006",
+          "key": "vol_true_range",
+          "description": "因子: vol_true_range",
+          "formula": "",
+          "source": "feature_snapshots/model_features_*.parquet",
+          "enabled": true,
+          "markets": [
+            "CN"
+          ],
+          "order_no": 7,
+          "default_selected": false,
+          "coverage_ratio": 1.0
+        },
+        {
+          "feature_id": "feat_volatility_007",
+          "key": "vol_parkinson_10",
+          "description": "因子: vol_parkinson_10",
+          "formula": "",
+          "source": "feature_snapshots/model_features_*.parquet",
+          "enabled": true,
+          "markets": [
+            "CN"
+          ],
+          "order_no": 8,
+          "default_selected": false,
+          "coverage_ratio": 0.9994
         },
         {
           "feature_id": "feat_033",
@@ -320,7 +585,64 @@
             "CRYPTO"
           ],
           "order_no": 4,
-          "default_selected": true
+          "default_selected": true,
+          "coverage_ratio": 0.9987
+        },
+        {
+          "feature_id": "feat_volatility_009",
+          "key": "vol_gk_10",
+          "description": "因子: vol_gk_10",
+          "formula": "",
+          "source": "feature_snapshots/model_features_*.parquet",
+          "enabled": true,
+          "markets": [
+            "CN"
+          ],
+          "order_no": 10,
+          "default_selected": false,
+          "coverage_ratio": 0.9994
+        },
+        {
+          "feature_id": "feat_volatility_010",
+          "key": "vol_gk_20",
+          "description": "因子: vol_gk_20",
+          "formula": "",
+          "source": "feature_snapshots/model_features_*.parquet",
+          "enabled": true,
+          "markets": [
+            "CN"
+          ],
+          "order_no": 11,
+          "default_selected": false,
+          "coverage_ratio": 0.9987
+        },
+        {
+          "feature_id": "feat_volatility_011",
+          "key": "vol_rs_10",
+          "description": "因子: vol_rs_10",
+          "formula": "",
+          "source": "feature_snapshots/model_features_*.parquet",
+          "enabled": true,
+          "markets": [
+            "CN"
+          ],
+          "order_no": 12,
+          "default_selected": false,
+          "coverage_ratio": 0.9994
+        },
+        {
+          "feature_id": "feat_volatility_012",
+          "key": "vol_rs_20",
+          "description": "因子: vol_rs_20",
+          "formula": "",
+          "source": "feature_snapshots/model_features_*.parquet",
+          "enabled": true,
+          "markets": [
+            "CN"
+          ],
+          "order_no": 13,
+          "default_selected": false,
+          "coverage_ratio": 0.9987
         },
         {
           "feature_id": "feat_038",
@@ -336,7 +658,8 @@
             "CRYPTO"
           ],
           "order_no": 5,
-          "default_selected": true
+          "default_selected": true,
+          "coverage_ratio": 0.9987
         },
         {
           "feature_id": "feat_039",
@@ -349,7 +672,8 @@
             "CN"
           ],
           "order_no": 6,
-          "default_selected": true
+          "default_selected": true,
+          "coverage_ratio": 0.9987
         },
         {
           "feature_id": "feat_040",
@@ -362,7 +686,8 @@
             "CN"
           ],
           "order_no": 7,
-          "default_selected": true
+          "default_selected": true,
+          "coverage_ratio": 0.9974
         },
         {
           "feature_id": "feat_041",
@@ -375,7 +700,8 @@
             "CN"
           ],
           "order_no": 8,
-          "default_selected": true
+          "default_selected": true,
+          "coverage_ratio": 0.9974
         },
         {
           "feature_id": "feat_042",
@@ -388,7 +714,22 @@
             "CN"
           ],
           "order_no": 9,
-          "default_selected": false
+          "default_selected": false,
+          "coverage_ratio": 0.9972
+        },
+        {
+          "feature_id": "feat_volatility_018",
+          "key": "vol_realized_rkurt",
+          "description": "因子: vol_realized_rkurt",
+          "formula": "",
+          "source": "feature_snapshots/model_features_*.parquet",
+          "enabled": true,
+          "markets": [
+            "CN"
+          ],
+          "order_no": 19,
+          "default_selected": false,
+          "coverage_ratio": 0.9972
         },
         {
           "feature_id": "feat_044",
@@ -402,42 +743,45 @@
             "CRYPTO"
           ],
           "order_no": 10,
-          "default_selected": true
+          "default_selected": false,
+          "coverage_ratio": 0.9974
+        },
+        {
+          "feature_id": "feat_volatility_020",
+          "key": "vol_jump_rjv_ratio",
+          "description": "因子: vol_jump_rjv_ratio",
+          "formula": "",
+          "source": "feature_snapshots/model_features_*.parquet",
+          "enabled": true,
+          "markets": [
+            "CN"
+          ],
+          "order_no": 21,
+          "default_selected": false,
+          "coverage_ratio": 0.982
+        },
+        {
+          "feature_id": "feat_volatility_021",
+          "key": "vol_jump_sjv_ratio",
+          "description": "因子: vol_jump_sjv_ratio",
+          "formula": "",
+          "source": "feature_snapshots/model_features_*.parquet",
+          "enabled": true,
+          "markets": [
+            "CN"
+          ],
+          "order_no": 22,
+          "default_selected": false,
+          "coverage_ratio": 0.982
         }
       ]
     },
     {
-      "id": "成交量",
-      "name": "成交量",
-      "order": 3,
-      "feature_count": 6,
+      "id": "liquidity",
+      "name": "成交量与流动性",
+      "order": 4,
+      "feature_count": 22,
       "features": [
-        {
-          "feature_id": "feat_049",
-          "key": "liq_volume",
-          "description": "当日成交量",
-          "formula": "Volume_t",
-          "source": "股票历史日行情信息表后复权.Volume",
-          "enabled": true,
-          "markets": [
-            "CN"
-          ],
-          "order_no": 1,
-          "default_selected": true
-        },
-        {
-          "feature_id": "feat_055",
-          "key": "liq_amount",
-          "description": "当日成交额",
-          "formula": "Amount_t",
-          "source": "股票历史日行情信息表后复权.Amount",
-          "enabled": true,
-          "markets": [
-            "CN"
-          ],
-          "order_no": 2,
-          "default_selected": true
-        },
         {
           "feature_id": "feat_047",
           "key": "liq_turnover_os",
@@ -449,7 +793,78 @@
             "CN"
           ],
           "order_no": 3,
-          "default_selected": true
+          "default_selected": true,
+          "coverage_ratio": 0.9973
+        },
+        {
+          "feature_id": "feat_liquidity_001",
+          "key": "liq_turnover_tl",
+          "description": "因子: liq_turnover_tl",
+          "formula": "",
+          "source": "feature_snapshots/model_features_*.parquet",
+          "enabled": true,
+          "markets": [
+            "CN"
+          ],
+          "order_no": 2,
+          "default_selected": false,
+          "coverage_ratio": 0.9973
+        },
+        {
+          "feature_id": "feat_049",
+          "key": "liq_volume",
+          "description": "当日成交量",
+          "formula": "Volume_t",
+          "source": "股票历史日行情信息表后复权.Volume",
+          "enabled": true,
+          "markets": [
+            "CN"
+          ],
+          "order_no": 1,
+          "default_selected": true,
+          "coverage_ratio": 1.0
+        },
+        {
+          "feature_id": "feat_liquidity_003",
+          "key": "liq_volume_ma_5",
+          "description": "因子: liq_volume_ma_5",
+          "formula": "",
+          "source": "feature_snapshots/model_features_*.parquet",
+          "enabled": true,
+          "markets": [
+            "CN"
+          ],
+          "order_no": 4,
+          "default_selected": true,
+          "coverage_ratio": 0.9997
+        },
+        {
+          "feature_id": "feat_liquidity_004",
+          "key": "liq_volume_ma_10",
+          "description": "因子: liq_volume_ma_10",
+          "formula": "",
+          "source": "feature_snapshots/model_features_*.parquet",
+          "enabled": true,
+          "markets": [
+            "CN"
+          ],
+          "order_no": 5,
+          "default_selected": false,
+          "coverage_ratio": 0.9994
+        },
+        {
+          "feature_id": "feat_liquidity_005",
+          "key": "liq_volume_ma_20",
+          "description": "因子: liq_volume_ma_20",
+          "formula": "",
+          "source": "feature_snapshots/model_features_*.parquet",
+          "enabled": true,
+          "markets": [
+            "CN"
+          ],
+          "order_no": 6,
+          "default_selected": false,
+          "coverage_ratio": 0.9987
         },
         {
           "feature_id": "feat_053",
@@ -462,7 +877,162 @@
             "CN"
           ],
           "order_no": 4,
-          "default_selected": true
+          "default_selected": true,
+          "coverage_ratio": 0.9986
+        },
+        {
+          "feature_id": "feat_liquidity_007",
+          "key": "liq_volume_ratio_20",
+          "description": "因子: liq_volume_ratio_20",
+          "formula": "",
+          "source": "feature_snapshots/model_features_*.parquet",
+          "enabled": true,
+          "markets": [
+            "CN"
+          ],
+          "order_no": 8,
+          "default_selected": false,
+          "coverage_ratio": 0.9984
+        },
+        {
+          "feature_id": "feat_055",
+          "key": "liq_amount",
+          "description": "当日成交额",
+          "formula": "Amount_t",
+          "source": "股票历史日行情信息表后复权.Amount",
+          "enabled": true,
+          "markets": [
+            "CN"
+          ],
+          "order_no": 2,
+          "default_selected": true,
+          "coverage_ratio": 1.0
+        },
+        {
+          "feature_id": "feat_liquidity_009",
+          "key": "liq_amount_ma_5",
+          "description": "因子: liq_amount_ma_5",
+          "formula": "",
+          "source": "feature_snapshots/model_features_*.parquet",
+          "enabled": true,
+          "markets": [
+            "CN"
+          ],
+          "order_no": 10,
+          "default_selected": true,
+          "coverage_ratio": 0.9997
+        },
+        {
+          "feature_id": "feat_liquidity_010",
+          "key": "liq_amount_ma_10",
+          "description": "因子: liq_amount_ma_10",
+          "formula": "",
+          "source": "feature_snapshots/model_features_*.parquet",
+          "enabled": true,
+          "markets": [
+            "CN"
+          ],
+          "order_no": 11,
+          "default_selected": false,
+          "coverage_ratio": 0.9994
+        },
+        {
+          "feature_id": "feat_liquidity_011",
+          "key": "liq_amount_ma_20",
+          "description": "因子: liq_amount_ma_20",
+          "formula": "",
+          "source": "feature_snapshots/model_features_*.parquet",
+          "enabled": true,
+          "markets": [
+            "CN"
+          ],
+          "order_no": 12,
+          "default_selected": false,
+          "coverage_ratio": 0.9987
+        },
+        {
+          "feature_id": "feat_liquidity_012",
+          "key": "liq_amount_ratio_5",
+          "description": "因子: liq_amount_ratio_5",
+          "formula": "",
+          "source": "feature_snapshots/model_features_*.parquet",
+          "enabled": true,
+          "markets": [
+            "CN"
+          ],
+          "order_no": 13,
+          "default_selected": false,
+          "coverage_ratio": 0.9986
+        },
+        {
+          "feature_id": "feat_liquidity_013",
+          "key": "liq_amount_ratio_20",
+          "description": "因子: liq_amount_ratio_20",
+          "formula": "",
+          "source": "feature_snapshots/model_features_*.parquet",
+          "enabled": true,
+          "markets": [
+            "CN"
+          ],
+          "order_no": 14,
+          "default_selected": false,
+          "coverage_ratio": 0.9984
+        },
+        {
+          "feature_id": "feat_liquidity_014",
+          "key": "liq_trade_count",
+          "description": "因子: liq_trade_count",
+          "formula": "",
+          "source": "feature_snapshots/model_features_*.parquet",
+          "enabled": true,
+          "markets": [
+            "CN"
+          ],
+          "order_no": 15,
+          "default_selected": false,
+          "coverage_ratio": 0.1538
+        },
+        {
+          "feature_id": "feat_liquidity_015",
+          "key": "liq_avg_trade_size",
+          "description": "因子: liq_avg_trade_size",
+          "formula": "",
+          "source": "feature_snapshots/model_features_*.parquet",
+          "enabled": true,
+          "markets": [
+            "CN"
+          ],
+          "order_no": 16,
+          "default_selected": false,
+          "coverage_ratio": 0.0988
+        },
+        {
+          "feature_id": "feat_liquidity_016",
+          "key": "liq_obv_20",
+          "description": "因子: liq_obv_20",
+          "formula": "",
+          "source": "feature_snapshots/model_features_*.parquet",
+          "enabled": true,
+          "markets": [
+            "CN"
+          ],
+          "order_no": 17,
+          "default_selected": false,
+          "coverage_ratio": 0.9987
+        },
+        {
+          "feature_id": "feat_liquidity_017",
+          "key": "liq_obv_60",
+          "description": "因子: liq_obv_60",
+          "formula": "",
+          "source": "feature_snapshots/model_features_*.parquet",
+          "enabled": true,
+          "markets": [
+            "CN"
+          ],
+          "order_no": 18,
+          "default_selected": false,
+          "coverage_ratio": 0.9958
         },
         {
           "feature_id": "feat_065",
@@ -475,7 +1045,22 @@
             "CN"
           ],
           "order_no": 5,
-          "default_selected": true
+          "default_selected": false,
+          "coverage_ratio": 0.9983
+        },
+        {
+          "feature_id": "feat_liquidity_019",
+          "key": "liq_accdist_20",
+          "description": "因子: liq_accdist_20",
+          "formula": "",
+          "source": "feature_snapshots/model_features_*.parquet",
+          "enabled": true,
+          "markets": [
+            "CN"
+          ],
+          "order_no": 20,
+          "default_selected": false,
+          "coverage_ratio": 0.9987
         },
         {
           "feature_id": "feat_067",
@@ -491,15 +1076,30 @@
             "CRYPTO"
           ],
           "order_no": 6,
-          "default_selected": true
+          "default_selected": true,
+          "coverage_ratio": 0.9892
+        },
+        {
+          "feature_id": "feat_liquidity_021",
+          "key": "liq_amihud_60",
+          "description": "因子: liq_amihud_60",
+          "formula": "",
+          "source": "feature_snapshots/model_features_*.parquet",
+          "enabled": true,
+          "markets": [
+            "CN"
+          ],
+          "order_no": 22,
+          "default_selected": false,
+          "coverage_ratio": 0.9726
         }
       ]
     },
     {
-      "id": "资金流",
+      "id": "fund_flow",
       "name": "资金流",
-      "order": 4,
-      "feature_count": 7,
+      "order": 5,
+      "feature_count": 22,
       "features": [
         {
           "feature_id": "feat_069",
@@ -512,7 +1112,8 @@
             "CN"
           ],
           "order_no": 1,
-          "default_selected": true
+          "default_selected": false,
+          "coverage_ratio": 0.9951
         },
         {
           "feature_id": "feat_070",
@@ -525,7 +1126,8 @@
             "CN"
           ],
           "order_no": 2,
-          "default_selected": true
+          "default_selected": false,
+          "coverage_ratio": 0.9951
         },
         {
           "feature_id": "feat_071",
@@ -538,7 +1140,134 @@
             "CN"
           ],
           "order_no": 3,
-          "default_selected": true
+          "default_selected": false,
+          "coverage_ratio": 0.9951
+        },
+        {
+          "feature_id": "feat_fund_flow_003",
+          "key": "flow_large_net_ratio",
+          "description": "因子: flow_large_net_ratio",
+          "formula": "",
+          "source": "feature_snapshots/model_features_*.parquet",
+          "enabled": true,
+          "markets": [
+            "CN"
+          ],
+          "order_no": 4,
+          "default_selected": false,
+          "coverage_ratio": 0.8948
+        },
+        {
+          "feature_id": "feat_fund_flow_004",
+          "key": "flow_medium_net_amount",
+          "description": "因子: flow_medium_net_amount",
+          "formula": "",
+          "source": "feature_snapshots/model_features_*.parquet",
+          "enabled": true,
+          "markets": [
+            "CN"
+          ],
+          "order_no": 5,
+          "default_selected": false,
+          "coverage_ratio": 0.9951
+        },
+        {
+          "feature_id": "feat_fund_flow_005",
+          "key": "flow_medium_net_ratio",
+          "description": "因子: flow_medium_net_ratio",
+          "formula": "",
+          "source": "feature_snapshots/model_features_*.parquet",
+          "enabled": true,
+          "markets": [
+            "CN"
+          ],
+          "order_no": 6,
+          "default_selected": false,
+          "coverage_ratio": 0.9906
+        },
+        {
+          "feature_id": "feat_fund_flow_006",
+          "key": "flow_small_net_amount",
+          "description": "因子: flow_small_net_amount",
+          "formula": "",
+          "source": "feature_snapshots/model_features_*.parquet",
+          "enabled": true,
+          "markets": [
+            "CN"
+          ],
+          "order_no": 7,
+          "default_selected": false,
+          "coverage_ratio": 0.9951
+        },
+        {
+          "feature_id": "feat_fund_flow_007",
+          "key": "flow_small_net_ratio",
+          "description": "因子: flow_small_net_ratio",
+          "formula": "",
+          "source": "feature_snapshots/model_features_*.parquet",
+          "enabled": true,
+          "markets": [
+            "CN"
+          ],
+          "order_no": 8,
+          "default_selected": false,
+          "coverage_ratio": 0.9916
+        },
+        {
+          "feature_id": "feat_fund_flow_008",
+          "key": "flow_net_order_count",
+          "description": "因子: flow_net_order_count",
+          "formula": "",
+          "source": "feature_snapshots/model_features_*.parquet",
+          "enabled": true,
+          "markets": [
+            "CN"
+          ],
+          "order_no": 9,
+          "default_selected": false,
+          "coverage_ratio": 0.9951
+        },
+        {
+          "feature_id": "feat_fund_flow_009",
+          "key": "flow_net_order_ratio",
+          "description": "因子: flow_net_order_ratio",
+          "formula": "",
+          "source": "feature_snapshots/model_features_*.parquet",
+          "enabled": true,
+          "markets": [
+            "CN"
+          ],
+          "order_no": 10,
+          "default_selected": false,
+          "coverage_ratio": 0.9951
+        },
+        {
+          "feature_id": "feat_fund_flow_010",
+          "key": "flow_large_net_order",
+          "description": "因子: flow_large_net_order",
+          "formula": "",
+          "source": "feature_snapshots/model_features_*.parquet",
+          "enabled": true,
+          "markets": [
+            "CN"
+          ],
+          "order_no": 11,
+          "default_selected": false,
+          "coverage_ratio": 0.9951
+        },
+        {
+          "feature_id": "feat_fund_flow_011",
+          "key": "flow_large_order_ratio",
+          "description": "因子: flow_large_order_ratio",
+          "formula": "",
+          "source": "feature_snapshots/model_features_*.parquet",
+          "enabled": true,
+          "markets": [
+            "CN"
+          ],
+          "order_no": 12,
+          "default_selected": false,
+          "coverage_ratio": 0.8948
         },
         {
           "feature_id": "feat_081",
@@ -552,7 +1281,8 @@
             "CRYPTO"
           ],
           "order_no": 4,
-          "default_selected": true
+          "default_selected": false,
+          "coverage_ratio": 0.9975
         },
         {
           "feature_id": "feat_082",
@@ -567,7 +1297,8 @@
             "CRYPTO"
           ],
           "order_no": 5,
-          "default_selected": true
+          "default_selected": false,
+          "coverage_ratio": 0.9955
         },
         {
           "feature_id": "feat_083",
@@ -583,7 +1314,92 @@
             "CRYPTO"
           ],
           "order_no": 6,
-          "default_selected": true
+          "default_selected": true,
+          "coverage_ratio": 0.9891
+        },
+        {
+          "feature_id": "feat_fund_flow_015",
+          "key": "flow_vpin_delta_5",
+          "description": "因子: flow_vpin_delta_5",
+          "formula": "",
+          "source": "feature_snapshots/model_features_*.parquet",
+          "enabled": true,
+          "markets": [
+            "CN"
+          ],
+          "order_no": 16,
+          "default_selected": false,
+          "coverage_ratio": 0.996
+        },
+        {
+          "feature_id": "feat_fund_flow_016",
+          "key": "flow_qsp",
+          "description": "因子: flow_qsp",
+          "formula": "",
+          "source": "feature_snapshots/model_features_*.parquet",
+          "enabled": true,
+          "markets": [
+            "CN"
+          ],
+          "order_no": 17,
+          "default_selected": true,
+          "coverage_ratio": 0.9951
+        },
+        {
+          "feature_id": "feat_fund_flow_017",
+          "key": "flow_esp",
+          "description": "因子: flow_esp",
+          "formula": "",
+          "source": "feature_snapshots/model_features_*.parquet",
+          "enabled": true,
+          "markets": [
+            "CN"
+          ],
+          "order_no": 18,
+          "default_selected": false,
+          "coverage_ratio": 0.9951
+        },
+        {
+          "feature_id": "feat_fund_flow_018",
+          "key": "flow_aqsp",
+          "description": "因子: flow_aqsp",
+          "formula": "",
+          "source": "feature_snapshots/model_features_*.parquet",
+          "enabled": true,
+          "markets": [
+            "CN"
+          ],
+          "order_no": 19,
+          "default_selected": false,
+          "coverage_ratio": 0.9951
+        },
+        {
+          "feature_id": "feat_fund_flow_019",
+          "key": "flow_qsp_time",
+          "description": "因子: flow_qsp_time",
+          "formula": "",
+          "source": "feature_snapshots/model_features_*.parquet",
+          "enabled": true,
+          "markets": [
+            "CN"
+          ],
+          "order_no": 20,
+          "default_selected": false,
+          "coverage_ratio": 0.9949
+        },
+        {
+          "feature_id": "feat_fund_flow_020",
+          "key": "flow_esp_time",
+          "description": "因子: flow_esp_time",
+          "formula": "",
+          "source": "feature_snapshots/model_features_*.parquet",
+          "enabled": true,
+          "markets": [
+            "CN"
+          ],
+          "order_no": 21,
+          "default_selected": false,
+          "coverage_ratio": 0.9949
         },
         {
           "feature_id": "feat_090",
@@ -596,15 +1412,16 @@
             "CN"
           ],
           "order_no": 7,
-          "default_selected": true
+          "default_selected": false,
+          "coverage_ratio": 0.9952
         }
       ]
     },
     {
-      "id": "风格因子",
+      "id": "style",
       "name": "风格因子",
-      "order": 5,
-      "feature_count": 8,
+      "order": 6,
+      "feature_count": 16,
       "features": [
         {
           "feature_id": "feat_091",
@@ -618,7 +1435,8 @@
             "US"
           ],
           "order_no": 1,
-          "default_selected": true
+          "default_selected": true,
+          "coverage_ratio": 1.0
         },
         {
           "feature_id": "feat_092",
@@ -631,7 +1449,78 @@
             "CN"
           ],
           "order_no": 2,
-          "default_selected": true
+          "default_selected": true,
+          "coverage_ratio": 1.0
+        },
+        {
+          "feature_id": "feat_093",
+          "key": "style_bp",
+          "description": "账面市净率倒数(B/P)",
+          "formula": "1/PB",
+          "source": "相对价值指标.pb_ratio",
+          "enabled": true,
+          "markets": [
+            "CN"
+          ],
+          "order_no": 7,
+          "default_selected": true,
+          "coverage_ratio": 0.9791
+        },
+        {
+          "feature_id": "feat_094",
+          "key": "style_ep_ttm",
+          "description": "盈利收益率(E/P)",
+          "formula": "1/PE_TTM",
+          "source": "相对价值指标.pe_ratio_ttm",
+          "enabled": true,
+          "markets": [
+            "CN"
+          ],
+          "order_no": 8,
+          "default_selected": true,
+          "coverage_ratio": 0.6888
+        },
+        {
+          "feature_id": "feat_style_004",
+          "key": "style_smb",
+          "description": "因子: style_smb",
+          "formula": "",
+          "source": "feature_snapshots/model_features_*.parquet",
+          "enabled": true,
+          "markets": [
+            "CN"
+          ],
+          "order_no": 5,
+          "default_selected": false,
+          "coverage_ratio": 1.0
+        },
+        {
+          "feature_id": "feat_style_005",
+          "key": "style_hml",
+          "description": "因子: style_hml",
+          "formula": "",
+          "source": "feature_snapshots/model_features_*.parquet",
+          "enabled": true,
+          "markets": [
+            "CN"
+          ],
+          "order_no": 6,
+          "default_selected": false,
+          "coverage_ratio": 1.0
+        },
+        {
+          "feature_id": "feat_style_006",
+          "key": "style_mkt_premium",
+          "description": "因子: style_mkt_premium",
+          "formula": "",
+          "source": "feature_snapshots/model_features_*.parquet",
+          "enabled": true,
+          "markets": [
+            "CN"
+          ],
+          "order_no": 7,
+          "default_selected": false,
+          "coverage_ratio": 1.0
         },
         {
           "feature_id": "feat_102",
@@ -645,7 +1534,8 @@
             "CRYPTO"
           ],
           "order_no": 3,
-          "default_selected": true
+          "default_selected": true,
+          "coverage_ratio": 0.9987
         },
         {
           "feature_id": "feat_103",
@@ -660,7 +1550,22 @@
             "US"
           ],
           "order_no": 4,
-          "default_selected": true
+          "default_selected": false,
+          "coverage_ratio": 0.9958
+        },
+        {
+          "feature_id": "feat_style_009",
+          "key": "style_beta_120",
+          "description": "因子: style_beta_120",
+          "formula": "",
+          "source": "feature_snapshots/model_features_*.parquet",
+          "enabled": true,
+          "markets": [
+            "CN"
+          ],
+          "order_no": 10,
+          "default_selected": false,
+          "coverage_ratio": 0.9918
         },
         {
           "feature_id": "feat_105",
@@ -673,7 +1578,22 @@
             "CN"
           ],
           "order_no": 5,
-          "default_selected": true
+          "default_selected": true,
+          "coverage_ratio": 0.9974
+        },
+        {
+          "feature_id": "feat_style_011",
+          "key": "style_idio_vol_60",
+          "description": "因子: style_idio_vol_60",
+          "formula": "",
+          "source": "feature_snapshots/model_features_*.parquet",
+          "enabled": true,
+          "markets": [
+            "CN"
+          ],
+          "order_no": 12,
+          "default_selected": false,
+          "coverage_ratio": 0.9918
         },
         {
           "feature_id": "feat_107",
@@ -686,41 +1606,58 @@
             "CN"
           ],
           "order_no": 6,
-          "default_selected": false
+          "default_selected": false,
+          "coverage_ratio": 0.9974
         },
         {
-          "feature_id": "feat_093",
-          "key": "style_bp",
-          "description": "账面市净率倒数(B/P)",
-          "formula": "1/PB",
-          "source": "相对价值指标.pb_ratio",
+          "feature_id": "feat_style_013",
+          "key": "style_valuation_composite",
+          "description": "因子: style_valuation_composite",
+          "formula": "",
+          "source": "feature_snapshots/model_features_*.parquet",
           "enabled": true,
           "markets": [
             "CN"
           ],
-          "order_no": 7,
-          "default_selected": true
+          "order_no": 14,
+          "default_selected": false,
+          "coverage_ratio": 0.6958
         },
         {
-          "feature_id": "feat_094",
-          "key": "style_ep_ttm",
-          "description": "盈利收益率(E/P)",
-          "formula": "1/PE_TTM",
-          "source": "相对价值指标.pe_ratio_ttm",
+          "feature_id": "feat_style_014",
+          "key": "style_size_percentile",
+          "description": "因子: style_size_percentile",
+          "formula": "",
+          "source": "feature_snapshots/model_features_*.parquet",
           "enabled": true,
           "markets": [
             "CN"
           ],
-          "order_no": 8,
-          "default_selected": true
+          "order_no": 15,
+          "default_selected": true,
+          "coverage_ratio": 1.0
+        },
+        {
+          "feature_id": "feat_style_015",
+          "key": "style_value_percentile",
+          "description": "因子: style_value_percentile",
+          "formula": "",
+          "source": "feature_snapshots/model_features_*.parquet",
+          "enabled": true,
+          "markets": [
+            "CN"
+          ],
+          "order_no": 16,
+          "default_selected": false,
+          "coverage_ratio": 0.6958
         }
       ]
     },
     {
-      "id": "行业因子",
+      "id": "industry",
       "name": "行业因子",
-      "order": 6,
-      "feature_count": 4,
+      "order": 7,
+      "feature_count": 20,
       "features": [
         {
           "feature_id": "feat_111",
@@ -733,7 +1670,36 @@
             "CN"
           ],
           "order_no": 1,
-          "default_selected": true
+          "default_selected": true,
+          "coverage_ratio": 0.9998
+        },
+        {
+          "feature_id": "feat_industry_001",
+          "key": "ind_ret_5d",
+          "description": "因子: ind_ret_5d",
+          "formula": "",
+          "source": "feature_snapshots/model_features_*.parquet",
+          "enabled": true,
+          "markets": [
+            "CN"
+          ],
+          "order_no": 2,
+          "default_selected": false,
+          "coverage_ratio": 0.9998
+        },
+        {
+          "feature_id": "feat_industry_002",
+          "key": "ind_ret_10d",
+          "description": "因子: ind_ret_10d",
+          "formula": "",
+          "source": "feature_snapshots/model_features_*.parquet",
+          "enabled": true,
+          "markets": [
+            "CN"
+          ],
+          "order_no": 3,
+          "default_selected": false,
+          "coverage_ratio": 0.9998
         },
         {
           "feature_id": "feat_114",
@@ -746,7 +1712,50 @@
             "CN"
           ],
           "order_no": 2,
-          "default_selected": true
+          "default_selected": true,
+          "coverage_ratio": 0.9998
+        },
+        {
+          "feature_id": "feat_industry_004",
+          "key": "ind_vol_20",
+          "description": "因子: ind_vol_20",
+          "formula": "",
+          "source": "feature_snapshots/model_features_*.parquet",
+          "enabled": true,
+          "markets": [
+            "CN"
+          ],
+          "order_no": 5,
+          "default_selected": false,
+          "coverage_ratio": 0.9998
+        },
+        {
+          "feature_id": "feat_industry_005",
+          "key": "ind_turnover_20",
+          "description": "因子: ind_turnover_20",
+          "formula": "",
+          "source": "feature_snapshots/model_features_*.parquet",
+          "enabled": true,
+          "markets": [
+            "CN"
+          ],
+          "order_no": 6,
+          "default_selected": false,
+          "coverage_ratio": 0.9998
+        },
+        {
+          "feature_id": "feat_industry_006",
+          "key": "ind_amount_20",
+          "description": "因子: ind_amount_20",
+          "formula": "",
+          "source": "feature_snapshots/model_features_*.parquet",
+          "enabled": true,
+          "markets": [
+            "CN"
+          ],
+          "order_no": 7,
+          "default_selected": false,
+          "coverage_ratio": 0.9998
         },
         {
           "feature_id": "feat_118",
@@ -759,7 +1768,106 @@
             "CN"
           ],
           "order_no": 3,
-          "default_selected": true
+          "default_selected": true,
+          "coverage_ratio": 0.9986
+        },
+        {
+          "feature_id": "feat_industry_008",
+          "key": "ind_strength_60",
+          "description": "因子: ind_strength_60",
+          "formula": "",
+          "source": "feature_snapshots/model_features_*.parquet",
+          "enabled": true,
+          "markets": [
+            "CN"
+          ],
+          "order_no": 9,
+          "default_selected": true,
+          "coverage_ratio": 0.9957
+        },
+        {
+          "feature_id": "feat_industry_009",
+          "key": "ind_dispersion_20",
+          "description": "因子: ind_dispersion_20",
+          "formula": "",
+          "source": "feature_snapshots/model_features_*.parquet",
+          "enabled": true,
+          "markets": [
+            "CN"
+          ],
+          "order_no": 10,
+          "default_selected": false,
+          "coverage_ratio": 0.9998
+        },
+        {
+          "feature_id": "feat_industry_010",
+          "key": "ind_up_breadth_20",
+          "description": "因子: ind_up_breadth_20",
+          "formula": "",
+          "source": "feature_snapshots/model_features_*.parquet",
+          "enabled": true,
+          "markets": [
+            "CN"
+          ],
+          "order_no": 11,
+          "default_selected": false,
+          "coverage_ratio": 0.9998
+        },
+        {
+          "feature_id": "feat_industry_011",
+          "key": "ind_down_breadth_20",
+          "description": "因子: ind_down_breadth_20",
+          "formula": "",
+          "source": "feature_snapshots/model_features_*.parquet",
+          "enabled": true,
+          "markets": [
+            "CN"
+          ],
+          "order_no": 12,
+          "default_selected": false,
+          "coverage_ratio": 0.9998
+        },
+        {
+          "feature_id": "feat_industry_012",
+          "key": "ind_relative_volume_20",
+          "description": "因子: ind_relative_volume_20",
+          "formula": "",
+          "source": "feature_snapshots/model_features_*.parquet",
+          "enabled": true,
+          "markets": [
+            "CN"
+          ],
+          "order_no": 13,
+          "default_selected": true,
+          "coverage_ratio": 0.9987
+        },
+        {
+          "feature_id": "feat_industry_013",
+          "key": "ind_relative_volatility_20",
+          "description": "因子: ind_relative_volatility_20",
+          "formula": "",
+          "source": "feature_snapshots/model_features_*.parquet",
+          "enabled": true,
+          "markets": [
+            "CN"
+          ],
+          "order_no": 14,
+          "default_selected": false,
+          "coverage_ratio": 0.9987
+        },
+        {
+          "feature_id": "feat_industry_014",
+          "key": "ind_relative_flow_20",
+          "description": "因子: ind_relative_flow_20",
+          "formula": "",
+          "source": "feature_snapshots/model_features_*.parquet",
+          "enabled": true,
+          "markets": [
+            "CN"
+          ],
+          "order_no": 15,
+          "default_selected": false,
+          "coverage_ratio": 0.9699
         },
         {
           "feature_id": "feat_126",
@@ -772,294 +1880,752 @@
             "CN"
           ],
           "order_no": 4,
-          "default_selected": true
+          "default_selected": true,
+          "coverage_ratio": 0.9998
+        },
+        {
+          "feature_id": "feat_industry_016",
+          "key": "ind_value_rank",
+          "description": "因子: ind_value_rank",
+          "formula": "",
+          "source": "feature_snapshots/model_features_*.parquet",
+          "enabled": true,
+          "markets": [
+            "CN"
+          ],
+          "order_no": 17,
+          "default_selected": false,
+          "coverage_ratio": 0.9998
+        },
+        {
+          "feature_id": "feat_industry_017",
+          "key": "ind_size_rank",
+          "description": "因子: ind_size_rank",
+          "formula": "",
+          "source": "feature_snapshots/model_features_*.parquet",
+          "enabled": true,
+          "markets": [
+            "CN"
+          ],
+          "order_no": 18,
+          "default_selected": false,
+          "coverage_ratio": 0.9998
+        },
+        {
+          "feature_id": "feat_industry_018",
+          "key": "ind_code_l1",
+          "description": "因子: ind_code_l1",
+          "formula": "",
+          "source": "feature_snapshots/model_features_*.parquet",
+          "enabled": true,
+          "markets": [
+            "CN"
+          ],
+          "order_no": 19,
+          "default_selected": false,
+          "coverage_ratio": 0.9998
+        },
+        {
+          "feature_id": "feat_industry_019",
+          "key": "ind_code_l2",
+          "description": "因子: ind_code_l2",
+          "formula": "",
+          "source": "feature_snapshots/model_features_*.parquet",
+          "enabled": true,
+          "markets": [
+            "CN"
+          ],
+          "order_no": 20,
+          "default_selected": false,
+          "coverage_ratio": 0.9998
         }
       ]
     },
     {
-      "id": "技术形态",
-      "name": "技术形态",
-      "order": 7,
-      "feature_count": 11,
-      "features": [
-        {
-          "key": "kline_kmid",
-          "name": "Kline Kmid",
-          "description": "核心因子: kline_kmid",
-          "enabled": true,
-          "order_no": 1,
-          "formula": "",
-          "source": "parquet",
-          "default_selected": true
-        },
-        {
-          "key": "kline_klen",
-          "name": "Kline Klen",
-          "description": "核心因子: kline_klen",
-          "enabled": true,
-          "order_no": 2,
-          "formula": "",
-          "source": "parquet",
-          "default_selected": true
-        },
-        {
-          "key": "kline_kup",
-          "name": "Kline Kup",
-          "description": "核心因子: kline_kup",
-          "enabled": true,
-          "order_no": 3,
-          "formula": "",
-          "source": "parquet",
-          "default_selected": true
-        },
-        {
-          "key": "kline_klow",
-          "name": "Kline Klow",
-          "description": "核心因子: kline_klow",
-          "enabled": true,
-          "order_no": 4,
-          "formula": "",
-          "source": "parquet",
-          "default_selected": true
-        },
-        {
-          "key": "kline_ksft",
-          "name": "Kline Ksft",
-          "description": "核心因子: kline_ksft",
-          "enabled": true,
-          "order_no": 5,
-          "formula": "",
-          "source": "parquet",
-          "default_selected": true
-        },
-        {
-          "key": "prel_open0",
-          "name": "Prel Open0",
-          "description": "核心因子: prel_open0",
-          "enabled": true,
-          "order_no": 6,
-          "formula": "",
-          "source": "parquet",
-          "default_selected": false
-        },
-        {
-          "key": "prel_high0",
-          "name": "Prel High0",
-          "description": "核心因子: prel_high0",
-          "enabled": true,
-          "order_no": 7,
-          "formula": "",
-          "source": "parquet",
-          "default_selected": false
-        },
-        {
-          "key": "prel_low0",
-          "name": "Prel Low0",
-          "description": "核心因子: prel_low0",
-          "enabled": true,
-          "order_no": 8,
-          "formula": "",
-          "source": "parquet",
-          "default_selected": false
-        },
-        {
-          "key": "prel_vwap0",
-          "name": "Prel Vwap0",
-          "description": "核心因子: prel_vwap0",
-          "enabled": true,
-          "order_no": 9,
-          "formula": "",
-          "source": "parquet",
-          "default_selected": true
-        },
-        {
-          "key": "tech_bollinger_position",
-          "name": "Tech Bollinger Position",
-          "description": "核心因子: tech_bollinger_position",
-          "enabled": true,
-          "order_no": 10,
-          "formula": "",
-          "source": "parquet",
-          "default_selected": true
-        },
-        {
-          "key": "tech_cci_20",
-          "name": "Tech Cci 20",
-          "description": "核心因子: tech_cci_20",
-          "enabled": true,
-          "order_no": 11,
-          "formula": "",
-          "source": "parquet",
-          "default_selected": true
-        }
-      ]
-    },
-    {
-      "id": "alpha因子",
-      "name": "Alpha因子",
+      "id": "microstructure",
+      "name": "微观结构",
       "order": 8,
-      "feature_count": 9,
+      "feature_count": 20,
       "features": [
         {
-          "key": "alpha_decay_ret_10",
-          "name": "Alpha Decay Ret 10",
-          "description": "核心因子: alpha_decay_ret_10",
+          "feature_id": "feat_microstructure_000",
+          "key": "micro_qsp_equal",
+          "description": "因子: micro_qsp_equal",
+          "formula": "",
+          "source": "feature_snapshots/model_features_*.parquet",
           "enabled": true,
+          "markets": [
+            "CN"
+          ],
           "order_no": 1,
-          "formula": "",
-          "source": "parquet",
-          "default_selected": true
+          "default_selected": false,
+          "coverage_ratio": 0.9951
         },
         {
-          "key": "alpha_corr_cv_20",
-          "name": "Alpha Corr Cv 20",
-          "description": "核心因子: alpha_corr_cv_20",
+          "feature_id": "feat_microstructure_001",
+          "key": "micro_esp_equal",
+          "description": "因子: micro_esp_equal",
+          "formula": "",
+          "source": "feature_snapshots/model_features_*.parquet",
           "enabled": true,
+          "markets": [
+            "CN"
+          ],
           "order_no": 2,
-          "formula": "",
-          "source": "parquet",
-          "default_selected": true
+          "default_selected": false,
+          "coverage_ratio": 0.9951
         },
         {
-          "key": "alpha_tsrank_ret_20",
-          "name": "Alpha Tsrank Ret 20",
-          "description": "核心因子: alpha_tsrank_ret_20",
+          "feature_id": "feat_microstructure_002",
+          "key": "micro_aqsp_equal",
+          "description": "因子: micro_aqsp_equal",
+          "formula": "",
+          "source": "feature_snapshots/model_features_*.parquet",
           "enabled": true,
+          "markets": [
+            "CN"
+          ],
           "order_no": 3,
-          "formula": "",
-          "source": "parquet",
-          "default_selected": true
+          "default_selected": false,
+          "coverage_ratio": 0.9951
         },
         {
-          "key": "alpha_tsrank_volume_20",
-          "name": "Alpha Tsrank Volume 20",
-          "description": "核心因子: alpha_tsrank_volume_20",
+          "feature_id": "feat_microstructure_003",
+          "key": "micro_qsp_time",
+          "description": "因子: micro_qsp_time",
+          "formula": "",
+          "source": "feature_snapshots/model_features_*.parquet",
           "enabled": true,
+          "markets": [
+            "CN"
+          ],
           "order_no": 4,
-          "formula": "",
-          "source": "parquet",
-          "default_selected": false
+          "default_selected": false,
+          "coverage_ratio": 0.9949
         },
         {
-          "key": "alpha_high_20d_ratio",
-          "name": "Alpha High 20D Ratio",
-          "description": "核心因子: alpha_high_20d_ratio",
+          "feature_id": "feat_microstructure_004",
+          "key": "micro_esp_time",
+          "description": "因子: micro_esp_time",
+          "formula": "",
+          "source": "feature_snapshots/model_features_*.parquet",
           "enabled": true,
+          "markets": [
+            "CN"
+          ],
           "order_no": 5,
-          "formula": "",
-          "source": "parquet",
-          "default_selected": true
+          "default_selected": false,
+          "coverage_ratio": 0.9949
         },
         {
-          "key": "alpha_low_20d_ratio",
-          "name": "Alpha Low 20D Ratio",
-          "description": "核心因子: alpha_low_20d_ratio",
+          "feature_id": "feat_microstructure_005",
+          "key": "micro_qsp_volume",
+          "description": "因子: micro_qsp_volume",
+          "formula": "",
+          "source": "feature_snapshots/model_features_*.parquet",
           "enabled": true,
+          "markets": [
+            "CN"
+          ],
           "order_no": 6,
-          "formula": "",
-          "source": "parquet",
-          "default_selected": false
+          "default_selected": false,
+          "coverage_ratio": 0.9951
         },
         {
-          "key": "alpha_close_open_gap",
-          "name": "Alpha Close Open Gap",
-          "description": "核心因子: alpha_close_open_gap",
+          "feature_id": "feat_microstructure_006",
+          "key": "micro_esp_volume",
+          "description": "因子: micro_esp_volume",
+          "formula": "",
+          "source": "feature_snapshots/model_features_*.parquet",
           "enabled": true,
+          "markets": [
+            "CN"
+          ],
           "order_no": 7,
-          "formula": "",
-          "source": "parquet",
-          "default_selected": true
+          "default_selected": false,
+          "coverage_ratio": 0.9951
         },
         {
-          "key": "fund_pe_percentile",
-          "name": "Fund Pe Percentile",
-          "description": "核心因子: fund_pe_percentile",
+          "feature_id": "feat_microstructure_007",
+          "key": "micro_qsp_amount",
+          "description": "因子: micro_qsp_amount",
+          "formula": "",
+          "source": "feature_snapshots/model_features_*.parquet",
           "enabled": true,
+          "markets": [
+            "CN"
+          ],
           "order_no": 8,
-          "formula": "",
-          "source": "parquet",
-          "default_selected": false
+          "default_selected": false,
+          "coverage_ratio": 0.9951
         },
         {
-          "key": "fund_pb_percentile",
-          "name": "Fund Pb Percentile",
-          "description": "核心因子: fund_pb_percentile",
-          "enabled": true,
-          "order_no": 9,
+          "feature_id": "feat_microstructure_008",
+          "key": "micro_esp_amount",
+          "description": "因子: micro_esp_amount",
           "formula": "",
-          "source": "parquet",
-          "default_selected": false
+          "source": "feature_snapshots/model_features_*.parquet",
+          "enabled": true,
+          "markets": [
+            "CN"
+          ],
+          "order_no": 9,
+          "default_selected": false,
+          "coverage_ratio": 0.9951
+        },
+        {
+          "feature_id": "feat_microstructure_009",
+          "key": "micro_effective_spread",
+          "description": "因子: micro_effective_spread",
+          "formula": "",
+          "source": "feature_snapshots/model_features_*.parquet",
+          "enabled": true,
+          "markets": [
+            "CN"
+          ],
+          "order_no": 10,
+          "default_selected": false,
+          "coverage_ratio": 0.9951
+        },
+        {
+          "feature_id": "feat_microstructure_010",
+          "key": "micro_quoted_spread",
+          "description": "因子: micro_quoted_spread",
+          "formula": "",
+          "source": "feature_snapshots/model_features_*.parquet",
+          "enabled": true,
+          "markets": [
+            "CN"
+          ],
+          "order_no": 11,
+          "default_selected": false,
+          "coverage_ratio": 0.9951
+        },
+        {
+          "feature_id": "feat_microstructure_011",
+          "key": "micro_spread_vol_20",
+          "description": "因子: micro_spread_vol_20",
+          "formula": "",
+          "source": "feature_snapshots/model_features_*.parquet",
+          "enabled": true,
+          "markets": [
+            "CN"
+          ],
+          "order_no": 12,
+          "default_selected": false,
+          "coverage_ratio": 0.9572
+        },
+        {
+          "feature_id": "feat_microstructure_012",
+          "key": "micro_imbalance_volume",
+          "description": "因子: micro_imbalance_volume",
+          "formula": "",
+          "source": "feature_snapshots/model_features_*.parquet",
+          "enabled": true,
+          "markets": [
+            "CN"
+          ],
+          "order_no": 13,
+          "default_selected": false,
+          "coverage_ratio": 0.9951
+        },
+        {
+          "feature_id": "feat_microstructure_013",
+          "key": "micro_imbalance_amount",
+          "description": "因子: micro_imbalance_amount",
+          "formula": "",
+          "source": "feature_snapshots/model_features_*.parquet",
+          "enabled": true,
+          "markets": [
+            "CN"
+          ],
+          "order_no": 14,
+          "default_selected": false,
+          "coverage_ratio": 0.9951
+        },
+        {
+          "feature_id": "feat_microstructure_014",
+          "key": "micro_imbalance_count",
+          "description": "因子: micro_imbalance_count",
+          "formula": "",
+          "source": "feature_snapshots/model_features_*.parquet",
+          "enabled": true,
+          "markets": [
+            "CN"
+          ],
+          "order_no": 15,
+          "default_selected": false,
+          "coverage_ratio": 0.9951
+        },
+        {
+          "feature_id": "feat_microstructure_015",
+          "key": "micro_imbalance_large",
+          "description": "因子: micro_imbalance_large",
+          "formula": "",
+          "source": "feature_snapshots/model_features_*.parquet",
+          "enabled": true,
+          "markets": [
+            "CN"
+          ],
+          "order_no": 16,
+          "default_selected": false,
+          "coverage_ratio": 0.8948
+        },
+        {
+          "feature_id": "feat_microstructure_016",
+          "key": "micro_imbalance_medium",
+          "description": "因子: micro_imbalance_medium",
+          "formula": "",
+          "source": "feature_snapshots/model_features_*.parquet",
+          "enabled": true,
+          "markets": [
+            "CN"
+          ],
+          "order_no": 17,
+          "default_selected": false,
+          "coverage_ratio": 0.9906
+        },
+        {
+          "feature_id": "feat_microstructure_017",
+          "key": "micro_imbalance_small",
+          "description": "因子: micro_imbalance_small",
+          "formula": "",
+          "source": "feature_snapshots/model_features_*.parquet",
+          "enabled": true,
+          "markets": [
+            "CN"
+          ],
+          "order_no": 18,
+          "default_selected": false,
+          "coverage_ratio": 0.9916
+        },
+        {
+          "feature_id": "feat_microstructure_018",
+          "key": "micro_jump_flag",
+          "description": "因子: micro_jump_flag",
+          "formula": "",
+          "source": "feature_snapshots/model_features_*.parquet",
+          "enabled": true,
+          "markets": [
+            "CN"
+          ],
+          "order_no": 19,
+          "default_selected": false,
+          "coverage_ratio": 0.9974
+        },
+        {
+          "feature_id": "feat_microstructure_019",
+          "key": "micro_pressure_score",
+          "description": "因子: micro_pressure_score",
+          "formula": "",
+          "source": "feature_snapshots/model_features_*.parquet",
+          "enabled": true,
+          "markets": [
+            "CN"
+          ],
+          "order_no": 20,
+          "default_selected": false,
+          "coverage_ratio": 0.9952
         }
       ]
     },
     {
-      "id": "趋势质量",
-      "name": "趋势质量",
+      "id": "gtja",
+      "name": "GTJA Alpha191 (价量因子)",
       "order": 9,
-      "feature_count": 5,
+      "feature_count": 16,
       "features": [
         {
-          "key": "trend_r2_20",
-          "name": "Trend R2 20",
-          "description": "核心因子: trend_r2_20",
+          "feature_id": "feat_gtja_000",
+          "key": "gtja_alpha_016",
+          "description": "GTJA Alpha16: -TSMAX(RANK(CORR(rank(vol),rank(vwap),5)),5)",
+          "formula": "GTJA Alpha16: -TSMAX(RANK(CORR(rank(vol),rank(vwap),5)),5)",
+          "source": "GTJA Alpha191 (国泰君安) — feature_snapshots/model_features_*.parquet",
           "enabled": true,
+          "markets": [
+            "CN"
+          ],
           "order_no": 1,
-          "formula": "",
-          "source": "parquet",
-          "default_selected": true
+          "default_selected": true,
+          "coverage_ratio": 0.95,
+          "tag": "正向"
         },
         {
-          "key": "trend_slope_20",
-          "name": "Trend Slope 20",
-          "description": "核心因子: trend_slope_20",
+          "feature_id": "feat_gtja_001",
+          "key": "gtja_alpha_032",
+          "description": "GTJA Alpha32: -SUM(RANK(CORR(rank(high),rank(vol),3)),3)",
+          "formula": "GTJA Alpha32: -SUM(RANK(CORR(rank(high),rank(vol),3)),3)",
+          "source": "GTJA Alpha191 (国泰君安) — feature_snapshots/model_features_*.parquet",
           "enabled": true,
+          "markets": [
+            "CN"
+          ],
           "order_no": 2,
-          "formula": "",
-          "source": "parquet",
-          "default_selected": true
+          "default_selected": false,
+          "coverage_ratio": 0.95,
+          "tag": "正向"
         },
         {
-          "key": "consecutive_updown_5",
-          "name": "Consecutive Updown 5",
-          "description": "核心因子: consecutive_updown_5",
+          "feature_id": "feat_gtja_002",
+          "key": "gtja_alpha_062",
+          "description": "GTJA Alpha62: -CORR(high, rank(vol), 5)",
+          "formula": "GTJA Alpha62: -CORR(high, rank(vol), 5)",
+          "source": "GTJA Alpha191 (国泰君安) — feature_snapshots/model_features_*.parquet",
           "enabled": true,
+          "markets": [
+            "CN"
+          ],
           "order_no": 3,
-          "formula": "",
-          "source": "parquet",
-          "default_selected": false
+          "default_selected": true,
+          "coverage_ratio": 0.95,
+          "tag": "正向"
         },
         {
-          "key": "pv_corr_20",
-          "name": "Pv Corr 20",
-          "description": "核心因子: pv_corr_20",
+          "feature_id": "feat_gtja_003",
+          "key": "gtja_alpha_083",
+          "description": "GTJA Alpha83: -RANK(COV(rank(high), rank(vol), 5))",
+          "formula": "GTJA Alpha83: -RANK(COV(rank(high), rank(vol), 5))",
+          "source": "GTJA Alpha191 (国泰君安) — feature_snapshots/model_features_*.parquet",
           "enabled": true,
+          "markets": [
+            "CN"
+          ],
           "order_no": 4,
-          "formula": "",
-          "source": "parquet",
-          "default_selected": true
+          "default_selected": true,
+          "coverage_ratio": 0.95,
+          "tag": "正向 - 最强"
         },
         {
-          "key": "pv_divergence_20",
-          "name": "Pv Divergence 20",
-          "description": "核心因子: pv_divergence_20",
+          "feature_id": "feat_gtja_004",
+          "key": "gtja_alpha_090",
+          "description": "GTJA Alpha90: -RANK(CORR(rank(vwap), rank(vol), 5))",
+          "formula": "GTJA Alpha90: -RANK(CORR(rank(vwap), rank(vol), 5))",
+          "source": "GTJA Alpha191 (国泰君安) — feature_snapshots/model_features_*.parquet",
           "enabled": true,
+          "markets": [
+            "CN"
+          ],
           "order_no": 5,
-          "formula": "",
-          "source": "parquet",
-          "default_selected": false
+          "default_selected": false,
+          "coverage_ratio": 0.95,
+          "tag": "正向"
+        },
+        {
+          "feature_id": "feat_gtja_005",
+          "key": "gtja_alpha_099",
+          "description": "GTJA Alpha99: -RANK(COV(rank(close), rank(vol), 5))",
+          "formula": "GTJA Alpha99: -RANK(COV(rank(close), rank(vol), 5))",
+          "source": "GTJA Alpha191 (国泰君安) — feature_snapshots/model_features_*.parquet",
+          "enabled": true,
+          "markets": [
+            "CN"
+          ],
+          "order_no": 6,
+          "default_selected": true,
+          "coverage_ratio": 0.95,
+          "tag": "正向"
+        },
+        {
+          "feature_id": "feat_gtja_006",
+          "key": "gtja_alpha_036",
+          "description": "GTJA Alpha36: RANK(SUM(CORR(rank(vol),rank(vwap),6),2))",
+          "formula": "GTJA Alpha36: RANK(SUM(CORR(rank(vol),rank(vwap),6),2))",
+          "source": "GTJA Alpha191 (国泰君安) — feature_snapshots/model_features_*.parquet",
+          "enabled": true,
+          "markets": [
+            "CN"
+          ],
+          "order_no": 7,
+          "default_selected": false,
+          "coverage_ratio": 0.95,
+          "tag": "反向"
+        },
+        {
+          "feature_id": "feat_gtja_007",
+          "key": "gtja_alpha_070",
+          "description": "GTJA Alpha70: STD(AMOUNT, 6)",
+          "formula": "GTJA Alpha70: STD(AMOUNT, 6)",
+          "source": "GTJA Alpha191 (国泰君安) — feature_snapshots/model_features_*.parquet",
+          "enabled": true,
+          "markets": [
+            "CN"
+          ],
+          "order_no": 8,
+          "default_selected": true,
+          "coverage_ratio": 0.95,
+          "tag": "反向/分行情"
+        },
+        {
+          "feature_id": "feat_gtja_008",
+          "key": "gtja_alpha_074",
+          "description": "GTJA Alpha74: RANK(CORR(SUM(price,20),SUM(MA(vol,40),20),7))+...",
+          "formula": "GTJA Alpha74: RANK(CORR(SUM(price,20),SUM(MA(vol,40),20),7))+...",
+          "source": "GTJA Alpha191 (国泰君安) — feature_snapshots/model_features_*.parquet",
+          "enabled": true,
+          "markets": [
+            "CN"
+          ],
+          "order_no": 9,
+          "default_selected": false,
+          "coverage_ratio": 0.95,
+          "tag": "反向"
+        },
+        {
+          "feature_id": "feat_gtja_009",
+          "key": "gtja_alpha_150",
+          "description": "GTJA Alpha150: (close+high+low)/3 * volume",
+          "formula": "GTJA Alpha150: (close+high+low)/3 * volume",
+          "source": "GTJA Alpha191 (国泰君安) — feature_snapshots/model_features_*.parquet",
+          "enabled": true,
+          "markets": [
+            "CN"
+          ],
+          "order_no": 10,
+          "default_selected": true,
+          "coverage_ratio": 0.95,
+          "tag": "反向/分行情"
+        },
+        {
+          "feature_id": "feat_gtja_010",
+          "key": "gtja_alpha_176",
+          "description": "GTJA Alpha176: CORR(rank(KDJ_RSV_12), rank(vol), 6)",
+          "formula": "GTJA Alpha176: CORR(rank(KDJ_RSV_12), rank(vol), 6)",
+          "source": "GTJA Alpha191 (国泰君安) — feature_snapshots/model_features_*.parquet",
+          "enabled": true,
+          "markets": [
+            "CN"
+          ],
+          "order_no": 11,
+          "default_selected": true,
+          "coverage_ratio": 0.95,
+          "tag": "反向"
+        },
+        {
+          "feature_id": "feat_gtja_011",
+          "key": "gtja_alpha_179",
+          "description": "GTJA Alpha179: RANK(CORR(vwap,vol,4))*RANK(CORR(rank(low),rank(MA(vol,50)),12))",
+          "formula": "GTJA Alpha179: RANK(CORR(vwap,vol,4))*RANK(CORR(rank(low),rank(MA(vol,50)),12))",
+          "source": "GTJA Alpha191 (国泰君安) — feature_snapshots/model_features_*.parquet",
+          "enabled": true,
+          "markets": [
+            "CN"
+          ],
+          "order_no": 12,
+          "default_selected": true,
+          "coverage_ratio": 0.95,
+          "tag": "反向"
+        },
+        {
+          "feature_id": "feat_gtja_012",
+          "key": "gtja_alpha_042",
+          "description": "GTJA Alpha42: -RANK(STD(high,10)) * CORR(high,vol,10)",
+          "formula": "GTJA Alpha42: -RANK(STD(high,10)) * CORR(high,vol,10)",
+          "source": "GTJA Alpha191 (国泰君安) — feature_snapshots/model_features_*.parquet",
+          "enabled": true,
+          "markets": [
+            "CN"
+          ],
+          "order_no": 13,
+          "default_selected": true,
+          "coverage_ratio": 0.95,
+          "tag": "分行情（牛市增强）"
+        },
+        {
+          "feature_id": "feat_gtja_013",
+          "key": "gtja_alpha_095",
+          "description": "GTJA Alpha95: STD(AMOUNT, 20)",
+          "formula": "GTJA Alpha95: STD(AMOUNT, 20)",
+          "source": "GTJA Alpha191 (国泰君安) — feature_snapshots/model_features_*.parquet",
+          "enabled": true,
+          "markets": [
+            "CN"
+          ],
+          "order_no": 14,
+          "default_selected": true,
+          "coverage_ratio": 0.95,
+          "tag": "分行情"
+        },
+        {
+          "feature_id": "feat_gtja_014",
+          "key": "gtja_alpha_158",
+          "description": "GTJA Alpha158: (high-low)/close (基于 EMA(close,15) 推导)",
+          "formula": "GTJA Alpha158: (high-low)/close (基于 EMA(close,15) 推导)",
+          "source": "GTJA Alpha191 (国泰君安) — feature_snapshots/model_features_*.parquet",
+          "enabled": true,
+          "markets": [
+            "CN"
+          ],
+          "order_no": 15,
+          "default_selected": true,
+          "coverage_ratio": 0.95,
+          "tag": "分行情"
+        },
+        {
+          "feature_id": "feat_gtja_015",
+          "key": "gtja_alpha_159",
+          "description": "GTJA Alpha159: 多周期 RSV 加权（牛熊反转因子）",
+          "formula": "GTJA Alpha159: 多周期 RSV 加权（牛熊反转因子）",
+          "source": "GTJA Alpha191 (国泰君安) — feature_snapshots/model_features_*.parquet",
+          "enabled": true,
+          "markets": [
+            "CN"
+          ],
+          "order_no": 16,
+          "default_selected": true,
+          "coverage_ratio": 0.95,
+          "tag": "分行情（牛熊 flip）"
         }
       ]
     }
   ],
-  "source": "file",
+  "source": "/app/config/features/model_training_feature_catalog_v1.json",
   "metadata": {
-    "source": "core_factors_selection",
-    "created_at": "2026-06-23",
-    "total_original": 197,
-    "total_core": 78,
-    "reduction": "60.4%",
-    "default_selected_count": 65,
-    "default_selected_note": "default_selected=true 标记的特征会被前端默认勾选；该字段是 truth source，前端不再维护硬编码的 PRESET 列表。",
-    "default_selected_set_version": "v1.1"
+    "default_selected_count": 47,
+    "default_selected_note": "前端默认勾选受 default_selected=true 控制",
+    "default_selected_set_version": "v1.3-shap-top35",
+    "parquet_schema": "qm_feature_set_v1_20260402",
+    "rebuild_date": "2026-06-25",
+    "rebuild_reason": "替换为新版 parquet (152 列统一 schema，2016-2026 schema 不漂移)",
+    "removed_keys": [
+      "alpha_close_open_gap",
+      "alpha_corr_cv_20",
+      "alpha_decay_ret_10",
+      "alpha_high_20d_ratio",
+      "alpha_low_20d_ratio",
+      "alpha_tsrank_ret_20",
+      "alpha_tsrank_volume_20",
+      "amount",
+      "consecutive_updown_5",
+      "fund_pb_percentile",
+      "fund_pe_percentile",
+      "kline_klen",
+      "kline_klow",
+      "kline_kmid",
+      "kline_ksft",
+      "kline_kup",
+      "mom_sharpe_20",
+      "prel_high0",
+      "prel_low0",
+      "prel_open0",
+      "prel_vwap0",
+      "pv_corr_20",
+      "pv_divergence_20",
+      "tech_bollinger_position",
+      "tech_cci_20",
+      "trend_r2_20",
+      "trend_slope_20"
+    ],
+    "added_keys": [
+      "factor",
+      "flow_aqsp",
+      "flow_esp",
+      "flow_esp_time",
+      "flow_large_net_order",
+      "flow_large_net_ratio",
+      "flow_large_order_ratio",
+      "flow_medium_net_amount",
+      "flow_medium_net_ratio",
+      "flow_net_order_count",
+      "flow_net_order_ratio",
+      "flow_qsp",
+      "flow_qsp_time",
+      "flow_small_net_amount",
+      "flow_small_net_ratio",
+      "flow_vpin_delta_5",
+      "ind_amount_20",
+      "ind_code_l1",
+      "ind_code_l2",
+      "ind_dispersion_20",
+      "ind_down_breadth_20",
+      "ind_relative_flow_20",
+      "ind_relative_volatility_20",
+      "ind_relative_volume_20",
+      "ind_ret_10d",
+      "ind_ret_5d",
+      "ind_size_rank",
+      "ind_strength_60",
+      "ind_turnover_20",
+      "ind_up_breadth_20",
+      "ind_value_rank",
+      "ind_vol_20",
+      "liq_accdist_20",
+      "liq_amihud_60",
+      "liq_amount_ma_10",
+      "liq_amount_ma_20",
+      "liq_amount_ma_5",
+      "liq_amount_ratio_20",
+      "liq_amount_ratio_5",
+      "liq_avg_trade_size",
+      "liq_obv_20",
+      "liq_obv_60",
+      "liq_trade_count",
+      "liq_turnover_tl",
+      "liq_volume_ma_10",
+      "liq_volume_ma_20",
+      "liq_volume_ma_5",
+      "liq_volume_ratio_20",
+      "micro_aqsp_equal",
+      "micro_effective_spread",
+      "micro_esp_amount",
+      "micro_esp_equal",
+      "micro_esp_time",
+      "micro_esp_volume",
+      "micro_imbalance_amount",
+      "micro_imbalance_count",
+      "micro_imbalance_large",
+      "micro_imbalance_medium",
+      "micro_imbalance_small",
+      "micro_imbalance_volume",
+      "micro_jump_flag",
+      "micro_pressure_score",
+      "micro_qsp_amount",
+      "micro_qsp_equal",
+      "micro_qsp_time",
+      "micro_qsp_volume",
+      "micro_quoted_spread",
+      "micro_spread_vol_20",
+      "mom_ema_gap_12",
+      "mom_ema_gap_26",
+      "mom_kdj_d",
+      "mom_kdj_j",
+      "mom_ma_gap_10",
+      "mom_ma_gap_120",
+      "mom_macd_dea",
+      "mom_macd_dif",
+      "mom_ret_10d",
+      "mom_ret_120d",
+      "mom_ret_3d",
+      "mom_roc_12",
+      "mom_rsi_6",
+      "style_beta_120",
+      "style_hml",
+      "style_idio_vol_60",
+      "style_mkt_premium",
+      "style_size_percentile",
+      "style_smb",
+      "style_valuation_composite",
+      "style_value_percentile",
+      "vol_atr_20",
+      "vol_gk_10",
+      "vol_gk_20",
+      "vol_jump_rjv_ratio",
+      "vol_jump_sjv_ratio",
+      "vol_parkinson_10",
+      "vol_realized_rkurt",
+      "vol_rs_10",
+      "vol_rs_20",
+      "vol_std_10",
+      "vol_std_5",
+      "vol_true_range"
+    ],
+    "default_selected_basis": "基于 train_baseline_56_v1 跑出的 SHAP 实证结果，选 top-35（覆盖 96% 累积重要性）。数据：data/training_jobs/train_baseline_56_v1/shap_summary.csv",
+    "gtja_added": "2026-06-25",
+    "gtja_count": 16,
+    "gtja_pruned_zero_shap": [
+      "gtja_alpha_032",
+      "gtja_alpha_036",
+      "gtja_alpha_074",
+      "gtja_alpha_090"
+    ]
   }
 }
