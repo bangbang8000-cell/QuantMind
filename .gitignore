@@ -185,3 +185,6 @@ graphify-out/
 .graphifyignore
 .graphifyignore_backup
 .graphifyignore_codeonly
+
+# GTJA 原始源码（外部参考，仅作公式对照，不入仓）
+scripts/data_repair/_gtja_191_source.py
