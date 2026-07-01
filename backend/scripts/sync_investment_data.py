@@ -182,15 +182,26 @@ def _read_qlib_calendar() -> list[date]:
 
 
 def _read_qlib_instruments() -> list[str]:
-    """读取所有股票代码"""
+    """读取所有股票代码，过滤掉指数（qlib instruments 把指数混入了个股列表）。
+
+    指数代码：000300/000852/000905/000906（沪）/ 399300（深）/ 880xxx（申万行业）。
+    这些若写进 stock_daily_latest 会污染横截面排序（return_5d 等极端值）。
+    """
     inst_path = QLIB_DATA_DIR / "instruments" / "all.txt"
     if not inst_path.exists():
         return []
+    # 指数/行业代码前缀（小写比较）
+    index_prefixes = ("sh000300", "sh000852", "sh000905", "sh000906",
+                      "sz399300", "sz000852", "sz000905", "sz000906",
+                      "sh880", "sz880")  # 申万行业指数
     symbols = set()
     for line in inst_path.read_text().splitlines():
         parts = line.strip().split("\t")
         if parts:
-            symbols.add(parts[0].lower())
+            sym = parts[0].lower()
+            if sym in index_prefixes:
+                continue
+            symbols.add(sym)
     return sorted(symbols)
 
 
