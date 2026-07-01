@@ -23,10 +23,10 @@
 |---|------|------|------|
 | **S-1** | 2016-2025 vs 2026 是两套不兼容的数据 | SH600519 2025-12-31 close=11948 / 600519.SH 2026-01-05 close=339（ratio 0.028）| 跨年特征全部失真 |
 | **S-2** | `volume_ratio_5/_20` 单位漂移 100× | 2016-2025 均值 0.01（被错误 clip）/ 2026 均值 1.02 | 量价类模型/评分卡跨年直接失效 |
-| **S-3** | 2026-06-22~24 数据严重不完整 | 06-22 茅台 volume=58k（应 ~3M）；06-23/24 只抓深市 | 风险评分对最近 3 天误判 |
-| **S-3b** | **PG 2026-06-23~06-25 close 是非复权交易价（adj_factor=1）**，跟 5.6~6.22 的后复权价（adj_factor≈0.237）不连续 | 茅台 06-22 close=294 / 06-23 close=1222 | 最近 3 天所有特征/评分全错；新发现于 plan C 清洗后 |
-| **S-4** | 4 个指数被混入个股表 | 000300.SH / 000852.SH / 000905.SH / 000906.SH / 399300.SZ；后者 return_5d=1039 | 横截面排序污染 |
-| **S-5** | **2026 段 `prefix`/`suffix` 两个 symbol 格式同存** 且 5.6 起 prefix 行被错算（1011/5155 票 close 与 suffix 完全不同）| 万科 5.6 prefix close=8.31 / suffix close=4.01；平安银行 prefix 3.86 / suffix 11.0 | 训练数据 51% 重复 + 20% 错值 |
+| **S-3** | 2026-06-22~24 数据严重不完整 | 06-22 茅台 volume=58k（应 ~3M）；06-23/24 只抓深市 | ✅ **已修**（qlib 覆盖到 6.26）|
+| **S-3b** | **PG 2026-06-23~06-25 close 是非复权交易价（adj_factor=1）**，跟 5.6~6.22 的后复权价（adj_factor≈0.237）不连续 | 茅台 06-22 close=294 / 06-23 close=1222 | ✅ **已修**（qlib 后复权覆盖）|
+| **S-4** | 4 个指数被混入个股表 | 000300.SH / 000852.SH / 000905.SH / 000906.SH / 399300.SZ；后者 return_5d=1039 | ✅ **已修** |
+| **S-5** | **2026 段 `prefix`/`suffix` 两个 symbol 格式同存** 且 5.6 起 prefix 行被错算（1011/5155 票 close 与 suffix 完全不同）| 万科 5.6 prefix close=8.31 / suffix close=4.01；平安银行 prefix 3.86 / suffix 11.0 | ✅ **已修**（删 suffix + qlib 覆盖 prefix）|
 
 ### 🟧 H 级（高，影响显著）
 
@@ -114,27 +114,41 @@ GitHub release (qlib_bin.tar.gz)
 - 5.6 起用新数据源（真复权价），4.30 前保留老标度
 - 量级断层依然存在（设计如此 — 不影响训练，相对模式有效）
 
-⚠️ **未解决（待 Phase 1 后续处理）**：
+✅ **方案 D 已执行（2026-07-01，`backend/scripts/sync_investment_data.py` 修复 + qlib 全量覆盖）**
 
-- **PG 2026-06-23~06-25 三天数据是第三种体系**：close=原始交易价（茅台 1222），adj_factor=1。
-  跟 5.6~6.22 的新标度（茅台 ~294，adj_factor=0.237）不连续。
-  根因：`daily_data_sync` 最近 3 天用了不同数据源（疑非复权接口）。
-  影响：风险评分对最近 3 天数据完全误判。
-  修法：要么重新跑 5.6 之后那套源补齐 6.23-25，要么把这 3 天标记 incomplete 排除。
-- 2016-2025 段的 adj_factor 仍硬写 1（H-2）、volume_ratio 单位漂移（S-2）、跨年价格量级断裂（S-1）仍在。
-  Plan C 没动 2016-2025 段。
+- 触发：用户要求更新 A 股数据。下载 chenditc/investment_data 最新 release（2026-06-28，本地原到 5.26），qlib 数据更新到 2026-06-26
+- 修了 `sync_investment_data.py` 三个 bug：
+  1. `_read_qlib_ohlcv_for_symbol` 列映射错位（reset_index 后顺序是 [instrument, datetime] 而非 [datetime, symbol]，导致 symbol 被当 datetime 解析，0 行写入）
+  2. `_upsert_ohlcv_to_pg` 临时表 `ON COMMIT DROP` 没包显式事务，asyncpg 每个 execute 自动提交后临时表丢失 → 用 `async with conn.transaction()` 包裹
+  3. 加 `--db-start/--db-end` 参数支持限定日期范围（避免误覆盖 2016-2025 老标度段）
+- 用户决策升级：从"只补 6.23 缺口"改为"PG 2026 全段用 qlib 后复权覆盖 + 删所有 suffix"
+- 执行：
+  - PG `stock_daily_latest` 2026 段（1.5~6.26）用 qlib 后复权全量 upsert（627,264 行）
+  - 删 PG 2026 全段 suffix 行 627,122 行（含 6.27~30 qlib 还没发布的坏非复权数据）
+  - Parquet `model_features_2026.parquet` 重算 2026 全年（since=2026-01-05），627,417 行
+- ✅ **结果**：
+  - PG 2026 全段后复权统一（茅台 1.5=338 → 6.26=284，adj_factor≈0.237 连续），0 suffix 残留，adj1 仅剩 145（qlib 无覆盖的新股）
+  - Parquet 2026 全段后复权，4.30/5.6 量级断层消失（茅台 329→326 连续），0 suffix
+  - PG 与 parquet 2026 段口径一致
+  - S-3b（6.23~25 非复权）、S-5（双格式+prefix 错算）、5/6月 adj1 前复权污染 全部修复
+
+⚠️ **仍未解决（Phase 1 后续）**：
+
+- **PG/parquet 2016-2025 段仍是老标度**（茅台 2025-12-31 close=11948，adj_factor=1）。PG 2025→2026 跨年断层仍在，会污染跨年动量特征（mom_ret_60d 等读 lookback 窗口跨年时失真）。这是 S-1/H-2，需用 qlib 全量覆盖 2016-2025（大工程，会 invalidate 所有 pred.pkl）。
+- volume_ratio 单位漂移（S-2）、return_* vs pct_change 单位（M-1）仍在。
 
 剩余任务（按优先级，未完成）:
 
 | 任务 | 工作量 | 优先级 | 状态 |
 |------|--------|--------|------|
-| 1.1 统一 2016-2025 vs 2026 的 symbol 格式（全 prefix 或全 suffix，选 prefix） | 1 hr | S-1 | ❌ 2026 已统一，2016-2025 段未动 |
-| 1.2 重新计算 2016-2025 段的 `adj_factor`（用 parquet `factor` 字段，而不是硬写 1） | 2 hr | S-1 / H-2 | ❌ 未做 |
-| 1.3 移除 PG 和 parquet 里的指数行（000300.SH 等 5 个） | 30 min | S-4 | ✅ **完成** |
-| 1.4 重新计算 2016-2025 段 `volume_ratio_5/_20`（去除 clip，改用 `/` 而非 `-1`）| 1 hr | S-2 | ❌ 未做 |
-| 1.5 dedup 2026 parquet 内部重复 key | 30 min | H-3 | ✅ **完成（保留 suffix → 重命名为 prefix）** |
-| 1.6 修 6.23~24 沪市缺失 + **修 6.23~25 第三套标度问题** | 2-3 hr | S-3 | ❌ 新发现，待处理 |
-| 1.7 单位规范化：把 `return_*` ×100 改成百分数与 `pct_change` 一致 | 2 hr | M-1 | ❌ 未做 |
+| 1.1 统一 2016-2025 vs 2026 的 symbol 格式 | 1 hr | S-1 | ✅ 2026 段完成；2016-2025 段仍 prefix 单一格式，无需动 |
+| 1.2 重新计算 2016-2025 段的 `adj_factor` + close 用 qlib 后复权覆盖 | 1-2 天 | S-1 / H-2 | ❌ 未做（需全量覆盖，会 invalidate pred.pkl）|
+| 1.3 移除 PG 和 parquet 里的指数行 | 30 min | S-4 | ✅ **完成** |
+| 1.4 重新计算 2016-2025 段 `volume_ratio_5/_20` | 1 hr | S-2 | ❌ 未做 |
+| 1.5 dedup 2026 parquet 内部重复 key | 30 min | H-3 | ✅ **完成** |
+| 1.6 修 6.23~25 标度问题 + 补最新缺口 | 2-3 hr | S-3 | ✅ **完成（qlib 覆盖到 6.26）** |
+| 1.7 单位规范化：`return_*` ×100 与 `pct_change` 一致 | 2 hr | M-1 | ❌ 未做 |
+| 1.8 跑数据质量验证脚本 | 1 hr | — | ❌ 未做 |
 | 1.8 跑数据质量验证脚本，确认所有 S/H 问题消除 | 1 hr | — | ❌ 未做 |
 
 **产出**：

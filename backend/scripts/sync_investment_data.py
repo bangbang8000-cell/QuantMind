@@ -211,8 +211,11 @@ def _init_qlib_once() -> None:
         _log(f"Qlib init warning: {e}")
 
 
-def _read_qlib_ohlcv_for_symbol(symbol: str) -> pd.DataFrame | None:
-    """用 Qlib API 读取单只股票的 OHLCV 数据"""
+def _read_qlib_ohlcv_for_symbol(symbol: str, start_time: str | None = None, end_time: str | None = None) -> pd.DataFrame | None:
+    """用 Qlib API 读取单只股票的 OHLCV 数据。
+
+    start_time/end_time: 可选，只读该日期范围（含）的数据，用于增量补缺口或限定范围。
+    """
     _init_qlib_once()
     try:
         from qlib.data import D
@@ -221,12 +224,15 @@ def _read_qlib_ohlcv_for_symbol(symbol: str) -> pd.DataFrame | None:
         df = D.features(
             [symbol],
             ["$open", "$high", "$low", "$close", "$volume", "$factor"],
+            start_time=start_time,
+            end_time=end_time,
         )
         if df is None or df.empty:
             return None
 
         df = df.reset_index()
-        df.columns = ["datetime", "symbol", "open", "high", "low", "close", "volume", "factor"]
+        # reset_index 后列顺序是 [instrument, datetime, $open, ...]（qlib MultiIndex 顺序）
+        df.columns = ["symbol", "datetime", "open", "high", "low", "close", "volume", "factor"]
         df["trade_date"] = pd.to_datetime(df["datetime"]).dt.date
         df["symbol"] = df["symbol"].str.upper()
 
@@ -274,29 +280,31 @@ async def _upsert_ohlcv_to_pg(dfs: list[pd.DataFrame], batch_size: int = 500) ->
 
         _log(f"Upserting {len(records):,} records to stock_daily_latest...")
 
-        # 创建临时表
-        await conn.execute(f"""
-            CREATE TEMP TABLE tmp_ohlcv_import ON COMMIT DROP
-            AS SELECT * FROM stock_daily_latest WITH NO DATA
-        """)
-        await conn.copy_records_to_table("tmp_ohlcv_import", records=records, columns=use_cols)
+        # 临时表 ON COMMIT DROP 需要显式事务包裹，否则每个 execute 自动提交后临时表即丢失
+        async with conn.transaction():
+            # 创建临时表
+            await conn.execute(f"""
+                CREATE TEMP TABLE tmp_ohlcv_import ON COMMIT DROP
+                AS SELECT * FROM stock_daily_latest WITH NO DATA
+            """)
+            await conn.copy_records_to_table("tmp_ohlcv_import", records=records, columns=use_cols)
 
-        # UPSERT
-        non_pk = [c for c in use_cols if c not in ("trade_date", "symbol")]
-        if non_pk:
-            update_set = ", ".join([f"{c}=EXCLUDED.{c}" for c in non_pk])
-            sql = (
-                f"INSERT INTO stock_daily_latest ({', '.join(use_cols)}) "
-                f"SELECT {', '.join(use_cols)} FROM tmp_ohlcv_import "
-                f"ON CONFLICT (trade_date, symbol) DO UPDATE SET {update_set}"
-            )
-        else:
-            sql = (
-                f"INSERT INTO stock_daily_latest ({', '.join(use_cols)}) "
-                f"SELECT {', '.join(use_cols)} FROM tmp_ohlcv_import "
-                "ON CONFLICT (trade_date, symbol) DO NOTHING"
-            )
-        await conn.execute(sql)
+            # UPSERT
+            non_pk = [c for c in use_cols if c not in ("trade_date", "symbol")]
+            if non_pk:
+                update_set = ", ".join([f"{c}=EXCLUDED.{c}" for c in non_pk])
+                sql = (
+                    f"INSERT INTO stock_daily_latest ({', '.join(use_cols)}) "
+                    f"SELECT {', '.join(use_cols)} FROM tmp_ohlcv_import "
+                    f"ON CONFLICT (trade_date, symbol) DO UPDATE SET {update_set}"
+                )
+            else:
+                sql = (
+                    f"INSERT INTO stock_daily_latest ({', '.join(use_cols)}) "
+                    f"SELECT {', '.join(use_cols)} FROM tmp_ohlcv_import "
+                    "ON CONFLICT (trade_date, symbol) DO NOTHING"
+                )
+            await conn.execute(sql)
 
         _log(f"Upserted {len(records):,} records successfully")
         return len(records)
@@ -356,6 +364,8 @@ def main() -> int:
     parser.add_argument("--skip-parquet", action="store_true", help="跳过 parquet 快照生成")
     parser.add_argument("--symbols", default="", help="指定股票代码列表（逗号分隔，默认为全部）")
     parser.add_argument("--years", default="", help="指定年份范围（逗号分隔，用于 parquet 生成）")
+    parser.add_argument("--db-start", default="", help="只写该日期（含）之后的 PG 数据，用于增量补缺口（如 2026-06-23）")
+    parser.add_argument("--db-end", default="", help="只写该日期（含）之前的 PG 数据，用于限定范围（如 2026-06-26）")
     args = parser.parse_args()
 
     _log("=" * 60)
@@ -403,7 +413,7 @@ def main() -> int:
         inserted = 0
 
         for i, sym in enumerate(symbols):
-            df = _read_qlib_ohlcv_for_symbol(sym)
+            df = _read_qlib_ohlcv_for_symbol(sym, start_time=args.db_start or None, end_time=args.db_end or None)
             if df is not None and not df.empty:
                 batch_dfs.append(df)
 
