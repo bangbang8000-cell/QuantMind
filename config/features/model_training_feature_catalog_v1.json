@@ -1314,7 +1314,7 @@
             "CRYPTO"
           ],
           "order_no": 6,
-          "default_selected": true,
+          "default_selected": false,
           "coverage_ratio": 0.9891
         },
         {
@@ -1342,7 +1342,7 @@
             "CN"
           ],
           "order_no": 17,
-          "default_selected": true,
+          "default_selected": false,
           "coverage_ratio": 0.9951
         },
         {
@@ -1463,7 +1463,7 @@
             "CN"
           ],
           "order_no": 7,
-          "default_selected": true,
+          "default_selected": false,
           "coverage_ratio": 0.9791
         },
         {
@@ -1477,7 +1477,7 @@
             "CN"
           ],
           "order_no": 8,
-          "default_selected": true,
+          "default_selected": false,
           "coverage_ratio": 0.6888
         },
         {
@@ -1634,7 +1634,7 @@
             "CN"
           ],
           "order_no": 15,
-          "default_selected": true,
+          "default_selected": false,
           "coverage_ratio": 1.0
         },
         {
@@ -1670,7 +1670,7 @@
             "CN"
           ],
           "order_no": 1,
-          "default_selected": true,
+          "default_selected": false,
           "coverage_ratio": 0.9998
         },
         {
@@ -1712,7 +1712,7 @@
             "CN"
           ],
           "order_no": 2,
-          "default_selected": true,
+          "default_selected": false,
           "coverage_ratio": 0.9998
         },
         {
@@ -1768,7 +1768,7 @@
             "CN"
           ],
           "order_no": 3,
-          "default_selected": true,
+          "default_selected": false,
           "coverage_ratio": 0.9986
         },
         {
@@ -1782,7 +1782,7 @@
             "CN"
           ],
           "order_no": 9,
-          "default_selected": true,
+          "default_selected": false,
           "coverage_ratio": 0.9957
         },
         {
@@ -1838,7 +1838,7 @@
             "CN"
           ],
           "order_no": 13,
-          "default_selected": true,
+          "default_selected": false,
           "coverage_ratio": 0.9987
         },
         {
@@ -1880,7 +1880,7 @@
             "CN"
           ],
           "order_no": 4,
-          "default_selected": true,
+          "default_selected": false,
           "coverage_ratio": 0.9998
         },
         {
