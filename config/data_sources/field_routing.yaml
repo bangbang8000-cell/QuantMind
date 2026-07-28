@@ -21,19 +21,19 @@ markets:
     daily_kline:
       tier: T1
       primary: baostock
-      fallbacks: [efinance, qstock, akshare, investment_data, tdx_api, mootdx, openbb, yahoo_finance, eltdx, simonlin_a_stock, quantdb]
+      fallbacks: [efinance, qstock, akshare, investment_data, tdx_api, mootdx, openbb, yahoo_finance, eltdx, simonlin_a_stock, quantdb, freestockdb]
       consensus: true
       cleanup: true
     adj_factor:
       tier: T1
       primary: baostock
-      fallbacks: [efinance, akshare, yahoo_finance, eltdx, investment_data]
+      fallbacks: [efinance, akshare, yahoo_finance, eltdx, investment_data, freestockdb]
       consensus: true
       cleanup: true
     minute_kline:
       tier: T2
       primary: tdx_api
-      fallbacks: [mootdx, efinance, qstock, eltdx]
+      fallbacks: [mootdx, efinance, qstock, eltdx, freestockdb]
       consensus: false
       cleanup: true
     realtime_quote:
@@ -134,8 +134,8 @@ markets:
       cleanup: false
     sector:
       tier: T1
-      primary: akshare
-      fallbacks: [efinance, qstock, openbb, eltdx, baostock]
+      primary: freestockdb
+      fallbacks: [akshare, efinance, qstock, openbb, eltdx, baostock]
       consensus: false
       cleanup: false
     growth:

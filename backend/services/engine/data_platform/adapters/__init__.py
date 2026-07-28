@@ -47,6 +47,8 @@ def _collect() -> None:
         "backend.services.engine.data_platform.adapters.easyquotation_adapter",
         # 第五批：QuantDB SDK（付费高质量数据源）
         "backend.services.engine.data_platform.adapters.quantdb_adapter",
+        # 第六批：free-stockdb（开源本地量化数据引擎）
+        "backend.services.engine.data_platform.adapters.freestockdb_adapter",
     ):
         try:
             import importlib
