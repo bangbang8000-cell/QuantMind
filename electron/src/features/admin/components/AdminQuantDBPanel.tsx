@@ -255,10 +255,10 @@ export const AdminQuantDBPanel: React.FC = () => {
             >
                 <Space wrap className="mb-4">
                     <Input
-                        placeholder="股票代码 (如 600519.SH)"
+                        placeholder="股票代码 (如 600519.SH / SH600036)"
                         value={klineSymbol}
                         onChange={e => setKlineSymbol(e.target.value)}
-                        style={{ width: 180 }}
+                        style={{ width: 200 }}
                         onPressEnter={queryKline}
                     />
                     <Select value={klineAdj} onChange={setKlineAdj} style={{ width: 120 }}>

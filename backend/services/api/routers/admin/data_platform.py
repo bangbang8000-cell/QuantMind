@@ -1072,10 +1072,12 @@ async def quantdb_query_kline(
 ):
     """通过 QuantDB SDK 查询 K 线数据（消耗流量配额）。"""
     try:
-        from backend.services.engine.data_platform.adapters.quantdb_adapter import _get_client
+        from backend.services.engine.data_platform.adapters.quantdb_adapter import _get_client, _to_qdb_symbol
         client = _get_client()
+        # 标准化 symbol: SH600036 → 600036.SH，兼容内部前缀格式和纯数字
+        qdb_symbol = _to_qdb_symbol(payload.symbol)
         df = client.query_kline(
-            payload.symbol,
+            qdb_symbol,
             adj_type=payload.adj_type,
             start_date=payload.start_date,
             end_date=payload.end_date,
@@ -1087,7 +1089,7 @@ async def quantdb_query_kline(
         return {
             "success": True,
             "data": {
-                "symbol": payload.symbol,
+                "symbol": qdb_symbol,
                 "rows": int(len(df)),
                 "columns": cols,
                 "data": records,
