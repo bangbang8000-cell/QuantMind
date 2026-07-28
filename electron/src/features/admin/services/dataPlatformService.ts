@@ -227,6 +227,89 @@ class DataPlatformService {
         });
         return this.unwrap(resp);
     }
+
+    // ---- QuantDB SDK 管理 ----
+    async getQuantDBInfo(): Promise<{
+        quantdb: {
+            installed: boolean;
+            api_key_configured: boolean;
+            connected: boolean;
+            version?: string;
+            account?: { username: string; email: string };
+            usage?: {
+                used_gb: number;
+                limit_gb: number;
+                remaining_gb: number;
+                credit_gb?: number;
+                subscription?: { status: string };
+            };
+            error?: string;
+        };
+        timestamp: string;
+    }> {
+        const resp = await this.axiosInstance.get('/admin/data-platform/quantdb/info');
+        return this.unwrap(resp);
+    }
+
+    async queryQuantDBKline(payload: {
+        symbol: string;
+        adj_type?: string;
+        start_date?: string;
+        end_date?: string;
+    }): Promise<{
+        symbol: string;
+        rows: number;
+        columns: string[];
+        data: any[];
+        timestamp: string;
+    }> {
+        const resp = await this.axiosInstance.post('/admin/data-platform/quantdb/query-kline', payload);
+        return this.unwrap(resp);
+    }
+
+    async queryQuantDBStockList(params: {
+        keyword?: string;
+        limit?: number;
+    }): Promise<{ rows: number; columns: string[]; data: any[]; timestamp: string }> {
+        const resp = await this.axiosInstance.get('/admin/data-platform/quantdb/stock-list', { params });
+        return this.unwrap(resp);
+    }
+
+    async queryQuantDBCalendar(start_date: string, end_date: string): Promise<{
+        rows: number;
+        columns: string[];
+        data: any[];
+        timestamp: string;
+    }> {
+        const resp = await this.axiosInstance.get('/admin/data-platform/quantdb/calendar', {
+            params: { start_date, end_date },
+        });
+        return this.unwrap(resp);
+    }
+
+    async syncQuantDBData(payload: {
+        mode: 'kline' | 'calendar' | 'ai_factors' | 'valuation' | 'all';
+        symbols?: string[];
+        incremental?: boolean;
+        start_date?: string;
+        end_date?: string;
+        adj_type?: string;
+    }): Promise<{ message: string; mode: string; incremental: boolean; timestamp: string }> {
+        const resp = await this.axiosInstance.post('/admin/data-platform/quantdb/sync', payload);
+        return this.unwrap(resp);
+    }
+
+    async getQuantDBSyncStatus(): Promise<{
+        status: {
+            quantdb_factors: { files: number; total_rows: number };
+            quantdb_valuation: { files: number };
+            quantdb_cache: { calendar_cached: boolean };
+        };
+        timestamp: string;
+    }> {
+        const resp = await this.axiosInstance.get('/admin/data-platform/quantdb/sync-status');
+        return this.unwrap(resp);
+    }
 }
 
 export const dataPlatformService = new DataPlatformService();

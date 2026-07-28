@@ -1041,3 +1041,236 @@ async def sync_alpha_agent_market(
     except Exception as exc:  # noqa: BLE001
         logger.error("sync_alpha_agent_market failed: %s", exc, exc_info=True)
         raise HTTPException(status_code=500, detail=f"failed: {exc}")
+
+
+# ---------------------------------------------------------------------------
+# QuantDB SDK 管理（付费高质量数据源）
+# ---------------------------------------------------------------------------
+@router.get("/quantdb/info")
+async def get_quantdb_info(current_user: dict = Depends(require_admin)):
+    """返回 QuantDB SDK 安装/连接状态、账户信息与流量配额。"""
+    try:
+        from backend.services.engine.data_platform.adapters.quantdb_adapter import get_sdk_info
+        info = get_sdk_info()
+        return {"success": True, "data": {"quantdb": info, "timestamp": _now_iso()}}
+    except Exception as exc:  # noqa: BLE001
+        logger.error("get_quantdb_info failed: %s", exc, exc_info=True)
+        raise HTTPException(status_code=500, detail=f"failed: {exc}")
+
+
+class QuantDBQueryRequest(BaseModel):
+    symbol: str
+    adj_type: str = "forward"
+    start_date: Optional[str] = None
+    end_date: Optional[str] = None
+
+
+@router.post("/quantdb/query-kline")
+async def quantdb_query_kline(
+    payload: QuantDBQueryRequest,
+    current_user: dict = Depends(require_admin),
+):
+    """通过 QuantDB SDK 查询 K 线数据（消耗流量配额）。"""
+    try:
+        from backend.services.engine.data_platform.adapters.quantdb_adapter import _get_client
+        client = _get_client()
+        df = client.query_kline(
+            payload.symbol,
+            adj_type=payload.adj_type,
+            start_date=payload.start_date,
+            end_date=payload.end_date,
+        )
+        if df is None or df.empty:
+            return {"success": True, "data": {"rows": 0, "columns": [], "data": []}}
+        cols = list(df.columns)
+        records = df.head(500).to_dict(orient="records")
+        return {
+            "success": True,
+            "data": {
+                "symbol": payload.symbol,
+                "rows": int(len(df)),
+                "columns": cols,
+                "data": records,
+                "timestamp": _now_iso(),
+            },
+        }
+    except Exception as exc:  # noqa: BLE001
+        logger.error("quantdb_query_kline failed: %s", exc, exc_info=True)
+        raise HTTPException(status_code=500, detail=f"failed: {exc}")
+
+
+@router.get("/quantdb/stock-list")
+async def quantdb_stock_list(
+    keyword: Optional[str] = None,
+    limit: int = Query(50, ge=1, le=10000),
+    current_user: dict = Depends(require_admin),
+):
+    """通过 QuantDB SDK 查询股票列表。"""
+    try:
+        from backend.services.engine.data_platform.adapters.quantdb_adapter import _get_client
+        client = _get_client()
+        df = client.query_stock_list(keyword=keyword, limit=limit)
+        if df is None or df.empty:
+            return {"success": True, "data": {"rows": 0, "columns": [], "data": []}}
+        records = df.head(limit).to_dict(orient="records")
+        return {
+            "success": True,
+            "data": {
+                "rows": int(len(df)),
+                "columns": list(df.columns),
+                "data": records,
+                "timestamp": _now_iso(),
+            },
+        }
+    except Exception as exc:  # noqa: BLE001
+        logger.error("quantdb_stock_list failed: %s", exc, exc_info=True)
+        raise HTTPException(status_code=500, detail=f"failed: {exc}")
+
+
+@router.get("/quantdb/calendar")
+async def quantdb_calendar(
+    start_date: str = Query(..., description="开始日期 YYYY-MM-DD"),
+    end_date: str = Query(..., description="结束日期 YYYY-MM-DD"),
+    current_user: dict = Depends(require_admin),
+):
+    """通过 QuantDB SDK 查询交易日历。"""
+    try:
+        from backend.services.engine.data_platform.adapters.quantdb_adapter import _get_client
+        client = _get_client()
+        df = client.query_calendar(start_date=start_date, end_date=end_date)
+        if df is None or df.empty:
+            return {"success": True, "data": {"rows": 0, "columns": [], "data": []}}
+        records = df.to_dict(orient="records")
+        return {
+            "success": True,
+            "data": {
+                "rows": int(len(df)),
+                "columns": list(df.columns),
+                "data": records,
+                "timestamp": _now_iso(),
+            },
+        }
+    except Exception as exc:  # noqa: BLE001
+        logger.error("quantdb_calendar failed: %s", exc, exc_info=True)
+        raise HTTPException(status_code=500, detail=f"failed: {exc}")
+
+
+class QuantDBSyncRequest(BaseModel):
+    mode: str = "kline"  # kline, calendar, ai_factors, valuation, all
+    symbols: Optional[list[str]] = None
+    incremental: bool = True
+    start_date: Optional[str] = None
+    end_date: Optional[str] = None
+    adj_type: str = "qfq"
+
+
+@router.post("/quantdb/sync")
+async def quantdb_sync_to_local(
+    payload: QuantDBSyncRequest,
+    current_user: dict = Depends(require_admin),
+):
+    """将 QuantDB 数据同步到本地 PG + Parquet（后台线程执行）。"""
+    import threading
+    from datetime import date as _date
+
+    def _run():
+        try:
+            from backend.services.engine.data_platform.adapters.quantdb_adapter import _get_client as _qdb_client
+            from backend.services.engine.data_platform.adapters.quantdb_adapter import _patch_sdk_redirect
+
+            if payload.mode in ("kline", "all"):
+                from backend.scripts.sync_quantdb_data import run_kline_sync
+                sd = _date.fromisoformat(payload.start_date) if payload.start_date else None
+                ed = _date.fromisoformat(payload.end_date) if payload.end_date else None
+                result = run_kline_sync(
+                    symbols=payload.symbols,
+                    incremental=payload.incremental,
+                    start_date=sd,
+                    end_date=ed,
+                    adj_type=payload.adj_type,
+                )
+                logger.info("QuantDB kline sync result: %s", result)
+
+            if payload.mode in ("calendar", "all"):
+                from backend.scripts.sync_quantdb_data import sync_calendar
+                client = _qdb_client()
+                _patch_sdk_redirect(client)
+                sync_calendar(client, start_date=payload.start_date, end_date=payload.end_date)
+
+            if payload.mode in ("ai_factors", "all"):
+                from backend.scripts.sync_quantdb_data import sync_ai_factors, _to_internal
+                client = _qdb_client()
+                _patch_sdk_redirect(client)
+                syms = payload.symbols or []
+                if not syms:
+                    from backend.scripts.sync_quantdb_data import _get_pg_symbols, _get_engine
+                    syms = _get_pg_symbols(_get_engine())
+                sync_ai_factors(client, [_to_internal(s) for s in syms])
+
+            if payload.mode in ("valuation", "all"):
+                from backend.scripts.sync_quantdb_data import sync_valuation, _to_internal
+                client = _qdb_client()
+                _patch_sdk_redirect(client)
+                syms = payload.symbols or []
+                if not syms:
+                    from backend.scripts.sync_quantdb_data import _get_pg_symbols, _get_engine
+                    syms = _get_pg_symbols(_get_engine())
+                sync_valuation(client, [_to_internal(s) for s in syms])
+
+        except Exception as exc:  # noqa: BLE001
+            logger.error("QuantDB sync failed: %s", exc, exc_info=True)
+
+    thread = threading.Thread(target=_run, daemon=True)
+    thread.start()
+    return {
+        "success": True,
+        "data": {
+            "message": f"QuantDB {payload.mode} sync started in background",
+            "mode": payload.mode,
+            "incremental": payload.incremental,
+            "timestamp": _now_iso(),
+        },
+    }
+
+
+@router.get("/quantdb/sync-status")
+async def quantdb_sync_status(current_user: dict = Depends(require_admin)):
+    """查询 QuantDB 同步状态（从 Redis 或最近日志推断）。"""
+    try:
+        from backend.scripts.sync_quantdb_data import FEATURE_PARQUET_DIR
+        import glob
+
+        status = {
+            "quantdb_factors": {"files": 0, "total_rows": 0},
+            "quantdb_valuation": {"files": 0, "total_rows": 0},
+            "quantdb_cache": {"calendar_cached": False},
+        }
+
+        # 检查因子文件
+        factor_dir = FEATURE_PARQUET_DIR / "quantdb_factors"
+        if factor_dir.exists():
+            files = list(factor_dir.glob("*.parquet"))
+            status["quantdb_factors"]["files"] = len(files)
+            total_rows = 0
+            for f in files[:10]:
+                try:
+                    import pandas as pd
+                    total_rows += len(pd.read_parquet(f))
+                except Exception:
+                    pass
+            status["quantdb_factors"]["total_rows"] = total_rows
+
+        # 检查估值文件
+        val_dir = FEATURE_PARQUET_DIR / "quantdb_valuation"
+        if val_dir.exists():
+            files = list(val_dir.glob("*.parquet"))
+            status["quantdb_valuation"]["files"] = len(files)
+
+        # 检查日历缓存
+        cal_path = FEATURE_PARQUET_DIR / "quantdb_cache" / "trading_calendar.parquet"
+        status["quantdb_cache"]["calendar_cached"] = cal_path.exists()
+
+        return {"success": True, "data": {"status": status, "timestamp": _now_iso()}}
+    except Exception as exc:  # noqa: BLE001
+        logger.error("quantdb_sync_status failed: %s", exc, exc_info=True)
+        raise HTTPException(status_code=500, detail=f"failed: {exc}")

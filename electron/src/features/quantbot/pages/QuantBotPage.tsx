@@ -11,7 +11,7 @@
 
 import React, { useEffect, useMemo, useRef, useState, useCallback } from 'react';
 import { Bot, RefreshCw, Wifi, WifiOff, ExternalLink, AlertTriangle } from 'lucide-react';
-import { isElectronEnv, getDynamicServerUrl } from '../../../config/services';
+import { isElectronEnv } from '../../../config/services';
 
 const QWENPAW_DESKTOP_URL = 'http://127.0.0.1:8089/';
 
@@ -30,10 +30,7 @@ const QuantBotPage: React.FC = () => {
     if (isElectronEnv()) {
       return QWENPAW_DESKTOP_URL;
     }
-    const base = getDynamicServerUrl() || '';
-    if (base) {
-      return `${base.replace(/\/+$/, '')}/api/v1/qwenpaw-ui/`;
-    }
+    // Web 模式：始终通过当前域名的 nginx 代理访问，忽略 Electron 桌面端保存的 serverUrl
     if (typeof window !== 'undefined') {
       return `${window.location.origin}/api/v1/qwenpaw-ui/`;
     }

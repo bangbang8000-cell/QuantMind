@@ -190,6 +190,9 @@ services:
       - EMBEDDING_BASE_URL=${EMBEDDING_BASE_URL:-https://api.siliconflow.cn/v1}
       - EMBEDDING_MODEL=${EMBEDDING_MODEL:-BAAI/bge-m3}
 
+      # QuantDB SDK（付费高质量数据源：K线/Tick/财报/估值/315维AI因子）
+      - QUANTDB_API_KEY=${QUANTDB_API_KEY:-}
+
       # AlphaAgent 因子编码专家系统提示词
       - ALPHA_AGENT_SYSTEM_PROMPT=${ALPHA_AGENT_SYSTEM_PROMPT:-}
 
@@ -565,7 +568,7 @@ services:
     image: agentscope/qwenpaw:latest
     container_name: qwenpaw
     ports:
-      - "127.0.0.1:8089:8088"
+      - "0.0.0.0:8089:8088"
     networks:
       quantmind-net:
         aliases:

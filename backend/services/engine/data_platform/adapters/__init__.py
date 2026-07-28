@@ -45,6 +45,8 @@ def _collect() -> None:
         # 第四批：OpenBB-CN + easyquotation
         "backend.services.engine.data_platform.adapters.openbb_adapter",
         "backend.services.engine.data_platform.adapters.easyquotation_adapter",
+        # 第五批：QuantDB SDK（付费高质量数据源）
+        "backend.services.engine.data_platform.adapters.quantdb_adapter",
     ):
         try:
             import importlib

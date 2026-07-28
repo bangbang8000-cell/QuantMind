@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useState, useRef, useCallback } from 'react';
-import { Alert, Button, Card, Col, Descriptions, Input, Row, Space, Spin, Statistic, Table, Tag, message, Typography, Progress, Divider, Tooltip, Empty } from 'antd';
+import { Alert, Button, Card, Col, Descriptions, Input, Row, Space, Spin, Statistic, Table, Tag, message, Typography, Progress, Divider, Tooltip, Empty, Tabs } from 'antd';
 import {
     DatabaseOutlined,
     ReloadOutlined,
@@ -19,9 +19,11 @@ import {
     GlobalOutlined,
     StockOutlined,
     FundOutlined,
+    CloudServerOutlined,
 } from '@ant-design/icons';
 import dayjs from 'dayjs';
 import { adminService } from '../services/adminService';
+import { AdminQuantDBPanel } from './AdminQuantDBPanel';
 import {
     AdminFeatureSnapshotsOlderSample,
     AdminFeatureSnapshotsInvalidSample,
@@ -392,32 +394,40 @@ export const AdminDataManagement: React.FC = () => {
     };
 
     return (
-        <div className="pb-24 space-y-10 animate-in fade-in slide-in-from-bottom-4 duration-700">
-            {/* Header Section */}
-            <div className="flex flex-col lg:flex-row justify-between items-start lg:items-center gap-6">
-                <div>
-                    <Title level={1} className="!m-0 !font-black !text-4xl !tracking-tighter !text-slate-900 uppercase">
-                        数据管理
-                    </Title>
-                    <div className="flex items-center mt-2 space-x-3">
-                        <Tag className="rounded-full bg-slate-100 border-none text-slate-500 font-bold px-3">
-                            节点: QUANT-OSS-01
-                        </Tag>
-                        <Text className="text-slate-400 font-medium text-sm flex items-center">
-                            <InfoCircleOutlined className="mr-1.5" />
-                            最后扫描时间: <span className="text-indigo-500 font-bold ml-1">{checkedAt}</span>
-                        </Text>
-                    </div>
-                </div>
-                <Space size="middle">
-                    <Button
-                        type="primary"
-                        icon={<ThunderboltOutlined />}
-                        className="rounded-2xl h-11 px-8 bg-indigo-600 border-none font-bold shadow-lg shadow-indigo-100"
-                        loading={loading}
-                        onClick={() => loadDataStatus(true, selectedMarket)}
-                    >
-                        强制深度扫描
+        <div className="pb-24 animate-in fade-in slide-in-from-bottom-4 duration-700">
+            <Tabs
+                defaultActiveKey="overview"
+                items={[
+                    {
+                        key: 'overview',
+                        label: <span className="font-bold">数据概览</span>,
+                        children: (
+                            <div className="space-y-10">
+                                {/* Header Section */}
+                                <div className="flex flex-col lg:flex-row justify-between items-start lg:items-center gap-6">
+                                    <div>
+                                        <Title level={1} className="!m-0 !font-black !text-4xl !tracking-tighter !text-slate-900 uppercase">
+                                            数据管理
+                                        </Title>
+                                        <div className="flex items-center mt-2 space-x-3">
+                                            <Tag className="rounded-full bg-slate-100 border-none text-slate-500 font-bold px-3">
+                                                节点: QUANT-OSS-01
+                                            </Tag>
+                                            <Text className="text-slate-400 font-medium text-sm flex items-center">
+                                                <InfoCircleOutlined className="mr-1.5" />
+                                                最后扫描时间: <span className="text-indigo-500 font-bold ml-1">{checkedAt}</span>
+                                            </Text>
+                                        </div>
+                                    </div>
+                                    <Space size="middle">
+                                        <Button
+                                            type="primary"
+                                            icon={<ThunderboltOutlined />}
+                                            className="rounded-2xl h-11 px-8 bg-indigo-600 border-none font-bold shadow-lg shadow-indigo-100"
+                                            loading={loading}
+                                            onClick={() => loadDataStatus(true, selectedMarket)}
+                                        >
+                                            强制深度扫描
                     </Button>
                     <Button
                         icon={<ReloadOutlined />}
@@ -1309,6 +1319,16 @@ export const AdminDataManagement: React.FC = () => {
                     )}
                 </Col>
             </Row>
+                            </div>
+                        ),
+                    },
+                    {
+                        key: 'quantdb',
+                        label: <span className="font-bold flex items-center"><CloudServerOutlined className="mr-1" />QuantDB SDK</span>,
+                        children: <AdminQuantDBPanel />,
+                    },
+                ]}
+            />
         </div>
     );
 };
