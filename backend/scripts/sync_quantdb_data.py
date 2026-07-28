@@ -145,12 +145,23 @@ def _to_internal(symbol: str) -> str:
 
 
 def _to_qdb(symbol: str) -> str:
-    """SH600036 -> 600036.SH (QuantDB 格式)"""
+    """SH600036 -> 600036.SH (QuantDB 格式)
+
+    支持输入: 600036.SH, SH600036, 600036, BJ873169
+    纯数字自动识别: 6/9→SH, 0/3/2→SZ, 4/8→BJ
+    """
     s = symbol.strip().upper()
     if "." in s:
         return s
     if s.startswith("SH") or s.startswith("SZ") or s.startswith("BJ"):
         return f"{s[2:]}.{s[:2]}"
+    if s.isdigit():
+        if s.startswith("6") or s.startswith("9"):
+            return f"{s}.SH"
+        if s.startswith("0") or s.startswith("3") or s.startswith("2"):
+            return f"{s}.SZ"
+        if s.startswith("4") or s.startswith("8"):
+            return f"{s}.BJ"
     return s
 
 
