@@ -452,6 +452,10 @@ def _convert_factor_value(factor: str, value: float) -> float:
         # Frontend: 亿; QuantDB: 万元
         val = float(value)
         return val * 1e4  # 亿 → 万元
+    if factor in ("chip_profit_ratio_20", "chip_floating_ratio"):
+        # Frontend: percentage (60 = 60%); QuantDB: decimal (0.6)
+        val = float(value)
+        return val / 100.0 if val > 1.0 else val
     return float(value)
 
 

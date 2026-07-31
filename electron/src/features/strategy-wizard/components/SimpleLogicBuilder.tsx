@@ -158,21 +158,21 @@ const PRESETS: { name: string; tip: string; items: Omit<FlatCondition, 'id'>[] }
   },
   {
     name: '高毛利稳健',
-    tip: '毛利率>40%, ROE>12%, 低负债',
+    tip: '高ROE+低PE+大市值',
     items: [
-      { factor: 'sales_gross_profit', operator: '>', value: 40 },
       { factor: 'roe', operator: '>', value: 12 },
+      { factor: 'pe', operator: '<', value: 25 },
       { factor: 'market_cap', operator: '>', value: 100 },
     ],
   },
   // === 筹码分析 ===
   {
     name: '筹码集中',
-    tip: '获利盘高+浮筹低+缩量',
+    tip: '获利盘高+缩量+非ST',
     items: [
       { factor: 'chip_profit_ratio_20', operator: '>', value: 60 },
-      { factor: 'chip_floating_ratio', operator: '<', value: 30 },
       { factor: 'volume_ratio_5', operator: '<', value: 0.8 },
+      { factor: 'is_st', operator: '==', value: 0 },
     ],
   },
   {
@@ -261,7 +261,7 @@ const PRESETS: { name: string; tip: string; items: Omit<FlatCondition, 'id'>[] }
     name: '布林收口',
     tip: '布林带窄+即将突破',
     items: [
-      { factor: 'tech_bb_width', operator: '<', value: 0.05 },
+      { factor: 'tech_bb_width', operator: '<', value: 0.1 },
       { factor: 'tech_adx_14', operator: '>', value: 20 },
     ],
   },

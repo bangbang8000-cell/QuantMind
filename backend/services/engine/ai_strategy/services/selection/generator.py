@@ -360,10 +360,18 @@ class QuantDBQueryExecutor:
                             ind_mask = df[ind_col].astype(str).str.contains(str(val), case=False, na=False)
                             mask |= ind_mask
                 elif field in ("idx_hs300", "idx_zz1000", "idx_zz500", "idx_chinext"):
-                    # Index membership: these are boolean flags in stock_list
-                    # For now, we don't have these columns in stock_list
-                    # Skip — will be handled by post-filtering in _build_items_from_quantdb
-                    pass
+                    # Index membership: map to BelongHS300 etc. in stock_list
+                    idx_col_map = {
+                        "idx_hs300": "BelongHS300",
+                        "idx_zz1000": "BelongHasKQZ",  # closest available
+                    }
+                    db_col = idx_col_map.get(field)
+                    if db_col and db_col in df.columns:
+                        col = pd.to_numeric(df[db_col], errors="coerce").fillna(0)
+                        if op in ("==", "=") and val == 1:
+                            mask &= col >= 1
+                        elif op in ("==", "=") and val == 0:
+                            mask &= col == 0
 
             filtered = df[mask]
             if sym_col in filtered.columns:
