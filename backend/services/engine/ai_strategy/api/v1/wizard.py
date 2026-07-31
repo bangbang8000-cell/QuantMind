@@ -293,7 +293,7 @@ def _safe_float(v) -> float:
         return 0.0
 
 
-def _build_items_from_quantdb(result: QueryPoolResponse, qdb_symbols: set[str], market: str | None = None):
+def _build_items_from_quantdb(result: QueryPoolResponse, qdb_symbols: set[str], market: str | None = None, exchange: str | None = None):
     """Build PoolItems from QuantDB symbols with rich metrics from multiple views."""
     from backend.services.engine.data_platform.quantdb_hub import QuantDBDataHub
 
@@ -598,6 +598,12 @@ def _build_items_from_quantdb(result: QueryPoolResponse, qdb_symbols: set[str], 
             m["is_st"] = 1  # type: ignore[assignment]
         result.items.append(PoolItem(symbol=sym, name=name, metrics=m))
 
+    # Exchange filter: only keep symbols matching .SH / .SZ / .BJ suffix
+    if exchange:
+        suffix = f".{exchange.upper()}"
+        result.items = [i for i in result.items if i.symbol.endswith(suffix)]
+        logger.info("QuantDB exchange filter (%s): %d items remain", suffix, len(result.items))
+
 
 @router.post("/query-pool", response_model=QueryPoolResponse)
 async def query_pool(body: QueryPoolRequest, request: Request):
@@ -641,18 +647,21 @@ async def query_pool(body: QueryPoolRequest, request: Request):
         qdb_symbols = set()
         result = QueryPoolResponse(items=[], summary={}, charts={})
 
+        # Determine exchange filter: only apply for A-share (CN/A) markets
+        exchange = body.exchange if body.market in ("CN", "A", None) else None
+
         if all_qdb_conditions:
             from backend.services.engine.ai_strategy.services.selection.generator import QuantDBQueryExecutor
             from datetime import date as _date
 
             executor = QuantDBQueryExecutor()
-            qdb_symbols = await asyncio.to_thread(executor.execute, all_qdb_conditions, _date.today())
+            qdb_symbols = await asyncio.to_thread(executor.execute, all_qdb_conditions, _date.today(), exchange)
             logger.info("QuantDB primary query returned %d symbols", len(qdb_symbols))
 
         # === Step 3: Build results ===
         if qdb_symbols:
             # Use QuantDB as sole data source (PG A-share data is incomplete)
-            await asyncio.to_thread(_build_items_from_quantdb, result, qdb_symbols, body.market)
+            await asyncio.to_thread(_build_items_from_quantdb, result, qdb_symbols, body.market, exchange)
             logger.info("QuantDB-only: QDB=%d, built=%d items", len(qdb_symbols), len(result.items))
         elif all_qdb_conditions:
             # Had QuantDB conditions but no results — return empty (do NOT fall back to PG)

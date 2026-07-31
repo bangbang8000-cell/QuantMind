@@ -101,48 +101,54 @@ export const StockPoolLibrary: React.FC = () => {
     CN: 'A股', HK: '港股', US: '美股', CRYPTO: '加密货币',
   };
 
-  const handleSelectAllMarket = async () => {
+  const handleSelectAllMarket = async (exchange?: string) => {
     if (loadingId) return;
-    setLoadingId('all-market');
+    const loadingKey = exchange ? `all-market-${exchange}` : 'all-market';
+    setLoadingId(loadingKey);
     const marketLabel = MARKET_NAMES[currentMarket] || currentMarket;
+    const exchangeLabel = exchange ? { SH: '沪市', SZ: '深市', BJ: '北交所' }[exchange] : '';
+    const poolLabel = exchangeLabel ? `${exchangeLabel}${marketLabel}` : `全部市场 (${marketLabel})`;
     try {
-      message.loading({ content: `正在加载全市场 ${marketLabel} 标的（含核心字段）...`, key: 'allMarket', duration: 0 });
-      // 后端 /api/v1/stocks/all 按市场读取对应的 stock_daily_latest_* 表
-      // enrich=true 一次性带回 close/pe/pb/marketCap/pctChange 等核心字段，无需再次批量补充
-      const url = `${SERVICE_ENDPOINTS.USER_SERVICE}/stocks/all?market=${currentMarket}&enrich=true`;
-      const response = await fetch(url);
-      if (!response.ok) throw new Error(`HTTP ${response.status}`);
-      const data = await response.json();
-      const items: any[] = data.items || [];
+      message.loading({ content: `正在加载${poolLabel}标的（含核心字段）...`, key: 'allMarket', duration: 0 });
+      const { queryPool } = await import('../services/wizardService');
+      const poolRes = await queryPool({
+        dsl: 'SELECT symbol WHERE pe_ttm > 0',
+        market: currentMarket,
+        exchange: exchange || undefined,
+        quantdb_filters: [
+          { table: 'quantdb_valuation', field: 'pe_ttm', operator: '>', value: 0 },
+        ],
+      });
+      const items: any[] = poolRes.items || [];
       if (items.length === 0) {
-        throw new Error(`后端返回空列表，检查 ${data.table || 'stock_daily_latest'} 表`);
+        throw new Error(`QuantDB 返回空列表，请检查数据源`);
       }
 
       const fullStocks = items.map((it: any) => ({
         symbol: it.symbol,
         name: it.name || it.symbol,
-        marketCap: it.marketCap ?? null,
-        floatMarketCap: it.floatMarketCap ?? null,
-        pe: it.pe ?? null,
-        pb: it.pb ?? null,
-        roe: it.roe ?? null,
-        price: it.close ?? null,
-        pctChange: it.pctChange ?? null,
-        turnoverRate: it.turnoverRate ?? null,
-        isSt: !!it.isSt,
+        marketCap: it.metrics?.market_cap ?? null,
+        floatMarketCap: it.metrics?.float_mv ?? null,
+        pe: it.metrics?.pe ?? null,
+        pb: it.metrics?.pb ?? null,
+        roe: it.metrics?.roe ?? null,
+        price: it.metrics?.close ?? null,
+        pctChange: it.metrics?.pct_change ?? null,
+        turnoverRate: it.metrics?.turnover_rate ?? null,
+        isSt: it.metrics?.is_st === 1,
       }));
 
-      setCurrentPoolName(`全部市场 (${marketLabel})`);
+      setCurrentPoolName(poolLabel);
       setWorkingPool(fullStocks as any);
       const validPE = fullStocks.filter((s) => s.pe != null && s.pe > 0).length;
       message.success({
-        content: `已载入全市场 ${fullStocks.length} 只${marketLabel}标的（${validPE} 个含PE/PB/市值字段）`,
+        content: `已载入${poolLabel} ${fullStocks.length} 只标的（${validPE} 个含PE/PB/市值字段）`,
         key: 'allMarket',
       });
     } catch (err: any) {
       console.error('[StockPool] handleSelectAllMarket failed:', err);
       message.error({
-        content: `加载全市场标的失败: ${err?.message || err}`,
+        content: `加载${poolLabel}标的失败: ${err?.message || err}`,
         key: 'allMarket',
         duration: 5,
       });
@@ -224,7 +230,8 @@ export const StockPoolLibrary: React.FC = () => {
               <div style={{ width: 3, height: 12, background: '#3b82f6', borderRadius: 2 }} />
               <Text type="secondary" style={{ fontSize: 11, fontWeight: 600, letterSpacing: 0.5 }}>系统内置</Text>
             </div>
-            <div 
+            {/* 全市场主按钮 */}
+            <div
               onClick={() => handleSelectAllMarket()}
               style={{
                 background: loadingId === 'all-market' ? '#eff6ff' : '#f8fafc',
@@ -247,6 +254,36 @@ export const StockPoolLibrary: React.FC = () => {
                 {loadingId === 'all-market' ? <Spin size="small" /> : <RightOutlined style={{ fontSize: 10, color: '#bfbfbf' }} />}
               </Flex>
             </div>
+            {/* A股交易所子按钮 */}
+            {currentMarket === 'CN' && (
+              <div style={{ display: 'flex', gap: 6, marginTop: 6 }}>
+                {([
+                  { key: 'SH', label: '沪市主板+科创板', color: '#dc2626' },
+                  { key: 'SZ', label: '深市主板+创业板', color: '#2563eb' },
+                  { key: 'BJ', label: '北交所', color: '#059669' },
+                ] as const).map((ex) => (
+                  <div
+                    key={ex.key}
+                    onClick={() => handleSelectAllMarket(ex.key)}
+                    style={{
+                      flex: 1,
+                      background: loadingId === `all-market-${ex.key}` ? '#eff6ff' : '#f8fafc',
+                      padding: '8px 6px',
+                      borderRadius: 8,
+                      border: loadingId === `all-market-${ex.key}` ? `1px solid ${ex.color}` : '1px solid #e2e8f0',
+                      cursor: 'pointer',
+                      transition: 'all 0.2s',
+                      textAlign: 'center',
+                    }}
+                    className="library-item-hover"
+                  >
+                    <div style={{ fontSize: 14, fontWeight: 700, color: ex.color }}>{ex.key}</div>
+                    <Text type="secondary" style={{ fontSize: 9 }}>{ex.label}</Text>
+                    {loadingId === `all-market-${ex.key}` && <Spin size="small" style={{ marginLeft: 4 }} />}
+                  </div>
+                ))}
+              </div>
+            )}
           </section>
 
           <section>

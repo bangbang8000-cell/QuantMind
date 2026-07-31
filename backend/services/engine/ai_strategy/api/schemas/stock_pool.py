@@ -40,17 +40,20 @@ class ParseResponse(BaseModel):
     confidence: float = 0.92
     suggestions: list[str] = []
     version: str = "1.0.0"
+    quantdb_filters: list[dict[str, Any]] | None = None  # QuantDB conditions for query_pool
 
 
 class QueryPoolRequest(BaseModel):
     dsl: str
     market: str | None = None  # CN, HK, US, CRYPTO
+    exchange: str | None = None  # SH, SZ, BJ (仅A股有效)
+    quantdb_filters: list[dict[str, Any]] | None = None  # QuantDB conditions from parse_text
 
 
 class PoolItem(BaseModel):
     symbol: str
     name: str | None = None
-    metrics: dict[str, float] = {}
+    metrics: dict[str, Any] = {}
 
 
 class QueryPoolResponse(BaseModel):

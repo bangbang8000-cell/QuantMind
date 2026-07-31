@@ -6,7 +6,8 @@ import {
   ThunderboltOutlined,
   CheckCircleOutlined,
   StockOutlined,
-  SendOutlined
+  SendOutlined,
+  SearchOutlined
 } from '@ant-design/icons';
 import { motion, AnimatePresence } from 'framer-motion';
 import { useWizardV2Store } from '../store/wizardV2Store';
@@ -32,7 +33,7 @@ export const NaturalTextInput: React.FC<{ onNext: () => void }> = ({ onNext }) =
   const [activeTab, setActiveTab] = useState('nlp');
   const [text, setText] = useState('');
   const [loading, setLoading] = useState(false);
-  const [preview, setPreview] = useState<{ dsl?: string; mapping?: any; suggestions?: string[] }>({});
+  const [preview, setPreview] = useState<{ dsl?: string; mapping?: any; suggestions?: string[]; quantdb_filters?: any[] }>({});
   const [matchedCount, setMatchedCount] = useState<number | null>(null);
   const [templateCategory, setTemplateCategory] = useState<string>('all');
 
@@ -45,6 +46,9 @@ export const NaturalTextInput: React.FC<{ onNext: () => void }> = ({ onNext }) =
     CN: {
       宽基指数: [
         { label: '全部A股', value: '全市场A股，剔除停牌和退市股票' },
+        { label: '沪市A股', value: '上海证券交易所全部股票，剔除停牌和ST' },
+        { label: '深市A股', value: '深圳证券交易所全部股票，剔除停牌和ST' },
+        { label: '北交所', value: '北京证券交易所全部股票，剔除停牌' },
         { label: '沪深300', value: '沪深300成分股' },
         { label: '中证500', value: '中证500成分股' },
         { label: '中证800', value: '中证800成分股' },
@@ -61,7 +65,11 @@ export const NaturalTextInput: React.FC<{ onNext: () => void }> = ({ onNext }) =
         { label: '小市值', value: '总市值10亿到100亿之间，剔除ST' },
         { label: '中市值', value: '总市值100亿到500亿之间' },
         { label: '大市值', value: '总市值大于500亿的蓝筹股' },
+        { label: '超大盘', value: '总市值大于2000亿的超大蓝筹' },
         { label: '高流动性', value: '日均成交额大于2亿元，换手率大于2%' },
+        { label: '低流动性', value: '日均成交额小于500万元，注意流动性风险' },
+        { label: '高换手', value: '换手率大于5%的活跃股，剔除ST' },
+        { label: '次新股', value: '上市60天到1年的股票，剔除ST' },
       ],
       行业板块: [
         { label: '金融股', value: '银行、证券、保险板块' },
@@ -74,6 +82,11 @@ export const NaturalTextInput: React.FC<{ onNext: () => void }> = ({ onNext }) =
         { label: '光伏储能', value: '光伏、储能、风电相关公司' },
         { label: '券商', value: '证券行业，剔除ST' },
         { label: '银行股', value: '银行业，市净率小于1.5' },
+        { label: '房地产', value: '房地产开发行业，剔除ST' },
+        { label: '白酒', value: '白酒行业，ROE大于20%' },
+        { label: '钢铁煤炭', value: '钢铁和煤炭行业' },
+        { label: '通信5G', value: '通信设备和5G相关行业' },
+        { label: '传媒游戏', value: '传媒和游戏行业' },
       ],
       价值与成长: [
         { label: '低估值', value: '市盈率小于20，市净率小于2，剔除亏损' },
@@ -83,6 +96,13 @@ export const NaturalTextInput: React.FC<{ onNext: () => void }> = ({ onNext }) =
         { label: '成长股', value: '净利润同比增长大于30%，营收增长大于20%' },
         { label: 'GARP', value: 'PE小于25且净利润增速大于20%，PEG小于1' },
         { label: '现金奶牛', value: '经营现金流净额连续3年为正，毛利率大于40%' },
+        { label: '高股息价值', value: 'PE小于15，股息率大于3%，总市值大于500亿' },
+        { label: '低估值成长', value: 'PE小于25且净利润增速大于20%，营收增长大于20%' },
+        { label: '破净股', value: '市净率小于1，剔除ST和亏损' },
+        { label: '高毛利', value: '销售毛利率大于50%，ROE大于10%' },
+        { label: '低负债', value: '资产负债率小于30%，经营现金流为正' },
+        { label: '高研发', value: '研发费用占营收比大于10%，市值大于50亿' },
+        { label: '稳健增长', value: '营收增长10%到30%，ROE大于12%，负债率小于50%' },
       ],
       技术形态: [
         { label: '突破新高', value: '近20日创60日新高，成交量放大' },
@@ -91,12 +111,22 @@ export const NaturalTextInput: React.FC<{ onNext: () => void }> = ({ onNext }) =
         { label: '超跌反弹', value: 'RSI小于30且近5日上涨' },
         { label: '回踩均线', value: '股价回踩20日均线企稳' },
         { label: '强势股', value: '近20日涨幅前10%，剔除ST' },
+        { label: '放量突破', value: '成交量大于5日均量2倍，涨幅大于3%' },
+        { label: '缩量整理', value: '成交量持续萎缩，股价在均线上方' },
+        { label: '底部放量', value: '近60日低位，单日成交量放大3倍以上' },
+        { label: '趋势突破', value: 'ADX趋势强度大于25，布林带位置大于0.5' },
+        { label: '布林收口', value: '布林带宽度收窄，即将选择方向' },
+        { label: 'CCI超卖', value: 'CCI商品通道指数小于-100，超卖区域' },
       ],
       资金趋势: [
         { label: '北向加仓', value: '近5日北向资金净流入排名前100' },
         { label: '主力流入', value: '主力资金净流入连续3日为正' },
         { label: '机构重仓', value: '机构持股比例大于30%' },
-        { label: '融资买入', value: '融资余额近5日持续增加' },
+        { label: '融资加仓', value: '融资净买入为正，融资余额近5日持续增加' },
+        { label: '资金流入', value: 'MFI资金流量指数大于60，OBV能量潮上升' },
+        { label: '大单净入', value: '大单净买入占比大于5%' },
+        { label: '融资升温', value: '融资余额大于5亿，融资净买入为正' },
+        { label: '融券减压', value: '融券余量小于100万股，无大量做空' },
       ],
       主题热点: [
         { label: '高ROE+低估值', value: 'ROE大于15%且PE小于20，市值大于100亿' },
@@ -104,6 +134,47 @@ export const NaturalTextInput: React.FC<{ onNext: () => void }> = ({ onNext }) =
         { label: '困境反转', value: '近1季度净利润同比扭亏，PB小于2' },
         { label: '小盘成长', value: '市值小于100亿，营收增长大于30%' },
         { label: 'AI算力', value: '云计算、IDC、服务器相关，市值大于50亿' },
+        { label: '低波红利', value: '波动率低，股息率大于4%，大市值' },
+        { label: '龙头溢价', value: '行业龙头，市值大于300亿，ROE大于15%' },
+        { label: '逆势抗跌', value: '大盘下跌时涨幅为正，Beta小于0.8' },
+      ],
+      筹码分析: [
+        { label: '获利盘集中', value: '20日获利盘比例大于60%，浮动筹码比例小于30%' },
+        { label: '筹码锁定', value: '筹码集中度高且获利盘比例大于70%' },
+        { label: '套牢盘释放', value: '5日获利变化大于10%，浮筹比例下降' },
+        { label: '主力吸筹', value: '获利盘比例小于30%，筹码集中度上升' },
+        { label: '底部筹码', value: '120日获利盘比例小于20%，可能见底' },
+        { label: '高位松动', value: '获利盘比例大于80%，筹码集中度下降' },
+        { label: '成本密集', value: '90%成本带宽收窄，筹码高度集中' },
+      ],
+      市场情绪: [
+        { label: '高流动性', value: '流动性评分大于0.7，买入压力大于卖出压力' },
+        { label: '动量强势', value: '1日动量大于2%，3日动量大于5%' },
+        { label: '缩量回调', value: '成交量集中度低，振幅小于3%' },
+        { label: '跳空高开', value: '跳空幅度大于1%，K线实体比例大于0.6' },
+        { label: '低波动', value: '日内波动率低，振幅小于2%，适合稳健持仓' },
+        { label: '放量上攻', value: '买入压力大于0.6，成交量集中度高' },
+        { label: '早盘强势', value: '早盘尾盘趋势为正，动量大于1%' },
+        { label: '情绪冰点', value: '流动性评分小于0.3，卖出压力大于买入压力，可能反转' },
+      ],
+      融资融券: [
+        { label: '融资加仓', value: '融资净买入为正，融资余额近5日持续增加' },
+        { label: '融资升温', value: '融资买入额大于融资偿还额，融资余额上升' },
+        { label: '融券做空', value: '融券余量小于100万股，融资余额大于5亿' },
+        { label: '融资买入激增', value: '融资买入额大于1亿，净买入为正' },
+        { label: '杠杆低位', value: '融资余额小于2亿，杠杆空间充足' },
+      ],
+      因子选股: [
+        { label: '低Beta', value: '20日Beta小于0.8，价值因子暴露大于0.5' },
+        { label: '行业强势', value: '行业强度20日大于0.7，行业轮动速度适中' },
+        { label: '概念热点', value: '概念热度评分大于0.6，概念轮动评分大于0.3' },
+        { label: '趋势突破', value: 'ADX趋势强度大于25，布林带位置大于0.5' },
+        { label: 'MFI超买', value: 'MFI资金流量指数大于80，量价相关性为正' },
+        { label: '价值风格', value: '价值因子暴露大于0.5，规模因子暴露小于0' },
+        { label: '小盘动量', value: '规模因子暴露小于-0.3，行业强度高' },
+        { label: '低波质量', value: '特质波动率低，Beta小于1，ROE大于10%' },
+        { label: '行业轮动', value: '行业轮动速度高，行业广度大于0.5' },
+        { label: '概念龙头', value: '概念领导力评分大于0.5，概念热度高' },
       ],
     },
     HK: {
@@ -239,11 +310,11 @@ export const NaturalTextInput: React.FC<{ onNext: () => void }> = ({ onNext }) =
         });
       }
       
-      setPreview({ ...parsed, dsl: correctedDsl });
+      setPreview({ ...parsed, dsl: correctedDsl, quantdb_filters: parsed.quantdb_filters });
 
       if (correctedDsl) {
         try {
-          const items = await fetchWorkingPoolByDsl(correctedDsl, currentMarket);
+          const items = await fetchWorkingPoolByDsl(correctedDsl, currentMarket, parsed.quantdb_filters);
           setMatchedCount(items.length);
           // fetchWorkingPoolByDsl already syncs to backend
           setWorkingPool(items, true); 
@@ -289,7 +360,7 @@ export const NaturalTextInput: React.FC<{ onNext: () => void }> = ({ onNext }) =
     try {
       if (preview.dsl) {
         // If there's a DSL but maybe analyze wasn't called or we want to refresh
-        const items = await fetchWorkingPoolByDsl(preview.dsl, currentMarket);
+        const items = await fetchWorkingPoolByDsl(preview.dsl, currentMarket, preview.quantdb_filters);
         setWorkingPool(items, true);
         message.success(`已生成股票池，包含 ${items.length} 只股票`);
       } else {
@@ -313,7 +384,11 @@ export const NaturalTextInput: React.FC<{ onNext: () => void }> = ({ onNext }) =
     try {
       const { parseConditions, queryPool } = await import('../services/wizardService');
       const parsed = await parseConditions({ conditions });
-      const poolRes = await queryPool({ dsl: parsed.dsl });
+      const poolRes = await queryPool({
+        dsl: parsed.dsl,
+        quantdb_filters: parsed.quantdb_filters || undefined,
+        market: currentMarket,
+      });
       if (!poolRes.items || poolRes.items.length === 0) {
         message.warning('未获取到股票池，请检查条件后重试');
         return;
@@ -324,6 +399,7 @@ export const NaturalTextInput: React.FC<{ onNext: () => void }> = ({ onNext }) =
         marketCap: Number(x?.metrics?.market_cap ?? x?.market_cap ?? 0) || 0,
         pe: Number(x?.metrics?.pe ?? x?.pe ?? 0) || 0,
         price: Number(x?.metrics?.close ?? x?.price ?? 0) || 0,
+        metrics: x?.metrics ?? undefined,
       })).filter((x: any) => x.symbol);
       
       setWorkingPool(items);
@@ -511,6 +587,20 @@ export const NaturalTextInput: React.FC<{ onNext: () => void }> = ({ onNext }) =
               children: (
                 <div className="mt-3 bg-white rounded-2xl border border-gray-100 p-4 shadow-sm">
                   <SimpleLogicBuilder onChange={(c) => setConditions(c)} />
+                  <div style={{ marginTop: 16, textAlign: 'center' }}>
+                    <Button
+                      type="primary"
+                      size="large"
+                      onClick={runVisualStrategy}
+                      loading={loading}
+                      disabled={!conditions || loading}
+                      icon={<SearchOutlined />}
+                      className="rounded-xl bg-gradient-to-r from-blue-500 to-purple-500 border-none shadow-md hover:shadow-lg transition-all"
+                      style={{ minWidth: 160, height: 44 }}
+                    >
+                      执行筛选
+                    </Button>
+                  </div>
                 </div>
               )
             },

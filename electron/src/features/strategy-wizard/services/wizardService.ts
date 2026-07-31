@@ -40,7 +40,7 @@ export async function parseConditions(payload: { conditions: Condition }) {
   return res.data;
 }
 
-export async function queryPool(payload: { dsl: string; market?: string }) {
+export async function queryPool(payload: { dsl: string; quantdb_filters?: any[]; market?: string; exchange?: string }) {
   const res = await client.post('/strategy/query-pool', payload);
   return res.data;
 }

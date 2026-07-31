@@ -213,10 +213,15 @@ class QuantDBQueryExecutor:
         """,
     }
 
-    def execute(self, conditions: list[dict], target_date: date | None = None) -> set[str]:
+    def execute(self, conditions: list[dict], target_date: date | None = None, exchange: str | None = None) -> set[str]:
         """执行 QuantDB 条件查询，返回满足所有条件的 symbol 交集。
 
         Uses DuckDB SQL for server-side filtering (much faster than loading all data into Pandas).
+
+        Args:
+            conditions: List of condition dicts with table/field/operator/value
+            target_date: Target date for filtering (defaults to today)
+            exchange: Optional exchange filter - SH, SZ, BJ (only for A-share)
         """
         from backend.services.engine.data_platform.quantdb_hub import QuantDBDataHub
 
@@ -329,7 +334,15 @@ class QuantDBQueryExecutor:
             return set()
 
         # Intersection of all result sets (stocks must pass ALL table conditions)
-        return set.intersection(*result_sets)
+        result = set.intersection(*result_sets)
+
+        # Exchange filter: only keep symbols matching .SH / .SZ / .BJ suffix
+        if exchange and result:
+            suffix = f".{exchange.upper()}"
+            result = {s for s in result if s.endswith(suffix)}
+            logger.info("QuantDB exchange filter (%s): %d stocks remain", suffix, len(result))
+
+        return result
 
     def _execute_stock_list_filter(self, hub, conditions: list[dict]) -> set[str]:
         """Filter symbols using hub.fetch_stock_list() for IsSTGP, industry, index membership."""
