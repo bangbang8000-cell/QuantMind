@@ -280,13 +280,386 @@ async def parse_conditions(body: ParseRequest, request: Request):
 # ============================================================================
 
 
+def _safe_float(v) -> float:
+    """Sanitize float: replace inf/nan with 0 for JSON serialization."""
+    try:
+        f = float(v) if v is not None else 0.0
+        if f != f:  # nan check
+            return 0.0
+        if abs(f) == float("inf"):
+            return 0.0
+        return f
+    except (ValueError, TypeError):
+        return 0.0
+
+
+def _build_items_from_quantdb(result: QueryPoolResponse, qdb_symbols: set[str], market: str | None = None):
+    """Build PoolItems from QuantDB symbols with rich metrics from multiple views."""
+    from backend.services.engine.data_platform.quantdb_hub import QuantDBDataHub
+
+    sym_list = list(qdb_symbols)[:10000]
+    hub = QuantDBDataHub.get_instance()
+    if not hub.available:
+        for sym in sym_list:
+            result.items.append(PoolItem(symbol=sym, name=sym, metrics={}))
+        return
+
+    conn = hub._get_duck_conn()
+    sym_placeholders = ", ".join(f"'{s}'" for s in sym_list)
+    sym_set = set(sym_list)
+
+    # Step 1: Valuation (close, pe, pb, market_cap, dividend_rate, ps_ttm, float_mv)
+    valuation: dict[str, dict] = {}
+    if hub._view_exists("qdb_valuation"):
+        try:
+            sql = f"""
+                SELECT symbol, close, pe_ttm, pb, total_mv, float_mv, ps_ttm, dividend_rate
+                FROM qdb_valuation
+                WHERE dt = (SELECT MAX(dt) FROM qdb_valuation)
+                  AND symbol IN ({sym_placeholders})
+            """
+            df = conn.execute(sql).fetchdf()
+            for _, row in df.iterrows():
+                sym = str(row.get("symbol", ""))
+                total_mv = _safe_float(row.get("total_mv"))
+                valuation[sym] = {
+                    "close": _safe_float(row.get("close")),
+                    "pe": _safe_float(row.get("pe_ttm")),
+                    "pb": _safe_float(row.get("pb")),
+                    "market_cap": total_mv / 1e8 if total_mv else 0,
+                    "float_mv": _safe_float(row.get("float_mv")) / 1e8 if _safe_float(row.get("float_mv")) else 0,
+                    "ps_ttm": _safe_float(row.get("ps_ttm")),
+                    "dividend_rate": _safe_float(row.get("dividend_rate")),
+                }
+        except Exception as exc:
+            logger.warning("QuantDB valuation fetch failed: %s", exc)
+
+    # Step 2: Technical indicators (ma, rsi, kdj, macd, returns, pct_change, ma_gap, vol_to_ma)
+    technical: dict[str, dict] = {}
+    if hub._view_exists("qdb_technical_indicators"):
+        try:
+            sql = f"""
+                SELECT symbol, ma5, ma10, ma20, ma60, rsi_6, rsi_14,
+                       kdj_k, kdj_d, kdj_j, macd_dif, macd_dea, macd_hist,
+                       vol_atr_14, vol_to_ma5, vol_to_ma20,
+                       vol_std_5, vol_std_20, vol_std_60,
+                       return_1d, return_3d, return_5d, return_10d, return_20d, return_60d,
+                       pct_change, ma_gap_5, ma_gap_10, ma_gap_20,
+                       beta_20, volume_trend_3d, volume_ma_3, amount_ma_5
+                FROM qdb_technical_indicators
+                WHERE dt = (SELECT MAX(dt) FROM qdb_technical_indicators)
+                  AND symbol IN ({sym_placeholders})
+            """
+            df = conn.execute(sql).fetchdf()
+            for _, row in df.iterrows():
+                sym = str(row.get("symbol", ""))
+                technical[sym] = {
+                    "ma5": _safe_float(row.get("ma5")),
+                    "ma10": _safe_float(row.get("ma10")),
+                    "ma20": _safe_float(row.get("ma20")),
+                    "ma60": _safe_float(row.get("ma60")),
+                    "rsi_6": _safe_float(row.get("rsi_6")),
+                    "rsi_14": _safe_float(row.get("rsi_14")),
+                    "kdj_k": _safe_float(row.get("kdj_k")),
+                    "kdj_d": _safe_float(row.get("kdj_d")),
+                    "kdj_j": _safe_float(row.get("kdj_j")),
+                    "macd_dif": _safe_float(row.get("macd_dif")),
+                    "macd_dea": _safe_float(row.get("macd_dea")),
+                    "macd_hist": _safe_float(row.get("macd_hist")),
+                    "atr_14": _safe_float(row.get("vol_atr_14")),
+                    "vol_to_ma5": _safe_float(row.get("vol_to_ma5")),
+                    "vol_to_ma20": _safe_float(row.get("vol_to_ma20")),
+                    "vol_std_5": _safe_float(row.get("vol_std_5")),
+                    "vol_std_20": _safe_float(row.get("vol_std_20")),
+                    "vol_std_60": _safe_float(row.get("vol_std_60")),
+                    "return_1d": _safe_float(row.get("return_1d")),
+                    "return_3d": _safe_float(row.get("return_3d")),
+                    "return_5d": _safe_float(row.get("return_5d")),
+                    "return_10d": _safe_float(row.get("return_10d")),
+                    "return_20d": _safe_float(row.get("return_20d")),
+                    "return_60d": _safe_float(row.get("return_60d")),
+                    "pct_change": _safe_float(row.get("pct_change")),
+                    "ma_gap_5": _safe_float(row.get("ma_gap_5")),
+                    "ma_gap_10": _safe_float(row.get("ma_gap_10")),
+                    "ma_gap_20": _safe_float(row.get("ma_gap_20")),
+                    "beta_20": _safe_float(row.get("beta_20")),
+                    "volume_trend_3d": _safe_float(row.get("volume_trend_3d")),
+                }
+        except Exception as exc:
+            logger.warning("QuantDB technical fetch failed: %s", exc)
+
+    # Step 3: Market sentiment (liquidity_score, buy_pressure, momentum)
+    sentiment: dict[str, dict] = {}
+    if hub._view_exists("qdb_market_sentiment"):
+        try:
+            sql = f"""
+                SELECT symbol, liquidity_score, buy_pressure, sell_pressure,
+                       momentum_1d, momentum_3d, amount_per_trade
+                FROM qdb_market_sentiment
+                WHERE dt = (SELECT MAX(dt) FROM qdb_market_sentiment)
+                  AND symbol IN ({sym_placeholders})
+            """
+            df = conn.execute(sql).fetchdf()
+            for _, row in df.iterrows():
+                sym = str(row.get("symbol", ""))
+                sentiment[sym] = {
+                    "liquidity_score": _safe_float(row.get("liquidity_score")),
+                    "buy_pressure": _safe_float(row.get("buy_pressure")),
+                    "sell_pressure": _safe_float(row.get("sell_pressure")),
+                    "momentum_1d": _safe_float(row.get("momentum_1d")),
+                    "momentum_3d": _safe_float(row.get("momentum_3d")),
+                }
+        except Exception as exc:
+            logger.warning("QuantDB sentiment fetch failed: %s", exc)
+
+    # Step 4: L1 factors (roe, turnover, chip, ind, style, concept, tech, liq)
+    factors: dict[str, dict] = {}
+    if hub._view_exists("qdb_l1_factors"):
+        try:
+            sql = f"""
+                SELECT symbol, fun_roe, fun_turnover_1, fun_turnover_5, fun_turnover_20,
+                       fun_bp, fun_ep, fun_peg, fun_value_zscore,
+                       chip_profit_ratio_20, chip_profit_ratio_60, chip_profit_ratio_120,
+                       chip_concentration_20, chip_floating_ratio, chip_cost_90_width,
+                       chip_peak_distance, chip_profit_delta_5,
+                       ind_strength_20, ind_strength_60, ind_rotation_speed_20,
+                       ind_breadth_up_20, ind_crowding_20, ind_dispersion_20,
+                       ind_relative_momentum_20, ind_relative_pe, ind_netflow_rank_20,
+                       ind_concentration, ind_momentum_decay,
+                       style_beta_20, style_beta_60, style_value_20, style_size_20,
+                       style_idio_vol_20, style_idio_vol_60, style_residual_ret_20,
+                       vol_std_5, vol_std_10, vol_std_20,
+                       liq_volume_ratio_5, liq_volume_ratio_20,
+                       liq_volume_ma_5, liq_volume_ma_20,
+                       liq_mfi_14, liq_obv_20,
+                       tech_adx_14, tech_bb_pos, tech_bb_width, tech_cci_20,
+                       tech_vol_price_corr_20,
+                       concept_hot_score, concept_momentum_top3, concept_leader_score,
+                       concept_rotation_score, concept_crowding_max, concept_diversity,
+                       concept_flow_rank, concept_exposure_top1, concept_cross_sector,
+                       concept_volume_ratio,
+                       mom_ret_1d, mom_ret_3d, mom_ret_5d, mom_ret_10d, mom_ret_20d, mom_ret_60d
+                FROM qdb_l1_factors
+                WHERE dt = (SELECT MAX(dt) FROM qdb_l1_factors)
+                  AND symbol IN ({sym_placeholders})
+            """
+            df = conn.execute(sql).fetchdf()
+            for _, row in df.iterrows():
+                sym = str(row.get("symbol", ""))
+                factors[sym] = {
+                    "roe": _safe_float(row.get("fun_roe")),
+                    "turnover_rate": _safe_float(row.get("fun_turnover_1")),
+                    "turnover_5": _safe_float(row.get("fun_turnover_5")),
+                    "turnover_20": _safe_float(row.get("fun_turnover_20")),
+                    "bp": _safe_float(row.get("fun_bp")),
+                    "ep": _safe_float(row.get("fun_ep")),
+                    "peg": _safe_float(row.get("fun_peg")),
+                    "value_zscore": _safe_float(row.get("fun_value_zscore")),
+                    "chip_profit_ratio_20": _safe_float(row.get("chip_profit_ratio_20")),
+                    "chip_profit_ratio_60": _safe_float(row.get("chip_profit_ratio_60")),
+                    "chip_profit_ratio_120": _safe_float(row.get("chip_profit_ratio_120")),
+                    "chip_concentration_20": _safe_float(row.get("chip_concentration_20")),
+                    "chip_floating_ratio": _safe_float(row.get("chip_floating_ratio")),
+                    "chip_cost_90_width": _safe_float(row.get("chip_cost_90_width")),
+                    "chip_peak_distance": _safe_float(row.get("chip_peak_distance")),
+                    "chip_profit_delta_5": _safe_float(row.get("chip_profit_delta_5")),
+                    "ind_strength_20": _safe_float(row.get("ind_strength_20")),
+                    "ind_strength_60": _safe_float(row.get("ind_strength_60")),
+                    "ind_rotation_speed_20": _safe_float(row.get("ind_rotation_speed_20")),
+                    "ind_breadth_up_20": _safe_float(row.get("ind_breadth_up_20")),
+                    "ind_crowding_20": _safe_float(row.get("ind_crowding_20")),
+                    "ind_dispersion_20": _safe_float(row.get("ind_dispersion_20")),
+                    "ind_relative_momentum_20": _safe_float(row.get("ind_relative_momentum_20")),
+                    "ind_relative_pe": _safe_float(row.get("ind_relative_pe")),
+                    "ind_netflow_rank_20": _safe_float(row.get("ind_netflow_rank_20")),
+                    "ind_concentration": _safe_float(row.get("ind_concentration")),
+                    "ind_momentum_decay": _safe_float(row.get("ind_momentum_decay")),
+                    "style_beta_20": _safe_float(row.get("style_beta_20")),
+                    "style_beta_60": _safe_float(row.get("style_beta_60")),
+                    "style_value_20": _safe_float(row.get("style_value_20")),
+                    "style_size_20": _safe_float(row.get("style_size_20")),
+                    "style_idio_vol_20": _safe_float(row.get("style_idio_vol_20")),
+                    "style_idio_vol_60": _safe_float(row.get("style_idio_vol_60")),
+                    "style_residual_ret_20": _safe_float(row.get("style_residual_ret_20")),
+                    "vol_std_20": _safe_float(row.get("vol_std_20")),
+                    "volume_ratio_5": _safe_float(row.get("liq_volume_ratio_5")),
+                    "volume_ratio_20": _safe_float(row.get("liq_volume_ratio_20")),
+                    "liq_mfi_14": _safe_float(row.get("liq_mfi_14")),
+                    "liq_obv_20": _safe_float(row.get("liq_obv_20")),
+                    "tech_adx_14": _safe_float(row.get("tech_adx_14")),
+                    "tech_bb_pos": _safe_float(row.get("tech_bb_pos")),
+                    "tech_bb_width": _safe_float(row.get("tech_bb_width")),
+                    "tech_cci_20": _safe_float(row.get("tech_cci_20")),
+                    "tech_vol_price_corr_20": _safe_float(row.get("tech_vol_price_corr_20")),
+                    "concept_hot_score": _safe_float(row.get("concept_hot_score")),
+                    "concept_leader_score": _safe_float(row.get("concept_leader_score")),
+                    "concept_rotation_score": _safe_float(row.get("concept_rotation_score")),
+                    "concept_crowding_max": _safe_float(row.get("concept_crowding_max")),
+                    "concept_diversity": _safe_float(row.get("concept_diversity")),
+                    "concept_flow_rank": _safe_float(row.get("concept_flow_rank")),
+                    # Returns from mom_ret_* (technical_indicators return_* are all NULL)
+                    "return_1d": _safe_float(row.get("mom_ret_1d")),
+                    "return_3d": _safe_float(row.get("mom_ret_3d")),
+                    "return_5d": _safe_float(row.get("mom_ret_5d")),
+                    "return_10d": _safe_float(row.get("mom_ret_10d")),
+                    "return_20d": _safe_float(row.get("mom_ret_20d")),
+                    "return_60d": _safe_float(row.get("mom_ret_60d")),
+                }
+        except Exception as exc:
+            logger.warning("QuantDB factors fetch failed: %s", exc)
+
+    # Step 5: Margin trading (finance_net, finance_balance) — values in 万元, convert to 亿
+    margin: dict[str, dict] = {}
+    if hub._view_exists("qdb_margin_trading"):
+        try:
+            sql = f"""
+                SELECT symbol, finance_balance, finance_net, finance_buy, slo_volume
+                FROM qdb_margin_trading
+                WHERE dt = (SELECT MAX(dt) FROM qdb_margin_trading)
+                  AND symbol IN ({sym_placeholders})
+            """
+            df = conn.execute(sql).fetchdf()
+            for _, row in df.iterrows():
+                sym = str(row.get("symbol", ""))
+                margin[sym] = {
+                    "finance_balance": _safe_float(row.get("finance_balance")) / 1e4 if _safe_float(row.get("finance_balance")) else 0,
+                    "finance_net": _safe_float(row.get("finance_net")) / 1e4 if _safe_float(row.get("finance_net")) else 0,
+                    "finance_buy": _safe_float(row.get("finance_buy")) / 1e4 if _safe_float(row.get("finance_buy")) else 0,
+                }
+        except Exception as exc:
+            logger.warning("QuantDB margin fetch failed: %s", exc)
+
+    # Step 6: Computed turnover_rate from volume/circulating_capital
+    turnover_map: dict[str, float] = {}
+    if hub._view_exists("qdb_daily_unadjusted") and hub._view_exists("qdb_valuation"):
+        try:
+            sql = f"""
+                SELECT d.symbol,
+                       d.volume * 100.0 / NULLIF(v.circulating_capital, 0) * 100 as turnover_rate
+                FROM qdb_daily_unadjusted d
+                JOIN qdb_valuation v ON d.symbol = v.symbol
+                WHERE d.dt = (SELECT MAX(dt) FROM qdb_daily_unadjusted)
+                  AND v.dt = (SELECT MAX(dt) FROM qdb_valuation)
+                  AND v.circulating_capital > 0
+                  AND d.symbol IN ({sym_placeholders})
+            """
+            df = conn.execute(sql).fetchdf()
+            for _, row in df.iterrows():
+                sym = str(row.get("symbol", ""))
+                turnover_map[sym] = _safe_float(row.get("turnover_rate"))
+        except Exception as exc:
+            logger.warning("QuantDB turnover computation failed: %s", exc)
+
+    # Step 7: Stock names + industry from instrument_detail
+    name_map: dict[str, str] = {}
+    industry_map: dict[str, str] = {}
+    is_st_map: dict[str, bool] = {}
+    try:
+        df_names = hub.fetch_stock_list()
+        if df_names is not None and not df_names.empty:
+            sym_col = "Symbol" if "Symbol" in df_names.columns else "symbol"
+            name_col = "Name" if "Name" in df_names.columns else "name"
+            matched = df_names[df_names[sym_col].isin(sym_set)]
+            for _, row in matched.iterrows():
+                sym = str(row[sym_col])
+                name = str(row.get(name_col, "")).strip()
+                if name:
+                    name_map[sym] = name
+                # Industry
+                for ind_col in ("rs_hyname", "tdx_dyname"):
+                    ind_val = str(row.get(ind_col, "")).strip()
+                    if ind_val and ind_val != "0":
+                        industry_map[sym] = ind_val
+                        break
+                # ST flag
+                st_col = "IsSTGP" if "IsSTGP" in df_names.columns else None
+                if st_col and row.get(st_col):
+                    is_st_map[sym] = bool(int(row.get(st_col, 0)))
+    except Exception as exc:
+        logger.debug("QuantDB name/industry lookup failed: %s", exc)
+
+    # Step 8: Build items with merged metrics
+    for sym in sym_list:
+        name = name_map.get(sym, sym)
+        m: dict[str, float] = {}
+        m.update(valuation.get(sym, {}))
+        m.update(technical.get(sym, {}))
+        m.update(sentiment.get(sym, {}))
+        m.update(factors.get(sym, {}))
+        m.update(margin.get(sym, {}))
+        # Add computed turnover_rate
+        if sym in turnover_map:
+            m["turnover_rate"] = turnover_map[sym]
+        # Add industry and ST as metrics fields
+        industry = industry_map.get(sym, "")
+        if industry:
+            m["industry"] = industry  # type: ignore[assignment]
+        if is_st_map.get(sym):
+            m["is_st"] = 1  # type: ignore[assignment]
+        result.items.append(PoolItem(symbol=sym, name=name, metrics=m))
+
+
 @router.post("/query-pool", response_model=QueryPoolResponse)
 async def query_pool(body: QueryPoolRequest, request: Request):
-    """执行查询确认股票池"""
+    """执行查询确认股票池 — 以 QuantDB 为主要数据源
+
+    流程:
+    1. 解析 DSL 条件，分离 PG 可用条件 vs QuantDB 条件
+    2. 用 QuantDB 执行条件过滤（主力数据源）
+    3. 用 QuantDB 结果回查 PG 获取 name/close 等基础字段
+    4. 用 QuantDB enrichment 补充估值/因子维度数据
+    """
     try:
         trace_id = _trace_id(request)
         user_id = _require_user_id(request)
-        result = await _step2_query_pool(body.dsl, user_id, market=body.market)
+        quantdb_conditions = body.quantdb_filters or []
+
+        # === Step 1: Determine ALL conditions (from DSL + explicit quantdb_filters) ===
+        # Parse DSL to extract factor conditions
+        all_qdb_conditions = list(quantdb_conditions)  # copy explicit filters
+
+        # Only parse DSL for additional QuantDB conditions if no explicit filters provided
+        # (avoids duplicate/conflicting conditions when presets already set them)
+        if not quantdb_conditions and body.dsl and body.dsl.startswith("SELECT symbol WHERE"):
+            from ...steps.step1_stock_selection import _parse_dsl, is_quantdb_factor, FACTOR_COLUMN_MAP
+            try:
+                conditions, combiners = _parse_dsl(body.dsl)
+                for cond in conditions:
+                    factor = cond.get("factor", "")
+                    if is_quantdb_factor(factor):
+                        mapped = FACTOR_COLUMN_MAP[factor.strip()]
+                        all_qdb_conditions.append({
+                            "table": mapped[0],
+                            "field": mapped[1],
+                            "operator": cond.get("op", ">"),
+                            "value": cond.get("value", 0),
+                        })
+            except Exception:
+                pass
+
+        # === Step 2: Query QuantDB as primary data source ===
+        qdb_symbols = set()
+        result = QueryPoolResponse(items=[], summary={}, charts={})
+
+        if all_qdb_conditions:
+            from backend.services.engine.ai_strategy.services.selection.generator import QuantDBQueryExecutor
+            from datetime import date as _date
+
+            executor = QuantDBQueryExecutor()
+            qdb_symbols = await asyncio.to_thread(executor.execute, all_qdb_conditions, _date.today())
+            logger.info("QuantDB primary query returned %d symbols", len(qdb_symbols))
+
+        # === Step 3: Build results ===
+        if qdb_symbols:
+            # Use QuantDB as sole data source (PG A-share data is incomplete)
+            await asyncio.to_thread(_build_items_from_quantdb, result, qdb_symbols, body.market)
+            logger.info("QuantDB-only: QDB=%d, built=%d items", len(qdb_symbols), len(result.items))
+        elif all_qdb_conditions:
+            # Had QuantDB conditions but no results — return empty (do NOT fall back to PG)
+            logger.info("QuantDB conditions yielded 0 results, returning empty (PG disabled for A-shares)")
+        else:
+            # No QuantDB conditions at all — return empty
+            logger.info("No QuantDB conditions provided, returning empty pool")
 
         logger.info(
             f"query_pool executed for user {user_id}",
@@ -294,7 +667,6 @@ async def query_pool(body: QueryPoolRequest, request: Request):
         )
         return result
     except HTTPException:
-        # 透传鉴权/参数错误，避免误报为 500。
         raise
     except Exception as e:
         import traceback
@@ -321,6 +693,58 @@ def _simple_parse_text(text_input: str):
     s = text_input.replace("：", ":").replace(" ", "")
     s = s.replace("总市值", "市值")
     s = s.replace("<=", "≤").replace(">=", "≥").replace("—", "-")
+
+    # --- 策略关键词预设 → 自动展开为 QuantDB 条件 ---
+    # 当用户输入模糊策略描述时，regex 无法匹配具体数值，这里用预设映射
+    _STRATEGY_PRESETS: dict[str, list[dict]] = {
+        "高股息": [
+            {"field": "dividend_rate", "operator": ">", "value": 0.03, "table": "quantdb_valuation"},
+            {"field": "pe_ttm", "operator": "<=", "value": 20.0, "table": "quantdb_valuation"},
+        ],
+        "价值股": [
+            {"field": "pe_ttm", "operator": "<=", "value": 20.0, "table": "quantdb_valuation"},
+            {"field": "pb", "operator": "<=", "value": 2.0, "table": "quantdb_valuation"},
+        ],
+        "蓝筹": [
+            {"field": "total_mv", "operator": ">=", "value": 200e8, "table": "quantdb_valuation"},
+            {"field": "pe_ttm", "operator": "<=", "value": 25.0, "table": "quantdb_valuation"},
+        ],
+        "白马": [
+            {"field": "total_mv", "operator": ">=", "value": 100e8, "table": "quantdb_valuation"},
+            {"field": "pe_ttm", "operator": "<=", "value": 25.0, "table": "quantdb_valuation"},
+            {"field": "dividend_rate", "operator": ">", "value": 0.01, "table": "quantdb_valuation"},
+        ],
+        "成长股": [
+            {"field": "total_mv", "operator": ">=", "value": 50e8, "table": "quantdb_valuation"},
+            {"field": "pe_ttm", "operator": "<=", "value": 40.0, "table": "quantdb_valuation"},
+        ],
+        "大盘股": [
+            {"field": "total_mv", "operator": ">=", "value": 500e8, "table": "quantdb_valuation"},
+        ],
+        "中盘股": [
+            {"field": "total_mv", "operator": ">=", "value": 100e8, "table": "quantdb_valuation"},
+            {"field": "total_mv", "operator": "<=", "value": 500e8, "table": "quantdb_valuation"},
+        ],
+        "小盘股": [
+            {"field": "total_mv", "operator": "<=", "value": 100e8, "table": "quantdb_valuation"},
+        ],
+        "低估值": [
+            {"field": "pe_ttm", "operator": "<=", "value": 15.0, "table": "quantdb_valuation"},
+            {"field": "pb", "operator": "<=", "value": 1.5, "table": "quantdb_valuation"},
+        ],
+    }
+    _preset_qdb_filters: list[dict] = []
+    _preset_dsl_parts: list[str] = []
+    for keyword, preset_filters in _STRATEGY_PRESETS.items():
+        if keyword in text_input:
+            _preset_qdb_filters.extend(preset_filters)
+            _preset_dsl_parts.append(keyword)
+    # deduplicate
+    if _preset_qdb_filters:
+        _dedup: dict[tuple, dict] = {}
+        for f in _preset_qdb_filters:
+            _dedup[(f["field"], f["operator"], f["table"])] = f
+        _preset_qdb_filters = list(_dedup.values())
 
     factors = []
     suggestions = []
@@ -615,6 +1039,171 @@ def _simple_parse_text(text_input: str):
         factors.append("idx_zz1000")
         local_hit = True
 
+    # --- QuantDB 新增维度解析 ---
+    # NOTE: A股估值数据(PE/PB/ROE/市值)在 PG 中为空，必须路由到 QuantDB
+    quantdb_filters: list[dict] = []
+
+    # Merge preset filters first
+    if _preset_qdb_filters:
+        quantdb_filters.extend(_preset_qdb_filters)
+        local_hit = True
+        if _preset_dsl_parts:
+            factors.extend(_preset_dsl_parts)
+
+    # is_st → stock_list filter (IsSTGP field)
+    if is_st_flag is not None:
+        quantdb_filters.append({"field": "IsSTGP", "operator": "==", "value": is_st_flag, "table": "quantdb_stock_list"})
+
+    # Index membership → stock_list filter
+    if hs300_flag is not None:
+        quantdb_filters.append({"field": "idx_hs300", "operator": "==", "value": 1, "table": "quantdb_stock_list"})
+    if csi1000_flag is not None:
+        quantdb_filters.append({"field": "idx_zz1000", "operator": "==", "value": 1, "table": "quantdb_stock_list"})
+
+    # PE → QuantDB valuation
+    if pe_range:
+        low, high = pe_range
+        if low is not None:
+            quantdb_filters.append({"field": "pe_ttm", "operator": ">=", "value": low, "table": "quantdb_valuation"})
+        if high is not None:
+            quantdb_filters.append({"field": "pe_ttm", "operator": "<=", "value": high, "table": "quantdb_valuation"})
+
+    # PB → QuantDB valuation
+    if pb_range:
+        low, high = pb_range
+        if low is not None:
+            quantdb_filters.append({"field": "pb", "operator": ">=", "value": low, "table": "quantdb_valuation"})
+        if high is not None:
+            quantdb_filters.append({"field": "pb", "operator": "<=", "value": high, "table": "quantdb_valuation"})
+
+    # ROE → QuantDB l1_factors (fun_roe is in percentage, e.g. 15 = 15%)
+    if roe_range:
+        low, high = roe_range
+        if low is not None:
+            quantdb_filters.append({"field": "fun_roe", "operator": ">=", "value": low, "table": "quantdb_factors"})
+        if high is not None:
+            quantdb_filters.append({"field": "fun_roe", "operator": "<=", "value": high, "table": "quantdb_factors"})
+
+    # Market cap → QuantDB valuation (total_mv in 元)
+    if cap_range:
+        low, high = cap_range
+        # cap_range is already in yuan (converted by _cap_to_yuan above)
+        if low is not None:
+            quantdb_filters.append({"field": "total_mv", "operator": ">=", "value": low, "table": "quantdb_valuation"})
+        if high is not None:
+            quantdb_filters.append({"field": "total_mv", "operator": "<=", "value": high, "table": "quantdb_valuation"})
+
+    if re.search(r"股息率|分红率", text_input):
+        val = 0.02  # default 2%
+        m_div = re.search(r"(?:股息率|分红率)[≥>=≥大于等于不少于不低于不小于大于高于超过以上至少]*(\d+(?:\.\d+)?)", s)
+        if m_div:
+            raw_val = float(m_div.group(1))
+            # QuantDB stores dividend_rate as decimal (0.03 = 3%), user inputs percentage
+            val = raw_val / 100.0 if raw_val > 1.0 else raw_val
+        quantdb_filters.append({"field": "dividend_rate", "operator": ">", "value": val, "table": "quantdb_valuation"})
+        factors.append("dividend_rate")
+        local_hit = True
+    if re.search(r"市销率|PS[^a-zA-Z]", text_input, re.IGNORECASE):
+        val = 5.0
+        m_ps = re.search(r"(?:市销率|PS)[≤<=≤小于等于不高于不超过不大于小于低于以下以内至多]*(\d+(?:\.\d+)?)", s, re.IGNORECASE)
+        if m_ps:
+            val = float(m_ps.group(1))
+        quantdb_filters.append({"field": "ps_ttm", "operator": "<", "value": val, "table": "quantdb_valuation"})
+        factors.append("ps_ttm")
+        local_hit = True
+    if re.search(r"静态市盈率|静态PE", text_input, re.IGNORECASE):
+        quantdb_filters.append({"field": "pe_static", "operator": "<", "value": 30.0, "table": "quantdb_valuation"})
+        factors.append("pe_static")
+        local_hit = True
+    if re.search(r"获利盘|筹码获利", text_input):
+        val = 50.0
+        m_chip = re.search(r"(?:获利盘|筹码获利)[比例]?(?:≥|>=|大于等于|不少于|不低于|不小于|大于|高于|超过|以上|至少)?(\d+(?:\.\d+)?)", s)
+        if m_chip:
+            val = float(m_chip.group(1))
+        quantdb_filters.append({"field": "chip_profit_ratio_20", "operator": ">", "value": val, "table": "quantdb_factors"})
+        factors.append("chip_profit_ratio_20")
+        local_hit = True
+    if re.search(r"筹码集中", text_input):
+        quantdb_filters.append({"field": "chip_concentration_20", "operator": ">", "value": 0.5, "table": "quantdb_factors"})
+        factors.append("chip_concentration_20")
+        local_hit = True
+    if re.search(r"行业强度|行业动量", text_input):
+        quantdb_filters.append({"field": "ind_strength_20", "operator": ">", "value": 0.0, "table": "quantdb_factors"})
+        factors.append("ind_strength_20")
+        local_hit = True
+    if re.search(r"行业拥挤|拥挤度", text_input):
+        quantdb_filters.append({"field": "ind_crowding_20", "operator": "<", "value": 0.5, "table": "quantdb_factors"})
+        factors.append("ind_crowding_20")
+        local_hit = True
+    if re.search(r"风格|Beta|beta", text_input):
+        if re.search(r"Beta|beta", text_input):
+            quantdb_filters.append({"field": "style_beta_20", "operator": ">", "value": 0.8, "table": "quantdb_factors"})
+            factors.append("style_beta_20")
+        else:
+            quantdb_filters.append({"field": "style_value_20", "operator": ">", "value": 0.0, "table": "quantdb_factors"})
+            factors.append("style_value_20")
+        local_hit = True
+    if re.search(r"概念热度|热门概念", text_input):
+        quantdb_filters.append({"field": "concept_hot_score", "operator": ">", "value": 0.5, "table": "quantdb_factors"})
+        factors.append("concept_hot_score")
+        local_hit = True
+    if re.search(r"概念轮动|板块轮动", text_input):
+        quantdb_filters.append({"field": "concept_rotation_score", "operator": ">", "value": 0.0, "table": "quantdb_factors"})
+        factors.append("concept_rotation_score")
+        local_hit = True
+    if re.search(r"流动性|流动性评分", text_input):
+        val = 0.3
+        m_liq = re.search(r"(?:流动性|流动性评分)[≥>=≥大于等于不少于不低于不小于大于高于超过以上至少]*(\d+(?:\.\d+)?)", s)
+        if m_liq:
+            val = float(m_liq.group(1))
+        quantdb_filters.append({"field": "liquidity_score", "operator": ">", "value": val, "table": "quantdb_sentiment"})
+        factors.append("liquidity_score")
+        local_hit = True
+    if re.search(r"买入压力|买压", text_input):
+        quantdb_filters.append({"field": "buy_pressure", "operator": ">", "value": 0.0, "table": "quantdb_sentiment"})
+        factors.append("buy_pressure")
+        local_hit = True
+    if re.search(r"融资余额|两融余额|融资净买入", text_input):
+        if "净买入" in s:
+            quantdb_filters.append({"field": "finance_net", "operator": ">", "value": 0, "table": "quantdb_margin"})
+            factors.append("finance_net")
+        else:
+            quantdb_filters.append({"field": "finance_balance", "operator": ">", "value": 0, "table": "quantdb_margin"})
+            factors.append("finance_balance")
+        local_hit = True
+    if re.search(r"融券|卖空", text_input):
+        quantdb_filters.append({"field": "slo_volume", "operator": "<", "value": 1000000, "table": "quantdb_margin"})
+        factors.append("slo_volume")
+        local_hit = True
+    if re.search(r"商誉", text_input):
+        # Financial data not in QuantDB parquet views; skip filter
+        factors.append("goodwill")
+        local_hit = True
+        suggestions.append("商誉筛选暂不支持（财务数据未接入QuantDB视图）")
+    if re.search(r"研发费用|研发投入", text_input):
+        factors.append("research_expenses")
+        local_hit = True
+        suggestions.append("研发费用筛选暂不支持（财务数据未接入QuantDB视图）")
+    if re.search(r"毛利率", text_input):
+        factors.append("sales_gross_profit")
+        local_hit = True
+        suggestions.append("毛利率筛选暂不支持（财务数据未接入QuantDB视图）")
+    if re.search(r"每股收益|EPS", text_input, re.IGNORECASE):
+        factors.append("s_fa_eps_basic")
+        local_hit = True
+        suggestions.append("EPS筛选暂不支持（财务数据未接入QuantDB视图）")
+    if re.search(r"量比|OBV|MFI|资金流量", text_input, re.IGNORECASE):
+        if re.search(r"MFI|资金流量", text_input, re.IGNORECASE):
+            quantdb_filters.append({"field": "liq_mfi_14", "operator": ">", "value": 50, "table": "quantdb_factors"})
+            factors.append("liq_mfi_14")
+        elif re.search(r"OBV|能量潮", text_input, re.IGNORECASE):
+            quantdb_filters.append({"field": "liq_obv_20", "operator": ">", "value": 0, "table": "quantdb_factors"})
+            factors.append("liq_obv_20")
+        else:
+            quantdb_filters.append({"field": "vol_to_ma5", "operator": ">", "value": 1.0, "table": "quantdb_technical"})
+            factors.append("vol_to_ma5")
+        local_hit = True
+
     parts = []
     if cap_range:
         low, high = cap_range
@@ -645,14 +1234,13 @@ def _simple_parse_text(text_input: str):
 
     if roe_range:
         low, high = roe_range
-        # 数据库中 roe 通常是小数，如 0.15 代表 15%。
-        # 用户输入 15，需除以 100 换算。
+        # fun_roe in QuantDB is already in percentage (e.g. 15 = 15%)
         if low is not None and high is not None:
-            parts.append(f"roe >= {low/100.0} AND roe <= {high/100.0}")
+            parts.append(f"roe >= {low} AND roe <= {high}")
         elif low is not None:
-            parts.append(f"roe >= {low/100.0}")
+            parts.append(f"roe >= {low}")
         elif high is not None:
-            parts.append(f"roe <= {high/100.0}")
+            parts.append(f"roe <= {high}")
 
     if is_st_flag is not None:
         parts.append(f"is_st == {is_st_flag}")
@@ -683,9 +1271,9 @@ def _simple_parse_text(text_input: str):
         if roe_range:
             low, high = roe_range
             if low is not None:
-                sql_parts.append(f"roe >= {low/100.0}")
+                sql_parts.append(f"fun_roe >= {low}")
             if high is not None:
-                sql_parts.append(f"roe <= {high/100.0}")
+                sql_parts.append(f"fun_roe <= {high}")
         if is_st_flag is not None:
             sql_parts.append(f"is_st = {is_st_flag}")
         if hs300_flag is not None:
@@ -758,10 +1346,10 @@ def _simple_parse_text(text_input: str):
                 if alias and alias not in expanded_industry_terms:
                     expanded_industry_terms.append(alias)
 
-        # 行业匹配覆盖 industry, ind_code_l1, ind_code_l2 三列，确保从一级到细分行业都能匹配。
+        # 行业匹配覆盖 industry 列（ind_code_l1/ind_code_l2 不存在于 PG，已移除）
         ind_clause = " OR ".join(
             [
-                f"industry ILIKE '%{_sql_quote(ind)}%' OR ind_code_l1 ILIKE '%{_sql_quote(ind)}%' OR ind_code_l2 ILIKE '%{_sql_quote(ind)}%'"
+                f"industry ILIKE '%{_sql_quote(ind)}%'"
                 for ind in expanded_industry_terms
             ]
         )
@@ -775,8 +1363,25 @@ def _simple_parse_text(text_input: str):
         )
     else:
         dsl = "SELECT symbol WHERE " + (" AND ".join(parts) if parts else "true")
+    # If preset filters generated conditions but DSL has no concrete parts, build from presets
+    if _preset_qdb_filters and not parts:
+        preset_parts = []
+        for f in _preset_qdb_filters:
+            field = f["field"]
+            op = f["operator"]
+            val = f["value"]
+            op_str = {">=": ">=", "<=": "<=", ">": ">", "<": "<"}.get(op, op)
+            if field == "total_mv" and isinstance(val, (int, float)) and val >= 1e8:
+                preset_parts.append(f"market_cap {op_str} {val/1e8:.0f}亿")
+            elif field == "dividend_rate":
+                preset_parts.append(f"dividend_rate {op_str} {val*100:.1f}%")
+            else:
+                preset_parts.append(f"{field} {op_str} {val}")
+        dsl = "SELECT symbol WHERE " + " AND ".join(preset_parts)
     mapping = {"factors": factors, "industry": industry_list, "local_hit": local_hit}
-    if not parts and not industry_list:
+    if quantdb_filters:
+        mapping["quantdb_filters"] = quantdb_filters
+    if not parts and not industry_list and not quantdb_filters:
         suggestions.append("未识别具体条件, 可尝试使用: 市值100-300, PE 15-20, 行业: 计算机")
     suggestions.extend(loose_mode_hits)
     return dsl, mapping, suggestions
@@ -803,14 +1408,30 @@ async def parse_text(body: ParseTextRequest, request: Request):
                 version="2.0.0",
             )
 
-        # 优先使用 LLM 大模型解析逻辑，以处理复杂语义和趋势描述。
+        # 优先使用本地正则解析（快速、确定性），LLM 仅在正则无法识别时作为兜底
+        local_dsl, local_mapping, local_suggestions = _simple_parse_text(body.text)
+        local_hit = local_mapping.get("local_hit", False)
+        local_qdb_filters = local_mapping.pop("quantdb_filters", None)
+
+        if local_hit:
+            return ParseResponse(
+                dsl=local_dsl,
+                mapping=local_mapping,
+                warnings=[],
+                confidence=0.85,
+                suggestions=local_suggestions,
+                version="local-primary-1.0.0",
+                quantdb_filters=local_qdb_filters,
+            )
+
+        # 正则无法识别时，降级到 LLM 大模型解析
         parser = get_intent_parser()
         try:
             intent = await parser.parse(body.text)
             generator = get_sql_generator()
             sql = await generator.generate_sql(intent)
         except Exception as llm_err:
-            logger.warning("LLM parsing failed, falling back to local: %s", llm_err)
+            logger.warning("LLM parsing also failed: %s", llm_err)
             sql = None
             intent = {}
 
@@ -827,7 +1448,7 @@ async def parse_text(body: ParseTextRequest, request: Request):
                 sql = re.sub(r"from\s+stock_selection", f"from {market_table}", sql, flags=re.IGNORECASE)
             if "from stock_daily" in sql.lower() and "from stock_daily_latest" not in sql.lower():
                 sql = re.sub(r"from\s+stock_daily(?!\s_latest)", f"from {market_table}", sql, flags=re.IGNORECASE)
-            
+
             # 若生成的是全市场 SQL，自动对齐口径
             if _is_full_market_sql(sql):
                 sql = _build_full_market_sql(body.market)
@@ -842,20 +1463,19 @@ async def parse_text(body: ParseTextRequest, request: Request):
             return ParseResponse(
                 dsl=dsl,
                 mapping=mapping,
-                warnings=[],
-                confidence=0.9,
+                warnings=["正则解析未命中，由 LLM 生成，复杂语义可能受限"],
+                confidence=0.7,
                 suggestions=suggestions,
-                version="llm-2.0.0",
+                version="llm-fallback-2.0.0",
             )
 
-        # 降级：只有在 LLM 无法处理时，才使用本地正则解析作为兜底
-        local_dsl, local_mapping, local_suggestions = _simple_parse_text(body.text)
+        # 正则和 LLM 都无法处理
         return ParseResponse(
             dsl=local_dsl,
             mapping=local_mapping,
             warnings=["当前解析结果由基础规则生成，复杂语义可能受限"],
-            confidence=0.7,
-            suggestions=local_suggestions,
+            confidence=0.5,
+            suggestions=local_suggestions or ["未识别具体条件，可尝试: 市值100-300亿, PE<20, 行业: 计算机"],
             version="local-fallback-1.0.0",
         )
     except Exception as e:

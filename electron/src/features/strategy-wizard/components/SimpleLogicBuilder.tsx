@@ -40,6 +40,7 @@ const FACTOR_META = new Map(FACTORS.map((f) => [f.key, f]));
 
 // 预设条件组合（一键填入）
 const PRESETS: { name: string; tip: string; items: Omit<FlatCondition, 'id'>[] }[] = [
+  // === 经典选股 ===
   {
     name: '低估值蓝筹',
     tip: 'PE<20, PB<2, 市值>100亿',
@@ -68,6 +69,25 @@ const PRESETS: { name: string; tip: string; items: Omit<FlatCondition, 'id'>[] }
     ],
   },
   {
+    name: '超大盘蓝筹',
+    tip: '市值>2000亿, PE<25, 排除ST',
+    items: [
+      { factor: 'market_cap', operator: '>', value: 2000 },
+      { factor: 'pe', operator: '<', value: 25 },
+      { factor: 'is_st', operator: '==', value: 0 },
+    ],
+  },
+  {
+    name: '破净价值',
+    tip: 'PB<1, ROE>8, 排除ST',
+    items: [
+      { factor: 'pb', operator: '<', value: 1 },
+      { factor: 'roe', operator: '>', value: 8 },
+      { factor: 'is_st', operator: '==', value: 0 },
+    ],
+  },
+  // === 技术形态 ===
+  {
     name: '突破强势',
     tip: '5日>10日>20日均线, 量比>1.5',
     items: [
@@ -93,19 +113,156 @@ const PRESETS: { name: string; tip: string; items: Omit<FlatCondition, 'id'>[] }
     ],
   },
   {
-    name: 'AI算力',
-    tip: 'AI概念 且 市值>50亿',
+    name: '放量突破',
+    tip: '换手>5%, 涨幅>3%, 量比>2',
     items: [
-      { factor: 'concept_ai', operator: '==', value: 1 },
-      { factor: 'market_cap', operator: '>', value: 50 },
+      { factor: 'turnover_rate', operator: '>', value: 5 },
+      { factor: 'pct_change', operator: '>', value: 3 },
+      { factor: 'volume_ratio_5', operator: '>', value: 2 },
     ],
   },
+  // === 资金流向 ===
   {
     name: '主力净流入',
     tip: '主力资金>0 且 涨幅>2%',
     items: [
       { factor: 'main_flow', operator: '>', value: 0 },
       { factor: 'pct_change', operator: '>', value: 2 },
+    ],
+  },
+  {
+    name: '融资加仓',
+    tip: '融资净买入>0, 融资余额>5亿',
+    items: [
+      { factor: 'finance_net', operator: '>', value: 0 },
+      { factor: 'finance_balance', operator: '>', value: 5 },
+    ],
+  },
+  {
+    name: '资金流入',
+    tip: 'MFI>60, OBV能量潮上升',
+    items: [
+      { factor: 'liq_mfi_14', operator: '>', value: 60 },
+      { factor: 'liq_obv_20', operator: '>', value: 0 },
+    ],
+  },
+  // === 价值+股息 ===
+  {
+    name: '高股息价值',
+    tip: '低PE+高股息+大市值蓝筹',
+    items: [
+      { factor: 'pe', operator: '<', value: 15 },
+      { factor: 'dividend_rate', operator: '>', value: 3 },
+      { factor: 'market_cap', operator: '>', value: 500 },
+    ],
+  },
+  {
+    name: '高毛利稳健',
+    tip: '毛利率>40%, ROE>12%, 低负债',
+    items: [
+      { factor: 'sales_gross_profit', operator: '>', value: 40 },
+      { factor: 'roe', operator: '>', value: 12 },
+      { factor: 'market_cap', operator: '>', value: 100 },
+    ],
+  },
+  // === 筹码分析 ===
+  {
+    name: '筹码集中',
+    tip: '获利盘高+浮筹低+缩量',
+    items: [
+      { factor: 'chip_profit_ratio_20', operator: '>', value: 60 },
+      { factor: 'chip_floating_ratio', operator: '<', value: 30 },
+      { factor: 'volume_ratio_5', operator: '<', value: 0.8 },
+    ],
+  },
+  {
+    name: '主力吸筹',
+    tip: '获利盘低+集中度上升+底部',
+    items: [
+      { factor: 'chip_profit_ratio_20', operator: '<', value: 30 },
+      { factor: 'chip_concentration_20', operator: '>', value: 0.5 },
+    ],
+  },
+  // === 行业因子 ===
+  {
+    name: '行业强势',
+    tip: '行业强度高+资金流入',
+    items: [
+      { factor: 'ind_strength_20', operator: '>', value: 0.7 },
+      { factor: 'main_flow', operator: '>', value: 0 },
+    ],
+  },
+  {
+    name: '行业轮动',
+    tip: '轮动速度高+广度大+不拥挤',
+    items: [
+      { factor: 'ind_rotation_speed_20', operator: '>', value: 0.3 },
+      { factor: 'ind_breadth_up_20', operator: '>', value: 0.5 },
+      { factor: 'ind_crowding_20', operator: '<', value: 0.5 },
+    ],
+  },
+  // === 风格因子 ===
+  {
+    name: '价值风格',
+    tip: '价值因子高+规模因子低',
+    items: [
+      { factor: 'style_value_20', operator: '>', value: 0.5 },
+      { factor: 'style_size_20', operator: '<', value: -0.3 },
+    ],
+  },
+  {
+    name: '低波质量',
+    tip: 'Beta<1+特质波动低+高ROE',
+    items: [
+      { factor: 'style_beta_20', operator: '<', value: 1 },
+      { factor: 'style_idio_vol_20', operator: '<', value: 0.02 },
+      { factor: 'roe', operator: '>', value: 10 },
+    ],
+  },
+  // === 市场情绪 ===
+  {
+    name: '流动性筛选',
+    tip: '流动性好+买入压力>卖出压力',
+    items: [
+      { factor: 'liquidity_score', operator: '>', value: 0.5 },
+      { factor: 'buy_pressure', operator: '>', value: 0.5 },
+      { factor: 'sell_pressure', operator: '<', value: 0.3 },
+    ],
+  },
+  {
+    name: '动量强势',
+    tip: '1日动量>2%+3日动量>5%',
+    items: [
+      { factor: 'momentum_1d', operator: '>', value: 2 },
+      { factor: 'momentum_3d', operator: '>', value: 5 },
+      { factor: 'is_st', operator: '==', value: 0 },
+    ],
+  },
+  // === 概念因子 ===
+  {
+    name: '概念热点',
+    tip: '概念热度高+领导力强',
+    items: [
+      { factor: 'concept_hot_score', operator: '>', value: 0.6 },
+      { factor: 'concept_leader_score', operator: '>', value: 0.5 },
+    ],
+  },
+  // === 扩展技术 ===
+  {
+    name: '趋势突破',
+    tip: 'ADX趋势+布林带中轨上方+量比放大',
+    items: [
+      { factor: 'tech_adx_14', operator: '>', value: 25 },
+      { factor: 'tech_bb_pos', operator: '>', value: 0.5 },
+      { factor: 'volume_ratio_5', operator: '>', value: 1.5 },
+    ],
+  },
+  {
+    name: '布林收口',
+    tip: '布林带窄+即将突破',
+    items: [
+      { factor: 'tech_bb_width', operator: '<', value: 0.05 },
+      { factor: 'tech_adx_14', operator: '>', value: 20 },
     ],
   },
 ];

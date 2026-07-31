@@ -164,3 +164,313 @@ def get_sql_generator():
     if _generator is None:
         _generator = SQLGenerator()
     return _generator
+
+
+# ---------------------------------------------------------------------------
+# QuantDB Query Executor — 从 QuantDB parquet 执行选股查询
+# ---------------------------------------------------------------------------
+
+import pandas as pd
+from datetime import date
+
+# Map QuantDB table prefix to QuantDBDataHub method name
+_QUANTDB_SOURCE_MAP: dict[str, str] = {
+    "quantdb_valuation": "fetch_valuation",
+    "quantdb_sentiment": "fetch_market_sentiment",
+    "quantdb_factors": "fetch_l1_factors",
+    "quantdb_margin": "fetch_margin_trading",
+    "quantdb_technical": "fetch_technical_indicators",
+    # quantdb_financial is per-symbol files; requires special handling (see below)
+}
+
+
+class QuantDBQueryExecutor:
+    """从 QuantDB parquet 执行选股查询，返回满足条件的 symbol 集合。
+
+    用法:
+        executor = QuantDBQueryExecutor()
+        symbols = executor.execute(conditions, target_date=date.today())
+    """
+
+    # Map QuantDB table name to DuckDB view name
+    _VIEW_MAP: dict[str, str] = {
+        "quantdb_valuation": "qdb_valuation",
+        "quantdb_sentiment": "qdb_market_sentiment",
+        "quantdb_factors": "qdb_l1_factors",
+        "quantdb_margin": "qdb_margin_trading",
+        "quantdb_technical": "qdb_technical_indicators",
+        "quantdb_daily": "qdb_daily_unadjusted",
+        # quantdb_financial is per-symbol files; requires special handling
+        # quantdb_stock_list is handled via hub.fetch_stock_list() (not a DuckDB view)
+        # quantdb_turnover is a virtual table handled via SQL JOIN computation
+    }
+
+    # Fields that require special SQL computation (not simple column filters)
+    _COMPUTED_FIELDS: dict[str, str] = {
+        # turnover_rate = volume(手) * 100 / circulating_capital * 100 (percentage)
+        "turnover_rate": """
+            d.volume * 100.0 / NULLIF(v.circulating_capital, 0) * 100
+        """,
+    }
+
+    def execute(self, conditions: list[dict], target_date: date | None = None) -> set[str]:
+        """执行 QuantDB 条件查询，返回满足所有条件的 symbol 交集。
+
+        Uses DuckDB SQL for server-side filtering (much faster than loading all data into Pandas).
+        """
+        from backend.services.engine.data_platform.quantdb_hub import QuantDBDataHub
+
+        hub = QuantDBDataHub.get_instance()
+        if not hub.available:
+            logger.info("QuantDB data not available, skipping QuantDB query")
+            return set()
+
+        if target_date is None:
+            target_date = date.today()
+
+        # Group conditions by source table
+        grouped: dict[str, list[dict]] = {}
+        for cond in conditions:
+            table = cond.get("table", "")
+            if table.startswith("quantdb_"):
+                grouped.setdefault(table, []).append(cond)
+
+        if not grouped:
+            return set()
+
+        result_sets: list[set[str]] = []
+        for table_name, table_conditions in grouped.items():
+            # quantdb_financial requires per-symbol file access; skip for now
+            if table_name == "quantdb_financial":
+                logger.info(
+                    "quantdb_financial queries skipped (per-symbol file access not yet supported in batch mode)"
+                )
+                continue
+
+            # quantdb_stock_list: filter via hub.fetch_stock_list() (IsSTGP, industry, index membership)
+            if table_name == "quantdb_stock_list":
+                result_sets.append(self._execute_stock_list_filter(hub, table_conditions))
+                continue
+
+            # quantdb_turnover: computed via SQL JOIN (volume/circulating_capital)
+            if table_name == "quantdb_turnover":
+                result_sets.append(self._execute_turnover_filter(hub, table_conditions))
+                continue
+
+            view_name = self._VIEW_MAP.get(table_name)
+            if not view_name:
+                # Fallback to pandas-based approach
+                method_name = _QUANTDB_SOURCE_MAP.get(table_name)
+                if method_name:
+                    result_sets.append(self._execute_pandas(hub, method_name, table_name, table_conditions, target_date))
+                continue
+
+            try:
+                conn = hub._get_duck_conn()
+                # Check if view exists
+                if not hub._view_exists(view_name):
+                    logger.info("QuantDB view %s not available, trying pandas fallback", view_name)
+                    method_name = _QUANTDB_SOURCE_MAP.get(table_name)
+                    if method_name:
+                        result_sets.append(self._execute_pandas(hub, method_name, table_name, table_conditions, target_date))
+                    continue
+
+                # Build SQL WHERE clause for conditions
+                where_parts = []
+                for cond in table_conditions:
+                    field = cond.get("field", cond.get("name", ""))
+                    op = cond.get("operator", ">")
+                    val = cond.get("value", 0)
+                    # Map operator to SQL
+                    sql_op = {">=": ">=", "<=": "<=", "==": "=", "!=": "!="}.get(op, op)
+                    if isinstance(val, str):
+                        where_parts.append(f'{field} {sql_op} \'{val}\'')
+                    else:
+                        where_parts.append(f'{field} {sql_op} {val}')
+
+                where_clause = " AND ".join(where_parts) if where_parts else "1=1"
+
+                # Get latest date in the view if target_date has no data
+                date_str = target_date.strftime("%Y-%m-%d")
+
+                sql = f"""
+                    SELECT DISTINCT symbol FROM {view_name}
+                    WHERE dt = '{date_str}' AND ({where_clause})
+                """
+                try:
+                    df = conn.execute(sql).fetchdf()
+                except Exception:
+                    # Date might not exist, try latest available
+                    sql = f"""
+                        SELECT DISTINCT symbol FROM {view_name}
+                        WHERE dt = (SELECT MAX(dt) FROM {view_name}) AND ({where_clause})
+                    """
+                    df = conn.execute(sql).fetchdf()
+
+                if df is not None and not df.empty:
+                    sym_col = "symbol" if "symbol" in df.columns else df.columns[0]
+                    symbols = set(df[sym_col].dropna().unique())
+                    logger.info(
+                        "QuantDB %s (SQL): %d stocks passed conditions",
+                        table_name,
+                        len(symbols),
+                    )
+                    result_sets.append(symbols)
+                else:
+                    logger.info("QuantDB %s (SQL): no stocks passed conditions", table_name)
+
+            except Exception as exc:
+                logger.warning("QuantDB SQL query failed for %s: %s, trying pandas fallback", table_name, exc)
+                method_name = _QUANTDB_SOURCE_MAP.get(table_name)
+                if method_name:
+                    result_sets.append(self._execute_pandas(hub, method_name, table_name, table_conditions, target_date))
+
+        if not result_sets:
+            return set()
+
+        # Intersection of all result sets (stocks must pass ALL table conditions)
+        return set.intersection(*result_sets)
+
+    def _execute_stock_list_filter(self, hub, conditions: list[dict]) -> set[str]:
+        """Filter symbols using hub.fetch_stock_list() for IsSTGP, industry, index membership."""
+        try:
+            df = hub.fetch_stock_list()
+            if df is None or df.empty:
+                return set()
+
+            sym_col = "Symbol" if "Symbol" in df.columns else "symbol"
+            mask = pd.Series(True, index=df.index)
+
+            for cond in conditions:
+                field = cond.get("field", cond.get("name", ""))
+                op = cond.get("operator", ">")
+                val = cond.get("value", 0)
+
+                if field == "IsSTGP":
+                    # is_st: val=0 means exclude ST, val=1 means only ST
+                    col = pd.to_numeric(df.get("IsSTGP", 0), errors="coerce").fillna(0)
+                    if op in ("==", "=") and val == 0:
+                        mask &= col == 0
+                    elif op in ("==", "=") and val == 1:
+                        mask &= col >= 1
+                elif field == "industry":
+                    # Industry filter: match against rs_hyname or tdx_dyname
+                    for ind_col in ("rs_hyname", "tdx_dyname"):
+                        if ind_col in df.columns:
+                            ind_mask = df[ind_col].astype(str).str.contains(str(val), case=False, na=False)
+                            mask |= ind_mask
+                elif field in ("idx_hs300", "idx_zz1000", "idx_zz500", "idx_chinext"):
+                    # Index membership: these are boolean flags in stock_list
+                    # For now, we don't have these columns in stock_list
+                    # Skip — will be handled by post-filtering in _build_items_from_quantdb
+                    pass
+
+            filtered = df[mask]
+            if sym_col in filtered.columns:
+                symbols = set(filtered[sym_col].dropna().unique())
+                logger.info("QuantDB stock_list filter: %d/%d stocks passed", len(symbols), len(df))
+                return symbols
+        except Exception as exc:
+            logger.warning("QuantDB stock_list filter failed: %s", exc)
+
+        return set()
+
+    def _execute_turnover_filter(self, hub, conditions: list[dict]) -> set[str]:
+        """Filter symbols by computed turnover_rate via SQL JOIN.
+
+        turnover_rate = volume(手) * 100 / circulating_capital * 100 (percentage)
+        """
+        try:
+            conn = hub._get_duck_conn()
+            if not hub._view_exists("qdb_daily_unadjusted") or not hub._view_exists("qdb_valuation"):
+                return set()
+
+            where_parts = []
+            for cond in conditions:
+                field = cond.get("field", "")
+                op = cond.get("operator", ">")
+                val = cond.get("value", 0)
+                sql_op = {">=": ">=", "<=": "<=", "==": "=", "!=": "!="}.get(op, op)
+
+                if field == "turnover_rate":
+                    # val is already in percentage (e.g., 3 = 3%)
+                    where_parts.append(
+                        f"d.volume * 100.0 / NULLIF(v.circulating_capital, 0) * 100 {sql_op} {val}"
+                    )
+
+            if not where_parts:
+                return set()
+
+            where_clause = " AND ".join(where_parts)
+            sql = f"""
+                SELECT DISTINCT d.symbol
+                FROM qdb_daily_unadjusted d
+                JOIN qdb_valuation v ON d.symbol = v.symbol
+                WHERE d.dt = (SELECT MAX(dt) FROM qdb_daily_unadjusted)
+                  AND v.dt = (SELECT MAX(dt) FROM qdb_valuation)
+                  AND v.circulating_capital > 0
+                  AND ({where_clause})
+            """
+            df = conn.execute(sql).fetchdf()
+            if df is not None and not df.empty:
+                symbols = set(df["symbol"].dropna().unique())
+                logger.info("QuantDB turnover filter: %d stocks passed", len(symbols))
+                return symbols
+        except Exception as exc:
+            logger.warning("QuantDB turnover filter failed: %s", exc)
+
+        return set()
+
+    def _execute_pandas(
+        self, hub, method_name: str, table_name: str,
+        table_conditions: list[dict], target_date: date,
+    ) -> set[str]:
+        """Fallback: use pandas-based filtering when DuckDB view is not available."""
+        fetch_fn = getattr(hub, method_name, None)
+        if fetch_fn is None:
+            return set()
+
+        try:
+            df = fetch_fn(start=target_date, end=target_date)
+            if df is None or df.empty:
+                df = fetch_fn()
+
+            if df is None or df.empty:
+                return set()
+
+            sym_col = "symbol" if "symbol" in df.columns else "Symbol"
+            if sym_col != "symbol" and sym_col in df.columns:
+                df = df.rename(columns={sym_col: "symbol"})
+
+            mask = pd.Series(True, index=df.index)
+            for cond in table_conditions:
+                field = cond.get("field", cond.get("name", ""))
+                op = cond.get("operator", ">")
+                val = cond.get("value", 0)
+
+                if field not in df.columns:
+                    continue
+
+                col = pd.to_numeric(df[field], errors="coerce")
+                if op in (">", "gt"):
+                    mask &= col > val
+                elif op in (">=", "gte", "ge"):
+                    mask &= col >= val
+                elif op in ("<", "lt"):
+                    mask &= col < val
+                elif op in ("<=", "lte", "le"):
+                    mask &= col <= val
+                elif op in ("==", "=", "eq"):
+                    mask &= col == val
+                elif op in ("!=", "ne"):
+                    mask &= col != val
+
+            filtered = df[mask]
+            if "symbol" in filtered.columns:
+                symbols = set(filtered["symbol"].dropna().unique())
+                logger.info("QuantDB %s (pandas): %d/%d stocks passed", table_name, len(symbols), len(df))
+                return symbols
+        except Exception as exc:
+            logger.warning("QuantDB pandas query failed for %s: %s", table_name, exc)
+
+        return set()

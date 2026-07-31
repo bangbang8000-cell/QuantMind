@@ -6,7 +6,6 @@ import { useWizardV2Store } from '../store/wizardV2Store';
 import { type WorkingPoolItemV2 } from '../services/wizardV2Service';
 import { previewPoolFile, deletePoolFile } from '../services/wizardService';
 import { getWizardUserId } from '../utils/userId';
-import { loadFeaturesBySymbolsInBatches } from '../utils/featureEnrichment';
 import { useAppSelector } from '../../../store';
 import { selectCurrentMarket } from '../../../store/slices/uiSlice';
 import { getMarketConfig } from '../../../config/marketConfig';
@@ -46,10 +45,8 @@ export const PoolPreview = React.forwardRef<PoolPreviewHandle, { onNext: () => v
   const initialWorkingPoolRef = useRef<WorkingPoolItemV2[]>([]);
   const initialSelectedRef = useRef<string[]>([]);
   const initialCurrentPoolNameRef = useRef<string>('');
-  const lastHydratedKeyRef = useRef<string>('');
-  
+
   const [historyLoading, setHistoryLoading] = useState(false);
-  const [featureHydrating, setFeatureHydrating] = useState(false);
   const [historySelectedKey, setHistorySelectedKey] = useState<string>('__current__');
   const [isHistoryModalOpen, setIsHistoryModalOpen] = useState(false);
 
@@ -95,52 +92,8 @@ export const PoolPreview = React.forwardRef<PoolPreviewHandle, { onNext: () => v
     }
   }, [activePoolVersionId, poolHistory, historySelectedKey]);
 
-  // 特征补全
-  useEffect(() => {
-    const hydrateMissingFeatures = async () => {
-      if (featureHydrating || !workingPool.length) return;
-      
-      const hydrateKey = workingPool.map((item) => item.symbol).join(',');
-      if (hydrateKey && hydrateKey === lastHydratedKeyRef.current) return;
-
-      const needHydrate = workingPool.some((item) => {
-        const marketCap = Number(item?.marketCap);
-        const pe = Number((item as any)?.pe);
-        return !Number.isFinite(marketCap) || marketCap <= 0 || !Number.isFinite(pe) || pe === 0;
-      });
-      if (!needHydrate) return;
-
-      try {
-        setFeatureHydrating(true);
-        const symbols = workingPool.map((item) => item.symbol);
-        const features = await loadFeaturesBySymbolsInBatches(symbols);
-        if (!features.length) return;
-
-        const featureMap = new Map(features.map((f: any) => [f.code, f]));
-        const merged = workingPool.map((item) => {
-          const f: any = featureMap.get(item.symbol);
-          if (!f) return item;
-          return {
-            ...item,
-            name: item.name || f.name,
-            marketCap: Number(item?.marketCap) > 0 ? item.marketCap : (f.marketCap ?? 0),
-            pe: ((item as any)?.pe !== undefined && (item as any)?.pe !== null && (item as any)?.pe !== 0) ? (item as any).pe : (f.pe ?? f.pe_ttm ?? f.peTtm ?? 0),
-            roe: item?.roe ?? f.roe ?? 0,
-            price: (item as any)?.price ?? f.closePrice ?? 0,
-          };
-        });
-
-        setWorkingPool(merged as any, true);
-        lastHydratedKeyRef.current = hydrateKey;
-      } catch (e) {
-        console.warn('[PoolPreview] hydrate feature failed:', e);
-      } finally {
-        setFeatureHydrating(false);
-      }
-    };
-
-    hydrateMissingFeatures();
-  }, [workingPool, setWorkingPool, featureHydrating]);
+  // 特征补全 — 已由 QuantDB 全量提供，不再需要 PG 补全（PG 数据为前复权且字段缺失）
+  // 保留 hydration 框架以备其他市场使用，但 A 股跳过
 
   const handleSelectHistoryPool = async (fileKey: string) => {
     setHistorySelectedKey(fileKey);
@@ -172,6 +125,7 @@ export const PoolPreview = React.forwardRef<PoolPreviewHandle, { onNext: () => v
         pe: Number(x?.metrics?.pe ?? 0),
         roe: Number(x?.metrics?.roe ?? 0),
         price: Number(x?.metrics?.close ?? 0),
+        metrics: x?.metrics ?? undefined,
       }));
 
       const historyPoolName = res.pool_file?.pool_name || '历史股票池';
@@ -221,6 +175,50 @@ export const PoolPreview = React.forwardRef<PoolPreviewHandle, { onNext: () => v
   const dataSource = useMemo(() => workingPool.map((x) => ({ ...x, key: x.symbol })), [workingPool]);
   const selectedList = useMemo(() => workingPool.filter((x) => selectedSymbols.includes(x.symbol)), [workingPool, selectedSymbols]);
   const listForStats = selectedList.length > 0 ? selectedList : workingPool;
+
+  // Dynamic QuantDB columns (only shown if data exists in workingPool)
+  const quantdbColumns = useMemo(() => {
+    const candidates = [
+      // Industry
+      { key: 'industry', title: '行业', field: 'industry', format: (v: any) => String(v || '-'), width: 100, isString: true },
+      // Valuation
+      { key: 'pb', title: '市净率', field: 'pb', format: (v: number) => (v && Number.isFinite(v) && v > 0) ? v.toFixed(2) : '--', width: 85 },
+      { key: 'roe', title: 'ROE(%)', field: 'roe', format: (v: number) => (v && Number.isFinite(v) && v !== 0) ? v.toFixed(1) : '--', width: 80 },
+      { key: 'ps_ttm', title: '市销率', field: 'ps_ttm', format: (v: number) => (v && Number.isFinite(v) && v > 0) ? v.toFixed(2) : '--', width: 85 },
+      { key: 'dividend_rate', title: '股息率(%)', field: 'dividend_rate', format: (v: number) => (v && v > 0) ? (v * 100).toFixed(2) : '--', width: 100 },
+      { key: 'float_mv', title: '流通市值(亿)', field: 'float_mv', format: (v: number) => (v && v > 0) ? v.toFixed(1) : '--', width: 110 },
+      // Price/Returns
+      { key: 'pct_change', title: '涨跌幅(%)', field: 'pct_change', format: (v: number) => (v && Number.isFinite(v) && v !== 0) ? v.toFixed(2) : '--', width: 95 },
+      { key: 'turnover_rate', title: '换手率(%)', field: 'turnover_rate', format: (v: number) => (v && Number.isFinite(v) && v > 0) ? v.toFixed(2) : '--', width: 95 },
+      { key: 'return_5d', title: '5日收益(%)', field: 'return_5d', format: (v: number) => (v && Number.isFinite(v) && v !== 0) ? v.toFixed(2) : '--', width: 95 },
+      { key: 'return_60d', title: '60日收益(%)', field: 'return_60d', format: (v: number) => (v && Number.isFinite(v) && v !== 0) ? v.toFixed(2) : '--', width: 100 },
+      // Technical
+      { key: 'rsi_14', title: 'RSI(14)', field: 'rsi_14', format: (v: number) => (v && Number.isFinite(v)) ? v.toFixed(1) : '--', width: 80 },
+      { key: 'macd_hist', title: 'MACD柱', field: 'macd_hist', format: (v: number) => (v && Number.isFinite(v) && v !== 0) ? v.toFixed(3) : '--', width: 85 },
+      { key: 'ma_gap_5', title: 'MA5偏离(%)', field: 'ma_gap_5', format: (v: number) => (v && Number.isFinite(v) && v !== 0) ? v.toFixed(2) : '--', width: 100 },
+      { key: 'volume_ratio_5', title: '量比5日', field: 'volume_ratio_5', format: (v: number) => (v && Number.isFinite(v) && v > 0) ? v.toFixed(2) : '--', width: 85 },
+      { key: 'vol_to_ma5', title: '量比MA5', field: 'vol_to_ma5', format: (v: number) => (v && Number.isFinite(v) && v > 0) ? v.toFixed(2) : '--', width: 85 },
+      // Sentiment
+      { key: 'buy_pressure', title: '买压', field: 'buy_pressure', format: (v: number) => (v && Number.isFinite(v) && v > 0) ? (v * 100).toFixed(1) : '--', width: 75 },
+      { key: 'liquidity_score', title: '流动性', field: 'liquidity_score', format: (v: number) => (v && Number.isFinite(v) && v > 0) ? v.toFixed(3) : '--', width: 80 },
+      // Factors
+      { key: 'chip_profit_ratio_20', title: '获利盘(%)', field: 'chip_profit_ratio_20', format: (v: number) => (v && Number.isFinite(v) && v > 0) ? (v * 100).toFixed(1) : '--', width: 95 },
+      { key: 'chip_floating_ratio', title: '浮筹(%)', field: 'chip_floating_ratio', format: (v: number) => (v && Number.isFinite(v) && v > 0) ? (v * 100).toFixed(1) : '--', width: 85 },
+      { key: 'ind_strength_20', title: '行业强度', field: 'ind_strength_20', format: (v: number) => (v && Number.isFinite(v) && v !== 0) ? v.toFixed(1) : '--', width: 90 },
+      { key: 'style_beta_20', title: 'Beta', field: 'style_beta_20', format: (v: number) => (v && Number.isFinite(v) && v !== 0) ? v.toFixed(2) : '--', width: 75 },
+      { key: 'style_value_20', title: '价值因子', field: 'style_value_20', format: (v: number) => (v && Number.isFinite(v) && v !== 0) ? v.toFixed(2) : '--', width: 90 },
+      // Margin
+      { key: 'finance_net', title: '融资净买(亿)', field: 'finance_net', format: (v: number) => (v && Number.isFinite(v) && v !== 0) ? v.toFixed(2) : '--', width: 110 },
+      { key: 'finance_balance', title: '融资余额(亿)', field: 'finance_balance', format: (v: number) => (v && Number.isFinite(v) && v > 0) ? v.toFixed(1) : '--', width: 110 },
+    ];
+    return candidates.filter(col =>
+      workingPool.some(item => {
+        const val = item.metrics?.[col.field];
+        if (col.isString) return val != null && val !== '';
+        return val != null && val !== 0;
+      })
+    );
+  }, [workingPool]);
 
   const capThresholdYi = 300;
   const capWithData = listForStats.filter((x) => Number(x.marketCap) > 0);
@@ -382,27 +380,56 @@ export const PoolPreview = React.forwardRef<PoolPreviewHandle, { onNext: () => v
                 dataSource={dataSource}
                 size="small"
                 rowSelection={rowSelection}
-                tableLayout="fixed"
+                scroll={{ x: 'max-content' }}
                 columns={[
-                  { title: '代码', dataIndex: 'symbol', width: 140, ellipsis: true },
-                  { title: '名称', dataIndex: 'name', width: 160, ellipsis: true },
+                  { title: '代码', dataIndex: 'symbol', width: 110, ellipsis: true },
+                  { title: '名称', dataIndex: 'name', width: 100, ellipsis: true },
+                  {
+                    title: '收盘价',
+                    dataIndex: 'price',
+                    width: 90,
+                    align: 'right',
+                    render: (v, record: any) => {
+                      const close = record?.metrics?.close ?? v;
+                      return (close && Number.isFinite(Number(close)) && Number(close) > 0) ? Number(close).toFixed(2) : '--';
+                    },
+                    sorter: (a: any, b: any) => (a.metrics?.close ?? a.price ?? 0) - (b.metrics?.close ?? b.price ?? 0)
+                  },
                   {
                     title: '市值(亿)',
                     dataIndex: 'marketCap',
-                    width: 140,
-                    align: 'center',
-                    render: (v) => (v !== undefined && v !== null && Number(v) > 0) ? Number(v).toFixed(2) : '--',
+                    width: 100,
+                    align: 'right',
+                    render: (v, record: any) => {
+                      const mc = Number(v) > 0 ? v : record?.metrics?.market_cap;
+                      return (mc && Number(mc) > 0) ? Number(mc).toFixed(1) : '--';
+                    },
                     sorter: (a, b) => (a.marketCap || 0) - (b.marketCap || 0)
                   },
                   {
                     title: '市盈率',
                     dataIndex: 'pe',
-                    width: 140,
-                    onHeaderCell: () => ({ style: { paddingRight: 30 } }),
-                    onCell: () => ({ style: { paddingRight: 30 } }),
-                    render: (v) => (v !== undefined && v !== null && Number(v) !== 0 && Number.isFinite(Number(v))) ? Number(v).toFixed(2) : '--',
-                    sorter: (a, b) => (a.pe || 0) - (b.pe || 0)
+                    width: 85,
+                    align: 'right',
+                    render: (v, record: any) => {
+                      const pe = Number(v) !== 0 ? v : record?.metrics?.pe;
+                      return (pe !== undefined && pe !== null && Number(pe) !== 0 && Number.isFinite(Number(pe))) ? Number(pe).toFixed(1) : '--';
+                    },
+                    sorter: (a: any, b: any) => (a.pe || a.metrics?.pe || 0) - (b.pe || b.metrics?.pe || 0)
                   },
+                  ...quantdbColumns.map(col => ({
+                    title: col.title,
+                    dataIndex: ['metrics', col.field],
+                    key: col.key,
+                    width: col.width || 90,
+                    align: col.isString ? 'left' as const : 'right' as const,
+                    render: (val: any) => val != null ? col.format(val) : '--',
+                    sorter: (a: any, b: any) => {
+                      const va = typeof a.metrics?.[col.field] === 'number' ? a.metrics[col.field] : 0;
+                      const vb = typeof b.metrics?.[col.field] === 'number' ? b.metrics[col.field] : 0;
+                      return va - vb;
+                    },
+                  })),
                 ]}
                 pagination={{ pageSize: 10, showSizeChanger: false }}
               />
