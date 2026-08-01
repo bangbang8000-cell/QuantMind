@@ -1,6 +1,8 @@
 """
 Simulation Scheduler - 模拟盘定时调度器
 每日固定时间自动执行调仓，支持多用户多策略并行调度
+
+每日流程：unlock_t1() → 触发推理（如无当日信号）→ run_cycle()
 """
 
 import asyncio
@@ -16,6 +18,9 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.services.trade.redis_client import RedisClient
 from backend.services.trade.simulation.engine import SimulationEngine, simulation_engine
+from backend.services.trade.simulation.services.simulation_manager import (
+    SimulationAccountManager,
+)
 from backend.shared.database_manager_v2 import get_db_manager
 
 logger = logging.getLogger(__name__)
@@ -130,6 +135,10 @@ class SimulationScheduler:
         """
         遍历所有激活的模拟盘账户，执行调仓。
 
+        每日开盘流程：
+        1. 解除 T+1 锁定（available_volume = volume）
+        2. 遍历账户执行调仓
+
         Returns:
             执行统计
         """
@@ -143,6 +152,9 @@ class SimulationScheduler:
         }
 
         try:
+            # 步骤 0: 解除所有账户的 T+1 锁定
+            await self._unlock_all_accounts()
+
             # 加载所有激活的模拟盘账户
             active_accounts = await self._load_active_accounts()
             stats["total"] = len(active_accounts)
@@ -247,6 +259,33 @@ class SimulationScheduler:
                 e,
             )
             return False
+
+    async def _unlock_all_accounts(self) -> None:
+        """解除所有模拟账户的 T+1 锁定：把 available_volume 补齐为 volume。"""
+        manager = SimulationAccountManager(self.redis)
+        try:
+            if not self.redis.client:
+                return
+            keys = list(self.redis.client.scan_iter(match="simulation:account:*", count=500))
+            unlocked_count = 0
+            for key in keys:
+                try:
+                    parts = str(key).split(":")
+                    if len(parts) >= 4:
+                        tenant_id = parts[2]
+                        user_id_str = parts[3]
+                        if user_id_str.isdigit():
+                            result = await manager.unlock_t1(
+                                user_id=int(user_id_str), tenant_id=tenant_id,
+                            )
+                            if result.get("success") and result.get("unlocked", 0) > 0:
+                                unlocked_count += 1
+                except Exception as e:
+                    logger.debug("SimulationScheduler: unlock_t1 失败 key=%s: %s", key, e)
+            if unlocked_count > 0:
+                logger.info("SimulationScheduler: T+1 解锁完成, %d 个账户有新解锁持仓", unlocked_count)
+        except Exception as e:
+            logger.error("SimulationScheduler: T+1 批量解锁失败 %s", e, exc_info=True)
 
 
 simulation_scheduler = SimulationScheduler()
