@@ -5,12 +5,12 @@ Simulation Engine - 统一模拟盘引擎
 
 import asyncio
 import logging
+import math
 import os
 from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Any
 
-import httpx
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.services.trade.redis_client import RedisClient
@@ -20,6 +20,10 @@ from backend.services.trade.simulation.services.execution_engine import (
 )
 from backend.services.trade.simulation.services.fund_snapshot_service import (
     SimulationFundSnapshotService,
+)
+from backend.services.trade.simulation.services.local_market_data import (
+    LocalMarketData,
+    get_local_market_data,
 )
 from backend.services.trade.simulation.services.rebalance_calculator import (
     Order,
@@ -77,17 +81,13 @@ class SimulationEngine:
         self,
         redis: RedisClient | None = None,
         loader: SignalLoader | None = None,
+        market_data: LocalMarketData | None = None,
     ):
         self.redis = redis or RedisClient()
         self.signal_loader = loader or signal_loader
         self.account_manager = SimulationAccountManager(self.redis)
         self.rebalance_calculator = RebalanceCalculator()
-        self._http: httpx.AsyncClient | None = None
-
-    async def _http_client(self) -> httpx.AsyncClient:
-        if self._http is None:
-            self._http = httpx.AsyncClient(timeout=5.0)
-        return self._http
+        self._market_data = market_data or get_local_market_data()
 
     async def run_cycle(
         self,
@@ -296,35 +296,25 @@ class SimulationEngine:
         return config
 
     async def _fetch_quotes(self, symbols: list[str]) -> dict[str, Quote]:
-        """批量获取行情"""
+        """从本地 quantdb 批量获取行情（一次 DuckDB 扫描替代逐 symbol HTTP）。"""
         if not symbols:
             return {}
 
+        trade_date = datetime.now().date()
+        bars = self._market_data.load_date(trade_date, symbols=symbols)
+
         quotes: dict[str, Quote] = {}
-        market_url = settings.MARKET_DATA_SERVICE_URL.rstrip("/")
-        client = await self._http_client()
+        for sym, bar in bars.items():
+            quotes[sym] = Quote(
+                symbol=sym,
+                current_price=bar.close,
+                is_limit_up=(bar.close >= bar.limit_up) if math.isfinite(bar.limit_up) else False,
+                is_limit_down=(bar.close <= bar.limit_down) if bar.limit_down > 0 else False,
+                is_suspended=bar.suspended,
+                pre_close=bar.pre_close if bar.pre_close > 0 else None,
+            )
 
-        # 批量请求（可优化为并发）
-        for symbol in symbols:
-            try:
-                resp = await client.get(
-                    f"{market_url}/api/v1/quotes/{symbol}",
-                    timeout=3.0,
-                )
-                if resp.status_code == 200:
-                    data = resp.json()
-                    quotes[symbol.upper()] = Quote(
-                        symbol=symbol.upper(),
-                        current_price=float(data.get("current_price") or data.get("last_price") or 0),
-                        is_limit_up=bool(data.get("is_limit_up")),
-                        is_limit_down=bool(data.get("is_limit_down")),
-                        is_suspended=bool(data.get("suspended") or data.get("is_suspended")),
-                        pre_close=float(data.get("pre_close") or 0) or None,
-                    )
-            except Exception as e:
-                logger.debug("SimulationEngine: 获取行情失败 %s: %s", symbol, e)
-
-        logger.info("SimulationEngine: 获取行情 %d/%d", len(quotes), len(symbols))
+        logger.info("SimulationEngine: 本地行情 %d/%d", len(quotes), len(symbols))
         return quotes
 
     def _build_account(self, data: dict[str, Any]) -> SimulationAccount:

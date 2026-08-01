@@ -15,7 +15,7 @@ class ManualExecutionCreateRequest(BaseModel):
     model_id: str = Field(..., description="模型 ID")
     run_id: str = Field(..., description="推理批次 run_id")
     strategy_id: str = Field(..., description="策略 ID")
-    trading_mode: str = Field("REAL", description="REAL / SHADOW / SIMULATION")
+    trading_mode: str = Field("SIMULATION", description="仅支持 SIMULATION")
     preview_hash: str | None = Field(None, description="调仓预案摘要哈希")
     note: str | None = Field(None, description="备注")
 
@@ -24,7 +24,7 @@ class ManualExecutionPreviewRequest(BaseModel):
     model_id: str = Field(..., description="模型 ID")
     run_id: str = Field(..., description="推理批次 run_id")
     strategy_id: str = Field(..., description="策略 ID")
-    trading_mode: str = Field("REAL", description="REAL / SHADOW / SIMULATION")
+    trading_mode: str = Field("SIMULATION", description="仅支持 SIMULATION")
     note: str | None = Field(None, description="备注")
 
 

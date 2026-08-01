@@ -95,7 +95,7 @@ async def start_trading(
     user_id: Optional[str] = Form(None),
     strategy_id: Optional[str] = Form(None),
     strategy_file: Optional[UploadFile] = File(None),
-    trading_mode: str = Form("REAL"),  # 默认 REAL，可传入 SHADOW/SIMULATION
+    trading_mode: str = Form("SIMULATION"),  # 仅支持 SIMULATION
     execution_config: Optional[str] = Form(None),
     live_trade_config: Optional[str] = Form(None),
     tenant_id: Optional[str] = Form(None),
@@ -109,10 +109,11 @@ async def start_trading(
 
     try:
         strategy_name = "unknown_strategy"
-        mode = str(trading_mode or "REAL").strip().upper()
-        if mode not in {"REAL", "SHADOW", "SIMULATION"}:
+        mode = str(trading_mode or "SIMULATION").strip().upper()
+        if mode not in {"SIMULATION"}:
             raise HTTPException(
-                status_code=400, detail=f"unsupported trading_mode: {mode}"
+                status_code=400,
+                detail=f"实盘交易已下线（政策原因），仅支持模拟盘。收到 trading_mode={mode}",
             )
 
         if not strategy_id and not strategy_file:
@@ -174,7 +175,7 @@ async def start_trading(
         if mode in {"REAL", "SHADOW", "SIMULATION"}:
             readiness = await run_trading_readiness_precheck(
                 db,
-                mode=mode,
+                mode="SIMULATION",
                 redis_client=redis.client,
                 user_id=resolved_user_id,
                 tenant_id=resolved_tenant_id,
@@ -243,43 +244,24 @@ async def start_trading(
             with open(file_path, "w", encoding="utf-8") as f:
                 f.write(f"# strategy_ref={strategy_id}\n")
 
-        # 3. K8s 调度 (仅针对 REAL 和 SHADOW 模式)
-        result = {"status": "success", "mode": mode}
-        if mode in ["REAL", "SHADOW"]:
-            result = await run_in_threadpool(
-                k8s_manager.create_deployment,
-                resolved_user_id,
-                file_path,
-                run_id=run_id,
-                exec_config={
-                    **exec_config,
-                    "trading_mode": mode,
-                    "trading_permission": trading_permission,
-                },
-                tenant_id=resolved_tenant_id,
-                live_trade_config=live_config,
-                strategy_id=strategy_id,
-            )
-            if result.get("status") == "error":
-                raise HTTPException(status_code=500, detail=result.get("message"))
-        else:
-            # 纯模拟盘模式：无需 K8s，使用轻量级进程池沙箱执行策略
-            from backend.services.trade.sandbox.manager import sandbox_manager
+        # 3. 沙箱模拟盘执行
+        result = {"status": "success", "mode": "SIMULATION"}
+        from backend.services.trade.sandbox.manager import sandbox_manager
 
-            try:
-                sandbox_run_id = sandbox_manager.submit_strategy(
-                    tenant_id=resolved_tenant_id,
-                    user_id=resolved_user_id,
-                    strategy_id=strategy_id or strategy_name,
-                    code_str=code_str,
-                    exec_config=exec_config,
-                    live_trade_config=live_config,
-                )
-                logger.info(
-                    f"[Sim] 用户 {resolved_user_id} 启动了沙箱模拟盘 {strategy_name} -> PID Task"
-                )
-            except Exception as e:
-                raise HTTPException(status_code=500, detail=f"沙箱启动失败: {str(e)}")
+        try:
+            sandbox_run_id = sandbox_manager.submit_strategy(
+                tenant_id=resolved_tenant_id,
+                user_id=resolved_user_id,
+                strategy_id=strategy_id or strategy_name,
+                code_str=code_str,
+                exec_config=exec_config,
+                live_trade_config=live_config,
+            )
+            logger.info(
+                f"[Sim] 用户 {resolved_user_id} 启动了沙箱模拟盘 {strategy_name} -> PID Task"
+            )
+        except Exception as e:
+            raise HTTPException(status_code=500, detail=f"沙箱启动失败: {str(e)}")
 
         # 4. 状态持久化
         redis.client.set(
@@ -298,17 +280,11 @@ async def start_trading(
                 }
             ),
         )
-        if mode in {"REAL", "SHADOW"}:
-            _schedule_status_writeback(
-                strategy_id=strategy_id,
-                user_id=resolved_user_id,
-                lifecycle_status="live_trading",
-            )
         _schedule_user_notification(
             user_id=resolved_user_id,
             tenant_id=resolved_tenant_id,
-            title="实盘策略已启动" if mode in {"REAL", "SHADOW"} else "模拟策略已启动",
-            content=f"策略 {strategy_name} 启动成功，模式：{mode}",
+            title="模拟策略已启动",
+            content=f"策略 {strategy_name} 启动成功",
             type="strategy",
             level="success",
             action_url="/trading",
@@ -321,8 +297,6 @@ async def start_trading(
             "effective_live_trade_config": live_config,
             "trading_permission": trading_permission,
             "signal_readiness": signal_readiness,
-            "k8s_result": result,
-            "orchestration_mode": k8s_manager.mode,
         }
     except HTTPException:
         _schedule_user_notification(
@@ -372,25 +346,14 @@ async def stop_trading(
 
         if active_strat_raw:
             data = json.loads(active_strat_raw)
-            mode = data.get("mode", "REAL")
             strat_id = data.get("strategy_id", "unknown")
             stopped_strategy_id = strat_id
-            if mode == "SIMULATION":
-                from backend.services.trade.sandbox.manager import sandbox_manager
+            from backend.services.trade.sandbox.manager import sandbox_manager
 
-                sandbox_manager.stop_strategy(
-                    resolved_tenant_id, resolved_user_id, strat_id
-                )
-                logger.info(f"[Sim] 用户 {resolved_user_id} 停止了沙箱模拟盘")
-            elif mode in {"REAL", "SHADOW"}:
-                result = await run_in_threadpool(
-                    k8s_manager.delete_deployment, resolved_user_id, resolved_tenant_id
-                )
-                _schedule_status_writeback(
-                    strategy_id=strat_id,
-                    user_id=resolved_user_id,
-                    lifecycle_status="repository",
-                )
+            sandbox_manager.stop_strategy(
+                resolved_tenant_id, resolved_user_id, strat_id
+            )
+            logger.info(f"[Sim] 用户 {resolved_user_id} 停止了沙箱模拟盘")
 
         # Clear active strategy in Redis
         redis.client.delete(_active_strategy_key(resolved_tenant_id, resolved_user_id))
@@ -468,9 +431,7 @@ async def get_status(
     resolved_user_id, resolved_tenant_id = _normalize_identity(
         auth, user_id=user_id, tenant_id=tenant_id
     )
-    status = await run_in_threadpool(
-        k8s_manager.get_status, resolved_user_id, resolved_tenant_id
-    )
+    status = None  # k8s status removed — simulation-only mode
 
     # Get active strategy info
     strategy_info = None
@@ -487,7 +448,7 @@ async def get_status(
         "message": "未检测到当前用户的最新推理信号版本",
     }
 
-    current_mode = "REAL"
+    current_mode = "SIMULATION"
     active_exec_config = None
     active_live_trade_config = None
     trading_permission = "trade_enabled"
@@ -512,7 +473,7 @@ async def get_status(
             )
             active_data = {}
         active_strat_id = active_data.get("strategy_id")
-        current_mode = active_data.get("mode", "REAL")
+        current_mode = active_data.get("mode", "SIMULATION")
         if isinstance(active_data.get("execution_config"), dict):
             active_exec_config = active_data.get("execution_config")
         if isinstance(active_data.get("live_trade_config"), dict):
@@ -593,9 +554,9 @@ async def get_status(
     )
 
     if current_mode == "SIMULATION" and strategy_info:
+        strategy_id_for_runtime = str(active_strat_id or "").strip()
         simulation_runtime_alive = False
         simulation_runtime_msg = None
-        strategy_id_for_runtime = str(active_strat_id or "").strip()
         if strategy_id_for_runtime:
             try:
                 from backend.services.trade.sandbox.manager import sandbox_manager
@@ -622,16 +583,11 @@ async def get_status(
                 or "检测到模拟策略标记，但沙箱运行进程未存活，请重新启动模拟盘",
                 "user_id": resolved_user_id,
                 "mode": "SIMULATION",
-                "orchestration_mode": k8s_manager.mode,
                 "strategy": strategy_info,
                 "execution_config": active_exec_config,
                 "live_trade_config": active_live_trade_config,
-                "daily_pnl": portfolio_snapshot["daily_pnl"]
-                if portfolio_snapshot
-                else None,
-                "daily_return": portfolio_snapshot["daily_return"]
-                if portfolio_snapshot
-                else None,
+                "daily_pnl": portfolio_snapshot["daily_pnl"] if portfolio_snapshot else None,
+                "daily_return": portfolio_snapshot["daily_return"] if portfolio_snapshot else None,
                 "portfolio": portfolio_snapshot,
                 "latest_hosted_task": latest_hosted_task,
                 "latest_signal_run_id": latest_signal_run_id,
@@ -642,88 +598,27 @@ async def get_status(
             "status": "running",
             "user_id": resolved_user_id,
             "mode": "SIMULATION",
-            "orchestration_mode": k8s_manager.mode,
             "strategy": strategy_info,
             "execution_config": active_exec_config,
             "live_trade_config": active_live_trade_config,
-            "daily_pnl": portfolio_snapshot["daily_pnl"]
-            if portfolio_snapshot
-            else None,
-            "daily_return": portfolio_snapshot["daily_return"]
-            if portfolio_snapshot
-            else None,
+            "daily_pnl": portfolio_snapshot["daily_pnl"] if portfolio_snapshot else None,
+            "daily_return": portfolio_snapshot["daily_return"] if portfolio_snapshot else None,
             "portfolio": portfolio_snapshot,
-            "k8s_status": {
-                "name": "batch-executor",
-                "ready_replicas": 1,
-                "replicas": 1,
-            },
             "latest_hosted_task": latest_hosted_task,
             "latest_signal_run_id": latest_signal_run_id,
             "signal_source_status": signal_source_status,
         }
 
-    if status is None:
-        return {
-            "status": "not_running",
-            "user_id": resolved_user_id,
-            "mode": current_mode,
-            "orchestration_mode": k8s_manager.mode,
-            "strategy": strategy_info,
-            "execution_config": active_exec_config,
-            "live_trade_config": active_live_trade_config,
-            "daily_pnl": portfolio_snapshot["daily_pnl"]
-            if portfolio_snapshot
-            else None,
-            "daily_return": portfolio_snapshot["daily_return"]
-            if portfolio_snapshot
-            else None,
-            "portfolio": portfolio_snapshot,
-            "latest_hosted_task": latest_hosted_task,
-            "latest_signal_run_id": latest_signal_run_id,
-            "signal_source_status": signal_source_status,
-            "trading_permission": trading_permission,
-            "signal_readiness": signal_readiness,
-        }
-
-    if "error" in status:
-        return {
-            "status": "error",
-            "message": status["error"],
-            "user_id": resolved_user_id,
-            "mode": current_mode,
-            "orchestration_mode": k8s_manager.mode,
-            "strategy": strategy_info,
-            "execution_config": active_exec_config,
-            "live_trade_config": active_live_trade_config,
-            "daily_pnl": portfolio_snapshot["daily_pnl"]
-            if portfolio_snapshot
-            else None,
-            "daily_return": portfolio_snapshot["daily_return"]
-            if portfolio_snapshot
-            else None,
-            "portfolio": portfolio_snapshot,
-            "latest_hosted_task": latest_hosted_task,
-            "latest_signal_run_id": latest_signal_run_id,
-            "signal_source_status": signal_source_status,
-            "trading_permission": trading_permission,
-            "signal_readiness": signal_readiness,
-        }
-
-    state = "running" if status.get("available_replicas", 0) > 0 else "starting"
+    # No active strategy
     return {
-        "status": state,
+        "status": "not_running",
         "user_id": resolved_user_id,
         "mode": current_mode,
-        "orchestration_mode": k8s_manager.mode,
-        "k8s_status": status,
         "strategy": strategy_info,
         "execution_config": active_exec_config,
         "live_trade_config": active_live_trade_config,
         "daily_pnl": portfolio_snapshot["daily_pnl"] if portfolio_snapshot else None,
-        "daily_return": portfolio_snapshot["daily_return"]
-        if portfolio_snapshot
-        else None,
+        "daily_return": portfolio_snapshot["daily_return"] if portfolio_snapshot else None,
         "portfolio": portfolio_snapshot,
         "latest_hosted_task": latest_hosted_task,
         "latest_signal_run_id": latest_signal_run_id,
@@ -743,10 +638,7 @@ async def get_logs(
     resolved_user_id, resolved_tenant_id = _normalize_identity(
         auth, user_id=user_id, tenant_id=tenant_id
     )
-    logs = await run_in_threadpool(
-        k8s_manager.get_logs, resolved_user_id, tail, resolved_tenant_id
-    )
-    return {"user_id": resolved_user_id, "logs": logs}
+    return {"user_id": resolved_user_id, "logs": [], "message": "模拟盘日志暂不支持远程查看"}
 
 
 @router.get("/orders")

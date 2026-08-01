@@ -131,7 +131,13 @@ class RebalanceCalculator:
         signals: list[SignalScore],
         quotes: dict[str, Quote],
     ) -> list[SignalScore]:
-        """剔除涨跌停、停牌标的"""
+        """剔除不可交易标的。
+
+        按信号方向分别过滤：
+        - 买入信号：跳过涨停、停牌
+        - 卖出信号：跳过跌停、停牌
+        - 无方向信号：跳过涨跌停、停牌（保守策略）
+        """
         tradable = []
         for sig in signals:
             quote = quotes.get(sig.symbol)
@@ -141,17 +147,28 @@ class RebalanceCalculator:
             if quote.is_suspended:
                 logger.debug("RebalanceCalculator: %s 停牌，跳过", sig.symbol)
                 continue
-            if quote.is_limit_up or quote.is_limit_down:
-                logger.debug(
-                    "RebalanceCalculator: %s 涨跌停（up=%s down=%s），跳过",
-                    sig.symbol,
-                    quote.is_limit_up,
-                    quote.is_limit_down,
-                )
-                continue
             if quote.current_price <= 0:
                 logger.debug("RebalanceCalculator: %s 价格无效，跳过", sig.symbol)
                 continue
+
+            side = getattr(sig, "side", None)
+            if side == "BUY" or side == "buy":
+                if quote.is_limit_up:
+                    logger.debug("RebalanceCalculator: %s 涨停，买入跳过", sig.symbol)
+                    continue
+            elif side == "SELL" or side == "sell":
+                if quote.is_limit_down:
+                    logger.debug("RebalanceCalculator: %s 跌停，卖出跳过", sig.symbol)
+                    continue
+            else:
+                if quote.is_limit_up or quote.is_limit_down:
+                    logger.debug(
+                        "RebalanceCalculator: %s 涨跌停（up=%s down=%s），跳过",
+                        sig.symbol,
+                        quote.is_limit_up,
+                        quote.is_limit_down,
+                    )
+                    continue
             tradable.append(sig)
         return tradable
 
@@ -252,6 +269,10 @@ class RebalanceCalculator:
 
             if current_qty > target_qty:
                 sell_qty = current_qty - target_qty
+                # T+1: 可卖量钳制
+                available = current_pos.get("available_volume")
+                if available is not None:
+                    sell_qty = min(sell_qty, int(float(available)))
                 quote = quotes.get(symbol)
                 price = quote.current_price if quote else 0
 
