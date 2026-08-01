@@ -113,14 +113,25 @@ class SandboxContext:
         positions = account.get("positions", {})
         pos = positions.get(symbol.upper())
         if pos:
+            volume = float(pos.get("volume", 0))
+            available = pos.get("available_volume")
             return {
                 "symbol": symbol.upper(),
-                "volume": float(pos.get("volume", 0)),
+                "volume": volume,
+                # T+1 上线前的存量持仓没有该字段，视为全部可卖
+                "available_volume": volume if available is None else float(available),
                 "cost": float(pos.get("cost", 0)),
                 "price": float(pos.get("price", 0)),
                 "market_value": float(pos.get("market_value", 0)),
             }
-        return {"symbol": symbol.upper(), "volume": 0, "cost": 0, "price": 0, "market_value": 0}
+        return {
+            "symbol": symbol.upper(),
+            "volume": 0,
+            "available_volume": 0,
+            "cost": 0,
+            "price": 0,
+            "market_value": 0,
+        }
 
     def get_cash(self) -> float:
         """从 Redis 读取真实可用现金"""

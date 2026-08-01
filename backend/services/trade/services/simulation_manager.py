@@ -22,6 +22,8 @@ class SimulationAccountManager:
 
     def __init__(self, redis: RedisClient):
         self.redis = redis
+        # A股 T+1: 当日买入不可卖出。持仓用 volume(总量) 与 available_volume(可卖量) 双字段表达，
+        # 买入只增 volume，卖出扣减 available_volume，次日开盘由 unlock_t1 把可卖量补齐。
         self._update_balance_lua = """
 local key = KEYS[1]
 local symbol = ARGV[1]
@@ -40,10 +42,19 @@ local positions = account.positions or {}
 
 local pos = positions[symbol]
 if not pos then
-    pos = {volume=0, cost=0, market_value=0, price=0}
+    pos = {volume=0, available_volume=0, cost=0, market_value=0, price=0}
 end
 
 local old_volume = tonumber(pos.volume or 0)
+-- 兼容 T+1 上线前写入的存量持仓: 它们没有 available_volume 字段，
+-- 视为全部可卖。缺少这个回退会让存量持仓永久无法卖出且不报错。
+local old_available
+if pos.available_volume == nil then
+    old_available = old_volume
+else
+    old_available = tonumber(pos.available_volume)
+end
+
 local new_cash = cash + delta_cash
 local new_volume = old_volume + delta_volume
 
@@ -53,6 +64,20 @@ end
 
 if new_volume < -0.000001 then
     return cjson.encode({success=false, reason="INSUFFICIENT_HOLDINGS"})
+end
+
+local new_available = old_available
+if delta_volume < 0 then
+    -- 卖出必须动用可卖量（T+1 约束）
+    if old_available + delta_volume < -0.000001 then
+        return cjson.encode({
+            success=false,
+            reason="INSUFFICIENT_AVAILABLE_VOLUME",
+            available_volume=old_available,
+            requested=-delta_volume
+        })
+    end
+    new_available = old_available + delta_volume
 end
 
 if delta_volume > 0 then
@@ -65,6 +90,7 @@ if delta_volume > 0 then
 end
 
 pos.volume = new_volume
+pos.available_volume = new_available
 pos.price = price
 pos.market_value = new_volume * price
 
@@ -86,6 +112,39 @@ account.total_asset = new_cash + total_market_value
 
 redis.call("SET", key, cjson.encode(account))
 return cjson.encode({success=true})
+"""
+
+        # 交易日开盘前调用：把全部持仓的可卖量补齐为总量，解除 T+1 锁定。
+        self._unlock_t1_lua = """
+local key = KEYS[1]
+
+local raw = redis.call("GET", key)
+if not raw then
+    return cjson.encode({success=false, reason="ACCOUNT_NOT_FOUND"})
+end
+
+local account = cjson.decode(raw)
+local positions = account.positions or {}
+local unlocked = 0
+
+for symbol, pos in pairs(positions) do
+    local volume = tonumber(pos.volume or 0)
+    local available
+    if pos.available_volume == nil then
+        available = volume
+    else
+        available = tonumber(pos.available_volume)
+    end
+    if available < volume then
+        unlocked = unlocked + 1
+    end
+    pos.available_volume = volume
+    positions[symbol] = pos
+end
+
+account.positions = positions
+redis.call("SET", key, cjson.encode(account))
+return cjson.encode({success=true, unlocked=unlocked})
 """
 
     @staticmethod
@@ -266,6 +325,24 @@ return cjson.encode({success=true})
         except Exception as e:
             logger.error("Failed to update simulation account atomically: %s", e)
             return {"success": False, "reason": "ATOMIC_UPDATE_FAILED"}
+
+    async def unlock_t1(self, user_id: int, tenant_id: str = "default") -> dict[str, Any]:
+        """交易日开盘前解除 T+1 锁定：把所有持仓的可卖量补齐为总量。"""
+        if not self.redis.client:
+            return {"success": False, "reason": "REDIS_UNAVAILABLE"}
+
+        tenant_id = self._normalize_tenant(tenant_id)
+        key = self._get_key(user_id, tenant_id)
+
+        try:
+            result = self.redis.client.eval(self._unlock_t1_lua, 1, key)
+            payload = json.loads(result) if isinstance(result, str) else result
+            if isinstance(payload, dict):
+                return payload
+            return {"success": False, "reason": "INVALID_SCRIPT_RESULT"}
+        except Exception as e:
+            logger.error("Failed to unlock T+1 for tenant=%s user=%s: %s", tenant_id, user_id, e)
+            return {"success": False, "reason": "UNLOCK_T1_FAILED"}
 
     async def _update_balance_margin(
         self,

@@ -118,6 +118,7 @@ DEFAULT_CATBOOST_PARAMS: dict[str, Any] = {
 _TREE_MODEL_TYPES = {"lightgbm", "xgboost", "catboost", "linear"}
 _DL_MODEL_TYPES = {"gru", "lstm", "alstm", "transformer", "tabnet", "tcn"}
 _ALL_MODEL_TYPES = _TREE_MODEL_TYPES | _DL_MODEL_TYPES
+_ENSEMBLE_MODEL_TYPES = _TREE_MODEL_TYPES - {"linear"}  # 可参与集成的树模型
 
 TRAINING_BASE_FEATURES: list[str] = [
     "mom_ret_1d",
@@ -137,6 +138,18 @@ _DEFAULT_SHAP_SAMPLE_ROWS = 30000
 _MIN_SHAP_SAMPLE_ROWS = 1000
 _MAX_SHAP_SAMPLE_ROWS = 100000
 _SHAP_SAMPLE_RANDOM_STATE = 42
+
+
+def _sanitize_nan_inf(obj):
+    """递归替换 NaN/Inf 为 None，确保 JSON 可序列化。"""
+    import math
+    if isinstance(obj, dict):
+        return {k: _sanitize_nan_inf(v) for k, v in obj.items()}
+    if isinstance(obj, list):
+        return [_sanitize_nan_inf(v) for v in obj]
+    if isinstance(obj, float) and (math.isnan(obj) or math.isinf(obj)):
+        return None
+    return obj
 
 
 def _load_local_parquet(
@@ -369,6 +382,7 @@ def load_data(
     source_mode: str = "LOCAL",
     local_dir: str | None = None,
     market: str = "CN",
+    industry_as_feature: bool = False,
 ) -> tuple:
     local_root = Path(local_dir).expanduser() if local_dir else None
     if local_root is None:
@@ -381,7 +395,8 @@ def load_data(
     horizon_col = f"mom_ret_{horizon}d"
     required_columns = list(
         dict.fromkeys(
-            ["trade_date", "symbol", "mom_ret_1d", horizon_col, "is_st"] + list(features)
+            ["trade_date", "symbol", "mom_ret_1d", horizon_col, "is_st", "volume"]
+            + list(features)
         )
     )
     logger.info(
@@ -520,7 +535,55 @@ def load_data(
             df = df[df["is_st"] == 0].copy()
             logger.info(f"After ST filter: {len(df)} rows (removed {before - len(df)} ST rows)")
 
+        # 行业条件化：合并 ind_code_l1（CSRC 一级行业编码）
+        if industry_as_feature or "ind_code_l1" in features:
+            try:
+                ind_detail_path = local_root / "2_base_sector" / "instrument_detail" / "instrument_detail.parquet"
+                if ind_detail_path.exists():
+                    ind_df = pd.read_parquet(ind_detail_path, engine="pyarrow")
+                    sym_col = "symbol" if "symbol" in ind_df.columns else "wind_code" if "wind_code" in ind_df.columns else None
+                    if sym_col and "rs_hycode_sim" in ind_df.columns:
+                        ind_map = ind_df[[sym_col, "rs_hycode_sim"]].dropna()
+                        ind_map = ind_map.rename(columns={sym_col: "symbol", "rs_hycode_sim": "ind_code_l1"})
+                        ind_map["symbol"] = ind_map["symbol"].astype(str).str.zfill(6)
+                        ind_map["ind_code_l1"] = pd.Categorical(ind_map["ind_code_l1"]).codes.astype(np.float32)
+                        df["symbol"] = df["symbol"].astype(str).str.zfill(6)
+                        df = df.merge(ind_map, on="symbol", how="left")
+                        df["ind_code_l1"] = df["ind_code_l1"].fillna(-1).astype(np.float32)
+                        logger.info("Industry mapping merged: %d/%d rows have ind_code_l1",
+                                    (df["ind_code_l1"] >= 0).sum(), len(df))
+                    else:
+                        logger.warning("instrument_detail.parquet missing symbol/wind_code or rs_hycode_sim columns")
+                else:
+                    logger.warning("instrument_detail.parquet not found at %s", ind_detail_path)
+            except Exception as e:
+                logger.warning("Failed to merge industry data (non-fatal): %s", e)
+
+    # 剔除节假日填充行：QuantDB parquet 含约 6.6% 的假交易日
+    # （close>0、mom_ret_1d=0，但全市场 volume==0），如春节/清明/劳动节。
+    # 必须在 label 构造前剔除：shift(-N) 按行位移，若序列含假日，
+    # "未来 N 个交易日收益" 实际只跨 N-k 个真实交易日，导致标签时间尺度不一致。
+    if "volume" in df.columns:
+        _day_vol = df.groupby("trade_date")["volume"].max()
+        _real_days = _day_vol[_day_vol > 0].index
+        _dropped_days = len(_day_vol) - len(_real_days)
+        if _dropped_days > 0:
+            _rows_before = len(df)
+            df = df[df["trade_date"].isin(_real_days)].copy()
+            logger.info(
+                "Dropped %d non-trading days (holiday fill rows): %d -> %d rows",
+                _dropped_days, _rows_before, len(df),
+            )
+    else:
+        logger.warning(
+            "Column 'volume' unavailable — cannot filter holiday fill rows; "
+            "labels may span fewer real trading days than target_horizon_days"
+        )
+
     # 标签：基于 target_horizon_days 构建 N 日远期收益
+    # 注：mom_ret_{N}d 列是过去 N 日收益（backward-looking），如 mom_ret_5d[T] = (close[T]-close[T-5])/close[T-5]
+    # shift(-N) 后，行 T 得到行 T+N 的值 = (close[T+N]-close[T])/close[T]，即正确的 N 日远期收益
+    # 等价于: label = next_N_day_return = pct_change(N).shift(-N)
     if "mom_ret_1d" not in df.columns:
         raise RuntimeError("Column 'mom_ret_1d' not found in parquet")
 
@@ -528,7 +591,6 @@ def load_data(
     _horizon = max(1, int(target_horizon_days or 1))
 
     df = df.sort_values(["symbol", "trade_date"]).reset_index(drop=True)
-    # 优先使用 parquet 内置的 N 日收益特征（精确复权），否则用累积 shift
     _mom_col = f"mom_ret_{_horizon}d"
     if _horizon == 1:
         df["label"] = df.groupby("symbol")["mom_ret_1d"].shift(-1)
@@ -715,7 +777,7 @@ def _train_xgb(cfg: dict, features: list[str], X_train: np.ndarray, y_train: np.
 
 def _train_catboost(cfg: dict, features: list[str], X_train: np.ndarray, y_train: np.ndarray,
                     X_val: np.ndarray, y_val: np.ndarray) -> Any:
-    """CatBoost 训练。"""
+    """CatBoost 训练。支持 cat_features（行业编码等类别特征）。"""
     from catboost import CatBoost, Pool
     model_cfg = cfg.get("model", {})
     params = {**DEFAULT_CATBOOST_PARAMS, **model_cfg.get("catboost_params", {})}
@@ -723,8 +785,21 @@ def _train_catboost(cfg: dict, features: list[str], X_train: np.ndarray, y_train
     if "iterations" not in model_cfg.get("catboost_params", {}):
         params["iterations"] = int(model_cfg.get("num_boost_round", 1000))
 
-    train_pool = Pool(X_train, label=y_train, feature_names=features)
-    val_pool = Pool(X_val, label=y_val, feature_names=features)
+    # 识别类别特征（ind_code_l1 等）
+    cat_feature_indices = []
+    for i, feat in enumerate(features):
+        if feat in ("ind_code_l1", "ind_code_l2"):
+            cat_feature_indices.append(i)
+    if cat_feature_indices:
+        # CatBoost 要求类别特征为 int 类型
+        for idx in cat_feature_indices:
+            X_train[:, idx] = X_train[:, idx].astype(int)
+            X_val[:, idx] = X_val[:, idx].astype(int)
+
+    train_pool = Pool(X_train, label=y_train, feature_names=features,
+                      cat_features=cat_feature_indices if cat_feature_indices else None)
+    val_pool = Pool(X_val, label=y_val, feature_names=features,
+                    cat_features=cat_feature_indices if cat_feature_indices else None)
 
     model = CatBoost(params)
     model.fit(train_pool, eval_set=val_pool, early_stopping_rounds=max(1, int(model_cfg.get("early_stopping_rounds", 100) or 100)))
@@ -1273,6 +1348,570 @@ def train_model(df: pd.DataFrame, features: list[str], cfg: dict, hardware: dict
     )
 
 
+# ── 因子筛选 ────────────────────────────────────────────────────────────────────
+def select_top_factors(
+    df: pd.DataFrame,
+    features: list[str],
+    label_col: str = "label",
+    n_top: int = 60,
+    ic_threshold: float = 0.02,
+    icir_threshold: float = 0.3,
+    correlation_threshold: float = 0.85,
+) -> tuple[list[str], dict[str, dict]]:
+    """专业因子筛选：IC/ICIR 初筛 → 相关性去冗余 → 稳定性检验。
+
+    返回 (selected_features, ic_results)。
+    """
+    from scipy.stats import spearmanr
+
+    logger.info("=== Factor Selection: IC/ICIR screening ===")
+    logger.info("Input: %d features, target top-%d", len(features), n_top)
+
+    # Step 1: 日频 Rank IC 计算
+    ic_results: dict[str, dict] = {}
+    for feat in features:
+        daily_ics = []
+        for _, g in df.groupby("trade_date", sort=False):
+            valid = g[[feat, label_col]].dropna()
+            if len(valid) < 30:
+                continue
+            ic, _ = spearmanr(valid[feat], valid[label_col])
+            if np.isfinite(ic):
+                daily_ics.append(ic)
+        if len(daily_ics) < 20:
+            ic_results[feat] = {"ic_mean": 0.0, "icir": 0.0, "ic_positive_rate": 0.0, "n_days": len(daily_ics)}
+            continue
+        arr = np.array(daily_ics)
+        ic_results[feat] = {
+            "ic_mean": float(np.mean(arr)),
+            "icir": float(np.mean(arr) / (np.std(arr) + 1e-9)),
+            "ic_positive_rate": float(np.mean(arr > 0)),
+            "n_days": len(arr),
+        }
+
+    # Step 2: IC阈值初筛
+    candidates = {
+        f: r for f, r in ic_results.items()
+        if abs(r["ic_mean"]) >= ic_threshold and abs(r["icir"]) >= icir_threshold
+    }
+    logger.info("After IC/ICIR threshold: %d candidates (|IC|>=%.2f, |ICIR|>=%.1f)",
+                len(candidates), ic_threshold, icir_threshold)
+
+    # Step 3: ICIR 排序 + 贪心去冗余
+    sorted_features = sorted(candidates.keys(),
+        key=lambda f: abs(candidates[f]["icir"]), reverse=True)
+
+    selected: list[str] = []
+    for feat in sorted_features:
+        if len(selected) >= n_top:
+            break
+        if len(selected) == 0:
+            selected.append(feat)
+            continue
+        # 抽样计算相关性（全量可能 OOM）
+        sample_n = min(50000, len(df))
+        corr_df = df[selected + [feat]].sample(sample_n, random_state=42).corr()
+        max_corr = corr_df[feat].drop(feat).abs().max()
+        if max_corr < correlation_threshold:
+            selected.append(feat)
+
+    logger.info("After correlation pruning (thresh=%.2f): %d selected",
+                correlation_threshold, len(selected))
+
+    # Step 4: 稳定性检验（滚动窗口 IC 标准差）
+    stable = []
+    for feat in selected:
+        daily_ics = []
+        for _, g in df.groupby("trade_date", sort=False):
+            valid = g[[feat, label_col]].dropna()
+            if len(valid) < 30:
+                continue
+            ic, _ = spearmanr(valid[feat], valid[label_col])
+            if np.isfinite(ic):
+                daily_ics.append(ic)
+        if daily_ics:
+            # 滚动60日 IC 标准差 / 均值 → 稳定性比率
+            rolling_std = pd.Series(daily_ics).rolling(60, min_periods=20).std()
+            mean_ic = abs(np.mean(daily_ics))
+            if mean_ic > 0 and rolling_std.mean() / (mean_ic + 1e-9) < 2.0:
+                stable.append(feat)
+
+    if len(stable) >= 30:
+        selected = stable[:n_top]
+        logger.info("After stability filter: %d stable factors", len(selected))
+
+    # 输出 top-10 供日志
+    for i, feat in enumerate(selected[:10]):
+        r = ic_results[feat]
+        logger.info("  %2d. %-30s IC=%.4f  ICIR=%.3f  IC>0=%.1f%%",
+                    i + 1, feat, r["ic_mean"], r["icir"], r["ic_positive_rate"] * 100)
+
+    return selected, ic_results
+
+
+# ── 多模型并行训练 ──────────────────────────────────────────────────────────────
+def _train_single_model(
+    model_type: str,
+    train_df: pd.DataFrame,
+    val_df: pd.DataFrame,
+    test_df: pd.DataFrame,
+    df: pd.DataFrame,
+    features: list[str],
+    cfg: dict,
+    hardware: dict | None = None,
+) -> dict[str, Any]:
+    """训练单个模型，返回结果字典（可序列化）。"""
+    logger.info("--- Training %s ---", model_type)
+    t0 = time.time()
+
+    model_cfg = cfg.get("model", {})
+    fill_values, X_train, y_train, X_val, y_val, _fill = _prepare_arrays(train_df, val_df, features)
+
+    if model_type == "lightgbm":
+        model = _train_lgb(cfg, features, X_train, y_train, X_val, y_val)
+    elif model_type == "xgboost":
+        model = _train_xgb(cfg, features, X_train, y_train, X_val, y_val)
+    elif model_type == "catboost":
+        model = _train_catboost(cfg, features, X_train, y_train, X_val, y_val)
+    elif model_type == "linear":
+        model = _train_linear(cfg, features, X_train, y_train, X_val, y_val)
+    elif model_type in _DL_MODEL_TYPES:
+        output_dir = Path("/workspace")
+        dl_params = model_cfg.get("dl_params", {})
+        model, train_m, val_m, dl_metadata = _train_dl(
+            model_type, train_df, val_df, features, dl_params, output_dir, hardware=hardware
+        )
+        y_full_pred = _predict_dl(output_dir, df, features, dl_metadata)
+        full_pred_df = df[["symbol", "trade_date", "label"]].copy()
+        full_pred_df["pred"] = y_full_pred
+        full_pred_df["split"] = "train"
+        full_pred_df.loc[
+            (full_pred_df["trade_date"] >= val_df["trade_date"].min()) &
+            (full_pred_df["trade_date"] <= val_df["trade_date"].max()), "split"] = "valid"
+        full_pred_df.loc[
+            (full_pred_df["trade_date"] >= test_df["trade_date"].min()) &
+            (full_pred_df["trade_date"] <= test_df["trade_date"].max()), "split"] = "test"
+        test_mask = full_pred_df["split"] == "test"
+        y_test_pred = full_pred_df.loc[test_mask, "pred"].values
+        y_test_true = full_pred_df.loc[test_mask, "label"].values
+        test_m = _compute_metrics(test_df, y_test_true.astype("float32"), y_test_pred.astype("float32"))
+        elapsed = time.time() - t0
+        return {
+            "model_type": model_type,
+            "model": model,
+            "fill_values": fill_values,
+            "train_m": train_m,
+            "val_m": val_m,
+            "test_m": test_m,
+            "pred_df": full_pred_df.reset_index(drop=True),
+            "split_frames": {"train": train_df.reset_index(drop=True), "valid": val_df.reset_index(drop=True), "test": test_df.reset_index(drop=True)},
+            "dl_metadata": dl_metadata,
+            "elapsed": elapsed,
+        }
+    else:
+        raise ValueError(f"Unsupported model_type: {model_type}")
+
+    # 树模型预测
+    y_train_pred = _predict_with_model(model, _fill(train_df), model_type, features)
+    y_val_pred = _predict_with_model(model, _fill(val_df), model_type, features)
+    y_test_pred = _predict_with_model(model, _fill(test_df), model_type, features)
+    train_m = _compute_metrics(train_df, y_train, y_train_pred)
+    val_m = _compute_metrics(val_df, y_val, y_val_pred)
+    test_m = _compute_metrics(test_df, test_df["label"].astype("float32").to_numpy(), y_test_pred)
+
+    full_pred_df = df[["symbol", "trade_date", "label"]].copy()
+    full_pred_df["pred"] = _predict_with_model(model, _fill(df), model_type, features)
+    full_pred_df["split"] = "train"
+    full_pred_df.loc[
+        (full_pred_df["trade_date"] >= val_df["trade_date"].min()) &
+        (full_pred_df["trade_date"] <= val_df["trade_date"].max()), "split"] = "valid"
+    full_pred_df.loc[
+        (full_pred_df["trade_date"] >= test_df["trade_date"].min()) &
+        (full_pred_df["trade_date"] <= test_df["trade_date"].max()), "split"] = "test"
+
+    best_iteration = getattr(model, "best_iteration", None)
+    if best_iteration is None and hasattr(model, "get_best_iteration"):
+        try:
+            best_iteration = model.get_best_iteration()
+        except Exception:
+            best_iteration = None
+
+    elapsed = time.time() - t0
+    logger.info("%s finished in %.2fs, best_iter=%s, val_ic=%.4f, val_icir=%.4f",
+                model_type, elapsed, best_iteration, val_m["ic"], val_m["rank_icir"])
+
+    return {
+        "model_type": model_type,
+        "model": model,
+        "fill_values": fill_values,
+        "train_m": train_m,
+        "val_m": val_m,
+        "test_m": test_m,
+        "pred_df": full_pred_df.reset_index(drop=True),
+        "split_frames": {"train": train_df.reset_index(drop=True), "valid": val_df.reset_index(drop=True), "test": test_df.reset_index(drop=True)},
+        "best_iteration": best_iteration,
+        "elapsed": elapsed,
+    }
+
+
+def train_multi_models(
+    df: pd.DataFrame,
+    features: list[str],
+    cfg: dict,
+    hardware: dict | None = None,
+) -> dict[str, Any]:
+    """多模型并行训练：数据加载一次，依次训练多个模型，生成对比报告。
+
+    返回 dict 包含：
+    - models: {model_type: {model, fill_values, metrics, pred_df, ...}}
+    - comparison: 对比报告
+    - primary_model_type: 最佳模型类型
+    """
+    model_cfg = cfg.get("model", {})
+    model_types_raw = model_cfg.get("types", [model_cfg.get("type", "lightgbm")])
+    if isinstance(model_types_raw, str):
+        model_types_raw = [model_types_raw]
+    model_types = [str(t).strip().lower() for t in model_types_raw]
+
+    # 验证
+    for mt in model_types:
+        if mt not in _ALL_MODEL_TYPES:
+            raise ValueError(f"Unsupported model_type: {mt}")
+
+    ensemble_method = str(model_cfg.get("ensemble", "none")).strip().lower()
+    if ensemble_method not in ("none", "stacking", "blending", "voting"):
+        raise ValueError(f"Unsupported ensemble method: {ensemble_method}")
+
+    logger.info("=== Multi-Model Training: %s ===", model_types)
+    logger.info("Ensemble method: %s", ensemble_method)
+
+    # 数据切分（共享）
+    train_df, val_df, test_df = _split_data(df, cfg)
+
+    # 依次训练每个模型
+    model_results: dict[str, dict] = {}
+    for mt in model_types:
+        model_results[mt] = _train_single_model(
+            mt, train_df, val_df, test_df, df, features, cfg, hardware=hardware
+        )
+
+    # 生成对比报告
+    comparison_rows = []
+    for mt, res in model_results.items():
+        vm = res["val_m"]
+        comparison_rows.append({
+            "model_type": mt,
+            "val_ic": round(vm["ic"], 6),
+            "val_rank_ic": round(vm["rank_ic"], 6),
+            "val_rank_icir": round(vm["rank_icir"], 4),
+            "val_rmse": round(vm["rmse"], 6),
+            "val_auc": round(vm["auc"], 6),
+            "test_ic": round(res["test_m"]["ic"], 6),
+            "test_rank_ic": round(res["test_m"]["rank_ic"], 6),
+            "test_rank_icir": round(res["test_m"]["rank_icir"], 4),
+            "elapsed_seconds": round(res["elapsed"], 1),
+        })
+
+    # 按 ICIR 排序确定最佳模型
+    comparison_rows.sort(key=lambda r: abs(r["val_rank_icir"]), reverse=True)
+    best = comparison_rows[0]["model_type"]
+
+    logger.info("=== Model Comparison ===")
+    logger.info("%-12s %10s %10s %10s %10s", "Model", "Val IC", "RankIC", "ICIR", "Time(s)")
+    for row in comparison_rows:
+        logger.info("%-12s %10.4f %10.4f %10.4f %10.1f",
+                    row["model_type"], row["val_ic"], row["val_rank_ic"], row["val_rank_icir"], row["elapsed_seconds"])
+    logger.info("Best model: %s (val_icir=%.4f)", best, comparison_rows[0]["val_rank_icir"])
+
+    return {
+        "models": model_results,
+        "comparison": comparison_rows,
+        "primary_model_type": best,
+        "model_types": model_types,
+        "ensemble_method": ensemble_method,
+        "split_frames": {"train": train_df.reset_index(drop=True), "valid": val_df.reset_index(drop=True), "test": test_df.reset_index(drop=True)},
+    }
+
+
+def _generate_oof_predictions(
+    model_type: str,
+    train_df: pd.DataFrame,
+    features: list[str],
+    cfg: dict,
+    n_folds: int = 5,
+    hardware: dict | None = None,
+) -> tuple[pd.Series, object, dict]:
+    """时序扩展窗口 K-Fold 生成 OOF 预测，训练最终全量基模型。
+
+    返回 (oof_pred_series, full_model, fill_values)
+    - oof_pred_series: 与 train_df 等长的 OOF 预测（fold 外部分为 NaN）
+    - full_model: 在全量 train_df 上训练的最终基模型
+    - fill_values: 特征填充值
+    """
+    dates = sorted(train_df["trade_date"].unique())
+    n_dates = len(dates)
+    if n_dates < n_folds + 1:
+        logger.warning("Too few dates (%d) for %d folds, reducing to %d", n_dates, n_folds, max(1, n_dates - 1))
+        n_folds = max(1, n_dates - 1)
+
+    fold_size = n_dates // (n_folds + 1)
+    oof_pred = pd.Series(np.nan, index=train_df.index, name="oof_pred")
+
+    for fold_i in range(n_folds):
+        train_end_idx = fold_size * (fold_i + 1)
+        val_start_idx = train_end_idx
+        val_end_idx = min(train_end_idx + fold_size, n_dates)
+
+        if val_end_idx <= val_start_idx:
+            continue
+
+        train_dates = set(dates[:train_end_idx])
+        val_dates = set(dates[val_start_idx:val_end_idx])
+
+        fold_train = train_df[train_df["trade_date"].isin(train_dates)]
+        fold_val = train_df[train_df["trade_date"].isin(val_dates)]
+
+        if len(fold_train) < 100 or len(fold_val) < 10:
+            logger.warning("Fold %d too small (train=%d, val=%d), skipping", fold_i, len(fold_train), len(fold_val))
+            continue
+
+        # 训练 fold 基模型
+        fold_result = _train_single_model(
+            model_type, fold_train, fold_val, fold_val,
+            train_df, features, cfg, hardware=hardware,
+        )
+        fold_model = fold_result["model"]
+        fill_values = fold_result["fill_values"]
+
+        # 预测 fold 验证集
+        X_val = fold_val[features].fillna(fill_values).values
+        if model_type == "lightgbm":
+            fold_pred = fold_model.predict(X_val)
+        elif model_type == "xgboost":
+            import xgboost as xgb
+            fold_pred = fold_model.predict(xgb.DMatrix(X_val))
+        elif model_type == "catboost":
+            from catboost import Pool
+            fold_pred = fold_model.predict(Pool(X_val))[0].flatten()
+        else:
+            fold_pred = fold_model.predict(X_val).flatten()
+
+        oof_pred.iloc[fold_val.index] = fold_pred
+        logger.info("OOF fold %d: train=%d dates, val=%d dates, pred_rows=%d",
+                     fold_i, len(train_dates), len(val_dates), len(fold_val))
+
+    # 训练全量基模型
+    val_ratio = cfg.get("model", {}).get("val_ratio", 0.15)
+    split_idx = int(len(train_df) * (1 - val_ratio))
+    full_train = train_df.iloc[:split_idx]
+    full_val = train_df.iloc[split_idx:]
+
+    full_result = _train_single_model(
+        model_type, full_train, full_val, full_val,
+        train_df, features, cfg, hardware=hardware,
+    )
+
+    return oof_pred, full_result["model"], full_result["fill_values"]
+
+
+def train_stacking(
+    df: pd.DataFrame,
+    features: list[str],
+    cfg: dict,
+    model_types: list[str],
+    n_folds: int = 5,
+    hardware: dict | None = None,
+) -> dict[str, Any]:
+    """Stacking 集成训练：时序 K-Fold OOF + Ridge 元学习器。
+
+    流程：
+    1. 数据切分 train/val/test
+    2. 对每个基模型生成 OOF 预测（时序扩展窗口）
+    3. 构建元特征矩阵 [oof_lgb, oof_xgb, oof_cbm]
+    4. 训练 Ridge 元学习器
+    5. 在 val/test 上评估集成效果
+    """
+    from sklearn.linear_model import Ridge
+
+    train_df, val_df, test_df = _split_data(df, cfg)
+
+    # Step 1: 生成各基模型 OOF 预测 + 全量基模型
+    oof_preds: dict[str, pd.Series] = {}
+    base_models: dict[str, Any] = {}
+    base_fill_values: dict[str, dict] = {}
+    base_results: dict[str, dict] = {}
+
+    for mt in model_types:
+        logger.info("=== Stacking: generating OOF for %s ===", mt)
+        oof_pred, full_model, fill_values = _generate_oof_predictions(
+            mt, train_df, features, cfg, n_folds=n_folds, hardware=hardware,
+        )
+        oof_preds[mt] = oof_pred
+        base_models[mt] = full_model
+        base_fill_values[mt] = fill_values
+
+        # 评估全量基模型在 val/test 上的表现
+        base_result = _train_single_model(
+            mt, train_df, val_df, test_df, df, features, cfg, hardware=hardware,
+        )
+        base_results[mt] = base_result
+        logger.info("Base model %s: val_icir=%.4f, test_icir=%.4f",
+                     mt, base_result["val_m"]["rank_icir"], base_result["test_m"]["rank_icir"])
+
+    # Step 2: 构建元特征矩阵（OOF 预测作为特征）
+    meta_features_train = pd.DataFrame({
+        f"oof_{mt}": oof_preds[mt] for mt in model_types
+    })
+    # 去除 NaN 行（某些 fold 未覆盖的样本）
+    valid_mask = meta_features_train.notna().all(axis=1)
+    meta_X_train = meta_features_train[valid_mask].values
+    label_col = "label"
+    meta_y_train = train_df.loc[valid_mask, label_col].values
+
+    logger.info("Meta-learner training samples: %d (from %d train samples)",
+                len(meta_y_train), len(train_df))
+
+    # Step 3: 训练 Ridge 元学习器
+    meta_model = Ridge(alpha=1.0, fit_intercept=True, random_state=42)
+    meta_model.fit(meta_X_train, meta_y_train)
+    logger.info("Ridge meta-learner coefficients: %s", dict(zip(
+        [f"oof_{mt}" for mt in model_types], meta_model.coef_.round(4)
+    )))
+
+    # Step 4: 在 val/test 上评估集成
+    def _predict_base(model_type: str, data_df: pd.DataFrame) -> np.ndarray:
+        fv = base_fill_values[model_type]
+        X = data_df[features].fillna(fv).values
+        model = base_models[model_type]
+        if model_type == "lightgbm":
+            return model.predict(X)
+        elif model_type == "xgboost":
+            import xgboost as xgb
+            return model.predict(xgb.DMatrix(X))
+        elif model_type == "catboost":
+            from catboost import Pool
+            return model.predict(Pool(X))[0].flatten()
+        else:
+            return model.predict(X).flatten()
+
+    # Val 集成预测
+    val_base_preds = {mt: _predict_base(mt, val_df) for mt in model_types}
+    meta_X_val = np.column_stack([val_base_preds[mt] for mt in model_types])
+    val_ensemble_pred = meta_model.predict(meta_X_val)
+
+    # Test 集成预测
+    test_base_preds = {mt: _predict_base(mt, test_df) for mt in model_types}
+    meta_X_test = np.column_stack([test_base_preds[mt] for mt in model_types])
+    test_ensemble_pred = meta_model.predict(meta_X_test)
+
+    # 评估集成指标
+    def _calc_metrics(y_true: np.ndarray, y_pred: np.ndarray) -> dict:
+        from scipy.stats import spearmanr
+        rmse = float(np.sqrt(np.mean((y_true - y_pred) ** 2)))
+        ic = float(np.corrcoef(y_true, y_pred)[0, 1]) if len(y_true) > 2 else 0.0
+        rank_ic, _ = spearmanr(y_true, y_pred)
+        rank_ic = float(rank_ic) if not np.isnan(rank_ic) else 0.0
+        icir = ic / (np.std(y_pred) + 1e-9)
+        rank_icir = rank_ic / (np.std(y_pred) + 1e-9)
+        return {"rmse": rmse, "ic": ic, "rank_ic": rank_ic, "icir": icir, "rank_icir": rank_icir, "auc": 0.0}
+
+    val_ensemble_m = _calc_metrics(val_df[label_col].values, val_ensemble_pred)
+    test_ensemble_m = _calc_metrics(test_df[label_col].values, test_ensemble_pred)
+
+    logger.info("=== Stacking Ensemble Results ===")
+    logger.info("Val:  IC=%.4f, RankIC=%.4f, ICIR=%.4f", val_ensemble_m["ic"], val_ensemble_m["rank_ic"], val_ensemble_m["rank_icir"])
+    logger.info("Test: IC=%.4f, RankIC=%.4f, ICIR=%.4f", test_ensemble_m["ic"], test_ensemble_m["rank_ic"], test_ensemble_m["rank_icir"])
+
+    # 对比：最佳单模型 vs 集成
+    best_single = max(base_results.items(), key=lambda x: abs(x[1]["val_m"]["rank_icir"]))
+    logger.info("Best single (%s): val_icir=%.4f vs Stacking: val_icir=%.4f",
+                best_single[0], best_single[1]["val_m"]["rank_icir"], val_ensemble_m["rank_icir"])
+
+    # 构建全量预测 DataFrame（使用集成预测覆盖 val+test，train 用 OOF）
+    pred_df = df[["trade_date", "symbol"]].copy()
+    pred_df["pred"] = np.nan
+    # Train 部分：使用 OOF 集成预测
+    oof_ensemble = meta_model.predict(meta_features_train.values)
+    pred_df.loc[valid_mask, "pred"] = oof_ensemble[valid_mask.values] if hasattr(valid_mask, 'values') else oof_ensemble
+    # Val 部分
+    val_idx = val_df.index
+    pred_df.loc[val_idx, "pred"] = val_ensemble_pred
+    # Test 部分
+    test_idx = test_df.index
+    pred_df.loc[test_idx, "pred"] = test_ensemble_pred
+
+    # 保存 OOF 预测（诊断用）
+    oof_df = pd.DataFrame({
+        "trade_date": train_df["trade_date"],
+        "symbol": train_df["symbol"],
+        **{f"oof_{mt}": oof_preds[mt] for mt in model_types},
+        "label": train_df[label_col],
+    })
+    oof_path = Path("/workspace/oof_predictions.parquet")
+    oof_df.to_parquet(oof_path, engine="pyarrow", compression="zstd", index=False)
+    logger.info("OOF predictions saved to %s", oof_path)
+
+    # 保存元学习器
+    import pickle
+    meta_model_path = Path("/workspace/meta_model.pkl")
+    with open(meta_model_path, "wb") as f:
+        pickle.dump({
+            "model": meta_model,
+            "model_types": model_types,
+            "n_folds": n_folds,
+        }, f)
+    logger.info("Meta-learner saved to %s", meta_model_path)
+
+    # 生成对比报告
+    comparison_rows = []
+    for mt, res in base_results.items():
+        vm = res["val_m"]
+        comparison_rows.append({
+            "model_type": mt,
+            "val_ic": round(vm["ic"], 6),
+            "val_rank_ic": round(vm["rank_ic"], 6),
+            "val_rank_icir": round(vm["rank_icir"], 4),
+            "val_rmse": round(vm["rmse"], 6),
+            "val_auc": round(vm["auc"], 6),
+            "test_ic": round(res["test_m"]["ic"], 6),
+            "test_rank_ic": round(res["test_m"]["rank_ic"], 6),
+            "test_rank_icir": round(res["test_m"]["rank_icir"], 4),
+            "elapsed_seconds": round(res["elapsed"], 1),
+        })
+    comparison_rows.append({
+        "model_type": "stacking_ensemble",
+        "val_ic": round(val_ensemble_m["ic"], 6),
+        "val_rank_ic": round(val_ensemble_m["rank_ic"], 6),
+        "val_rank_icir": round(val_ensemble_m["rank_icir"], 4),
+        "val_rmse": round(val_ensemble_m["rmse"], 6),
+        "val_auc": round(val_ensemble_m["auc"], 6),
+        "test_ic": round(test_ensemble_m["ic"], 6),
+        "test_rank_ic": round(test_ensemble_m["rank_ic"], 6),
+        "test_rank_icir": round(test_ensemble_m["rank_icir"], 4),
+        "elapsed_seconds": 0.0,
+    })
+    comparison_rows.sort(key=lambda r: abs(r["val_rank_icir"]), reverse=True)
+
+    best_type = comparison_rows[0]["model_type"]
+    primary_type = best_type if best_type in model_types else model_types[0]
+
+    return {
+        "models": base_results,
+        "base_models": base_models,
+        "base_fill_values": base_fill_values,
+        "meta_model": meta_model,
+        "comparison": comparison_rows,
+        "primary_model_type": primary_type,
+        "model_types": model_types,
+        "ensemble_method": "stacking",
+        "val_ensemble_m": val_ensemble_m,
+        "test_ensemble_m": test_ensemble_m,
+        "pred_df": pred_df,
+        "oof_preds": oof_preds,
+        "split_frames": {"train": train_df.reset_index(drop=True), "valid": val_df.reset_index(drop=True), "test": test_df.reset_index(drop=True)},
+    }
+
+
 # ── 主入口 ────────────────────────────────────────────────────────────────────
 def main() -> int:
     # 最早期诊断日志：在任何处理之前打印，确保 Batch 环境中一定能看到
@@ -1341,146 +1980,373 @@ def main() -> int:
             source_mode=source_mode,
             local_dir=local_data_dir,
             market=market,
+            industry_as_feature=bool(cfg.get("context", {}).get("industry_as_feature", False)),
         )
-        train_t0 = time.time()
-        train_result = train_model(df, valid_features, cfg, hardware=hardware)
-        # train_model 返回 8-tuple (树模型) 或 9-tuple (DL 模型，含 dl_metadata)
-        if len(train_result) == 9:
-            model, fill_values, train_m, val_m, test_m, pred_df, split_frames, actual_model_type, dl_metadata = train_result
-        else:
-            model, fill_values, train_m, val_m, test_m, pred_df, split_frames, actual_model_type = train_result
-            dl_metadata = None
-        elapsed = float(time.time() - train_t0)
 
-        # 获取 best_iteration（不同框架方式不同）
-        best_iteration = getattr(model, "best_iteration", None)
-        if best_iteration is None and hasattr(model, "get_best_iteration"):
-            try:
-                best_iteration = model.get_best_iteration()
-            except Exception:
-                best_iteration = None
-        logger.info("Training finished in %.2fs, best_iteration=%s, model_type=%s", elapsed, best_iteration, actual_model_type)
-
-        # 保存模型（多框架）
-        workspace = Path("/workspace")
-        model_filename = _save_model(model, actual_model_type, workspace)
-        logger.info(f"Model saved to {workspace / model_filename}")
-
-        # 保存预测结果（parquet 压缩用于存档，比 pickle 小 ~10x）
-        pred_path = Path("/workspace/pred.parquet")
-        pred_df.to_parquet(pred_path, engine="pyarrow", compression="zstd", index=False)
-        logger.info(f"Predictions saved to {pred_path} ({pred_path.stat().st_size/1024/1024:.1f} MB)")
-
-        # 同时保存回测引擎兼容格式 pred.pkl
-        # 回测引擎要求: MultiIndex(datetime, instrument) + 'score' 列
-        pred_qlib = (
-            pred_df[["trade_date", "symbol", "pred"]]
-            .rename(columns={"trade_date": "datetime", "symbol": "instrument", "pred": "score"})
-            .assign(datetime=lambda d: pd.to_datetime(d["datetime"]))
-            .set_index(["datetime", "instrument"])
-            .sort_index()
-        )
-        pred_pkl_path = Path("/workspace/pred.pkl")
-        pred_qlib.to_pickle(pred_pkl_path)
-        logger.info(f"Backtest-compatible pred.pkl saved ({pred_pkl_path.stat().st_size/1024/1024:.1f} MB, {len(pred_qlib):,} rows)")
-
-        shap_summary_path = Path("/workspace/shap_summary.csv")
-        # SHAP: pred_contrib 仅支持 LightGBM；其他框架暂跳过
-        if actual_model_type != "lightgbm":
-            explain_cfg_shap = {**explain_cfg, "enable_shap": False}
-            logger.info("SHAP disabled: pred_contrib not supported for %s", actual_model_type)
-        else:
-            explain_cfg_shap = explain_cfg
-        shap_info = _compute_shap_summary(
-            model=model,
-            split_frames=split_frames,
-            features=valid_features,
-            fill_values=fill_values,
-            explain_cfg=explain_cfg_shap,
-            out_path=shap_summary_path,
-        )
-        if shap_info.get("status") == "completed":
-            logger.info(
-                "SHAP summary generated: split=%s rows=%s -> %s",
-                shap_info.get("split"),
-                shap_info.get("rows_used"),
-                shap_summary_path,
+        # ── 因子筛选 ──
+        factor_selection_cfg = cfg.get("factor_selection", {}) or {}
+        factor_selection_method = str(factor_selection_cfg.get("method", "")).strip().lower()
+        if factor_selection_method in ("ic_icir", "combined") or submitted_features and len(submitted_features) == 1 and submitted_features[0].lower().startswith("auto_top"):
+            n_top = int(factor_selection_cfg.get("n_top", 60))
+            ic_thresh = float(factor_selection_cfg.get("ic_threshold", 0.02))
+            icir_thresh = float(factor_selection_cfg.get("icir_threshold", 0.3))
+            corr_thresh = float(factor_selection_cfg.get("correlation_threshold", 0.85))
+            logger.info("=== Auto Factor Selection: top-%d ===", n_top)
+            valid_features, ic_results = select_top_factors(
+                df, valid_features, label_col="label",
+                n_top=n_top, ic_threshold=ic_thresh,
+                icir_threshold=icir_thresh, correlation_threshold=corr_thresh,
             )
-        elif shap_info.get("status") == "disabled":
-            logger.info("SHAP summary disabled by config")
-        elif shap_info.get("status") == "skipped":
-            logger.warning("SHAP summary skipped: %s", shap_info.get("error") or "unknown")
+            logger.info("Selected %d features from auto selection", len(valid_features))
+
+        train_t0 = time.time()
+
+        # ── 判断单模型 vs 多模型 ──
+        model_cfg = cfg.get("model", {})
+        model_types_raw = model_cfg.get("types", None)
+        is_multi_model = bool(model_types_raw and isinstance(model_types_raw, list) and len(model_types_raw) > 1)
+
+        if is_multi_model:
+            # ── 多模型训练路径 ──
+            ensemble_method = str(model_cfg.get("ensemble", "none")).strip().lower()
+            if ensemble_method == "stacking":
+                multi_result = train_stacking(
+                    df, valid_features, cfg,
+                    model_types=[str(t).strip().lower() for t in model_types_raw],
+                    n_folds=int(model_cfg.get("n_folds", 5)),
+                    hardware=hardware,
+                )
+            else:
+                multi_result = train_multi_models(df, valid_features, cfg, hardware=hardware)
+            elapsed = float(time.time() - train_t0)
+            primary_type = multi_result["primary_model_type"]
+            is_stacking = multi_result.get("ensemble_method") == "stacking"
+
+            # 保存各基模型
+            workspace = Path("/workspace")
+            saved_models: dict[str, str] = {}
+            for mt, res in multi_result["models"].items():
+                suffix_map = {"lightgbm": "_lgb", "xgboost": "_xgb", "catboost": "_cbm", "linear": "_lin"}
+                suffix = suffix_map.get(mt, f"_{mt}")
+                model_filename = _save_model(res["model"], mt, workspace.with_name(workspace.name) if False else workspace)
+                ext = Path(model_filename).suffix
+                new_name = f"model{suffix}{ext}"
+                if model_filename != new_name:
+                    (workspace / model_filename).rename(workspace / new_name)
+                    model_filename = new_name
+                saved_models[mt] = model_filename
+                logger.info("Saved %s model: %s", mt, model_filename)
+
+            # 获取主模型指标和预测
+            primary_res = multi_result["models"][primary_type]
+            if is_stacking:
+                # Stacking: 使用集成预测和集成指标
+                model = primary_res["model"]
+                fill_values = primary_res["fill_values"]
+                val_m = multi_result["val_ensemble_m"]
+                test_m = multi_result["test_ensemble_m"]
+                train_m = primary_res["train_m"]
+                pred_df = multi_result["pred_df"]
+                split_frames = primary_res["split_frames"]
+                actual_model_type = "stacking"
+                dl_metadata = primary_res.get("dl_metadata")
+            else:
+                model = primary_res["model"]
+                fill_values = primary_res["fill_values"]
+                train_m, val_m, test_m = primary_res["train_m"], primary_res["val_m"], primary_res["test_m"]
+                pred_df = primary_res["pred_df"]
+                split_frames = primary_res["split_frames"]
+                actual_model_type = primary_type
+                dl_metadata = primary_res.get("dl_metadata")
+
+            best_iteration = getattr(model, "best_iteration", None)
+            if best_iteration is None and hasattr(model, "get_best_iteration"):
+                try:
+                    best_iteration = model.get_best_iteration()
+                except Exception:
+                    best_iteration = None
+
+            # 保存预测
+            pred_path = Path("/workspace/pred.parquet")
+            pred_df.to_parquet(pred_path, engine="pyarrow", compression="zstd", index=False)
+            logger.info(f"Predictions saved to {pred_path}")
+
+            pred_qlib = (
+                pred_df[["trade_date", "symbol", "pred"]]
+                .rename(columns={"trade_date": "datetime", "symbol": "instrument", "pred": "score"})
+                .assign(datetime=lambda d: pd.to_datetime(d["datetime"]))
+                .set_index(["datetime", "instrument"])
+                .sort_index()
+            )
+            pred_pkl_path = Path("/workspace/pred.pkl")
+            pred_qlib.to_pickle(pred_pkl_path)
+            logger.info(f"Backtest-compatible pred.pkl saved ({len(pred_qlib):,} rows)")
+
+            # 保存对比报告
+            comparison_path = workspace / "model_comparison.json"
+            comparison_path.write_text(json.dumps(multi_result["comparison"], ensure_ascii=False, indent=2, default=str))
+
+            # SHAP（仅 LightGBM 基模型）
+            shap_info: dict[str, Any] = {"enabled": False, "status": "disabled"}
+            if "lightgbm" in multi_result["models"]:
+                lgb_res = multi_result["models"]["lightgbm"]
+                shap_summary_path = Path("/workspace/shap_summary.csv")
+                shap_info = _compute_shap_summary(
+                    model=lgb_res["model"],
+                    split_frames=lgb_res["split_frames"],
+                    features=valid_features,
+                    fill_values=lgb_res["fill_values"],
+                    explain_cfg=explain_cfg,
+                    out_path=shap_summary_path,
+                )
+            else:
+                logger.info("SHAP skipped: no LightGBM in multi-model run")
+
+            # 保存各基模型独立预测（parquet）
+            for mt, res in multi_result["models"].items():
+                base_pred_path = workspace / f"pred_{mt}.parquet"
+                res["pred_df"].to_parquet(base_pred_path, engine="pyarrow", compression="zstd", index=False)
+
+            # 构造 metadata
+            metadata = {
+                "run_id": run_id, "job_name": job_name,
+                "is_multi_model": True,
+                "is_ensemble": is_stacking,
+                "model_types": multi_result["model_types"],
+                "primary_model_type": primary_type,
+                "framework": _get_model_framework(primary_type),
+                "model_type": actual_model_type,
+                "model_file": saved_models.get(primary_type, ""),
+                "saved_models": saved_models,
+                "comparison": multi_result["comparison"],
+                "ensemble_method": multi_result["ensemble_method"],
+                "hardware": hardware,
+                "feature_count": len(valid_features),
+                "requested_feature_count": len(submitted_features),
+                "requested_features": submitted_features,
+                "auto_appended_feature_count": len(auto_appended_features),
+                "auto_appended_features": auto_appended_features,
+                "features": valid_features,
+                "feature_columns": valid_features,
+                "fill_values": fill_values,
+                "train_start": cfg["data"]["train_start"],
+                "train_end":   cfg["data"]["train_end"],
+                "val_start":   (cfg.get("split", {}).get("valid") or [None, None])[0] or "",
+                "val_end":     (cfg.get("split", {}).get("valid") or [None, None])[1] or "",
+                "test_start":  (cfg.get("split", {}).get("test")  or [None, None])[0] or "",
+                "test_end":    (cfg.get("split", {}).get("test")  or [None, None])[1] or "",
+                "data_source": "parquet",
+                "context": context_cfg,
+                "best_iteration": best_iteration,
+                "target_horizon_days": int((cfg.get("label", {}) or {}).get("target_horizon_days") or 1),
+                "target_mode": str((cfg.get("label", {}) or {}).get("target_mode") or "return"),
+                "label_formula": str((cfg.get("label", {}) or {}).get("label_formula") or ""),
+                "effective_trade_date": str((cfg.get("label", {}) or {}).get("effective_trade_date") or ""),
+                "training_window": str((cfg.get("label", {}) or {}).get("training_window") or ""),
+                "metrics": {
+                    "train_ic": train_m["ic"], "train_rank_ic": train_m["rank_ic"], "train_rank_icir": train_m["rank_icir"],
+                    "val_ic": val_m["ic"], "val_rank_ic": val_m["rank_ic"], "val_rank_icir": val_m["rank_icir"],
+                    "test_ic": test_m["ic"], "test_rank_ic": test_m["rank_ic"], "test_rank_icir": test_m["rank_icir"],
+                },
+                "pred_coverage_start": str(pred_df["trade_date"].min().date()) if not pred_df.empty else "",
+                "pred_coverage_end": str(pred_df["trade_date"].max().date()) if not pred_df.empty else "",
+                "pred_rows": int(len(pred_df)),
+                "shap": shap_info,
+                "generated_at": datetime.utcnow().isoformat(),
+                "elapsed_seconds": elapsed,
+            }
+            if is_stacking:
+                metadata["base_model_files"] = saved_models
+                metadata["meta_model_file"] = "meta_model.pkl"
+                metadata["n_folds"] = int(model_cfg.get("n_folds", 5))
+                metadata["base_model_fill_values"] = multi_result.get("base_fill_values", {})
+                metadata["fold_method"] = "expanding_window"
+                metadata["meta_learner"] = "ridge"
+            if dl_metadata:
+                metadata.update(dl_metadata)
+
+            metadata_bytes = json.dumps(_sanitize_nan_inf(metadata), ensure_ascii=False, indent=2).encode()
+            Path("/workspace/metadata.json").write_bytes(metadata_bytes)
+            logger.info("metadata.json saved locally")
+
+            # 复制推理脚本模板
+            template_path = Path("/app/backend/services/engine/inference/templates/inference_parquet.py")
+            inference_dest = Path("/workspace/inference.py")
+            if template_path.is_file():
+                inference_dest.write_text(template_path.read_text(encoding="utf-8"), encoding="utf-8")
+                logger.info("inference.py copied from unified template: %s", template_path)
+
+            result = {
+                "status": "completed",
+                "run_id": run_id,
+                "job_name": job_name,
+                "metrics": {
+                    "train": {"rmse": train_m["rmse"], "auc": train_m["auc"]},
+                    "val": {"rmse": val_m["rmse"], "auc": val_m["auc"]},
+                    "test": {"rmse": test_m["rmse"], "auc": test_m["auc"]},
+                },
+                "artifacts": [
+                    {"name": saved_models.get(primary_type, "model.lgb"), "local": f"/workspace/{saved_models.get(primary_type, 'model.lgb')}"},
+                    {"name": "pred.parquet",  "local": "/workspace/pred.parquet"},
+                    {"name": "metadata.json", "local": "/workspace/metadata.json"},
+                    {"name": "inference.py",  "local": "/workspace/inference.py"},
+                    {"name": "config.yaml",   "local": "/workspace/config.yaml"},
+                    {"name": "result.json",   "local": "/workspace/result.json"},
+                    {"name": "model_comparison.json", "local": "/workspace/model_comparison.json"},
+                ] + [
+                    {"name": f"pred_{mt}.parquet", "local": f"/workspace/pred_{mt}.parquet"}
+                    for mt in multi_result["model_types"]
+                ] + [
+                    {"name": fn, "local": f"/workspace/{fn}"}
+                    for fn in saved_models.values() if fn != saved_models.get(primary_type)
+                ],
+                "summary": {
+                    "status": "Stacking集成训练完成" if is_stacking else "多模型训练完成",
+                    "message": f"{'Stacking集成' if is_stacking else '训练'}完成({len(multi_result['model_types'])}个模型)，最佳={primary_type}，val_icir={val_m['rank_icir']:.4f}",
+                },
+                "metadata": metadata,
+                "error": "",
+                "logs": f"val_rmse={val_m['rmse']:.6f}, val_auc={val_m['auc']:.6f}, best={primary_type}",
+            }
+            if is_stacking:
+                result["artifacts"].extend([
+                    {"name": "meta_model.pkl", "local": "/workspace/meta_model.pkl"},
+                    {"name": "oof_predictions.parquet", "local": "/workspace/oof_predictions.parquet"},
+                ])
+            if shap_info.get("status") == "completed" and Path("/workspace/shap_summary.csv").exists():
+                result["artifacts"].append({"name": "shap_summary.csv", "local": "/workspace/shap_summary.csv"})
+
         else:
-            logger.warning("SHAP summary failed: %s", shap_info.get("error") or "unknown")
+            # ── 单模型训练路径（向后兼容） ──
+            train_result = train_model(df, valid_features, cfg, hardware=hardware)
+            # train_model 返回 8-tuple (树模型) 或 9-tuple (DL 模型，含 dl_metadata)
+            if len(train_result) == 9:
+                model, fill_values, train_m, val_m, test_m, pred_df, split_frames, actual_model_type, dl_metadata = train_result
+            else:
+                model, fill_values, train_m, val_m, test_m, pred_df, split_frames, actual_model_type = train_result
+                dl_metadata = None
+            elapsed = float(time.time() - train_t0)
 
-        # 构造 metadata
-        metadata = {
-            "run_id": run_id, "job_name": job_name,
-            "framework": _get_model_framework(actual_model_type),
-            "model_type": actual_model_type,
-            "model_file": model_filename,
-            "hardware": hardware,
-            "feature_count": len(valid_features),
-            "requested_feature_count": len(submitted_features),
-            "requested_features": submitted_features,
-            "auto_appended_feature_count": len(auto_appended_features),
-            "auto_appended_features": auto_appended_features,
-            "features": valid_features,
-            "feature_columns": valid_features,
-            "fill_values": fill_values,
-            "train_start": cfg["data"]["train_start"],
-            "train_end":   cfg["data"]["train_end"],
-            "val_start":   (cfg.get("split", {}).get("valid") or [None, None])[0] or "",
-            "val_end":     (cfg.get("split", {}).get("valid") or [None, None])[1] or "",
-            "test_start":  (cfg.get("split", {}).get("test")  or [None, None])[0] or "",
-            "test_end":    (cfg.get("split", {}).get("test")  or [None, None])[1] or "",
-            "data_source": "parquet",
-            "context": context_cfg,
-            "best_iteration": best_iteration,
-            "target_horizon_days": int((cfg.get("label", {}) or {}).get("target_horizon_days") or 1),
-            "target_mode": str((cfg.get("label", {}) or {}).get("target_mode") or "return"),
-            "label_formula": str((cfg.get("label", {}) or {}).get("label_formula") or ""),
-            "effective_trade_date": str((cfg.get("label", {}) or {}).get("effective_trade_date") or ""),
-            "training_window": str((cfg.get("label", {}) or {}).get("training_window") or ""),
-            "metrics": {
-                "train_ic": train_m["ic"], "train_rank_ic": train_m["rank_ic"], "train_rank_icir": train_m["rank_icir"],
-                "val_ic": val_m["ic"], "val_rank_ic": val_m["rank_ic"], "val_rank_icir": val_m["rank_icir"],
-                "test_ic": test_m["ic"], "test_rank_ic": test_m["rank_ic"], "test_rank_icir": test_m["rank_icir"],
-            },
-            "pred_coverage_start": str(pred_df["trade_date"].min().date()) if not pred_df.empty else "",
-            "pred_coverage_end": str(pred_df["trade_date"].max().date()) if not pred_df.empty else "",
-            "pred_rows": int(len(pred_df)),
-            "shap": shap_info,
-            "generated_at": datetime.utcnow().isoformat(),
-            "elapsed_seconds": elapsed,
-        }
-        # DL 模型特有元数据 (model_class_name, model_params, input_spec 等)
-        if dl_metadata:
-            metadata.update(dl_metadata)
-        def _sanitize_for_json_meta(obj):
-            import math
-            if isinstance(obj, dict):
-                return {k: _sanitize_for_json_meta(v) for k, v in obj.items()}
-            if isinstance(obj, list):
-                return [_sanitize_for_json_meta(v) for v in obj]
-            if isinstance(obj, float) and (math.isnan(obj) or math.isinf(obj)):
-                return None
-            return obj
+            # 获取 best_iteration（不同框架方式不同）
+            best_iteration = getattr(model, "best_iteration", None)
+            if best_iteration is None and hasattr(model, "get_best_iteration"):
+                try:
+                    best_iteration = model.get_best_iteration()
+                except Exception:
+                    best_iteration = None
+            logger.info("Training finished in %.2fs, best_iteration=%s, model_type=%s", elapsed, best_iteration, actual_model_type)
 
-        metadata_bytes = json.dumps(_sanitize_for_json_meta(metadata), ensure_ascii=False, indent=2).encode()
-        Path("/workspace/metadata.json").write_bytes(metadata_bytes)
-        logger.info("metadata.json saved locally")
+            # 保存模型（多框架）
+            workspace = Path("/workspace")
+            model_filename = _save_model(model, actual_model_type, workspace)
+            logger.info(f"Model saved to {workspace / model_filename}")
 
-        # 复制统一推理脚本模板（而非内联生成旧版脚本）
-        template_path = Path("/app/backend/services/engine/inference/templates/inference_parquet.py")
-        inference_dest = Path("/workspace/inference.py")
-        if template_path.is_file():
-            inference_dest.write_text(template_path.read_text(encoding="utf-8"), encoding="utf-8")
-            logger.info("inference.py copied from unified template: %s", template_path)
-        else:
-            # 兜底：模板不存在时写入简化版（仅记录警告）
-            logger.warning("统一推理模板不存在: %s，使用简化版", template_path)
-            _INFERENCE_SCRIPT_FALLBACK = '''#!/usr/bin/env python3
+            # 保存预测结果（parquet 压缩用于存档，比 pickle 小 ~10x）
+            pred_path = Path("/workspace/pred.parquet")
+            pred_df.to_parquet(pred_path, engine="pyarrow", compression="zstd", index=False)
+            logger.info(f"Predictions saved to {pred_path} ({pred_path.stat().st_size/1024/1024:.1f} MB)")
+
+            # 同时保存回测引擎兼容格式 pred.pkl
+            # 回测引擎要求: MultiIndex(datetime, instrument) + 'score' 列
+            pred_qlib = (
+                pred_df[["trade_date", "symbol", "pred"]]
+                .rename(columns={"trade_date": "datetime", "symbol": "instrument", "pred": "score"})
+                .assign(datetime=lambda d: pd.to_datetime(d["datetime"]))
+                .set_index(["datetime", "instrument"])
+                .sort_index()
+            )
+            pred_pkl_path = Path("/workspace/pred.pkl")
+            pred_qlib.to_pickle(pred_pkl_path)
+            logger.info(f"Backtest-compatible pred.pkl saved ({pred_pkl_path.stat().st_size/1024/1024:.1f} MB, {len(pred_qlib):,} rows)")
+
+            shap_summary_path = Path("/workspace/shap_summary.csv")
+            # SHAP: pred_contrib 仅支持 LightGBM；其他框架暂跳过
+            if actual_model_type != "lightgbm":
+                explain_cfg_shap = {**explain_cfg, "enable_shap": False}
+                logger.info("SHAP disabled: pred_contrib not supported for %s", actual_model_type)
+            else:
+                explain_cfg_shap = explain_cfg
+            shap_info = _compute_shap_summary(
+                model=model,
+                split_frames=split_frames,
+                features=valid_features,
+                fill_values=fill_values,
+                explain_cfg=explain_cfg_shap,
+                out_path=shap_summary_path,
+            )
+            if shap_info.get("status") == "completed":
+                logger.info(
+                    "SHAP summary generated: split=%s rows=%s -> %s",
+                    shap_info.get("split"),
+                    shap_info.get("rows_used"),
+                    shap_summary_path,
+                )
+            elif shap_info.get("status") == "disabled":
+                logger.info("SHAP summary disabled by config")
+            elif shap_info.get("status") == "skipped":
+                logger.warning("SHAP summary skipped: %s", shap_info.get("error") or "unknown")
+            else:
+                logger.warning("SHAP summary failed: %s", shap_info.get("error") or "unknown")
+
+            # 构造 metadata
+            metadata = {
+                "run_id": run_id, "job_name": job_name,
+                "framework": _get_model_framework(actual_model_type),
+                "model_type": actual_model_type,
+                "model_file": model_filename,
+                "hardware": hardware,
+                "feature_count": len(valid_features),
+                "requested_feature_count": len(submitted_features),
+                "requested_features": submitted_features,
+                "auto_appended_feature_count": len(auto_appended_features),
+                "auto_appended_features": auto_appended_features,
+                "features": valid_features,
+                "feature_columns": valid_features,
+                "fill_values": fill_values,
+                "train_start": cfg["data"]["train_start"],
+                "train_end":   cfg["data"]["train_end"],
+                "val_start":   (cfg.get("split", {}).get("valid") or [None, None])[0] or "",
+                "val_end":     (cfg.get("split", {}).get("valid") or [None, None])[1] or "",
+                "test_start":  (cfg.get("split", {}).get("test")  or [None, None])[0] or "",
+                "test_end":    (cfg.get("split", {}).get("test")  or [None, None])[1] or "",
+                "data_source": "parquet",
+                "context": context_cfg,
+                "best_iteration": best_iteration,
+                "target_horizon_days": int((cfg.get("label", {}) or {}).get("target_horizon_days") or 1),
+                "target_mode": str((cfg.get("label", {}) or {}).get("target_mode") or "return"),
+                "label_formula": str((cfg.get("label", {}) or {}).get("label_formula") or ""),
+                "effective_trade_date": str((cfg.get("label", {}) or {}).get("effective_trade_date") or ""),
+                "training_window": str((cfg.get("label", {}) or {}).get("training_window") or ""),
+                "metrics": {
+                    "train_ic": train_m["ic"], "train_rank_ic": train_m["rank_ic"], "train_rank_icir": train_m["rank_icir"],
+                    "val_ic": val_m["ic"], "val_rank_ic": val_m["rank_ic"], "val_rank_icir": val_m["rank_icir"],
+                    "test_ic": test_m["ic"], "test_rank_ic": test_m["rank_ic"], "test_rank_icir": test_m["rank_icir"],
+                },
+                "pred_coverage_start": str(pred_df["trade_date"].min().date()) if not pred_df.empty else "",
+                "pred_coverage_end": str(pred_df["trade_date"].max().date()) if not pred_df.empty else "",
+                "pred_rows": int(len(pred_df)),
+                "shap": shap_info,
+                "generated_at": datetime.utcnow().isoformat(),
+                "elapsed_seconds": elapsed,
+            }
+            # DL 模型特有元数据 (model_class_name, model_params, input_spec 等)
+            if dl_metadata:
+                metadata.update(dl_metadata)
+
+            metadata_bytes = json.dumps(_sanitize_nan_inf(metadata), ensure_ascii=False, indent=2).encode()
+            Path("/workspace/metadata.json").write_bytes(metadata_bytes)
+            logger.info("metadata.json saved locally")
+
+            # 复制统一推理脚本模板（而非内联生成旧版脚本）
+            template_path = Path("/app/backend/services/engine/inference/templates/inference_parquet.py")
+            inference_dest = Path("/workspace/inference.py")
+            if template_path.is_file():
+                inference_dest.write_text(template_path.read_text(encoding="utf-8"), encoding="utf-8")
+                logger.info("inference.py copied from unified template: %s", template_path)
+            else:
+                # 兜底：模板不存在时写入简化版（仅记录警告）
+                logger.warning("统一推理模板不存在: %s，使用简化版", template_path)
+                _INFERENCE_SCRIPT_FALLBACK = '''#!/usr/bin/env python3
 """
 QuantMind Parquet 数据源推理脚本 (inference.py 模板)
 =====================================================
@@ -1685,55 +2551,44 @@ def main():
 if __name__ == "__main__":
     main()
 '''
-            inference_dest.write_text(_INFERENCE_SCRIPT_FALLBACK, encoding="utf-8")
-            logger.info("inference.py fallback version written to model directory")
+                inference_dest.write_text(_INFERENCE_SCRIPT_FALLBACK, encoding="utf-8")
+                logger.info("inference.py fallback version written to model directory")
 
-        result = {
-            "status": "completed",
-            "run_id": run_id,
-            "job_name": job_name,
-            "metrics": {
-                "train": {"rmse": train_m["rmse"], "auc": train_m["auc"]},
-                "val": {"rmse": val_m["rmse"], "auc": val_m["auc"]},
-                "test": {"rmse": test_m["rmse"], "auc": test_m["auc"]},
-            },
-            "artifacts": [
-                {"name": model_filename,  "local": f"/workspace/{model_filename}"},
-                {"name": "pred.parquet",  "local": "/workspace/pred.parquet"},
-                {"name": "metadata.json", "local": "/workspace/metadata.json"},
-                {"name": "inference.py",  "local": "/workspace/inference.py"},
-                {"name": "config.yaml",   "local": "/workspace/config.yaml"},
-                {"name": "result.json",   "local": "/workspace/result.json"},
-            ],
-            "summary": {
-                "status": "训练完成",
-                "message": f"训练完成({actual_model_type})，best_iteration={best_iteration}，产物已保存到本地模型目录",
-            },
-            "metadata": metadata,
-            "error": "",
-            "logs": f"val_rmse={val_m['rmse']:.6f}, val_auc={val_m['auc']:.6f}",
-        }
-        if shap_info.get("status") == "completed" and shap_summary_path.exists():
-            result["artifacts"].append({"name": "shap_summary.csv", "local": "/workspace/shap_summary.csv"})
+            result = {
+                "status": "completed",
+                "run_id": run_id,
+                "job_name": job_name,
+                "metrics": {
+                    "train": {"rmse": train_m["rmse"], "auc": train_m["auc"]},
+                    "val": {"rmse": val_m["rmse"], "auc": val_m["auc"]},
+                    "test": {"rmse": test_m["rmse"], "auc": test_m["auc"]},
+                },
+                "artifacts": [
+                    {"name": model_filename,  "local": f"/workspace/{model_filename}"},
+                    {"name": "pred.parquet",  "local": "/workspace/pred.parquet"},
+                    {"name": "metadata.json", "local": "/workspace/metadata.json"},
+                    {"name": "inference.py",  "local": "/workspace/inference.py"},
+                    {"name": "config.yaml",   "local": "/workspace/config.yaml"},
+                    {"name": "result.json",   "local": "/workspace/result.json"},
+                ],
+                "summary": {
+                    "status": "训练完成",
+                    "message": f"训练完成({actual_model_type})，best_iteration={best_iteration}，产物已保存到本地模型目录",
+                },
+                "metadata": metadata,
+                "error": "",
+                "logs": f"val_rmse={val_m['rmse']:.6f}, val_auc={val_m['auc']:.6f}",
+            }
+            if shap_info.get("status") == "completed" and shap_summary_path.exists():
+                result["artifacts"].append({"name": "shap_summary.csv", "local": "/workspace/shap_summary.csv"})
 
     except Exception as e:
         logger.exception(f"Training failed: {e}")
         result = {"status": "failed", "run_id": run_id, "error": str(e)}
 
     finally:
-        def _sanitize_for_json(obj):
-            """Replace NaN/Inf with None for JSON compliance."""
-            import math
-            if isinstance(obj, dict):
-                return {k: _sanitize_for_json(v) for k, v in obj.items()}
-            if isinstance(obj, list):
-                return [_sanitize_for_json(v) for v in obj]
-            if isinstance(obj, float) and (math.isnan(obj) or math.isinf(obj)):
-                return None
-            return obj
-
         result_path.parent.mkdir(parents=True, exist_ok=True)
-        result_clean = _sanitize_for_json(result)
+        result_clean = _sanitize_nan_inf(result)
         result_json = json.dumps(result_clean, ensure_ascii=False, indent=2)
         result_path.write_text(result_json)
         logger.info(f"result.json → {result_path}")

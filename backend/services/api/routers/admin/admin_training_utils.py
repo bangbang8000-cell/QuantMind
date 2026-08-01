@@ -33,6 +33,38 @@ _ALLOWED_MODEL_TYPES = {
 }
 _TREE_MODEL_TYPES = {"lightgbm", "xgboost", "catboost", "linear"}
 _DL_MODEL_TYPES = {"gru", "lstm", "alstm", "transformer", "tabnet", "tcn"}
+# 市场 → exchange_calendars 日历名。CRYPTO 为 7x24 无休市，不在此映射中。
+_MARKET_TO_XCAL = {"CN": "XSHG", "US": "XNYS", "HK": "XHKG"}
+
+
+def _shift_trading_days_back(anchor: datetime, n_days: int, market: str) -> tuple[datetime, bool]:
+    """从 anchor 往前数 n_days 个交易日，返回 (结果日期, 是否用了交易日历)。
+
+    label 是 close(T+N)/close(T)-1，N 计的是交易日，因此 gap 必须按交易日算：
+    10 个日历日只夹约 6 个交易日，会让 train 尾部的 label 窗口伸进 valid 区间。
+    CRYPTO 或日历不可用时退化为日历日（返回 False，调用方据此提示用户）。
+    """
+    cal_name = _MARKET_TO_XCAL.get(str(market or "CN").upper())
+    if not cal_name:
+        return anchor - timedelta(days=n_days), False
+    try:
+        import exchange_calendars as xcals
+
+        cal = xcals.get_calendar(cal_name)
+        # 往前取足够长的窗口（含周末与长假，2 倍 + 30 天足够覆盖春节/国庆）
+        lookback = max(n_days * 2 + 30, 45)
+        sessions = cal.sessions_in_range(
+            (anchor - timedelta(days=lookback)).strftime("%Y-%m-%d"),
+            anchor.strftime("%Y-%m-%d"),
+        )
+        # 只保留严格早于 anchor 的交易日，取倒数第 n_days 个
+        prior = [s for s in sessions if s.strftime("%Y-%m-%d") < anchor.strftime("%Y-%m-%d")]
+        if len(prior) < n_days:
+            return anchor - timedelta(days=n_days), False
+        return datetime.strptime(prior[-n_days].strftime("%Y-%m-%d"), "%Y-%m-%d"), True
+    except Exception as exc:
+        logger.warning("trading-day gap unavailable (market=%s): %s", market, exc)
+        return anchor - timedelta(days=n_days), False
 _TRAINING_BASE_FEATURES = [
     "mom_ret_1d",
     "mom_ret_5d",
@@ -194,6 +226,7 @@ def _normalize_context(context: dict[str, Any]) -> dict[str, Any]:
         "slippage": slippage,
         "deal_price": deal_price,
         "market": market,
+        "industry_as_feature": bool(context.get("industry_as_feature", False)),
     }
 
 
@@ -207,6 +240,25 @@ def _normalize_payload(payload: dict[str, Any], allowed_features: list[str]) -> 
             status_code=422,
             detail=f"Unsupported model_type: {model_type}. Allowed: {sorted(_ALLOWED_MODEL_TYPES)}",
         )
+
+    # 多模型支持：model_types 列表
+    model_types: list[str] | None = None
+    raw_model_types = payload.get("model_types")
+    if raw_model_types and isinstance(raw_model_types, list):
+        model_types = [str(t).strip().lower() for t in raw_model_types if str(t).strip()]
+        for mt in model_types:
+            if mt not in _ALLOWED_MODEL_TYPES:
+                raise HTTPException(
+                    status_code=422,
+                    detail=f"Unsupported model_type in model_types: {mt}. Allowed: {sorted(_ALLOWED_MODEL_TYPES)}",
+                )
+        # 多模型时，model_type 取第一个作为主模型（向后兼容）
+        if model_types:
+            model_type = model_types[0]
+
+    ensemble_method = str(payload.get("ensemble", "none")).strip().lower()
+    if ensemble_method not in ("none", "stacking", "blending", "voting"):
+        ensemble_method = "none"
 
     display_name = str(payload.get("display_name") or payload.get("job_name") or "unnamed").strip() or "unnamed"
     if len(display_name) > 128:
@@ -316,7 +368,10 @@ def _normalize_payload(payload: dict[str, Any], allowed_features: list[str]) -> 
         "xgb_params": xgb_params,
         "catboost_params": catboost_params,
         "dl_params": dl_params,
+        "ensemble": ensemble_method,
     }
+    if model_types and len(model_types) > 1:
+        normalized["model_types"] = model_types
 
     explicit_fields = ["valid_start", "valid_end", "test_start", "test_end"]
     has_explicit_split = any(payload.get(k) for k in explicit_fields)
