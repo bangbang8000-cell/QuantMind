@@ -13,15 +13,15 @@ import SettingsCenter from './tabs/SettingsCenter';
 import type { RealTradingStatus, AccountInfo, PreflightCheckResponse, PreflightCheckItem } from '../../services/realTradingService';
 import { authService } from '../../features/auth/services/authService';
 import type { StrategyFile } from '../../types/backtest/strategy';
-import { useAppDispatch, useAppSelector } from '../../store';
-import { setTradingMode, selectCurrentMarket } from '../../store/slices/uiSlice';
+import { useAppSelector } from '../../store';
+import { selectCurrentMarket } from '../../store/slices/uiSlice';
 import { getMarketConfig } from '../../config/marketConfig';
 import { useTradeWebSocket } from '../../hooks/useTradeWebSocket';
 import { buildTradingTopBarAccountInfo, resolveTradingAccountMode } from './utils/accountAdapter';
 import LiveTradeConfigWizard from './components/LiveTradeConfigWizard';
 import type { DeployMode, ExecutionConfig, LiveTradeConfig } from '../../types/liveTrading';
 
-type TradingMode = 'real' | 'simulation';
+type TradingMode = 'simulation';  // 仅支持模拟盘（实盘通道因政策原因已下线）
 type ActiveTab = 'manage' | 'manual-task' | 'personal' | 'position' | 'history' | 'settings';
 type PreflightStage = 'trading-readiness' | 'preflight';
 type PendingDeploy = {
@@ -49,8 +49,6 @@ type TradingReadinessResult = {
         trading_permission?: string;
     } | null;
 };
-const TRADING_MODE_PREF_KEY = 'qm:trading_mode_pref';
-
 const permissionTag = (permission?: string) => {
     if (permission === 'observe_only') {
         return <Tag color="processing" className="ml-2">观察态</Tag>;
@@ -89,8 +87,7 @@ const RealTradingPage: React.FC = () => {
         }
         return 'user_1001';
     });
-    const dispatch = useAppDispatch();
-    const tradingMode = useAppSelector((state) => state.ui.tradingMode);
+    const tradingMode: TradingMode = 'simulation';  // 仅模拟盘
     const [status, setStatus] = useState<RealTradingStatus | null>(null);
     const [accountInfo, setAccountInfo] = useState<AccountInfo | null>(null);
     const [preflightResult, setPreflightResult] = useState<PreflightCheckResponse | null>(null);
@@ -106,7 +103,7 @@ const RealTradingPage: React.FC = () => {
     const [tradingReadinessResult, setTradingReadinessResult] = useState<TradingReadinessResult | null>(null);
     const [wizardOpen, setWizardOpen] = useState(false);
     const [wizardStrategy, setWizardStrategy] = useState<StrategyFile | null>(null);
-    const [wizardMode, setWizardMode] = useState<DeployMode>('REAL');
+    const [wizardMode, setWizardMode] = useState<DeployMode>('SIMULATION');
     const [confirmStarting, setConfirmStarting] = useState(false);
     const [revealedItemCount, setRevealedItemCount] = useState(0);
     const [isRevealing, setIsRevealing] = useState(false);
@@ -114,11 +111,8 @@ const RealTradingPage: React.FC = () => {
     const isFetchingRef = useRef(false);
 
     useEffect(() => {
-        const remembered = String(localStorage.getItem(TRADING_MODE_PREF_KEY) || '').trim();
-        if (remembered === 'real' || remembered === 'simulation') {
-            dispatch(setTradingMode(remembered));
-        }
-    }, [dispatch]);
+        // 模拟盘模式固定，无需记忆切换
+    }, []);
 
     const fetchData = useCallback(async () => {
         if (isFetchingRef.current) return;
@@ -224,8 +218,8 @@ const RealTradingPage: React.FC = () => {
     const strategyStatus: 'running' | 'starting' | 'stopped' = runtimeStatus === 'running'
         ? 'running'
         : (runtimeStatus === 'starting' ? 'starting' : 'stopped');
-    const resolvedRunMode: 'REAL' | 'SHADOW' | 'SIMULATION' | undefined = isRuntimeActive
-        ? (status?.mode || (tradingMode === 'simulation' ? 'SIMULATION' : 'REAL'))
+    const resolvedRunMode: 'SIMULATION' | undefined = isRuntimeActive
+        ? 'SIMULATION'
         : undefined;
     const resolvedOrchestrationMode: 'docker' | 'k8s' | undefined = isRuntimeActive
         ? status?.orchestration_mode
@@ -264,7 +258,7 @@ const RealTradingPage: React.FC = () => {
                 setEffectiveLiveTradeConfig(startResp.effective_live_trade_config);
             }
 
-            const modeText = mode === 'REAL' ? '实盘' : (mode === 'SHADOW' ? '影子' : '模拟');
+            const modeText = '模拟盘';
             const permissionText = startResp?.trading_permission === 'observe_only'
                 ? '（观察态，不自动下单）'
                 : '';
@@ -297,7 +291,7 @@ const RealTradingPage: React.FC = () => {
         isShadow: boolean,
         strategy?: StrategyFile | null,
     ) => {
-        const mode: DeployMode = tradingMode === 'simulation' ? 'SIMULATION' : (isShadow ? 'SHADOW' : 'REAL');
+        const mode: DeployMode = 'SIMULATION';
         setWizardStrategy(strategy || { id: strategyId, name: strategyId, source: 'personal', code: '' });
         setWizardMode(mode);
         setWizardOpen(true);
@@ -413,9 +407,7 @@ const RealTradingPage: React.FC = () => {
 
     const confirmStartLabel = useMemo(() => {
         if (!pendingDeploy) return '确认并启动';
-        if (pendingDeploy.mode === 'SIMULATION') return '确认并启动模拟盘';
-        if (pendingDeploy.mode === 'SHADOW') return '确认并启动影子运行';
-        return '确认并启动实盘';
+        return '确认并启动模拟盘';
     }, [pendingDeploy]);
 
     // 检测结果全部展示，不做逐项 reveal（加快加载速度）
@@ -469,11 +461,6 @@ const RealTradingPage: React.FC = () => {
         }
     };
 
-    const handleModeSwitch = (mode: TradingMode): void => {
-        localStorage.setItem(TRADING_MODE_PREF_KEY, mode);
-        dispatch(setTradingMode(mode));
-    };
-
     const tabs: Array<{ id: ActiveTab; label: string; icon: LucideIcon }> = [
         { id: 'manage', label: '策略管理', icon: LayoutDashboard },
         { id: 'manual-task', label: '手动任务', icon: ClipboardList },
@@ -524,30 +511,13 @@ const RealTradingPage: React.FC = () => {
                         ))}
                     </div>
 
-                    {/* Bottom Help Center + Mode Switch */}
+                    {/* Bottom Help Center + Simulation Badge */}
                     <div className="p-4 border-t border-gray-200 shrink-0 relative">
                         <div className="flex items-center justify-between gap-1">
                             <HelpCenterLink className="whitespace-nowrap flex-1" />
-                            <button
-                                onClick={() => handleModeSwitch(tradingMode === 'simulation' ? 'real' : 'simulation')}
-                                className="flex items-center gap-1.5 px-2 py-2 rounded-xl border border-gray-200 text-gray-600 hover:text-blue-600 hover:border-blue-200 hover:bg-blue-50 transition-colors flex-shrink-0"
-                                title="切换实盘/模拟盘"
-                            >
-                                <span className="text-xs font-bold whitespace-nowrap">
-                                    {tradingMode === 'simulation' ? '模拟' : '实盘'}
-                                </span>
-                                <span
-                                    className={`relative inline-flex items-center h-4 w-7 rounded-full transition-colors duration-200 ${
-                                        tradingMode === 'simulation' ? 'bg-blue-600' : 'bg-gray-300'
-                                    }`}
-                                >
-                                    <span
-                                        className={`inline-block w-2.5 h-2.5 rounded-full bg-white shadow transform transition-transform duration-200 ${
-                                            tradingMode === 'simulation' ? 'translate-x-[14px]' : 'translate-x-[2px]'
-                                        }`}
-                                    />
-                                </span>
-                            </button>
+                            <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg bg-blue-50 text-blue-700 text-xs font-semibold border border-blue-100">
+                                模拟盘
+                            </span>
                         </div>
                     </div>
                 </div>
