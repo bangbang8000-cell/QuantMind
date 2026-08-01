@@ -54,22 +54,15 @@ class TradingEngine:
 
     def _get_broker(self, trading_mode: TradingMode) -> BaseBroker:
         """
-        按订单 trading_mode 选择 broker，避免由全局开关决定执行路径。
+        按订单 trading_mode 取 broker（实盘通道已下线，统一走本地模拟撮合）。
         """
         mode = (trading_mode or TradingMode.SIMULATION).value
         if mode in self._broker_cache:
             return self._broker_cache[mode]
 
-        enable_real = trading_mode == TradingMode.REAL
         broker = create_broker(
-            enable_real=enable_real,
-            broker_type=getattr(settings, "REAL_BROKER_TYPE", "bridge"),
-            qmt_host=getattr(settings, "QMT_HOST", "127.0.0.1"),
-            qmt_port=getattr(settings, "QMT_PORT", 18080),
             redis_client=self.redis,
             market_url=getattr(settings, "MARKET_DATA_SERVICE_URL", "http://stream-gateway:8003"),
-            stream_base_url=getattr(settings, "MARKET_DATA_SERVICE_URL", "http://stream-gateway:8003"),
-            internal_secret=getattr(settings, "INTERNAL_CALL_SECRET", None),
         )
         self._broker_cache[mode] = broker
         return broker
@@ -129,19 +122,12 @@ class TradingEngine:
                 f"发送下单请求到 Broker: {order.symbol} {order.quantity} @ {order.price} (ID: {order.order_id})"
             )
 
-            is_qmt_broker = broker.__class__.__name__ == "QMTBroker"
-            side_arg = getattr(order.side, "name", str(order.side)).upper() if is_qmt_broker else str(order.side.value)
-            order_type_arg = (
-                getattr(order.order_type, "name", str(order.order_type)).upper()
-                if is_qmt_broker
-                else str(order.order_type.value)
-            )
             place_order_kwargs = {
                 "user_id": str(order.user_id),
                 "symbol": order.symbol,
-                "side": side_arg,
+                "side": str(order.side.value),
                 "quantity": order.quantity,
-                "order_type": order_type_arg,
+                "order_type": str(order.order_type.value),
                 "price": order.price,
                 "tenant_id": tenant_id,
             }

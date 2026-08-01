@@ -2,11 +2,9 @@ import asyncio
 import os
 from contextlib import asynccontextmanager
 from datetime import datetime
-from typing import Any, Optional
 
 from fastapi import FastAPI, Header, HTTPException, Response, WebSocket
 from fastapi.middleware.cors import CORSMiddleware
-from pydantic import BaseModel, Field
 from sqlalchemy import text
 
 from backend.services.stream.market_app.api.v1 import (
@@ -343,147 +341,9 @@ app.include_router(klines_router, prefix="/api/v1")
 app.include_router(symbols_router, prefix="/api/v1")
 
 
-class BridgeOrderDispatchRequest(BaseModel):
-    tenant_id: str = Field(default="default")
-    user_id: str
-    account_id: str | None = None
-    payload: dict[str, Any]
-
-
-class BridgeCancelDispatchRequest(BaseModel):
-    tenant_id: str = Field(default="default")
-    user_id: str
-    account_id: str | None = None
-    payload: dict[str, Any]
-
-
-def _resolve_bridge_targets(tenant_id: str, user_id: str, account_id: str | None) -> list[str]:
-    normalized_tenant = str(tenant_id or "").strip() or "default"
-    normalized_user_raw = str(user_id or "").strip()
-    normalized_account = str(account_id or "").strip()
-
-    def _normalize_user(value: str) -> str:
-        text = str(value or "").strip()
-        if text.isdigit():
-            try:
-                return str(int(text))
-            except Exception:
-                return text
-        return text
-
-    normalized_user = _normalize_user(normalized_user_raw)
-
-    candidates: list[tuple[float, str]] = []
-    for connection_id, metadata in ws_manager.connection_metadata.items():
-        if connection_id not in ws_manager.active_connections:
-            continue
-        if str(metadata.get("auth_source") or "") != "bridge_session":
-            continue
-        if str(metadata.get("tenant_id") or "").strip() != normalized_tenant:
-            continue
-        if _normalize_user(str(metadata.get("user_id") or "").strip()) != normalized_user:
-            continue
-        if normalized_account and str(metadata.get("account_id") or "").strip() != normalized_account:
-            continue
-        connected_at = float(metadata.get("connected_at") or 0.0)
-        candidates.append((connected_at, connection_id))
-
-    if not candidates:
-        return []
-    candidates.sort(reverse=True)
-    return [candidates[0][1]]
-
-
-@app.post("/api/v1/internal/bridge/order")
-async def dispatch_bridge_order(
-    payload: BridgeOrderDispatchRequest,
-    x_internal_call: str | None = Header(default=None),
-):
-    if str(x_internal_call or "").strip() != get_internal_call_secret():
-        raise HTTPException(status_code=401, detail="Invalid internal secret")
-
-    order_payload = payload.payload or {}
-    client_order_id = str(order_payload.get("client_order_id") or "").strip()
-    symbol = str(order_payload.get("symbol") or "").strip()
-    side = str(order_payload.get("side") or "").strip()
-    quantity = float(order_payload.get("quantity") or 0)
-    if not client_order_id or not symbol or not side or quantity <= 0:
-        raise HTTPException(status_code=400, detail="invalid bridge order payload")
-
-    targets = _resolve_bridge_targets(payload.tenant_id, payload.user_id, payload.account_id)
-    if not targets:
-        return {
-            "ok": False,
-            "dispatched": 0,
-            "reason": "bridge_agent_offline",
-            "tenant_id": payload.tenant_id,
-            "user_id": payload.user_id,
-        }
-
-    sent: list[str] = []
-    message = {"type": "order", "payload": order_payload}
-    for connection_id in targets:
-        success = await ws_manager.send_message(connection_id, message, use_queue=False)
-        if success:
-            sent.append(connection_id)
-
-    return {
-        "ok": len(sent) > 0,
-        "dispatched": len(sent),
-        "target_connections": sent,
-        "tenant_id": payload.tenant_id,
-        "user_id": payload.user_id,
-    }
-
-
-@app.post("/api/v1/internal/bridge/cancel")
-async def dispatch_bridge_cancel(
-    payload: BridgeCancelDispatchRequest,
-    x_internal_call: str | None = Header(default=None),
-):
-    if str(x_internal_call or "").strip() != get_internal_call_secret():
-        raise HTTPException(status_code=401, detail="Invalid internal secret")
-
-    cancel_payload = payload.payload or {}
-    client_order_id = str(cancel_payload.get("client_order_id") or "").strip()
-    exchange_order_id = str(cancel_payload.get("exchange_order_id") or "").strip()
-    if not client_order_id and not exchange_order_id:
-        raise HTTPException(status_code=400, detail="client_order_id or exchange_order_id required")
-
-    targets = _resolve_bridge_targets(payload.tenant_id, payload.user_id, payload.account_id)
-    if not targets:
-        return {
-            "ok": False,
-            "dispatched": 0,
-            "reason": "bridge_agent_offline",
-            "tenant_id": payload.tenant_id,
-            "user_id": payload.user_id,
-        }
-
-    sent: list[str] = []
-    message = {"type": "cancel", "payload": cancel_payload}
-    for connection_id in targets:
-        success = await ws_manager.send_message(connection_id, message, use_queue=False)
-        if success:
-            sent.append(connection_id)
-
-    return {
-        "ok": len(sent) > 0,
-        "dispatched": len(sent),
-        "target_connections": sent,
-        "tenant_id": payload.tenant_id,
-        "user_id": payload.user_id,
-    }
-
-
 # 通用 WebSocket 主入口
 @app.websocket("/ws")
 async def main_websocket_endpoint(websocket: WebSocket):
-    await core_ws_endpoint(websocket)
-
-
-@app.websocket("/ws/bridge")
-async def bridge_websocket_compat_endpoint(websocket: WebSocket):
     await core_ws_endpoint(websocket)
 
 

@@ -915,44 +915,7 @@ CREATE TABLE IF NOT EXISTS risk_rules (
 );
 
 -- ========================
--- 39. QMT_AGENT_BINDINGS
--- ========================
-CREATE TABLE IF NOT EXISTS qmt_agent_bindings (
-    id                  VARCHAR(64) NOT NULL PRIMARY KEY,
-    tenant_id           VARCHAR(64) NOT NULL DEFAULT 'default',
-    user_id             VARCHAR(64) NOT NULL,
-    api_key_id          INTEGER NOT NULL,
-    agent_type          VARCHAR(32) NOT NULL,
-    account_id          VARCHAR(64) NOT NULL,
-    client_fingerprint  VARCHAR(255) NOT NULL,
-    hostname            VARCHAR(255),
-    client_version      VARCHAR(64),
-    status              VARCHAR(32) NOT NULL DEFAULT 'active',
-    last_ip             VARCHAR(64),
-    last_seen_at        TIMESTAMPTZ,
-    bound_at            TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-    created_at          TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-    updated_at          TIMESTAMPTZ NOT NULL DEFAULT NOW()
-);
-
--- ========================
--- 40. QMT_AGENT_SESSIONS
--- ========================
-CREATE TABLE IF NOT EXISTS qmt_agent_sessions (
-    id          VARCHAR(64) NOT NULL PRIMARY KEY,
-    binding_id  VARCHAR(64) NOT NULL,
-    tenant_id   VARCHAR(64) NOT NULL DEFAULT 'default',
-    user_id     VARCHAR(64) NOT NULL,
-    token_hash  VARCHAR(64) NOT NULL,
-    expires_at  TIMESTAMPTZ NOT NULL,
-    revoked_at  TIMESTAMPTZ,
-    last_used_at TIMESTAMPTZ,
-    created_at  TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-    updated_at  TIMESTAMPTZ NOT NULL DEFAULT NOW()
-);
-
--- ========================
--- 41. REAL_ACCOUNT_SNAPSHOTS
+-- 39. REAL_ACCOUNT_SNAPSHOTS
 -- ========================
 CREATE TABLE IF NOT EXISTS real_account_snapshots (
     id              SERIAL PRIMARY KEY,
@@ -973,7 +936,7 @@ CREATE TABLE IF NOT EXISTS real_account_snapshots (
 );
 
 -- ========================
--- 42. REAL_TRADING_PREFLIGHT_SNAPSHOTS
+-- 40. REAL_TRADING_PREFLIGHT_SNAPSHOTS
 -- ========================
 CREATE TABLE IF NOT EXISTS real_trading_preflight_snapshots (
     id                  SERIAL PRIMARY KEY,
@@ -996,7 +959,7 @@ CREATE TABLE IF NOT EXISTS real_trading_preflight_snapshots (
 );
 
 -- ========================
--- 43. REAL_ACCOUNT_LEDGER_DAILY_SNAPSHOTS
+-- 41. REAL_ACCOUNT_LEDGER_DAILY_SNAPSHOTS
 -- ========================
 CREATE TABLE IF NOT EXISTS real_account_ledger_daily_snapshots (
     id              SERIAL PRIMARY KEY,
@@ -1024,7 +987,7 @@ CREATE TABLE IF NOT EXISTS real_account_ledger_daily_snapshots (
 );
 
 -- ========================
--- 44. SIM_ORDERS
+-- 42. SIM_ORDERS
 -- ========================
 CREATE TABLE IF NOT EXISTS sim_orders (
     id              SERIAL PRIMARY KEY,
@@ -1058,7 +1021,7 @@ CREATE TABLE IF NOT EXISTS sim_orders (
 );
 
 -- ========================
--- 45. SIM_TRADES
+-- 43. SIM_TRADES
 -- ========================
 CREATE TABLE IF NOT EXISTS sim_trades (
     id              SERIAL PRIMARY KEY,
@@ -1084,7 +1047,7 @@ CREATE TABLE IF NOT EXISTS sim_trades (
 );
 
 -- ========================
--- 46. SIMULATION_FUND_SNAPSHOTS
+-- 44. SIMULATION_FUND_SNAPSHOTS
 -- ========================
 CREATE TABLE IF NOT EXISTS simulation_fund_snapshots (
     id              SERIAL PRIMARY KEY,
@@ -1104,7 +1067,7 @@ CREATE TABLE IF NOT EXISTS simulation_fund_snapshots (
 );
 
 -- ========================
--- 47. KLINES
+-- 45. KLINES
 -- ========================
 CREATE TABLE IF NOT EXISTS klines (
     id              SERIAL PRIMARY KEY,
@@ -1126,7 +1089,7 @@ CREATE TABLE IF NOT EXISTS klines (
 );
 
 -- ========================
--- 48. QUOTES
+-- 46. QUOTES
 -- ========================
 CREATE TABLE IF NOT EXISTS quotes (
     id              SERIAL PRIMARY KEY,
@@ -1167,7 +1130,7 @@ CREATE TABLE IF NOT EXISTS quotes (
 );
 
 -- ========================
--- 49. QUOTE_DAILY_SUMMARIES
+-- 47. QUOTE_DAILY_SUMMARIES
 -- ========================
 CREATE TABLE IF NOT EXISTS quote_daily_summaries (
     id              SERIAL PRIMARY KEY,
@@ -1188,7 +1151,7 @@ CREATE TABLE IF NOT EXISTS quote_daily_summaries (
 );
 
 -- ========================
--- 50. COMMUNITY_POSTS
+-- 48. COMMUNITY_POSTS
 -- ========================
 CREATE TABLE IF NOT EXISTS community_posts (
     id              BIGSERIAL PRIMARY KEY,
@@ -1216,7 +1179,7 @@ CREATE INDEX IF NOT EXISTS idx_cp_author_id ON community_posts (author_id);
 CREATE INDEX IF NOT EXISTS idx_cp_category ON community_posts (tenant_id, category);
 
 -- ========================
--- 51. COMMUNITY_COMMENTS
+-- 49. COMMUNITY_COMMENTS
 -- ========================
 CREATE TABLE IF NOT EXISTS community_comments (
     id              BIGSERIAL PRIMARY KEY,
@@ -1235,7 +1198,7 @@ CREATE INDEX IF NOT EXISTS idx_cc_post_id ON community_comments (post_id);
 CREATE INDEX IF NOT EXISTS idx_cc_author_id ON community_comments (author_id);
 
 -- ========================
--- 52. COMMUNITY_INTERACTIONS
+-- 50. COMMUNITY_INTERACTIONS
 -- ========================
 CREATE TABLE IF NOT EXISTS community_interactions (
     id              BIGSERIAL PRIMARY KEY,
@@ -1249,7 +1212,7 @@ CREATE TABLE IF NOT EXISTS community_interactions (
 );
 
 -- ========================
--- 53. COMMUNITY_AUTHOR_FOLLOWS
+-- 51. COMMUNITY_AUTHOR_FOLLOWS
 -- ========================
 CREATE TABLE IF NOT EXISTS community_author_follows (
     id              BIGSERIAL PRIMARY KEY,
@@ -1261,7 +1224,7 @@ CREATE TABLE IF NOT EXISTS community_author_follows (
 );
 
 -- ========================
--- 54. COMMUNITY_AUDIT_LOGS
+-- 52. COMMUNITY_AUDIT_LOGS
 -- ========================
 CREATE TABLE IF NOT EXISTS community_audit_logs (
     id              BIGSERIAL PRIMARY KEY,
@@ -1277,7 +1240,7 @@ CREATE TABLE IF NOT EXISTS community_audit_logs (
 );
 
 -- ========================
--- 55. ADMIN_MODELS
+-- 53. ADMIN_MODELS
 -- ========================
 CREATE TABLE IF NOT EXISTS admin_models (
     id              SERIAL PRIMARY KEY,
@@ -1295,7 +1258,7 @@ CREATE TABLE IF NOT EXISTS admin_models (
 );
 
 -- ========================
--- 56. ADMIN_DATA_FILES
+-- 54. ADMIN_DATA_FILES
 -- ========================
 CREATE TABLE IF NOT EXISTS admin_data_files (
     id              SERIAL PRIMARY KEY,
@@ -1309,7 +1272,7 @@ CREATE TABLE IF NOT EXISTS admin_data_files (
 );
 
 -- ========================
--- 57. ADMIN_TRAINING_JOBS
+-- 55. ADMIN_TRAINING_JOBS
 -- ========================
 CREATE TABLE IF NOT EXISTS admin_training_jobs (
     id              VARCHAR(64) PRIMARY KEY,
@@ -1326,7 +1289,7 @@ CREATE TABLE IF NOT EXISTS admin_training_jobs (
 );
 
 -- ========================
--- 58. LOGIN_DEVICES
+-- 56. LOGIN_DEVICES
 -- ========================
 CREATE TABLE IF NOT EXISTS login_devices (
     id              SERIAL PRIMARY KEY,

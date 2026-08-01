@@ -3,7 +3,6 @@ test_stream_service.py - quantmind-stream 服务测试
 验证实时流网关服务的健康检查、路由注册和 WebSocket 功能
 """
 
-import asyncio
 
 import pytest
 
@@ -43,13 +42,6 @@ class TestStreamAppCreation:
 
         ws_routes = [r.path for r in app.routes if hasattr(r, "path")]
         assert "/ws" in ws_routes, f"未找到 /ws 端点，当前路由: {ws_routes}"
-
-    def test_bridge_websocket_endpoint_registered(self):
-        """验证 /ws/bridge WebSocket 兼容端点已注册"""
-        from backend.services.stream.main import app
-
-        ws_routes = [r.path for r in app.routes if hasattr(r, "path")]
-        assert "/ws/bridge" in ws_routes, f"未找到 /ws/bridge 端点，当前路由: {ws_routes}"
 
     def test_cors_middleware_configured(self):
         """验证 CORS 中间件已配置"""
@@ -201,84 +193,3 @@ class TestWSCoreModules:
         from backend.services.stream.ws_core.message_queue import MessageQueue
 
         assert MessageQueue is not None
-
-    def test_extract_ws_auth_metadata_accepts_bridge_session(self, monkeypatch):
-        """验证 Agent 必须使用 bridge session token 建立 WS 握手"""
-        from contextlib import asynccontextmanager
-
-        from backend.services.stream.ws_core import server as ws_server
-
-        class _DummySession:
-            async def commit(self):
-                return None
-
-        @asynccontextmanager
-        async def fake_get_session(read_only=False):
-            yield _DummySession()
-
-        async def fake_verify_bridge_session_token(session, token):
-            assert token == "qms_session_token"
-
-            class _Ctx:
-                session_id = "session-1"
-                binding_id = "binding-1"
-                tenant_id = "default"
-                user_id = "00000001"
-                account_id = "00000001"
-
-            return _Ctx()
-
-        monkeypatch.setattr(
-            ws_server,
-            "get_session",
-            fake_get_session,
-        )
-        monkeypatch.setattr(
-            ws_server,
-            "verify_bridge_session_token",
-            fake_verify_bridge_session_token,
-        )
-
-        class DummyWebSocket:
-            headers = {
-                "authorization": "Bearer qms_session_token",
-            }
-            query_params = {}
-
-        metadata = asyncio.run(ws_server._extract_ws_auth_metadata(DummyWebSocket()))
-        assert metadata["authenticated"] is True
-        assert metadata["auth_source"] == "bridge_session"
-        assert metadata["user_id"] == "00000001"
-        assert metadata["tenant_id"] == "default"
-        assert metadata["session_id"] == "session-1"
-
-    def test_resolve_bridge_targets_prefers_latest_connection(self):
-        from backend.services.stream import main as stream_main
-
-        original_active = stream_main.ws_manager.active_connections
-        original_meta = stream_main.ws_manager.connection_metadata
-        try:
-            stream_main.ws_manager.active_connections = {"c1": object(), "c2": object()}
-            stream_main.ws_manager.connection_metadata = {
-                "c1": {
-                    "auth_source": "bridge_session",
-                    "tenant_id": "default",
-                    "user_id": "00000001",
-                    "account_id": "acc-1",
-                    "connected_at": 100.0,
-                },
-                "c2": {
-                    "auth_source": "bridge_session",
-                    "tenant_id": "default",
-                    "user_id": "1",
-                    "account_id": "acc-1",
-                    "connected_at": 200.0,
-                },
-            }
-
-            targets = stream_main._resolve_bridge_targets("default", "00000001", "acc-1")
-
-            assert targets == ["c2"]
-        finally:
-            stream_main.ws_manager.active_connections = original_active
-            stream_main.ws_manager.connection_metadata = original_meta

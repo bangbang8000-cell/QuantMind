@@ -894,46 +894,6 @@ def _normalize_live_trade_config(user_live_cfg: dict, base_live_cfg: dict) -> di
     return normalized
 
 
-def _parse_bridge_report_ts(report: dict) -> float | None:
-    """
-    从柜台桥接上报中提取时间戳（秒）:
-    兼容常见字段: timestamp/ts/last_seen/updated_at/report_ts/report_time
-    """
-    candidates = (
-        "timestamp",
-        "ts",
-        "last_seen",
-        "updated_at",
-        "report_ts",
-        "report_time",
-    )
-    for key in candidates:
-        raw = report.get(key)
-        if raw is None:
-            continue
-        # 数字时间戳
-        if isinstance(raw, (int, float)):
-            ts = float(raw)
-            # 兼容毫秒时间戳
-            return ts / 1000.0 if ts > 1e12 else ts
-        # 字符串时间戳 / ISO8601
-        if isinstance(raw, str):
-            text_raw = raw.strip()
-            if not text_raw:
-                continue
-            try:
-                ts = float(text_raw)
-                return ts / 1000.0 if ts > 1e12 else ts
-            except Exception:
-                pass
-            try:
-                iso = text_raw.replace("Z", "+00:00")
-                return datetime.fromisoformat(iso).timestamp()
-            except Exception:
-                continue
-    return None
-
-
 def _resolve_preflight_symbols() -> list[str]:
     raw = str(os.getenv("PREFLIGHT_STREAM_SYMBOLS", "SZ000001,SH600000")).strip()
     symbols = [item.strip() for item in raw.split(",") if item.strip()]

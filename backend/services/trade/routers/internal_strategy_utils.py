@@ -1,53 +1,14 @@
-import json
 import logging
-import os
-import shutil
-import tempfile
-import time
-import uuid
-import zipfile
 from datetime import datetime, timedelta, timezone
 from datetime import time as dt_time
-from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any
 from zoneinfo import ZoneInfo
 
-from fastapi import APIRouter, Depends, Header, HTTPException, Request
-from fastapi.responses import FileResponse
-from pydantic import BaseModel
-from sqlalchemy import and_, select, text
-from sqlalchemy.exc import IntegrityError
+from fastapi import APIRouter, Header, HTTPException
+from sqlalchemy import select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from backend.services.api.user_app.models.api_key import ApiKey
-from backend.services.trade.deps import AuthContext, get_auth_context, get_db, get_redis
-from backend.services.trade.models.enums import (
-    OrderSide,
-    OrderStatus,
-    OrderType,
-    PositionSide,
-    TradeAction,
-    TradingMode,
-)
-from backend.services.trade.models.order import Order
-from backend.services.trade.models.qmt_agent_binding import QMTAgentBinding
 from backend.services.trade.models.real_account_snapshot import RealAccountSnapshot
-from backend.services.trade.models.trade import Trade
-from backend.services.trade.portfolio.models import Portfolio, Position
-from backend.services.trade.redis_client import RedisClient
-from backend.services.trade.schemas.order import OrderCreate
-from backend.services.trade.schemas.qmt_agent import (
-    QMTAgentDownloadAssetInfo,
-    QMTAgentReleaseDownloadResponse,
-    QMTBindingStatusResponse,
-    QMTBridgeAccountPayload,
-    QMTBridgeExecutionPayload,
-    QMTBridgeHeartbeatPayload,
-    QMTBridgeRefreshResponse,
-    QMTBridgeSessionRequest,
-    QMTBridgeSessionResponse,
-)
-from backend.services.trade.services.order_service import OrderService
 from backend.services.trade.services.real_account_ledger_service import (
     upsert_real_account_daily_ledger,
 )
@@ -57,24 +18,6 @@ from backend.services.trade.services.real_account_snapshot_guard import (
     is_inconsistent_zero_total_snapshot,
     is_suspicious_asset_jump,
 )
-from backend.services.trade.services.qmt_agent_auth import (
-    SESSION_REFRESH_THRESHOLD_SECONDS,
-    SESSION_TTL_SECONDS,
-    BridgeSessionContext,
-    create_bridge_session,
-    get_active_binding,
-    get_or_create_binding,
-    refresh_bridge_session,
-    reset_binding,
-    resolve_api_key,
-    utcnow,
-    validate_api_key_secret,
-    verify_bridge_session_token,
-)
-from backend.services.trade.services.simulation_manager import SimulationAccountManager
-from backend.services.trade.services.trading_engine import TradingEngine
-from backend.services.trade.utils.stock_lookup import lookup_symbol_name
-from backend.shared.cos_service import get_cos_service
 from backend.shared.auth import get_internal_call_secret
 
 router = APIRouter(
@@ -92,96 +35,6 @@ async def verify_internal_call(x_internal_call: str = Header(None)):
             f"Unauthorized internal call attempt with secret: {x_internal_call}"
         )
         raise HTTPException(status_code=401, detail="Invalid internal secret")
-
-
-def _bridge_ws_url() -> str:
-    return os.getenv("BRIDGE_SERVER_URL", "ws://localhost:8003/ws/bridge")
-
-
-def _agent_template_root() -> str:
-    return str(Path(__file__).resolve().parents[3] / "static" / "templates" / "bridge")
-
-
-def _qmt_agent_release_manifest_key() -> str:
-    return os.getenv(
-        "QMT_AGENT_RELEASE_MANIFEST_KEY", "qmt-agent/windows/release/latest.json"
-    )
-
-
-def _qmt_agent_release_asset_ttl() -> int:
-    try:
-        return max(60, int(os.getenv("QMT_AGENT_RELEASE_URL_TTL", "1800") or 1800))
-    except Exception:
-        return 1800
-
-
-def _qmt_agent_release_local_manifest_path() -> Path:
-    override = str(os.getenv("QMT_AGENT_RELEASE_MANIFEST_LOCAL_PATH") or "").strip()
-    if override:
-        return Path(override)
-    return Path(__file__).resolve().parents[4] / "dist" / "qmt_agent" / "latest.json"
-
-
-def _load_qmt_agent_release_manifest() -> tuple[dict[str, Any], str]:
-    cos = get_cos_service()
-    manifest_key = _qmt_agent_release_manifest_key()
-    if cos.client and cos.bucket_name:
-        manifest = cos.get_object_json(manifest_key)
-        if manifest:
-            return manifest, "cos"
-
-    local_manifest = _qmt_agent_release_local_manifest_path()
-    if local_manifest.exists():
-        try:
-            manifest = json.loads(local_manifest.read_text(encoding="utf-8"))
-            if isinstance(manifest, dict):
-                return manifest, "local"
-        except Exception as exc:
-            logger.warning("load local qmt agent release manifest failed: %s", exc)
-
-    raise HTTPException(
-        status_code=503, detail="QMT Agent release manifest unavailable"
-    )
-
-
-def _build_qmt_agent_release_asset(
-    asset_name: str,
-    asset_payload: dict[str, Any],
-) -> QMTAgentDownloadAssetInfo:
-    cos = get_cos_service()
-    key = str(asset_payload.get("key") or "").strip()
-    if not key:
-        raise HTTPException(status_code=500, detail=f"Missing COS key for {asset_name}")
-
-    file_name = str(
-        asset_payload.get("file_name") or os.path.basename(key) or key
-    ).strip()
-    sha256 = str(asset_payload.get("sha256") or "").strip() or None
-    content_type = str(asset_payload.get("content_type") or "").strip() or None
-
-    download_url = ""
-    if cos.client and cos.bucket_name:
-        download_url = str(
-            cos.get_presigned_url(key, expired=_qmt_agent_release_asset_ttl()) or ""
-        ).strip()
-    if not download_url:
-        download_url = str(asset_payload.get("download_url") or "").strip()
-    if not download_url and cos.base_url:
-        download_url = f"{cos.base_url.rstrip('/')}/{key}"
-    if not download_url:
-        raise HTTPException(
-            status_code=503, detail=f"Cannot resolve download URL for {asset_name}"
-        )
-
-    return QMTAgentDownloadAssetInfo(
-        asset=asset_name,
-        key=key,
-        file_name=file_name,
-        download_url=download_url,
-        sha256=sha256,
-        content_type=content_type,
-        expires_in=_qmt_agent_release_asset_ttl(),
-    )
 
 
 def _iso_or_none(value: Any) -> str | None:
@@ -827,20 +680,3 @@ async def _compute_account_metrics(
         },
     }
     return metrics, metrics_meta
-
-
-async def _get_bridge_session_context(
-    authorization: str | None = Header(None),
-    db=Depends(get_db),
-) -> BridgeSessionContext:
-    header = str(authorization or "").strip()
-    if not header.lower().startswith("bearer "):
-        raise HTTPException(status_code=401, detail="Missing bridge session token")
-    raw_token = header[7:].strip()
-    if not raw_token:
-        raise HTTPException(status_code=401, detail="Missing bridge session token")
-    context = await verify_bridge_session_token(db, raw_token)
-    if context is None:
-        raise HTTPException(status_code=401, detail="Invalid bridge session token")
-    await db.commit()
-    return context

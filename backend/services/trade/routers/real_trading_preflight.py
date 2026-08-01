@@ -10,7 +10,6 @@ from .real_trading_utils import (
     _fetch_latest_real_account_snapshot,
     _get_stream_series_redis_client,
     _normalize_identity,
-    _parse_bridge_report_ts,
     _parse_user_id,
     _resolve_preflight_symbols,
     _resolve_runner_image_for_mode,
@@ -19,7 +18,6 @@ from .real_trading_utils import (
 from backend.services.trade.services.signal_readiness_service import (
     signal_readiness_service,
 )
-from backend.shared.trade_redis_keys import build_trade_agent_heartbeat_key
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
@@ -219,100 +217,22 @@ async def preflight_check(
             f"{orchestration_label} 客户端已就绪" if orchestration_ok else f"{orchestration_label} 客户端未初始化",
         )
 
-    # 7) QMT Agent 在线状态（PG 账户快照 + Redis 心跳）
-    bridge_required = mode == "REAL"
+    # 7) 实盘账户快照（miniQMT 在线状态检测已随实盘通道下线一并移除）
     account_report: dict | None = None
-    if bridge_required:
-        heartbeat_key = build_trade_agent_heartbeat_key(resolved_tenant_id, resolved_user_id)
-        try:
-            account_snapshot = await _fetch_latest_real_account_snapshot(
-                db,
-                tenant_id=resolved_tenant_id,
-                user_id=resolved_user_id,
-            )
-            heartbeat_raw = redis.client.get(heartbeat_key)
-            if not account_snapshot:
-                add_check(
-                    "qmt_agent_online",
-                    "QMT Agent 在线状态",
-                    False,
-                    bridge_required,
-                    "未检测到 PostgreSQL 实盘账户快照，请先等待 QMT Agent 上报并落库",
-                )
-            elif not heartbeat_raw:
-                add_check(
-                    "qmt_agent_online",
-                    "QMT Agent 在线状态",
-                    False,
-                    bridge_required,
-                    f"未检测到 QMT Agent 心跳上报({heartbeat_key})，请确认 QMT Agent 已连接",
-                )
-            else:
-                account_report = account_snapshot.get("payload_json") or {}
-                if not isinstance(account_report, dict):
-                    account_report = {}
-                try:
-                    heartbeat_report = json.loads(heartbeat_raw)
-                except Exception as e:
-                    add_check(
-                        "qmt_agent_online",
-                        "QMT Agent 在线状态",
-                        False,
-                        bridge_required,
-                        f"检测到 QMT Agent 心跳无法解析为 JSON: {e}",
-                    )
-                    heartbeat_report = None
-
-                if not isinstance(heartbeat_report, dict):
-                    add_check(
-                        "qmt_agent_online",
-                        "QMT Agent 在线状态",
-                        False,
-                        bridge_required,
-                        "检测到 QMT Agent 心跳格式异常（非 JSON 对象）",
-                    )
-                else:
-                    account_ts = _parse_snapshot_timestamp(account_snapshot.get("snapshot_at"))
-                    heartbeat_ts = _parse_bridge_report_ts(heartbeat_report)
-                    if account_ts is None or heartbeat_ts is None:
-                        add_check(
-                            "qmt_agent_online",
-                            "QMT Agent 在线状态",
-                            False,
-                            bridge_required,
-                            "QMT Agent 上报缺少有效时间戳（PG 账户快照或心跳）",
-                        )
-                    else:
-                        account_age_sec = max(0, int(time.time() - account_ts))
-                        heartbeat_age_sec = max(0, int(time.time() - heartbeat_ts))
-                        account_threshold_sec = int(os.getenv("QMT_AGENT_ACCOUNT_STALE_THRESHOLD_SEC", "120"))
-                        heartbeat_threshold_sec = int(os.getenv("QMT_AGENT_HEARTBEAT_STALE_THRESHOLD_SEC", "60"))
-                        if account_age_sec <= account_threshold_sec and heartbeat_age_sec <= heartbeat_threshold_sec:
-                            add_check(
-                                "qmt_agent_online",
-                                "QMT Agent 在线状态",
-                                True,
-                                bridge_required,
-                                f"账户快照 {account_age_sec} 秒前，心跳 {heartbeat_age_sec} 秒前",
-                            )
-                        else:
-                            add_check(
-                                "qmt_agent_online",
-                                "QMT Agent 在线状态",
-                                False,
-                                bridge_required,
-                                f"QMT Agent 上报已过期：账户快照 {account_age_sec}/{account_threshold_sec} 秒，心跳 {heartbeat_age_sec}/{heartbeat_threshold_sec} 秒",
-                            )
-        except Exception as e:
-            add_check(
-                "qmt_agent_online",
-                "QMT Agent 在线状态",
-                False,
-                bridge_required,
-                f"QMT Agent 检测失败: {e}",
-            )
-            # 回滚事务以清除 aborted 状态，避免后续查询失败
-            await db.rollback()
+    try:
+        account_snapshot = await _fetch_latest_real_account_snapshot(
+            db,
+            tenant_id=resolved_tenant_id,
+            user_id=resolved_user_id,
+        )
+        if account_snapshot:
+            account_report = account_snapshot.get("payload_json") or {}
+            if not isinstance(account_report, dict):
+                account_report = {}
+    except Exception as e:
+        logger.warning("读取实盘账户快照失败: %s", e)
+        # 回滚事务以清除 aborted 状态，避免后续查询失败
+        await db.rollback()
 
     # 7.1~7.4) 双向交易专属预检
     margin_enabled = bool(getattr(settings, "ENABLE_MARGIN_TRADING", False))

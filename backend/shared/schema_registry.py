@@ -69,8 +69,6 @@ SCHEMA_SPECS: tuple[SchemaSpec, ...] = (
             "backend.services.trade.models.risk_rule",
             "backend.services.trade.models.preflight_snapshot",
             "backend.services.trade.models.real_account_snapshot",
-            "backend.services.trade.models.qmt_agent_binding",
-            "backend.services.trade.models.qmt_agent_session",
         ),
     ),
     SchemaSpec(

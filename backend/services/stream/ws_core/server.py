@@ -17,16 +17,12 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from backend.shared.auth import auth_manager, decode_jwt_token
 from backend.shared.cors import resolve_cors_origins
-from backend.shared.database_manager_v2 import get_session
-from backend.shared.qmt_bridge_auth import verify_bridge_session_token
 
 from .manager import manager
 from .notification_pusher import notification_pusher
 from .quote_pusher import quote_pusher
 from .trade_pusher import trade_pusher
 from .ws_config import ws_config
-
-# from .qmt_pusher import qmt_pusher  # QMT 功能已移除
 
 logger = logging.getLogger(__name__)
 
@@ -47,23 +43,6 @@ async def _extract_ws_auth_metadata(websocket: WebSocket) -> dict[str, Any]:
     payload: dict[str, Any] = {}
     if token:
         try:
-            async with get_session(read_only=False) as session:
-                bridge_ctx = await verify_bridge_session_token(session, token)
-                if bridge_ctx is not None:
-                    await session.commit()
-                    return {
-                        "tenant_id": bridge_ctx.tenant_id,
-                        "user_id": bridge_ctx.user_id,
-                        "authenticated": True,
-                        "auth_source": "bridge_session",
-                        "session_id": bridge_ctx.session_id,
-                        "account_id": bridge_ctx.account_id,
-                        "binding_id": bridge_ctx.binding_id,
-                        "connected_at": time.time(),
-                    }
-        except Exception:
-            pass
-        try:
             payload = auth_manager.verify_token(token)
         except Exception:
             payload = decode_jwt_token(token)
@@ -81,32 +60,6 @@ async def _extract_ws_auth_metadata(websocket: WebSocket) -> dict[str, Any]:
         "auth_source": "jwt" if token else "anonymous",
         "connected_at": time.time(),
     }
-
-
-async def _disconnect_stale_bridge_connections(current_connection_id: str, metadata: dict[str, Any]) -> None:
-    if str(metadata.get("auth_source") or "") != "bridge_session":
-        return
-
-    same_binding: list[str] = []
-    for connection_id, current_metadata in manager.connection_metadata.items():
-        if connection_id == current_connection_id:
-            continue
-        if str(current_metadata.get("auth_source") or "") != "bridge_session":
-            continue
-        if str(current_metadata.get("tenant_id") or "") != str(metadata.get("tenant_id") or ""):
-            continue
-        if str(current_metadata.get("user_id") or "") != str(metadata.get("user_id") or ""):
-            continue
-        if str(current_metadata.get("binding_id") or "") != str(metadata.get("binding_id") or ""):
-            continue
-        same_binding.append(connection_id)
-
-    for stale_connection_id in same_binding:
-        await manager.close_connection(
-            stale_connection_id,
-            code=1008,
-            reason="Superseded by a newer bridge session",
-        )
 
 
 async def handle_message(connection_id: str, message: dict):
@@ -186,28 +139,6 @@ async def handle_message(connection_id: str, message: dict):
                     await quote_pusher.unsubscribe_quote(topic.split("stock.", 1)[1])
                 await manager.send_message(connection_id, {"type": "unsubscribed", "topic": topic})
 
-    # QMT 功能已移除 - 以下代码已注释
-    # elif msg_type == "qmt_query":
-    #     # 手动查询QMT账户数据
-    #     logger.info(f"收到手动查询请求: connection_id={connection_id}")
-    #     account_data = await qmt_pusher.query_and_push()
-    #     if account_data:
-    #         await manager.send_message(
-    #             connection_id, {"type": "qmt_query_success", "message": "查询成功"}
-    #         )
-    #     else:
-    #         await manager.send_message(
-    #             connection_id, {"type": "qmt_query_error", "message": "查询失败"}
-    #         )
-    #
-    # elif msg_type == "qmt_set_auto_push":
-    #     # 设置自动推送模式
-    #     enabled = message.get("enabled", False)
-    #     qmt_pusher.set_auto_push(enabled)
-    #     await manager.send_message(
-    #         connection_id, {"type": "qmt_auto_push_set", "enabled": enabled}
-    #     )
-
     else:
         logger.warning(f"未知消息类型: {msg_type}")
 
@@ -237,25 +168,9 @@ class WebSocketServer:
         # 启动通知事件推送器（驱动 notification.* 主题）
         await notification_pusher.start()
 
-        # QMT 功能已移除 - 以下代码已注释
-        # # 启动QMT推送器（如果配置了）
-        # try:
-        #     import os
-        #
-        #     qmt_path = os.environ.get("QMT_PATH", r"E:\xtqmt\userdata")
-        #     qmt_account = os.environ.get("QMT_ACCOUNT", "2051444")
-        #     await qmt_pusher.start(qmt_path, qmt_account)
-        #     logger.info(f"QMT推送器已启动: path={qmt_path}, account={qmt_account}")
-        # except Exception as e:
-        #     logger.warning(f"QMT推送器启动失败（可能未配置）: {e}")
-
     async def stop(self):
         """停止服务器"""
         self.running = False
-
-        # QMT 功能已移除 - 以下代码已注释
-        # # 停止QMT推送器
-        # await qmt_pusher.stop()
 
         # 停止消息队列处理器
         await manager.stop_queue_processor()
@@ -348,7 +263,6 @@ async def websocket_endpoint(websocket: WebSocket):
         if not success:
             return
 
-        await _disconnect_stale_bridge_connections(connection_id, metadata)
 
         # 发送欢迎消息
         await manager.send_message(

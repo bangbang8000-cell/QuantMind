@@ -1,6 +1,4 @@
-import json
 import os
-import time
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
@@ -12,10 +10,6 @@ import redis as redis_lib
 from backend.services.trade.services.k8s_manager import k8s_manager
 from backend.services.trade.services.signal_readiness_service import (
     signal_readiness_service,
-)
-from backend.shared.trade_redis_keys import (
-    pick_first_matching_key,
-    trade_agent_heartbeat_key_candidates,
 )
 
 
@@ -86,39 +80,6 @@ def _resolve_probe_symbols() -> list[str]:
     raw = str(os.getenv("PREFLIGHT_STREAM_SYMBOLS", "SZ000001,SH600000")).strip()
     symbols = [item.strip() for item in raw.split(",") if item.strip()]
     return symbols or ["SZ000001", "SH600000"]
-
-
-def _parse_bridge_report_ts(report: dict[str, Any]) -> float | None:
-    candidates = (
-        "timestamp",
-        "ts",
-        "last_seen",
-        "updated_at",
-        "report_ts",
-        "report_time",
-    )
-    for key in candidates:
-        raw = report.get(key)
-        if raw is None:
-            continue
-        if isinstance(raw, (int, float)):
-            ts = float(raw)
-            return ts / 1000.0 if ts > 1e12 else ts
-        if isinstance(raw, str):
-            text_raw = raw.strip()
-            if not text_raw:
-                continue
-            try:
-                ts = float(text_raw)
-                return ts / 1000.0 if ts > 1e12 else ts
-            except Exception:
-                pass
-            try:
-                iso = text_raw.replace("Z", "+00:00")
-                return datetime.fromisoformat(iso).timestamp()
-            except Exception:
-                continue
-    return None
 
 
 def _previous_trading_day(today: date, market: str = "A") -> date:
@@ -229,92 +190,6 @@ def _check_inference_model_exists() -> tuple[bool, str]:
 
 
     pass
-
-
-def _parse_snapshot_at(snapshot: dict[str, Any]) -> float | None:
-    raw = snapshot.get("snapshot_at") or snapshot.get("updated_at")
-    if raw is None:
-        return None
-    if isinstance(raw, datetime):
-        if raw.tzinfo is None:
-            return raw.replace(tzinfo=timezone.utc).timestamp()
-        return raw.timestamp()
-    if isinstance(raw, (int, float)):
-        ts = float(raw)
-        return ts / 1000.0 if ts > 1e12 else ts
-    if isinstance(raw, str):
-        text_raw = raw.strip()
-        if not text_raw:
-            return None
-        try:
-            ts = float(text_raw)
-            return ts / 1000.0 if ts > 1e12 else ts
-        except Exception:
-            pass
-        try:
-            parsed = datetime.fromisoformat(text_raw.replace("Z", "+00:00"))
-        except Exception:
-            return None
-        if parsed.tzinfo is None:
-            parsed = parsed.replace(tzinfo=timezone.utc)
-        return parsed.timestamp()
-    return None
-
-
-async def _check_qmt_agent_online(
-    db: AsyncSession, redis_client, tenant_id: str, user_id: str
-) -> tuple[bool, str]:
-    from backend.services.trade.routers.real_trading_utils import (
-        _fetch_latest_real_account_snapshot,
-    )
-
-    account_snapshot = await _fetch_latest_real_account_snapshot(
-        db, tenant_id=tenant_id, user_id=user_id
-    )
-    heartbeat_key, heartbeat_raw = pick_first_matching_key(
-        redis_client.get,
-        trade_agent_heartbeat_key_candidates(tenant_id, user_id),
-    )
-    if not account_snapshot:
-        return (
-            False,
-            "未检测到 PostgreSQL 实盘账户快照，请先启动 QMT Agent 并等待上报落库",
-        )
-    if not heartbeat_raw:
-        return False, (
-            f"未检测到 QMT Agent 心跳上报({trade_agent_heartbeat_key_candidates(tenant_id, user_id)[0]})"
-        )
-
-    try:
-        heartbeat_report = json.loads(heartbeat_raw)
-    except Exception:
-        return False, "检测到 QMT Agent 心跳格式异常（非 JSON）"
-
-    if not isinstance(heartbeat_report, dict):
-        return False, "检测到 QMT Agent 心跳格式异常（非 JSON 对象）"
-
-    account_ts = _parse_snapshot_at(account_snapshot)
-    heartbeat_ts = _parse_bridge_report_ts(heartbeat_report)
-    if account_ts is None or heartbeat_ts is None:
-        return False, "QMT Agent 上报缺少有效时间戳（PG 账户快照或心跳）"
-
-    account_age_sec = max(0, int(time.time() - account_ts))
-    heartbeat_age_sec = max(0, int(time.time() - heartbeat_ts))
-    account_threshold_sec = int(
-        os.getenv("QMT_AGENT_ACCOUNT_STALE_THRESHOLD_SEC", "120")
-    )
-    heartbeat_threshold_sec = int(
-        os.getenv("QMT_AGENT_HEARTBEAT_STALE_THRESHOLD_SEC", "60")
-    )
-    passed = (
-        account_age_sec <= account_threshold_sec
-        and heartbeat_age_sec <= heartbeat_threshold_sec
-    )
-    detail = (
-        f"account_age_sec={account_age_sec}/{account_threshold_sec}, "
-        f"heartbeat_age_sec={heartbeat_age_sec}/{heartbeat_threshold_sec}"
-    )
-    return passed, detail
 
 
 async def run_trading_readiness_precheck(
@@ -558,19 +433,6 @@ async def run_trading_readiness_precheck(
             res["message"],
         )
     )
-
-    if normalized_mode == "REAL":
-        qmt_ok, qmt_detail = await _check_qmt_agent_online(
-            db, redis_client, tenant_id, user_id
-        )
-        checks.append(
-            _build_check(
-                "qmt_agent_online",
-                "QMT Agent 在线且数据已上报",
-                qmt_ok,
-                qmt_detail,
-            )
-        )
 
     return {
         "passed": all(bool(item.get("passed")) for item in checks),

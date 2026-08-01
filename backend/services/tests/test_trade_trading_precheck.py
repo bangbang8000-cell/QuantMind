@@ -2,12 +2,10 @@ import json
 import pytest
 from fastapi import HTTPException
 from datetime import date, datetime, timezone
-from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
 from backend.services.trade.deps import AuthContext
 from backend.services.trade.routers import (
-    internal_strategy_bridge as bridge_router,
     real_trading_lifecycle as real_lifecycle,
     real_trading_preflight as real_preflight,
     real_trading_utils as real_utils,
@@ -15,7 +13,6 @@ from backend.services.trade.routers import (
 from backend.services.trade.services.trading_precheck_service import (
     run_trading_readiness_precheck,
 )
-import backend.services.trade.services.trading_precheck_service as precheck_service
 from backend.services.trade.routers import real_trading_ledger as real_ledger
 from backend.services.trade.services.real_account_snapshot_guard import (
     is_inconsistent_zero_total_snapshot,
@@ -164,14 +161,13 @@ async def test_trading_precheck_fails_when_model_missing(tmp_path, monkeypatch):
         "inference_database_ready",
         "k8s_and_runner_ready",
         "realtime_market_ready",
-        "qmt_agent_online",
     ]
     model_item = next(item for item in result["items"] if item["key"] == "production_model")
     assert model_item["passed"] is False
 
 
 @pytest.mark.asyncio
-async def test_trading_precheck_fails_without_pg_snapshot_even_with_heartbeat(monkeypatch, tmp_path):
+async def test_trading_precheck_has_no_qmt_agent_check(monkeypatch, tmp_path):
     model_dir = tmp_path / "model_qlib"
     model_dir.mkdir(parents=True)
     (model_dir / "model.pkl").write_bytes(b"fake_model")
@@ -180,51 +176,8 @@ async def test_trading_precheck_fails_without_pg_snapshot_even_with_heartbeat(mo
     monkeypatch.setenv("STRATEGY_RUNNER_IMAGE", "quantmind-ml-runtime:latest")
     monkeypatch.setenv("INTERNAL_CALL_SECRET", "secret")
     monkeypatch.setattr(
-        "backend.services.trade.services.trading_precheck_service._check_stream_series_freshness",
-        lambda _redis: (True, "stream_ready"),
-    )
-    monkeypatch.setattr(real_preflight.k8s_manager, "api", object(), raising=False)
-    monkeypatch.setattr(real_preflight.k8s_manager, "core_api", object(), raising=False)
-    monkeypatch.setattr(
-        "backend.services.trade.services.trading_precheck_service.k8s_manager",
-        real_preflight.k8s_manager,
-    )
-    monkeypatch.setattr(
-        "backend.services.trade.routers.real_trading_utils._fetch_latest_real_account_snapshot",
-        AsyncMock(return_value=None),
-    )
-
-    fake_db = _FakeDb(
-        [
-            {"ok": 1},
-        ]
-    )
-
-    result = await run_trading_readiness_precheck(
-        fake_db,
-        mode="REAL",
-        redis_client=_FakeRedisClient({"trade:agent:heartbeat:default:00001001": '{"timestamp": 9999999999}'}),
-        user_id="1001",
-        tenant_id="default",
-    )
-
-    qmt_item = next(item for item in result["items"] if item["key"] == "qmt_agent_online")
-    assert qmt_item["passed"] is False
-    assert "PostgreSQL 实盘账户快照" in qmt_item["detail"]
-
-
-@pytest.mark.asyncio
-async def test_trading_precheck_shadow_skips_qmt(monkeypatch, tmp_path):
-    model_dir = tmp_path / "model_qlib"
-    model_dir.mkdir(parents=True)
-    (model_dir / "model.pkl").write_bytes(b"fake_model")
-    monkeypatch.chdir(tmp_path)
-    monkeypatch.setenv("MODELS_PRODUCTION", str(model_dir))
-    monkeypatch.setenv("STRATEGY_RUNNER_IMAGE", "quantmind-ml-runtime:latest")
-    monkeypatch.setenv("INTERNAL_CALL_SECRET", "secret")
-    monkeypatch.setattr(
-        "backend.services.trade.services.trading_precheck_service._check_stream_series_freshness",
-        lambda _redis: (True, "stream_ready"),
+        "backend.services.trade.routers.real_trading_utils.check_stream_series_freshness",
+        lambda redis_client=None: {"ok": True, "message": "stream_ready", "details": {}},
     )
     monkeypatch.setattr(real_preflight.k8s_manager, "api", object(), raising=False)
     monkeypatch.setattr(real_preflight.k8s_manager, "core_api", object(), raising=False)
@@ -237,13 +190,12 @@ async def test_trading_precheck_shadow_skips_qmt(monkeypatch, tmp_path):
 
     result = await run_trading_readiness_precheck(
         fake_db,
-        mode="SHADOW",
+        mode="REAL",
         redis_client=_FakeRedisClient(),
         user_id="1001",
         tenant_id="default",
     )
 
-    assert result["passed"] is True
     assert all(item["key"] != "qmt_agent_online" for item in result["items"])
 
 
@@ -898,167 +850,6 @@ async def test_get_account_marks_snapshot_offline_when_stale(monkeypatch):
 
     assert result["is_online"] is False
     assert "stale_reason" in result
-
-
-@pytest.mark.asyncio
-async def test_qmt_agent_online_treats_naive_snapshot_timestamp_as_utc(monkeypatch):
-    snapshot_at = datetime.fromtimestamp(1_700_000_000)
-    heartbeat_ts = 1_700_000_010
-    account_snapshot = {
-        "snapshot_at": snapshot_at,
-    }
-
-    monkeypatch.setattr(
-        "backend.services.trade.routers.real_trading_utils._fetch_latest_real_account_snapshot",
-        AsyncMock(return_value=account_snapshot),
-    )
-    monkeypatch.setattr(precheck_service.time, "time", lambda: heartbeat_ts)
-
-    ok, detail = await precheck_service._check_qmt_agent_online(
-        _FakeDb([{"ok": 1}]),
-        _FakeRedisClient({"trade:agent:heartbeat:default:00001001": f'{{"timestamp": {heartbeat_ts}}}'}),
-        "default",
-        "1001",
-    )
-
-    assert ok is True
-    assert "account_age_sec=" in detail
-
-
-@pytest.mark.asyncio
-async def test_bridge_account_uses_latest_valid_snapshot_for_portfolio_sync_when_guard_rejects(monkeypatch):
-    payload = bridge_router.QMTBridgeAccountPayload(
-        account_id="8886664999",
-        total_asset=0.0,
-        cash=0.0,
-        available_cash=0.0,
-        market_value=0.0,
-        positions=[],
-        reported_at=datetime(2026, 4, 11, 10, 0, 0, tzinfo=timezone.utc),
-    )
-    metrics = {
-        "today_pnl": 0.0,
-        "total_pnl": 0.0,
-        "floating_pnl": 0.0,
-        "monthly_pnl": 0.0,
-        "total_return": 0.0,
-        "win_rate": 0.0,
-    }
-    metrics_meta = {
-        "snapshot_persisted": False,
-        "snapshot_reject_reason": "rejected_empty_snapshot",
-        "quality": "ok",
-    }
-    latest_snapshot = {
-        "snapshot_at": "2026-04-11T09:59:30+00:00",
-        "cash": 5356712.35,
-        "available_cash": 5356712.35,
-        "total_asset": 21852149.35,
-        "market_value": 16495437.0,
-        "today_pnl": 0.0,
-        "total_pnl": 852149.35,
-        "floating_pnl": 0.0,
-        "monthly_pnl": 852149.35,
-        "total_return": 4.057854,
-        "baseline": {
-            "initial_equity": 21000000.0,
-            "day_open_equity": 21852149.35,
-            "month_open_equity": 21000000.0,
-        },
-        "positions": [{"symbol": "000001.SZ", "volume": 100, "symbol_name": "平安银行"}],
-        "position_count": 1,
-        "payload_json": {
-            "positions": [{"symbol": "000001.SZ", "volume": 100, "symbol_name": "平安银行"}],
-            "liabilities": 123.0,
-            "short_market_value": 45.0,
-        },
-    }
-
-    captured_cache = {}
-    sync_mock = AsyncMock()
-    monkeypatch.setattr(bridge_router, "_compute_account_metrics", AsyncMock(return_value=(metrics, metrics_meta)))
-    monkeypatch.setattr(bridge_router, "_fetch_latest_real_account_snapshot", AsyncMock(return_value=latest_snapshot))
-    monkeypatch.setattr(bridge_router, "_sync_qmt_account_to_db", sync_mock)
-    monkeypatch.setattr(bridge_router, "write_trade_account_cache", lambda _redis, _tenant, _user, info: captured_cache.update(info))
-
-    class _FakeRedis:
-        def publish_event(self, *_args, **_kwargs):
-            return None
-
-    class _FakeDb:
-        async def commit(self):
-            return None
-
-    ctx = SimpleNamespace(tenant_id="default", user_id="00001001", account_id="8886664999")
-    result = await bridge_router.upsert_qmt_account_snapshot(
-        payload=payload,
-        ctx=ctx,
-        redis=_FakeRedis(),
-        db=_FakeDb(),
-    )
-
-    assert result["ok"] is True
-    sync_mock.assert_awaited_once()
-    sync_kwargs = sync_mock.await_args.kwargs
-    assert sync_kwargs["total_asset"] == 21852149.35
-    assert sync_kwargs["available_cash"] == 5356712.35
-    assert sync_kwargs["position_rows"] == [{"symbol": "000001.SZ", "volume": 100, "symbol_name": "平安银行"}]
-    assert captured_cache["snapshot_guard_triggered"] is True
-    assert captured_cache["metrics_meta"]["quality"] == "guard_rejected"
-    assert captured_cache["metrics_meta"]["snapshot_guard"]["fallback_sync_source"] == "latest_valid_snapshot"
-
-
-@pytest.mark.asyncio
-async def test_bridge_account_skips_portfolio_sync_when_guard_rejects_and_no_fallback(monkeypatch):
-    payload = bridge_router.QMTBridgeAccountPayload(
-        account_id="8886664999",
-        total_asset=0.0,
-        cash=0.0,
-        available_cash=0.0,
-        market_value=0.0,
-        positions=[],
-        reported_at=datetime(2026, 4, 11, 10, 0, 0, tzinfo=timezone.utc),
-    )
-    metrics = {
-        "today_pnl": 0.0,
-        "total_pnl": 0.0,
-        "floating_pnl": 0.0,
-        "monthly_pnl": 0.0,
-        "total_return": 0.0,
-        "win_rate": 0.0,
-    }
-    metrics_meta = {
-        "snapshot_persisted": False,
-        "snapshot_reject_reason": "rejected_empty_snapshot",
-        "quality": "ok",
-    }
-
-    sync_mock = AsyncMock()
-    monkeypatch.setattr(bridge_router, "_compute_account_metrics", AsyncMock(return_value=(metrics, metrics_meta)))
-    monkeypatch.setattr(bridge_router, "_fetch_latest_real_account_snapshot", AsyncMock(return_value=None))
-    monkeypatch.setattr(bridge_router, "_sync_qmt_account_to_db", sync_mock)
-    cache_mock = AsyncMock()
-    monkeypatch.setattr(bridge_router, "write_trade_account_cache", cache_mock)
-
-    class _FakeRedis:
-        def publish_event(self, *_args, **_kwargs):
-            return None
-
-    class _FakeDb:
-        async def commit(self):
-            return None
-
-    ctx = SimpleNamespace(tenant_id="default", user_id="00001001", account_id="8886664999")
-    result = await bridge_router.upsert_qmt_account_snapshot(
-        payload=payload,
-        ctx=ctx,
-        redis=_FakeRedis(),
-        db=_FakeDb(),
-    )
-
-    assert result["ok"] is True
-    sync_mock.assert_not_awaited()
-    cache_mock.assert_not_awaited()
 
 
 def test_snapshot_guard_detects_suspicious_asset_jump_with_positions():

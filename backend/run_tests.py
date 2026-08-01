@@ -184,15 +184,14 @@ def run_parallel_tests():
 
 
 def run_trade_long_short_mvp_tests():
-    """运行 QMT 多空 MVP 关键链路测试（CI 必跑）"""
-    print("📌 运行 QMT 多空 MVP 关键链路测试...")
+    """运行多空 MVP 关键链路测试（CI 必跑）"""
+    print("📌 运行多空 MVP 关键链路测试...")
     return run_command(
         [
             sys.executable,
             "-m",
             "pytest",
-            "services/tests/test_qmt_agent_async_reconcile.py",
-            "services/tests/test_trade_long_short_risk_and_bridge.py",
+            "services/tests/test_trade_long_short_risk.py",
             "services/tests/test_trade_long_short_integration_chain.py",
             "services/tests/test_trade_trading_precheck.py",
             "-q",

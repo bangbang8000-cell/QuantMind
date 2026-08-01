@@ -69,15 +69,6 @@ class Settings(BaseSettings):
     MAX_ORDER_SIZE: float = 1000000.0  # max order value
     MIN_ORDER_SIZE: float = 100.0  # min order value
 
-    # QMT Broker
-    QMT_HOST: str = os.getenv("QMT_HOST", "127.0.0.1")
-    QMT_PORT: int = int(os.getenv("QMT_PORT", "18080"))
-    REAL_BROKER_TYPE: str = os.getenv("REAL_BROKER_TYPE", "bridge")
-    # HMAC 指令签名密钥：用于对发布到 Redis 的下单指令进行签名，
-    # 本地 Agent 侧通过相同密钥验证，防止伪造指令。
-    # 生成方式：python -c "import secrets; print(secrets.token_hex(32))"
-    QMT_CMD_HMAC_SECRET: str = os.getenv("QMT_CMD_HMAC_SECRET", "")
-
     # Trade Command Stream（指令通道，替换原 Pub/Sub）
     # key 格式：{TRADE_CMD_STREAM_PREFIX}:{platform_user_id}
     TRADE_CMD_STREAM_PREFIX: str = os.getenv(

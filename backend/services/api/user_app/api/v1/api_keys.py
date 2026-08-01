@@ -2,7 +2,6 @@ from fastapi import APIRouter, Depends, HTTPException, status
 
 from backend.services.api.user_app.middleware.auth import get_current_user
 from backend.services.api.user_app.schemas.api_key import (
-    ApiKeyBootstrapResponse,
     ApiKeyCreate,
     ApiKeyInfo,
     ApiKeyListResponse,
@@ -101,20 +100,6 @@ async def init_default_api_key(current_user: dict = Depends(get_current_user)):
             created_at=created.created_at,
             expires_at=created.expires_at,
             last_used_at=None,
-        )
-
-
-@router.post(
-    "/qmt-agent/bootstrap",
-    response_model=ApiKeyBootstrapResponse,
-    summary="初始化 QMT Agent 默认接入凭证",
-)
-async def bootstrap_qmt_agent_key(current_user: dict = Depends(get_current_user)):
-    async with get_session(read_only=False) as session:
-        service = ApiKeyService(session)
-        return await service.bootstrap_default_key(
-            user_id=current_user["user_id"],
-            tenant_id=current_user["tenant_id"],
         )
 
 
