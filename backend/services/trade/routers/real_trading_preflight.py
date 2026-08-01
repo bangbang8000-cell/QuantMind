@@ -674,14 +674,17 @@ async def preflight_check(
 
 @router.get("/trading-precheck", response_model=TradingPrecheckResponse)
 async def trading_precheck(
-    trading_mode: str = "REAL",
+    trading_mode: str = "SIMULATION",
     auth: AuthContext = Depends(get_auth_context),
     redis: RedisClient = Depends(get_redis),
     db: AsyncSession = Depends(get_db),
 ):
-    mode = str(trading_mode or "REAL").strip().upper()
-    if mode not in {"REAL", "SHADOW", "SIMULATION"}:
-        raise HTTPException(status_code=400, detail=f"unsupported trading_mode: {mode}")
+    mode = str(trading_mode or "SIMULATION").strip().upper()
+    if mode != "SIMULATION":
+        raise HTTPException(
+            status_code=400,
+            detail=f"实盘交易已下线（政策原因），仅支持模拟盘。收到 trading_mode={mode}",
+        )
     resolved_user_id, resolved_tenant_id = _normalize_identity(auth)
     return await run_trading_readiness_precheck(
         db,

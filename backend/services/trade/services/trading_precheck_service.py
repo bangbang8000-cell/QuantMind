@@ -6,8 +6,6 @@ from typing import Any
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
-import redis as redis_lib
-from backend.services.trade.services.k8s_manager import k8s_manager
 from backend.services.trade.services.signal_readiness_service import (
     signal_readiness_service,
 )
@@ -25,61 +23,25 @@ def _build_check(key: str, label: str, passed: bool, detail: str) -> dict[str, A
     }
 
 
-def _resolve_runner_image() -> tuple[str, str]:
-    configured = str(os.getenv("STRATEGY_RUNNER_IMAGE", "")).strip()
-    if configured:
-        return configured, "configured"
-    # 与 k8s_manager 的默认行为保持一致，避免“预检失败但实际可启动”的误报
-    default_image = (
-        "quantmind-ml-runtime:latest"
-        if k8s_manager.mode == "docker"
-        else "asia-east1-docker.pkg.dev/gen-lang-client-0953736716/quantmind-repo/quantmind-qlib-runner:latest"
+def _check_local_market_data_freshness(expected_trade_date: date) -> tuple[bool, str]:
+    """本地 quantdb 行情是否已覆盖到目标交易日。
+
+    替代原「stream 实时行情新鲜度」检查：模拟盘撮合只读本地 parquet，
+    实时行情服务不再是依赖项。
+    """
+    from backend.services.trade.simulation.services.local_market_data import (
+        get_local_market_data,
     )
-    return default_image, "default"
 
-
-def _get_env_with_root_fallback(key: str, default: str = "") -> str:
-    value = os.getenv(key)
-    if value is not None and str(value).strip() != "":
-        return str(value).strip()
-
-    try:
-        root_env = Path(__file__).resolve().parents[4] / ".env"
-        if root_env.exists():
-            for line in root_env.read_text(encoding="utf-8").splitlines():
-                raw = line.strip()
-                if not raw or raw.startswith("#") or "=" not in raw:
-                    continue
-                env_key, env_value = raw.split("=", 1)
-                if env_key.strip() == key:
-                    return env_value.strip().strip("'").strip('"')
-    except Exception:
-        return default
-
-    return default
-
-
-def _get_stream_series_redis_client():
-    host = _get_env_with_root_fallback("REDIS_HOST", "localhost")
-    port = int(_get_env_with_root_fallback("REDIS_PORT", "6379") or "6379")
-    password = _get_env_with_root_fallback("REDIS_PASSWORD", "") or None
-    db = int(_get_env_with_root_fallback("REDIS_DB_MARKET", "3"))
-    client = redis_lib.Redis(
-        host=host,
-        port=port,
-        password=password,
-        db=db,
-        decode_responses=True,
-        socket_timeout=3.0,
-        socket_connect_timeout=3.0,
-    )
-    return client, host, port
-
-
-def _resolve_probe_symbols() -> list[str]:
-    raw = str(os.getenv("PREFLIGHT_STREAM_SYMBOLS", "SZ000001,SH600000")).strip()
-    symbols = [item.strip() for item in raw.split(",") if item.strip()]
-    return symbols or ["SZ000001", "SH600000"]
+    latest = get_local_market_data().latest_trade_date()
+    if latest is None:
+        return False, "本地 quantdb 无任何行情分区，请先执行日线同步"
+    if latest < expected_trade_date:
+        return (
+            False,
+            f"本地行情最新交易日 {latest} 落后于目标 {expected_trade_date}，请先执行日线同步",
+        )
+    return True, f"本地行情已覆盖至 {latest}"
 
 
 def _previous_trading_day(today: date, market: str = "A") -> date:
@@ -101,75 +63,6 @@ def _previous_trading_day(today: date, market: str = "A") -> date:
         return candidate
 
 
-async def _query_market_data_readiness(
-    db: AsyncSession, expected_trade_date: date
-) -> dict[str, Any]:
-    feature_cols_count_row = (
-        (
-            await db.execute(
-                text("""
-                SELECT COUNT(*) AS cnt
-                FROM information_schema.columns
-                WHERE table_schema = 'public'
-                  AND table_name = 'market_data_daily'
-                  AND column_name ~ '^feature_[0-9]+$'
-                """)
-            )
-        )
-        .mappings()
-        .first()
-    )
-    feature_cols_count = int((feature_cols_count_row or {}).get("cnt") or 0)
-    has_48_feature_cols = feature_cols_count >= 48
-
-    dim48_condition = (
-        "jsonb_typeof(features) = 'array' AND jsonb_array_length(features) = 48"
-    )
-    if has_48_feature_cols:
-        dim48_columns_condition = " AND ".join(
-            [f"feature_{i} IS NOT NULL" for i in range(48)]
-        )
-        dim48_condition = f"(({dim48_condition}) OR ({dim48_columns_condition}))"
-
-    row = (
-        (
-            await db.execute(
-                text(f"""
-                SELECT
-                    MAX(date) AS latest_trade_date,
-                    COUNT(*) FILTER (WHERE date = :expected_trade_date) AS expected_rows,
-                    COUNT(*) FILTER (
-                        WHERE date = :expected_trade_date
-                          AND {dim48_condition}
-                    ) AS expected_dim48_rows
-                FROM market_data_daily
-                """),
-                {"expected_trade_date": expected_trade_date},
-            )
-        )
-        .mappings()
-        .first()
-    )
-
-    data_stats = dict(row or {})
-    latest_trade_date = data_stats.get("latest_trade_date")
-    expected_rows = int(data_stats.get("expected_rows") or 0)
-    expected_dim48_rows = int(data_stats.get("expected_dim48_rows") or 0)
-    passed = (
-        str(latest_trade_date) >= expected_trade_date.isoformat()
-        and expected_rows > 0
-        and expected_dim48_rows == expected_rows
-    )
-    detail = (
-        f"latest_trade_date={latest_trade_date}, expected_trade_date={expected_trade_date.isoformat()}, "
-        f"rows={expected_rows}, dim48_rows={expected_dim48_rows}, feature_columns={feature_cols_count}"
-    )
-    return {
-        "passed": passed,
-        "detail": detail,
-    }
-
-
 def _check_inference_model_exists() -> tuple[bool, str]:
     """检查推理模型文件是否存在，不查询数据库。"""
     production_dir = Path(
@@ -189,9 +82,6 @@ def _check_inference_model_exists() -> tuple[bool, str]:
     )
 
 
-    pass
-
-
 async def run_trading_readiness_precheck(
     db: AsyncSession,
     *,
@@ -200,9 +90,11 @@ async def run_trading_readiness_precheck(
     user_id: str,
     tenant_id: str,
 ) -> dict[str, Any]:
-    normalized_mode = str(mode or "REAL").strip().upper()
-    if normalized_mode not in {"REAL", "SHADOW", "SIMULATION"}:
-        raise ValueError(f"unsupported trading mode: {mode}")
+    normalized_mode = str(mode or "SIMULATION").strip().upper()
+    if normalized_mode != "SIMULATION":
+        raise ValueError(
+            f"实盘交易已下线（政策原因），仅支持 SIMULATION。收到 mode={mode}"
+        )
 
     checks: list[dict[str, Any]] = []
 
@@ -265,130 +157,46 @@ async def run_trading_readiness_precheck(
         )
     )
 
-    if normalized_mode == "SIMULATION":
-        # 默认模型检测（检查用户是否配置了默认模型）
-        try:
-            from backend.shared.model_registry import model_registry_service
+    # 默认模型检测（检查用户是否配置了默认模型）
+    try:
+        from backend.shared.model_registry import model_registry_service
 
-            default_model = await model_registry_service.get_default_model(
-                tenant_id=tenant_id,
-                user_id=user_id,
+        default_model = await model_registry_service.get_default_model(
+            tenant_id=tenant_id,
+            user_id=user_id,
+        )
+        model_configured = bool(default_model)
+        checks.append(
+            _build_check(
+                "default_model_configured",
+                "默认模型已配置",
+                model_configured,
+                (
+                    f"默认模型已配置 (model_id={default_model.get('model_id')})"
+                    if model_configured
+                    else "未配置默认模型，请先在模型管理中设置默认模型"
+                ),
             )
-            model_configured = bool(default_model)
-            checks.append(
-                _build_check(
-                    "default_model_configured",
-                    "默认模型已配置",
-                    model_configured,
-                    (
-                        f"默认模型已配置 (model_id={default_model.get('model_id')})"
-                        if model_configured
-                        else "未配置默认模型，请先在模型管理中设置默认模型"
-                    ),
-                )
+        )
+    except Exception as exc:
+        checks.append(
+            _build_check(
+                "default_model_configured",
+                "默认模型已配置",
+                False,
+                f"default_model_check_error={exc}",
             )
-        except Exception as exc:
-            checks.append(
-                _build_check(
-                    "default_model_configured",
-                    "默认模型已配置",
-                    False,
-                    f"default_model_check_error={exc}",
-                )
-            )
+        )
 
-        try:
-            model_ok, model_detail = _check_inference_model_exists()
-            # SIMULATION 模式推理模型仅警告，允许用户先配置系统
-            checks.append(
-                _build_check(
-                    "inference_database_ready",
-                    "推理模型已就绪",
-                    True,  # 仅警告，不阻断
-                    model_detail if model_ok else f"[WARNING] {model_detail}",
-                )
-            )
-        except Exception as exc:
-            checks.append(
-                _build_check(
-                    "inference_database_ready",
-                    "推理模型已就绪",
-                    True,  # 仅警告，不阻断
-                    f"[WARNING] model_check_error={exc}",
-                )
-            )
-
-        try:
-            from backend.services.trade.sandbox.manager import sandbox_manager
-
-            workers = list(getattr(sandbox_manager, "_workers", {}).values())
-            worker_total = len(workers)
-            alive_total = sum(1 for proc in workers if bool(proc and proc.is_alive()))
-            pool_ok = alive_total > 0
-            checks.append(
-                _build_check(
-                    "simulation_sandbox_pool",
-                    "模拟盘进程池",
-                    pool_ok,
-                    (
-                        f"进程池可用（alive={alive_total}/{worker_total}）"
-                        if pool_ok
-                        else "进程池不可用（无存活 worker）"
-                    ),
-                )
-            )
-        except Exception as exc:
-            checks.append(
-                _build_check(
-                    "simulation_sandbox_pool",
-                    "模拟盘进程池",
-                    False,
-                    f"process_pool_error={exc}",
-                )
-            )
-
-        try:
-            from backend.services.trade.routers.real_trading_utils import check_stream_series_freshness
-            res = check_stream_series_freshness(redis_client=redis_client)
-            checks.append(
-                _build_check(
-                    "stream_series_freshness",
-                    "实时行情服务已就绪",
-                    res["ok"],
-                    res["message"],
-                )
-            )
-        except Exception as exc:
-            now = datetime.now(timezone.utc).replace(tzinfo=None)
-            is_trading_hours = (
-                now.weekday() < 5
-                and ((now.hour == 9 and now.minute >= 15) or (now.hour >= 10 and now.hour < 15))
-            )
-            checks.append(
-                _build_check(
-                    "stream_series_freshness",
-                    "实时行情服务已就绪",
-                    not is_trading_hours,
-                    f"[阻断] stream_probe_error={exc}" if is_trading_hours else f"[WARNING] stream_probe_error={exc}",
-                )
-            )
-        return {
-            "passed": all(bool(item.get("passed")) for item in checks),
-            "checked_at": datetime.now().isoformat(),
-            "items": checks,
-            "signal_readiness": signal_readiness,
-            "trading_permission": signal_readiness.get("trading_permission"),
-        }
-
-    # REAL/SHADOW 模式：推理模型检查
     try:
         model_ok, model_detail = _check_inference_model_exists()
+        # SIMULATION 模式推理模型仅警告，允许用户先配置系统
         checks.append(
             _build_check(
                 "inference_database_ready",
                 "推理模型已就绪",
-                model_ok,
-                model_detail,
+                True,  # 仅警告，不阻断
+                model_detail if model_ok else f"[WARNING] {model_detail}",
             )
         )
     except Exception as exc:
@@ -396,44 +204,59 @@ async def run_trading_readiness_precheck(
             _build_check(
                 "inference_database_ready",
                 "推理模型已就绪",
-                False,
-                f"model_check_error={exc}",
+                True,  # 仅警告，不阻断
+                f"[WARNING] model_check_error={exc}",
             )
         )
 
-    resolved_image, image_source = _resolve_runner_image()
-    # 容器编排就绪度检测 (支持 Docker 或 K8s)
-    orchestration_ready = bool(k8s_manager.api and k8s_manager.core_api)
-    orchestration_label = (
-        "容器编排服务 (Docker) 与执行镜像已就绪"
-        if k8s_manager.mode == "docker"
-        else "Kubernetes 服务与执行镜像已就绪"
-    )
+    try:
+        from backend.services.trade.sandbox.manager import sandbox_manager
 
-    checks.append(
-        _build_check(
-            "k8s_and_runner_ready",
-            orchestration_label,
-            orchestration_ready and bool(resolved_image),
-            (
-                f"orchestration_mode={k8s_manager.mode}, "
-                f"orchestration_ready={orchestration_ready}, "
-                f"runner_image={resolved_image}, image_source={image_source}"
-            ),
+        workers = list(getattr(sandbox_manager, "_workers", {}).values())
+        worker_total = len(workers)
+        alive_total = sum(1 for proc in workers if bool(proc and proc.is_alive()))
+        pool_ok = alive_total > 0
+        checks.append(
+            _build_check(
+                "simulation_sandbox_pool",
+                "模拟盘进程池",
+                pool_ok,
+                (
+                    f"进程池可用（alive={alive_total}/{worker_total}）"
+                    if pool_ok
+                    else "进程池不可用（无存活 worker）"
+                ),
+            )
         )
-    )
-
-    from backend.services.trade.routers.real_trading_utils import check_stream_series_freshness
-    res = check_stream_series_freshness(redis_client=redis_client)
-    checks.append(
-        _build_check(
-            "stream_series_freshness",
-            "实时行情服务已就绪",
-            res["ok"],
-            res["message"],
+    except Exception as exc:
+        checks.append(
+            _build_check(
+                "simulation_sandbox_pool",
+                "模拟盘进程池",
+                False,
+                f"process_pool_error={exc}",
+            )
         )
-    )
 
+    try:
+        ok, detail = _check_local_market_data_freshness(expected_trade_date)
+        checks.append(
+            _build_check(
+                "local_market_data_freshness",
+                "本地行情数据已就绪",
+                ok,
+                detail,
+            )
+        )
+    except Exception as exc:
+        checks.append(
+            _build_check(
+                "local_market_data_freshness",
+                "本地行情数据已就绪",
+                False,
+                f"local_market_probe_error={exc}",
+            )
+        )
     return {
         "passed": all(bool(item.get("passed")) for item in checks),
         "checked_at": datetime.now().isoformat(),

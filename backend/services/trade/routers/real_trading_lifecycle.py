@@ -10,7 +10,6 @@ from .real_trading_utils import (
     _normalize_identity,
     _normalize_live_trade_config,
     _parse_user_id,
-    _schedule_status_writeback,
     _schedule_user_notification,
 )
 from backend.services.trade.services.manual_execution_service import (
@@ -167,19 +166,13 @@ async def start_trading(
                 )
             live_config = _normalize_live_trade_config(user_live_cfg, live_config)
 
-        readiness = {
-            "passed": True,
-            "checked_at": datetime.now().isoformat(),
-            "items": [],
-        }
-        if mode in {"REAL", "SHADOW", "SIMULATION"}:
-            readiness = await run_trading_readiness_precheck(
-                db,
-                mode="SIMULATION",
-                redis_client=redis.client,
-                user_id=resolved_user_id,
-                tenant_id=resolved_tenant_id,
-            )
+        readiness = await run_trading_readiness_precheck(
+            db,
+            mode="SIMULATION",
+            redis_client=redis.client,
+            user_id=resolved_user_id,
+            tenant_id=resolved_tenant_id,
+        )
         signal_readiness = readiness.get("signal_readiness") or {}
         trading_permission = str(
             readiness.get("trading_permission")
@@ -196,7 +189,7 @@ async def start_trading(
             raise HTTPException(
                 status_code=409,
                 detail={
-                    "message": "交易准备度检测未通过，请先确认模型、数据库、Kubernetes、实时行情与柜台上报状态",
+                    "message": "交易准备度检测未通过，请先确认模型、数据库与本地行情数据状态",
                     "precheck_failed": True,
                     "checked_at": readiness.get("checked_at"),
                     "items": readiness.get("items", []),
@@ -210,7 +203,7 @@ async def start_trading(
             raise HTTPException(
                 status_code=409,
                 detail={
-                    "message": "默认模型没有可交易的目标交易日推理信号，实盘启动已阻断",
+                    "message": "默认模型没有可交易的目标交易日推理信号，模拟盘启动已阻断",
                     "precheck_failed": True,
                     "checked_at": readiness.get("checked_at"),
                     "items": readiness.get("items", []),
