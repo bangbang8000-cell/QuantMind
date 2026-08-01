@@ -222,7 +222,7 @@ class LocalMarketData:
             pre_close_map: dict[str, float] = {}
         else:
             prev = df[df["dt"] == prev_dt_int]
-            pre_close_map = dict(zip(prev["symbol"], prev["close"].astype(float)))
+            pre_close_map = dict(zip(prev["symbol"], prev["close"].astype(float), strict=True))
 
         st_symbols = self._st_symbol_set()
 

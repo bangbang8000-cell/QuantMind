@@ -6,20 +6,16 @@ Broker Client - 抽象 Broker 接口，支持模拟和真实交易
 
 import abc
 import logging
+import math
 import random
 from dataclasses import dataclass
 from datetime import datetime
-from typing import TYPE_CHECKING, Any, Dict, Optional
+from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
     from backend.services.trade.services.simulation_manager import (
         SimulationAccountManager,
     )
-
-from sqlalchemy import text
-
-from backend.shared.auth import get_internal_call_secret
-from backend.shared.database_manager_v2 import get_session
 
 logger = logging.getLogger(__name__)
 
@@ -91,7 +87,7 @@ class BaseBroker(abc.ABC):
 class PaperTradingBroker(BaseBroker):
     """
     Paper Trading Broker with internal state management via Redis.
-    Fetches real market prices for execution.
+    行情来自本地 quantdb parquet（LocalMarketData）。
     """
 
     COMMISSION_RATE = 0.0003  # 0.03% commission
@@ -103,134 +99,35 @@ class PaperTradingBroker(BaseBroker):
     ):
         self.simulation_manager = simulation_manager
         self.market_url = market_url
-        self._client = None
-
-    async def _get_client(self):
-        if self._client is None:
-            import httpx
-
-            self._client = httpx.AsyncClient(timeout=5.0)
-        return self._client
-
-    @staticmethod
-    def _as_float(value: Any) -> float | None:
-        try:
-            if value is None:
-                return None
-            return float(value)
-        except (TypeError, ValueError):
-            return None
-
-    @staticmethod
-    def _as_int(value: Any) -> int | None:
-        try:
-            if value is None:
-                return None
-            return int(float(value))
-        except (TypeError, ValueError):
-            return None
-
-    @staticmethod
-    def _as_bool(value: Any) -> bool:
-        if isinstance(value, bool):
-            return value
-        if value is None:
-            return False
-        if isinstance(value, (int, float)):
-            return bool(value)
-        text = str(value).strip().lower()
-        if not text:
-            return False
-        return text in {"1", "true", "yes", "y", "on"}
-
-    @staticmethod
-    def _is_price_near(price: float, limit_price: float | None, tolerance: float = 0.0015) -> bool:
-        if limit_price is None or limit_price <= 0 or price <= 0:
-            return False
-        return abs(price - limit_price) / max(limit_price, 1e-6) <= tolerance
 
     async def _get_market_snapshot(self, symbol: str) -> MarketQuoteSnapshot:
-        # Level 1: 实时行情
-        try:
-            client = await self._get_client()
-            headers = {"X-Internal-Call": get_internal_call_secret()}
-            resp = await client.get(f"{self.market_url}/api/v1/quotes/{symbol}", headers=headers)
-            if resp.status_code == 200:
-                data = resp.json()
-                px = self._as_float(data.get("current_price") or data.get("last_price"))
-                if px and px > 0:
-                    limit_up = self._as_bool(data.get("is_limit_up"))
-                    limit_down = self._as_bool(data.get("is_limit_down"))
-                    suspended = self._as_bool(data.get("suspended") or data.get("is_suspended"))
-                    limit_up_price = self._as_float(data.get("limit_up_today"))
-                    limit_down_price = self._as_float(data.get("limit_down_today"))
-                    if not limit_up and self._is_price_near(px, limit_up_price):
-                        limit_up = True
-                    if not limit_down and self._is_price_near(px, limit_down_price):
-                        limit_down = True
+        """从本地 quantdb parquet 取行情快照。
 
-                    pre_close = self._as_float(data.get("pre_close") or data.get("close_price"))
-                    ask1_volume = self._as_int(data.get("ask1_volume"))
-                    bid1_volume = self._as_int(data.get("bid1_volume"))
-                    if pre_close and pre_close > 0:
-                        change_ratio = (px - pre_close) / pre_close
-                        if not limit_up and ask1_volume is not None and ask1_volume <= 0 and change_ratio >= 0.095:
-                            limit_up = True
-                        if not limit_down and bid1_volume is not None and bid1_volume <= 0 and change_ratio <= -0.095:
-                            limit_down = True
+        取不到行情时 price=0 且 suspended=True，由 place_order 拒单——不编造价格。
+        """
+        from backend.services.trade.simulation.services.local_market_data import (
+            get_local_market_data,
+        )
 
-                    return MarketQuoteSnapshot(
-                        price=px,
-                        limit_up=limit_up,
-                        limit_down=limit_down,
-                        suspended=suspended,
-                    )
-        except Exception as e:
-            logger.warning(f"Failed to fetch real-time price for {symbol}: {e}")
+        market = get_local_market_data()
+        trade_date = market.latest_trade_date()
+        if trade_date is None:
+            logger.error("[PaperTrading] 本地行情数据不可用，无法为 %s 定价", symbol)
+            return MarketQuoteSnapshot(price=0.0, suspended=True)
 
-        # Level 2: 数据库兜底 (L2 Fallback)
-        try:
-            async with get_session(read_only=True) as session:
-                query_with_limits = text("""
-                    SELECT close, adj_factor, limit_up_today, limit_down_today, volume
-                    FROM stock_daily_latest
-                    WHERE symbol = :symbol
-                    ORDER BY trade_date DESC LIMIT 1
-                """)
-                try:
-                    result = await session.execute(query_with_limits, {"symbol": symbol})
-                    row = result.fetchone()
-                    if row:
-                        hfq_close = float(row[0])
-                        adj_factor = float(row[1] or 1.0)
-                        price = hfq_close / adj_factor if adj_factor > 0 else hfq_close
-                        logger.info("[PaperTrading] Fallback to DB nominal price for %s: %s", symbol, price)
-                        return MarketQuoteSnapshot(
-                            price=price,
-                            limit_up=self._is_price_near(price, self._as_float(row[2])),
-                            limit_down=self._is_price_near(price, self._as_float(row[3])),
-                            suspended=(self._as_float(row[4]) or 0.0) <= 0.0,
-                        )
-                except Exception:
-                    query_legacy = text("""
-                        SELECT close, adj_factor
-                        FROM stock_daily_latest
-                        WHERE symbol = :symbol
-                        ORDER BY trade_date DESC LIMIT 1
-                    """)
-                    result = await session.execute(query_legacy, {"symbol": symbol})
-                    row = result.fetchone()
-                    if row:
-                        hfq_close = float(row[0])
-                        adj_factor = float(row[1] or 1.0)
-                        price = hfq_close / adj_factor if adj_factor > 0 else hfq_close
-                        logger.info("[PaperTrading] Fallback to DB legacy nominal price for %s: %s", symbol, price)
-                        return MarketQuoteSnapshot(price=price)
-        except Exception as e:
-            logger.error(f"[PaperTrading] Database fallback failed for {symbol}: {e}")
+        bar = market.get_bar(symbol, trade_date)
+        if bar is None or bar.close <= 0:
+            logger.warning(
+                "[PaperTrading] 本地行情缺少 %s @ %s，按停牌处理", symbol, trade_date
+            )
+            return MarketQuoteSnapshot(price=0.0, suspended=True)
 
-        # Level 3: 最终保底
-        return MarketQuoteSnapshot(price=100.0 + random.uniform(-1, 1))
+        return MarketQuoteSnapshot(
+            price=bar.close,
+            limit_up=math.isfinite(bar.limit_up) and bar.close >= bar.limit_up,
+            limit_down=bar.limit_down > 0 and bar.close <= bar.limit_down,
+            suspended=bar.suspended,
+        )
 
     async def _get_market_price(self, symbol: str) -> float:
         """Fetch real-time price from Market Data Service with L2 DB fallback"""
