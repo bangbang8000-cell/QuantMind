@@ -87,7 +87,7 @@ export interface StrategyValidationWarning {
 /** 策略转换请求 */
 export interface StrategyConversionRequest {
   source_code: string;
-  source_language: 'python' | 'miniqmt' | 'other';
+  source_language: 'python' | 'other';
   target_format: 'qlib';
   conversion_options?: {
     preserve_comments?: boolean;

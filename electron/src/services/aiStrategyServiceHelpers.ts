@@ -46,7 +46,7 @@ export class AIStrategyServiceHelpersMixin {
     return {
       ...strategy,
       language: 'python',
-      framework: 'miniqmt',
+      framework: 'standard',
       createdAt: new Date().toISOString(),
       performance
     };

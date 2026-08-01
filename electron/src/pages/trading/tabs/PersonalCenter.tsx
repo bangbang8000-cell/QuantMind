@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
-import { User, Activity, Server, Clock, Shield, Database, Settings2, RefreshCw, DownloadCloud, Link2Off, Camera, Upload, Trash2, CheckCircle2 } from 'lucide-react';
+import { User, Activity, Server, Clock, Shield, Database, Settings2, RefreshCw, DownloadCloud, Camera, Upload, Trash2, CheckCircle2 } from 'lucide-react';
 import { message, Modal } from 'antd';
 import type { AccountInfo, RealTradingStatus } from '../../../services/realTradingService';
 import { strategyManagementService } from '../../../services/strategyManagementService';
@@ -20,8 +20,6 @@ const PersonalCenter: React.FC<PersonalCenterProps> = ({ tenantId, userId, statu
     
     // ... (现有状态)
     const [isSyncing, setIsSyncing] = useState(false);
-    const [isUnbinding, setIsUnbinding] = useState(false);
-    const [unbindModalOpen, setUnbindModalOpen] = useState(false);
     const [createdAt, setCreatedAt] = useState<string | null>(null);
 
     const handleSyncTemplates = async () => {
@@ -174,27 +172,6 @@ const PersonalCenter: React.FC<PersonalCenterProps> = ({ tenantId, userId, statu
         }
     };
 
-    const handleUnbindQmt = async () => {
-        setIsUnbinding(true);
-        try {
-            const { realTradingService } = await import('../../../services/realTradingService');
-            const result = await realTradingService.unbindQmtAgent();
-            if (result.success) {
-                message.success(result.message);
-                // 触发全局刷新事件
-                window.dispatchEvent(new CustomEvent('refresh-account-data'));
-                window.dispatchEvent(new CustomEvent('refresh-strategy-status'));
-            } else {
-                message.error(result.message);
-            }
-        } catch (err: any) {
-            console.error('Failed to unbind QMT agent', err);
-            message.error(err.message || '解绑失败，请稍后重试');
-        } finally {
-            setIsUnbinding(false);
-            setUnbindModalOpen(false);
-        }
-    };
     const handleOcrAnalyze = async () => {
         if (ocrFiles.length === 0) {
             message.warning('请先上传持仓截图');
@@ -465,14 +442,6 @@ const PersonalCenter: React.FC<PersonalCenterProps> = ({ tenantId, userId, statu
                                         >
                                             对齐券商
                                         </button>
-                                        <button
-                                            onClick={() => setUnbindModalOpen(true)}
-                                            disabled={isUnbinding}
-                                            className="px-3 py-1.5 rounded-xl border border-red-200 text-red-600 text-xs font-medium hover:bg-red-50 disabled:bg-gray-100 disabled:text-gray-400 disabled:cursor-not-allowed flex items-center justify-center gap-1.5 transition-colors"
-                                        >
-                                            <Link2Off size={12} />
-                                            一键解绑 QMT
-                                        </button>
                                     </div>
                                 </div>
                                 <div className="mt-2 text-[10px] text-gray-400">
@@ -492,50 +461,6 @@ const PersonalCenter: React.FC<PersonalCenterProps> = ({ tenantId, userId, statu
                 </div>
             </div>
 
-            {/* 解绑确认弹窗 */}
-            <Modal
-                title="确认解绑 QMT"
-                open={unbindModalOpen}
-                onCancel={() => setUnbindModalOpen(false)}
-                footer={[
-                    <button
-                        key="cancel"
-                        onClick={() => setUnbindModalOpen(false)}
-                        className="px-4 py-2 rounded-xl border border-gray-300 text-gray-700 text-sm font-medium hover:bg-gray-50"
-                    >
-                        取消
-                    </button>,
-                    <button
-                        key="confirm"
-                        onClick={handleUnbindQmt}
-                        disabled={isUnbinding}
-                        className="px-4 py-2 rounded-xl bg-red-600 text-white text-sm font-medium hover:bg-red-700 disabled:bg-gray-300 disabled:cursor-not-allowed"
-                    >
-                        {isUnbinding ? '解绑中...' : '确认解绑'}
-                    </button>,
-                ]}
-                centered
-                width={420}
-            >
-                <div className="py-4">
-                    <div className="flex items-start gap-3 mb-4">
-                        <div className="w-10 h-10 rounded-full bg-red-100 flex items-center justify-center flex-shrink-0">
-                            <Link2Off size={20} className="text-red-600" />
-                        </div>
-                        <div>
-                            <p className="text-gray-800 font-medium">确定要解除 QMT 绑定吗？</p>
-                            <p className="text-gray-500 text-sm mt-1">
-                                解绑后，QMT Agent 将断开连接，需要重新启动 Agent 并绑定新设备。
-                            </p>
-                        </div>
-                    </div>
-                    <div className="bg-amber-50 border border-amber-200 rounded-xl p-3">
-                        <p className="text-amber-800 text-sm">
-                            <strong>注意：</strong>解绑仅删除设备绑定关系，资产快照数据将保留。如需清除资产数据，请单独操作。
-                        </p>
-                    </div>
-                </div>
-            </Modal>
             {/* OCR Sync Modal */}
             <Modal
                 title={

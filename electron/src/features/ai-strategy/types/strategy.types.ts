@@ -1,19 +1,9 @@
 /**
  * AI策略模块类型定义
- * 支持MiniQMT语法
  */
 
 import { AIStrategyParams, AIStrategy } from '../../../store/slices/aiStrategySlice';
 import { StrategyStyle } from '../../../types/strategy';
-
-// MiniQMT support has been removed
-// Placeholder type for MiniQMTValidationResult
-export interface MiniQMTValidationResult {
-  isValid: boolean;
-  errors: string[];
-  warnings: string[];
-  suggestions: string[];
-}
 
 // 策略生成参数
 export interface AIStrategyGenerationParams extends Partial<Omit<AIStrategyParams, 'market' | 'riskLevel' | 'timeframe'>> {
@@ -23,11 +13,11 @@ export interface AIStrategyGenerationParams extends Partial<Omit<AIStrategyParam
   riskPreference: 'conservative' | 'moderate' | 'aggressive';
   investmentStyle: 'value' | 'growth' | 'balanced' | 'technical';
   timeframe: 'intraday' | 'daily' | 'weekly' | 'monthly';
-  style: StrategyStyle; // 添加缺少的style属性
+  style: StrategyStyle;
 
-  // 股票池参数（新增）
-  symbols: string[]; // 股票代码列表
-  symbolsCount?: number; // 股票数量（用于验证）
+  // 股票池参数
+  symbols: string[];
+  symbolsCount?: number;
 
   // 高级参数
   initialCapital?: number;
@@ -35,25 +25,25 @@ export interface AIStrategyGenerationParams extends Partial<Omit<AIStrategyParam
   stopLoss?: number;
   takeProfit?: number;
   leverage?: number;
-  maxDrawdown?: number; // 最大回撤限制
-  commissionRate?: number; // 手续费率
-  slippage?: number; // 滑点
-  benchmark?: string; // 基准指数
+  maxDrawdown?: number;
+  commissionRate?: number;
+  slippage?: number;
+  benchmark?: string;
 
   // 策略类型
   strategyType?: 'trend_following' | 'mean_reversion' | 'arbitrage' | 'market_making';
   strategyLength?: 'short_term' | 'medium_term' | 'long_term' | 'unlimited';
   backtestPeriod?: '3months' | '6months' | '1year' | '2years' | '5years';
 
-  // MiniQMT相关参数
-  framework?: 'standard' | 'miniqmt'; // 策略框架
-  outputFormat?: 'python' | 'miniqmt'; // 输出格式
-  includeImports?: boolean; // 是否包含导入语句
-  includeComments?: boolean; // 是否包含注释
+  // 输出格式
+  framework?: 'standard';
+  outputFormat?: 'python';
+  includeImports?: boolean;
+  includeComments?: boolean;
 
   // 模板相关
-  templateId?: string; // 使用的模板ID
-  useTemplate?: boolean; // 是否使用模板
+  templateId?: string;
+  useTemplate?: boolean;
 
   // 示例数据
   examples?: string[];
@@ -67,22 +57,7 @@ export interface GenerationState {
   message: string;
   result?: AIStrategy;
   error?: string;
-  framework?: 'standard' | 'miniqmt';
-  validation?: MiniQMTValidationResult;
-}
-
-// MiniQMT策略结果
-export interface MiniQMTStrategyResult {
-  strategy_code: string;
-  framework: 'miniqmt';
-  validation: MiniQMTValidationResult;
-  extracted_parameters: Record<string, any>;
-  metadata: {
-    generated_at: string;
-    template_used?: string;
-    complexity: 'beginner' | 'intermediate' | 'advanced';
-    indicators: string[];
-  };
+  framework?: 'standard';
 }
 
 // 参数面板配置

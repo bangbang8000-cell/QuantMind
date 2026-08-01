@@ -504,7 +504,7 @@ const ManualTaskPage: React.FC<ManualTaskPageProps> = ({ tradingMode, onBack }) 
                     </div>
                     <div>
                         <div className="text-lg font-bold text-gray-900">手动任务</div>
-                        <div className="text-[11px] text-gray-500 font-medium">采用 5 步向导式执行流程，经由 Hash 核对后推送到 QMT 柜台</div>
+                        <div className="text-[11px] text-gray-500 font-medium">采用 5 步向导式执行流程，经由 Hash 核对后推送至交易执行引擎</div>
                     </div>
                 </div>
                 <div className="flex items-center gap-3">
@@ -1407,7 +1407,7 @@ const ManualTaskPage: React.FC<ManualTaskPageProps> = ({ tradingMode, onBack }) 
                                         <TerminalSquare className="text-slate-900" size={18} />
                                     </h2>
                                     <p className="text-[13px] text-gray-500 mt-1">
-                                        任务已提交至执行队列，控制台显示 QMT Agent 的实时链路状态。
+                                        任务已提交至执行队列，控制台显示执行引擎的实时链路状态。
                                     </p>
                                 </div>
 
@@ -1523,7 +1523,7 @@ const ManualTaskPage: React.FC<ManualTaskPageProps> = ({ tradingMode, onBack }) 
                                                 {submitting ? (
                                                     <Loader2 size={16} className="animate-spin" />
                                                 ) : (
-                                                    <>推送到 QMT <Zap size={14} fill="currentColor" /></>
+                                                    <>推送执行 <Zap size={14} fill="currentColor" /></>
                                                 )}
                                             </button>
                                             <button 
@@ -1542,7 +1542,7 @@ const ManualTaskPage: React.FC<ManualTaskPageProps> = ({ tradingMode, onBack }) 
                                                     <CheckCircle2 size={24} />
                                                 </div>
                                                 <div className="text-xs font-bold text-emerald-900 leading-none">正在执行</div>
-                                                <div className="text-[9px] text-emerald-600/70 mt-1 uppercase tracking-tighter">Connected to QMT</div>
+                                                <div className="text-[9px] text-emerald-600/70 mt-1 uppercase tracking-tighter">Executing</div>
                                             </div>
                                             {(selectedTask?.stage === 'completed' || selectedTask?.status === 'completed') && (
                                                 <button
@@ -1558,7 +1558,7 @@ const ManualTaskPage: React.FC<ManualTaskPageProps> = ({ tradingMode, onBack }) 
                                     <div className="p-4 rounded-xl border border-gray-50 bg-gray-50/20">
                                         <div className="text-[9px] font-bold text-gray-400 uppercase tracking-widest mb-1.5 opacity-60">风险披露</div>
                                         <div className="text-[9px] text-gray-400 leading-relaxed italic">
-                                            指令通过 QMT 链路报送。请确保账户已就绪且资金充足。
+                                            指令通过执行引擎报送。请确保账户已就绪且资金充足。
                                         </div>
                                     </div>
                                 </div>

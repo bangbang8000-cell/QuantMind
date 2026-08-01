@@ -501,16 +501,12 @@ function buildConfigWarning(): string | null {
     return null;
 }
 
-const bindingStatusCache = new Map<string, { expiresAt: number; promise: Promise<QmtBindingStatus | null> }>();
-const BINDING_STATUS_TTL_MS = 15000;
-
 function buildUnavailableRealAccount(
     reason: 'unbound' | 'not_reported' | 'not_found',
     message: string,
-    bindingStatus?: QmtBindingStatus | null,
 ): AccountInfo {
     return {
-        account_id: bindingStatus?.account_id || undefined,
+        account_id: undefined,
         total_asset: 0,
         cash: 0,
         available_cash: 0,
@@ -542,45 +538,6 @@ function buildUnavailableRealAccount(
 export const realTradingService = {
     getFriendlyError: (error: any): string => resolveErrorMessage(error),
     getConfigWarning: (): string | null => buildConfigWarning(),
-    getQmtBindingStatus: async (
-        userId: string,
-        tenantId: string = getTenantId(),
-        options?: { force?: boolean },
-    ): Promise<QmtBindingStatus | null> => {
-        const disableCache = String((import.meta as any).env?.MODE || '').toLowerCase() === 'test';
-        const cacheKey = `${tenantId}:${String(userId || '').trim() || 'current'}`;
-        const now = Date.now();
-        const cached = bindingStatusCache.get(cacheKey);
-        if (!disableCache && !options?.force && cached && cached.expiresAt > now) {
-            return cached.promise;
-        }
-
-        const token = authService.getAccessToken();
-        const promise = axios.get(
-            `${String(SERVICE_URLS.API_GATEWAY || '').replace(/\/+$/, '')}/internal/strategy/bridge/binding/status`,
-            {
-                params: { user_id: userId },
-                headers: token ? new AxiosHeaders({ Authorization: `Bearer ${token}` }) : undefined,
-                timeout: 15000,
-            },
-        )
-            .then((response) => response.data as QmtBindingStatus)
-            .catch((error) => {
-                const status = Number(error?.response?.status ?? 0);
-                if (status === 401 || status === 403) {
-                    throw error;
-                }
-                return null;
-            });
-
-        if (!disableCache) {
-            bindingStatusCache.set(cacheKey, {
-                expiresAt: now + BINDING_STATUS_TTL_MS,
-                promise,
-            });
-        }
-        return promise;
-    },
     extractTradingPrecheckFailure: (error: any): TradingPrecheckFailure | null => {
         const detail = error?.response?.data?.detail;
         if (!detail || typeof detail !== 'object' || detail.precheck_failed !== true) {
@@ -803,20 +760,6 @@ export const realTradingService = {
 
     // Get Account Info
     getAccount: async (userId: string, tenantId: string = getTenantId()): Promise<AccountInfo> => {
-        const bindingStatus = await realTradingService.getQmtBindingStatus(userId, tenantId).catch((error) => {
-            const status = Number(error?.response?.status ?? 0);
-            if (status === 401 || status === 403) {
-                throw error;
-            }
-            return null;
-        });
-
-        if (bindingStatus && !bindingStatus.account_id) {
-            return buildUnavailableRealAccount('unbound', '当前账户未绑定实盘交易账号', bindingStatus);
-        }
-        // 移除对 account_reported_at 的提前检查，让后端 API 从数据库获取历史快照
-        // 后端会根据数据库中的快照数据决定是否返回，并设置 is_online 和 stale_reason
-
         try {
             return await requestRealTradingWithFallback<AccountInfo>({
                 method: 'get',
@@ -828,13 +771,9 @@ export const realTradingService = {
                 throw error;
             }
             if (status === 404) {
-                const message = bindingStatus?.account_id
-                    ? '实盘账号尚未上报账户快照，请启动 QMT Agent'
-                    : '当前账户未绑定实盘交易账号';
                 return buildUnavailableRealAccount(
-                    bindingStatus?.account_id ? 'not_reported' : 'unbound',
-                    message,
-                    bindingStatus,
+                    'unbound',
+                    '当前账户未绑定实盘交易账号',
                 );
             }
             throw error;
@@ -962,25 +901,6 @@ export const realTradingService = {
         }
     },
 
-    // Unbind QMT Agent (delete binding, keep account data)
-    unbindQmtAgent: async (): Promise<{ success: boolean; message: string }> => {
-        try {
-            const token = authService.getAccessToken();
-            const response = await axios.delete<{ reset: boolean; message: string }>(
-                `${SERVICE_URLS.API_GATEWAY}/internal/strategy/bridge/binding/me`,
-                {
-                    headers: token ? new AxiosHeaders({ Authorization: `Bearer ${token}` }) : undefined,
-                    timeout: 15000,
-                }
-            );
-            return { success: response.data?.reset === true, message: response.data?.message || '解绑成功' };
-        } catch (err: any) {
-            console.error('Failed to unbind QMT agent', err);
-            const errorMsg = resolveErrorMessage(err);
-            return { success: false, message: errorMsg };
-        }
-    },
-
     analyzeHoldingImages: async (
         formData: FormData
     ): Promise<{ success: boolean; message?: string; data?: any[]; available_cash?: number }> => {
@@ -1015,10 +935,10 @@ export interface AccountInfo {
     snapshot_kind?: 'account_snapshot';
     timestamp?: string | number;
     total_asset: number;
-    /** 可用资金（后端归一化：QMT available_cash 为 0 时 fallback 到 cash） */
+    /** 可用资金（available_cash 为 0 时 fallback 到 cash） */
     cash: number;
     available_cash?: number;
-    /** QMT 上报的冻结资金（委托冻结 + 资产缺口冻结） */
+    /** 冻结资金（委托冻结 + 资产缺口冻结） */
     frozen_cash?: number;
     frozen?: number;
     market_value: number;
@@ -1061,17 +981,4 @@ export interface AccountInfo {
         last_price?: number;
         cost_price?: number;
     }>;
-}
-
-export interface QmtBindingStatus {
-    online: boolean;
-    user_id: string;
-    tenant_id: string;
-    account_id?: string | null;
-    hostname?: string | null;
-    client_version?: string | null;
-    last_seen_at?: string | null;
-    heartbeat_at?: string | null;
-    account_reported_at?: string | null;
-    stale_reason?: string | null;
 }

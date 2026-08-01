@@ -568,22 +568,11 @@ const StrategyManagement: React.FC<StrategyManagementProps> = ({
         return item?.ok;
     }, [pickMonitorItem]);
 
-    const getQmtAgentDisplayMessage = useCallback((item?: PreflightCheckItem, fallback = '未获取'): string => {
-        if (!item) return fallback;
-        if (item.ok) return '已上报';
-        const messageStr = String(item.message || '');
-        if (messageStr.includes('过期') || messageStr.includes('stale')) return '已过期';
-        if (messageStr.includes('检测失败') || messageStr.includes('异常')) return '检测异常';
-        if (messageStr.includes('未检测到')) return '未上报';
-        return '未上报';
-    }, []);
-
     const getEnvDisplayMessage = useCallback((keyOrKeys: string | string[], fallback: string): string => {
         const item = pickMonitorItem(keyOrKeys);
         if (!item) return fallback;
-        if (item.key === 'qmt_agent_online') return getQmtAgentDisplayMessage(item, fallback);
         return item.ok ? '已就绪' : (item.message || '未就绪');
-    }, [pickMonitorItem, getQmtAgentDisplayMessage]);
+    }, [pickMonitorItem]);
 
     const formatWebSocketStatus = useCallback((value: WebSocketStatus): { label: string; ok: boolean } => {
         switch (value) {
@@ -637,7 +626,6 @@ const StrategyManagement: React.FC<StrategyManagementProps> = ({
         : [
             { label: 'Runner 镜像', keyRef: 'strategy_runner_image', value: getEnvDisplayMessage('strategy_runner_image', '未获取'), ok: getCheckTone('strategy_runner_image'), title: getCheckMessage('strategy_runner_image') },
             { label: '运行容器状态', keyRef: 'orchestration', value: status?.k8s_status ? `Ready ${status.k8s_status.ready_replicas}/${status.k8s_status.replicas}` : getEnvDisplayMessage('orchestration', '未获取'), ok: status?.status === 'running' || getCheckTone('orchestration'), title: getCheckMessage('orchestration') },
-            { label: 'QMT Agent', keyRef: 'qmt_agent_online', value: getEnvDisplayMessage('qmt_agent_online', '未获取'), ok: getCheckTone('qmt_agent_online'), title: getCheckMessage('qmt_agent_online') },
         ];
     // 仅展示后端实际返回的检查项（后端精简后自动隐藏已移除的项）
     const envChecks = envChecksAll.filter((item) => pickMonitorItem(item.keyRef) !== undefined);

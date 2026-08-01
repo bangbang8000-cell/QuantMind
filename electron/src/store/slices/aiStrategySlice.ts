@@ -35,8 +35,8 @@ export interface AIStrategyParams extends Omit<StrategyParams, 'style'> {
   backtestPeriod: BacktestPeriod;
   // 扩展字段以支持更多功能
   stockPoolConfig?: any;
-  framework?: 'standard' | 'miniqmt';
-  outputFormat?: 'python' | 'miniqmt';
+  framework?: 'standard';
+  outputFormat?: 'python';
 }
 
 // 使用兼容的ChatMessage接口，保持与原有代码的兼容性
@@ -285,8 +285,8 @@ const initialState: StrategyGenerationState = {
     riskLevel: 'medium' as RiskLevel,
     style: 'custom' as const,
     symbols: [],
-    framework: 'miniqmt',
-    outputFormat: 'miniqmt',
+    framework: 'standard',
+    outputFormat: 'python',
     timeframe: '1d' as Timeframe,
     strategyLength: 'unlimited' as const,
     backtestPeriod: '1year' as const,
