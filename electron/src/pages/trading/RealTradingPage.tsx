@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react';
-import { LayoutDashboard, PieChart, FileText, Settings, User, ClipboardList } from 'lucide-react';
+import { LayoutDashboard, PieChart, FileText, Settings, User, ClipboardList, AlertTriangle } from 'lucide-react';
 import HelpCenterLink from '../../components/common/HelpCenterLink';
 import type { LucideIcon } from 'lucide-react';
 import { Button, Collapse, Modal, Spin, Tag, message } from 'antd';
@@ -472,6 +472,17 @@ const RealTradingPage: React.FC = () => {
 
     return (
         <div className="flex flex-col h-full bg-[#f8fafc] p-4 gap-3 font-sans">
+            {/* 模拟盘声明 —— 政策原因实盘通道已下线，须让用户一眼看到 */}
+            <div className="shrink-0 flex items-start gap-2.5 px-4 py-2.5 rounded-xl bg-amber-50 border border-amber-200">
+                <AlertTriangle size={16} className="text-amber-600 shrink-0 mt-0.5" />
+                <p className="text-xs leading-relaxed text-amber-900">
+                    <span className="font-semibold">模拟盘</span>
+                    ：本页全部委托均为本地模拟撮合，基于 quantdb 历史行情与 A 股规则（T+1、涨跌停、停牌、整手、佣金印花税）计算，
+                    <span className="font-semibold">不接入任何真实资金或券商通道</span>
+                    。模拟结果不代表真实收益，不构成投资建议。
+                </p>
+            </div>
+
             {/* Top Section - Account Overview (collapsible) */}
             <div className="shrink-0 bg-white rounded-2xl shadow-sm border border-gray-100 overflow-hidden">
                 <TopBar
