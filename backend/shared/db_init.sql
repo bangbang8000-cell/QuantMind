@@ -1310,5 +1310,100 @@ CREATE TABLE IF NOT EXISTS login_devices (
 );
 
 -- ========================
+-- REPLAY (时光回放：模拟盘历史单步推演)
+-- 与 sim_orders/sim_trades 刻意分表：会话生命周期独立，
+-- 且 trade_date 记录的是「模拟交易日」而非墙钟时间。
+-- ========================
+CREATE TABLE IF NOT EXISTS replay_sessions (
+    session_id      UUID PRIMARY KEY,
+    tenant_id       VARCHAR(64) NOT NULL DEFAULT 'default',
+    user_id         INTEGER NOT NULL,
+    name            VARCHAR(128) NOT NULL DEFAULT '',
+    model_id        VARCHAR(128),
+    strategy_params JSONB NOT NULL DEFAULT '{}'::jsonb,
+    initial_cash    FLOAT NOT NULL,
+    start_date      DATE NOT NULL,
+    end_date        DATE NOT NULL,
+    cursor_date     DATE,
+    next_date       DATE,
+    sessions_total  INTEGER NOT NULL DEFAULT 0,
+    sessions_done   INTEGER NOT NULL DEFAULT 0,
+    status          VARCHAR(20) NOT NULL DEFAULT 'creating',
+    signal_progress JSONB NOT NULL DEFAULT '{}'::jsonb,
+    auto_trade      BOOLEAN NOT NULL DEFAULT TRUE,
+    stop_loss_pct   FLOAT,
+    pending_orders  JSONB,
+    error_message   TEXT,
+    created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at      TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS idx_replay_session_scope_status
+    ON replay_sessions (tenant_id, user_id, status);
+
+CREATE TABLE IF NOT EXISTS replay_orders (
+    id              SERIAL PRIMARY KEY,
+    order_id        UUID NOT NULL UNIQUE,
+    session_id      UUID NOT NULL REFERENCES replay_sessions(session_id) ON DELETE CASCADE,
+    trade_date      DATE NOT NULL,
+    symbol          VARCHAR(20) NOT NULL,
+    side            VARCHAR(10) NOT NULL,
+    order_type      VARCHAR(10) NOT NULL DEFAULT 'market',
+    status          VARCHAR(20) NOT NULL DEFAULT 'pending',
+    origin          VARCHAR(20) NOT NULL DEFAULT 'signal',
+    quantity        FLOAT NOT NULL,
+    filled_quantity FLOAT NOT NULL DEFAULT 0,
+    price           FLOAT,
+    average_price   FLOAT,
+    filled_value    FLOAT NOT NULL DEFAULT 0,
+    total_fee       FLOAT NOT NULL DEFAULT 0,
+    reject_reason   VARCHAR(200),
+    price_source    VARCHAR(64),
+    created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at      TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS idx_replay_order_session_date
+    ON replay_orders (session_id, trade_date);
+
+CREATE TABLE IF NOT EXISTS replay_trades (
+    id              SERIAL PRIMARY KEY,
+    trade_id        UUID NOT NULL UNIQUE,
+    session_id      UUID NOT NULL REFERENCES replay_sessions(session_id) ON DELETE CASCADE,
+    order_id        UUID NOT NULL REFERENCES replay_orders(order_id) ON DELETE CASCADE,
+    trade_date      DATE NOT NULL,
+    symbol          VARCHAR(20) NOT NULL,
+    side            VARCHAR(10) NOT NULL,
+    origin          VARCHAR(20) NOT NULL DEFAULT 'signal',
+    quantity        FLOAT NOT NULL,
+    price           FLOAT NOT NULL,
+    trade_value     FLOAT NOT NULL,
+    commission      FLOAT NOT NULL DEFAULT 0,
+    stamp_duty      FLOAT NOT NULL DEFAULT 0,
+    transfer_fee    FLOAT NOT NULL DEFAULT 0,
+    total_fee       FLOAT NOT NULL DEFAULT 0,
+    price_source    VARCHAR(64),
+    executed_at     TIMESTAMP NOT NULL DEFAULT NOW(),
+    created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at      TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS idx_replay_trade_session_date
+    ON replay_trades (session_id, trade_date);
+
+CREATE TABLE IF NOT EXISTS replay_equity_snapshots (
+    id              SERIAL PRIMARY KEY,
+    session_id      UUID NOT NULL REFERENCES replay_sessions(session_id) ON DELETE CASCADE,
+    trade_date      DATE NOT NULL,
+    cash            FLOAT NOT NULL DEFAULT 0,
+    market_value    FLOAT NOT NULL DEFAULT 0,
+    total_asset     FLOAT NOT NULL DEFAULT 0,
+    day_pnl         FLOAT NOT NULL DEFAULT 0,
+    cum_pnl         FLOAT NOT NULL DEFAULT 0,
+    position_count  INTEGER NOT NULL DEFAULT 0,
+    positions       JSONB NOT NULL DEFAULT '{}'::jsonb,
+    created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    CONSTRAINT uq_replay_equity_session_date UNIQUE (session_id, trade_date)
+);
+
+-- ========================
 -- DONE - 所有缺失表已创建
 -- ========================

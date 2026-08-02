@@ -84,6 +84,7 @@ SCHEMA_SPECS: tuple[SchemaSpec, ...] = (
             "backend.services.trade.simulation.models.order",
             "backend.services.trade.simulation.models.trade",
             "backend.services.trade.simulation.models.fund_snapshot",
+            "backend.services.trade.simulation.models.replay",
         ),
     ),
     SchemaSpec(

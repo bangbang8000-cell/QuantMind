@@ -8,7 +8,7 @@ import logging
 import math
 import os
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import date, datetime
 from typing import Any
 
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -295,12 +295,17 @@ class SimulationEngine:
 
         return config
 
-    async def _fetch_quotes(self, symbols: list[str]) -> dict[str, Quote]:
-        """从本地 quantdb 批量获取行情（一次 DuckDB 扫描替代逐 symbol HTTP）。"""
+    async def _fetch_quotes(
+        self, symbols: list[str], as_of: date | None = None
+    ) -> dict[str, Quote]:
+        """从本地 quantdb 批量获取行情（一次 DuckDB 扫描替代逐 symbol HTTP）。
+
+        as_of 指定基准交易日，仅时光回放会传；不传即按今天，活路径行为不变。
+        """
         if not symbols:
             return {}
 
-        trade_date = datetime.now().date()
+        trade_date = as_of or datetime.now().date()
         bars = self._market_data.load_date(trade_date, symbols=symbols)
 
         quotes: dict[str, Quote] = {}

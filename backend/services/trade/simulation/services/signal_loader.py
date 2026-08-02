@@ -121,6 +121,80 @@ class SignalLoader:
             logger.error("SignalLoader: 加载信号失败 %s", e, exc_info=True)
             return []
 
+    async def load_signals_for_date(
+        self,
+        db: AsyncSession,
+        tenant_id: str,
+        user_id: str,
+        trade_date: date,
+        run_id: str | None = None,
+        min_score: float = 0.0,
+        limit: int | None = None,
+    ) -> list[SignalScore]:
+        """加载**指定交易日**的信号（时光回放用）。
+
+        与 load_latest_signals 的区别是不取 MAX(trade_date) 而是精确匹配。
+        注意 engine_signal_scores.trade_date 存的是「信号生效日」(T+1)，
+        所以这里传的 trade_date 就是要交易的那一天，不需要再做偏移；
+        偏移只发生在生成信号时（用 prev_session(D) 作为推理数据日）。
+        """
+        tenant = (tenant_id or "").strip() or "default"
+        uid = str(user_id or "").strip()
+
+        conditions = [
+            "tenant_id = :tenant_id",
+            "user_id = :user_id",
+            "trade_date = :trade_date",
+            "fusion_score >= :min_score",
+        ]
+        params: dict[str, Any] = {
+            "tenant_id": tenant,
+            "user_id": uid,
+            "trade_date": trade_date,
+            "min_score": min_score,
+            "limit": limit or 1000,
+        }
+        if run_id:
+            conditions.append("run_id = :run_id")
+            params["run_id"] = run_id
+
+        query = text(f"""
+            SELECT symbol, fusion_score, trade_date, run_id, tenant_id, user_id
+            FROM engine_signal_scores
+            WHERE {" AND ".join(conditions)}
+            ORDER BY fusion_score DESC
+            LIMIT :limit
+        """)
+
+        try:
+            rows = (await db.execute(query, params)).fetchall()
+            signals = [
+                SignalScore(
+                    symbol=str(row[0]).upper(),
+                    score=float(row[1]),
+                    trade_date=row[2],
+                    run_id=str(row[3]),
+                    tenant_id=str(row[4]),
+                    user_id=str(row[5]),
+                )
+                for row in rows
+            ]
+            logger.info(
+                "SignalLoader: 加载 %s 的信号 %d 条, tenant=%s user=%s run_id=%s",
+                trade_date,
+                len(signals),
+                tenant,
+                uid,
+                run_id or "any",
+            )
+            return signals
+        except Exception as e:
+            logger.error(
+                "SignalLoader: 加载指定日期信号失败 date=%s %s", trade_date, e,
+                exc_info=True,
+            )
+            return []
+
     async def load_latest_run_id(
         self,
         db: AsyncSession,

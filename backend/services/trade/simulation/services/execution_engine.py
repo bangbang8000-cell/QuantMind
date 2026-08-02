@@ -6,7 +6,7 @@ Synthetic execution engine for simulation orders.
 """
 
 import logging
-from datetime import datetime
+from datetime import date, datetime
 from typing import Any
 
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -89,9 +89,15 @@ class SimulationExecutionEngine:
         self._market_data = market_data or get_local_market_data()
         self._match_config = match_config or MatchConfig()
 
-    async def execute_order(self, order: SimOrder) -> ExecutionResult:
+    async def execute_order(
+        self, order: SimOrder, as_of: date | None = None
+    ) -> ExecutionResult:
+        """撮合一笔委托。
+
+        as_of 指定行情基准交易日，仅时光回放会传；不传即按今天，活路径行为不变。
+        """
         side = str(order.side.value).lower()
-        trade_date = datetime.now().date()
+        trade_date = as_of or datetime.now().date()
         bar = self._market_data.get_bar(order.symbol, trade_date)
 
         if bar is None:
