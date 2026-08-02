@@ -2,6 +2,20 @@
 
 交易核心服务（订单、成交、持仓、模拟盘、风控）。
 
+> **⚠️ 实盘通道已下线（政策原因）**
+>
+> miniQMT/xtquant 实盘链路已按监管要求整体删除，本服务只提供**本地模拟撮合**：
+> 行情读 `data/quantdb` 本地 parquet（`simulation/services/local_market_data.py`），
+> 撮合走 A 股规则完整版（`simulation/services/ashare_matcher.py`：T+1、涨跌停、
+> 停牌、整手、佣金/印花税/过户费、滑点）。
+>
+> 下方**日期早于 2026-08 的章节属于历史变更记录**，其中涉及 QMT Agent、
+> `/ws/bridge`、Windows 安装器发布、K8s/Docker Runner Pod、实时 Stream 行情预检
+> 的内容**均已不存在**，仅供追溯，不要照其操作。已删除的模块包括
+> `tools/qmt_agent/`、`routers/internal_strategy_bridge.py`、`runner/`、
+> `services/k8s_manager.py`、`services/qmt_agent_auth.py` 及 `qmt_agent_bindings`
+> / `qmt_agent_sessions` 两张表。
+
 ## 路由拆分（2026-04-08）
 
 - `routers/real_trading.py`：聚合入口
