@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
-"""更新 model_features_2026.parquet，从 stock_daily_latest 补充缺失日期。
+"""更新 model_features_{year}.parquet，从 QuantDB 本地 parquet 读取数据。
 
-从 DB 读取 OHLCV + 基本面 + 指数成分 + 概念标签数据，
-计算全部模型特征（原有 51 + 新增 ~36 = ~87 个），更新 parquet。
+数据源: QuantDB 本地 parquet (daily_forward 前复权日线 + 估值 + 技术指标 + 行业/概念)
+口径:   前复权 (daily_forward) — 因子计算需要连续价格序列，消除除权除息缺口。
+        撮合/行情层使用 daily_unadjusted (不复权)，两者口径有意区分。
 
 用法:
     python update_feature_parquet.py                    # 自动补充所有缺失日期
@@ -12,9 +13,7 @@
 """
 
 import argparse
-import asyncio
 import os
-import sys
 import warnings
 from datetime import date, datetime, timedelta
 from pathlib import Path
@@ -24,14 +23,27 @@ import pandas as pd
 
 warnings.filterwarnings("ignore", category=RuntimeWarning)
 
-# 容器内 vs 主机
+# ── 路径配置 ──
 if os.path.exists("/app") and not os.environ.get("QUANTMIND_HOST_MODE"):
-    PARQUET_PATH = Path("/app/db/feature_snapshots/model_features_2026.parquet")
-    DB_URL = "postgresql://quantmind:quantmind2026@db:5432/quantmind"
+    FEATURE_SNAPSHOT_DIR = Path("/app/db/feature_snapshots")
+    QDB_DATA_DIR = Path(os.environ.get("QM_QUANTDB_DATA_DIR", "/data/quantdb"))
 else:
     PROJECT_ROOT = Path(__file__).resolve().parents[2]
-    PARQUET_PATH = PROJECT_ROOT / "db" / "feature_snapshots" / "model_features_2026.parquet"
-    DB_URL = "postgresql://quantmind:quantmind2026@localhost:5432/quantmind"
+    FEATURE_SNAPSHOT_DIR = PROJECT_ROOT / "db" / "feature_snapshots"
+    QDB_DATA_DIR = Path(os.environ.get("QM_QUANTDB_DATA_DIR", str(PROJECT_ROOT / "data" / "quantdb")))
+
+# QuantDB 子目录
+QDB_KLINE_DIR = QDB_DATA_DIR / "1_kline_data"
+QDB_SECTOR_DIR = QDB_DATA_DIR / "2_base_sector"
+QDB_FIN_DIR = QDB_DATA_DIR / "3_financial_data"
+QDB_TECH_DIR = QDB_DATA_DIR / "5_technical_derived"
+
+# 默认 lookback: 250 交易日 ≈ 1 年，确保 mom_ret_120d / ma120 / ma60 等有足够窗口
+DEFAULT_LOOKBACK_DAYS = 250
+
+
+def _parquet_path_for_year(year: int) -> Path:
+    return FEATURE_SNAPSHOT_DIR / f"model_features_{year}.parquet"
 
 
 def _log(msg: str) -> None:
@@ -40,10 +52,10 @@ def _log(msg: str) -> None:
 
 
 # ═══════════════════════════════════════════════════════════════════════════
-# 数据读取
+# 数据读取 — QuantDB 本地 parquet
 # ═══════════════════════════════════════════════════════════════════════════
 
-# 从 DB 读取的列
+# 从 QuantDB 读取的列（用于特征计算 + 辅助列）
 DB_OHLCV_COLS = [
     "symbol", "trade_date", "open", "high", "low", "close", "volume", "amount", "adj_factor",
 ]
@@ -71,32 +83,374 @@ ALL_DB_COLS = list(dict.fromkeys(
 ))
 
 
-async def fetch_data(since: date, until: date, lookback_days: int = 180) -> pd.DataFrame:
-    """从 stock_daily_latest 读取数据（含 lookback 窗口）。
+def _read_kline_forward(since: date, until: date) -> pd.DataFrame:
+    """从 QuantDB daily_forward parquet 读取前复权 OHLCV。
 
-    lookback_days=180: 确保 mom_ret_120d 等长期因子有足够数据计算。
+    目录结构: 1_kline_data/daily_forward/dt=YYYYMMDD/*.parquet
+    每个文件列: symbol, time, open, high, low, close, volume, amount, ...
     """
-    import asyncpg
+    kline_dir = QDB_KLINE_DIR / "daily_forward"
+    if not kline_dir.exists():
+        _log(f"  daily_forward 目录不存在: {kline_dir}")
+        return pd.DataFrame()
 
-    conn = await asyncpg.connect(DB_URL)
-    try:
-        # 只查询存在的列
-        cols_str = ", ".join(ALL_DB_COLS)
-        rows = await conn.fetch(f"""
-            SELECT {cols_str}
-            FROM stock_daily_latest
-            WHERE trade_date BETWEEN $1 AND $2
-            ORDER BY symbol, trade_date
-        """, since - timedelta(days=lookback_days), until)
+    # 扫描日期分区目录
+    parts = []
+    for dt_dir in sorted(kline_dir.iterdir()):
+        if not dt_dir.is_dir() or not dt_dir.name.startswith("dt="):
+            continue
+        dt_str = dt_dir.name[3:]  # "dt=20240304" → "20240304"
+        try:
+            dt = date(int(dt_str[:4]), int(dt_str[4:6]), int(dt_str[6:8]))
+        except ValueError:
+            continue
+        if dt < since or dt > until:
+            continue
+        for pf in dt_dir.glob("*.parquet"):
+            parts.append(pf)
 
-        if not rows:
-            return pd.DataFrame()
+    if not parts:
+        return pd.DataFrame()
 
-        df = pd.DataFrame([dict(r) for r in rows])
-        df["trade_date"] = pd.to_datetime(df["trade_date"]).dt.date
-        return df
-    finally:
-        await conn.close()
+    _log(f"  读取 daily_forward: {len(parts)} 个分区文件")
+    dfs = [pd.read_parquet(p, columns=["symbol", "time", "open", "high", "low", "close", "volume", "amount"])
+           for p in parts]
+    df = pd.concat(dfs, ignore_index=True)
+    df["trade_date"] = pd.to_datetime(df["time"]).dt.date
+    df = df.drop(columns=["time"])
+    # 确保数值类型
+    for col in ["open", "high", "low", "close", "volume", "amount"]:
+        df[col] = pd.to_numeric(df[col], errors="coerce")
+    return df
+
+
+def _read_valuation(since: date, until: date) -> pd.DataFrame:
+    """从 QuantDB valuation parquet 读取估值数据 (pe_ttm, pb, total_mv, float_mv 等).
+
+    目录结构: 5_technical_derived/valuation/dt=YYYYMMDD/data.parquet
+    """
+    val_dir = QDB_TECH_DIR / "valuation"
+    if not val_dir.exists():
+        return pd.DataFrame()
+
+    parts = []
+    for dt_dir in sorted(val_dir.iterdir()):
+        if not dt_dir.is_dir() or not dt_dir.name.startswith("dt="):
+            continue
+        dt_str = dt_dir.name[3:]
+        try:
+            dt = date(int(dt_str[:4]), int(dt_str[4:6]), int(dt_str[6:8]))
+        except ValueError:
+            continue
+        if dt < since or dt > until:
+            continue
+        pf = dt_dir / "data.parquet"
+        if pf.exists():
+            parts.append(pf)
+
+    if not parts:
+        return pd.DataFrame()
+
+    _log(f"  读取 valuation: {len(parts)} 个分区文件")
+    cols = ["symbol", "time", "pe_ttm", "pb", "total_mv", "float_mv",
+            "net_profit_ttm", "equity", "circulating_capital", "total_capital"]
+    dfs = []
+    for p in parts:
+        try:
+            available = pd.read_parquet(p).columns.tolist()
+            use_cols = [c for c in cols if c in available]
+            dfs.append(pd.read_parquet(p, columns=use_cols))
+        except Exception:
+            continue
+    if not dfs:
+        return pd.DataFrame()
+    df = pd.concat(dfs, ignore_index=True)
+    df["trade_date"] = pd.to_datetime(df["time"]).dt.date
+    df = df.drop(columns=["time"], errors="ignore")
+    # 计算衍生列
+    if "pe_ttm" in df.columns:
+        df["ep_ttm"] = 1.0 / df["pe_ttm"].replace(0, np.nan)
+    if "pb" in df.columns:
+        df["bp"] = 1.0 / df["pb"].replace(0, np.nan)
+    if "total_mv" in df.columns:
+        df["ln_mv_total"] = np.log(df["total_mv"].clip(lower=1))
+    if "equity" in df.columns and "net_profit_ttm" in df.columns:
+        df["roe"] = (df["net_profit_ttm"] / df["equity"].clip(lower=1)).clip(-5, 5)
+    return df
+
+
+def _read_technical_indicators(since: date, until: date) -> pd.DataFrame:
+    """从 QuantDB technical_indicators parquet 读取技术指标.
+
+    目录结构: 5_technical_derived/technical_indicators/dt=YYYYMMDD/data.parquet
+    """
+    ti_dir = QDB_TECH_DIR / "technical_indicators"
+    if not ti_dir.exists():
+        return pd.DataFrame()
+
+    parts = []
+    for dt_dir in sorted(ti_dir.iterdir()):
+        if not dt_dir.is_dir() or not dt_dir.name.startswith("dt="):
+            continue
+        dt_str = dt_dir.name[3:]
+        try:
+            dt = date(int(dt_str[:4]), int(dt_str[4:6]), int(dt_str[6:8]))
+        except ValueError:
+            continue
+        if dt < since or dt > until:
+            continue
+        pf = dt_dir / "data.parquet"
+        if pf.exists():
+            parts.append(pf)
+
+    if not parts:
+        return pd.DataFrame()
+
+    _log(f"  读取 technical_indicators: {len(parts)} 个分区文件")
+    cols = ["symbol", "time", "return_1d", "return_5d", "return_20d",
+            "ma5", "ma10", "ma20", "ma60", "rsi_6", "rsi_14",
+            "kdj_k", "kdj_d", "kdj_j", "macd_dif", "macd_dea", "macd_hist",
+            "vol_std_5", "vol_std_20", "vol_std_60", "vol_atr_14",
+            "vol_to_ma5", "vol_to_ma20", "volume_ma_3", "amount_ma_5",
+            "beta_20", "pct_change"]
+    dfs = []
+    for p in parts:
+        try:
+            available = pd.read_parquet(p).columns.tolist()
+            use_cols = [c for c in cols if c in available]
+            dfs.append(pd.read_parquet(p, columns=use_cols))
+        except Exception:
+            continue
+    if not dfs:
+        return pd.DataFrame()
+    df = pd.concat(dfs, ignore_index=True)
+    df["trade_date"] = pd.to_datetime(df["time"]).dt.date
+    df = df.drop(columns=["time"], errors="ignore")
+    # 重命名 vol_to_ma5 → volume_ratio_5, vol_to_ma20 → volume_ratio_20
+    if "vol_to_ma5" in df.columns:
+        df["volume_ratio_5"] = df.pop("vol_to_ma5")
+    if "vol_to_ma20" in df.columns:
+        df["volume_ratio_20"] = df.pop("vol_to_ma20")
+    return df
+
+
+def _read_instrument_detail() -> pd.DataFrame:
+    """从 instrument_detail.parquet 读取行业编码、ST 标识、复权因子等静态信息。
+
+    返回: DataFrame[symbol, is_st, industry, adj_factor, ind_code_l1, listing_market]
+    """
+    ind_path = QDB_SECTOR_DIR / "instrument_detail" / "instrument_detail.parquet"
+    if not ind_path.exists():
+        _log(f"  instrument_detail.parquet 不存在: {ind_path}")
+        return pd.DataFrame()
+
+    _log("  读取 instrument_detail")
+    use_cols = ["Symbol", "IsSTGP", "rs_hycode_sim", "rs_hyname",
+                "ZAF", "tdx_dycode", "tdx_dyname", "BelongHS300", "BelongRZRQ"]
+    available = pd.read_parquet(ind_path).columns.tolist()
+    read_cols = [c for c in use_cols if c in available]
+    df = pd.read_parquet(ind_path, columns=read_cols)
+
+    # 统一 symbol 格式: "000001.SZ" (已是后缀格式)
+    df = df.rename(columns={"Symbol": "symbol"})
+    df["symbol"] = df["symbol"].astype(str).str.strip()
+
+    # is_st: IsSTGP 是字符串 "0"/"1"
+    if "IsSTGP" in df.columns:
+        df["is_st"] = pd.to_numeric(df["IsSTGP"], errors="coerce").fillna(0).astype(int)
+    else:
+        df["is_st"] = 0
+
+    # industry: 使用 rs_hyname (行业名称)
+    if "rs_hyname" in df.columns:
+        df["industry"] = df["rs_hyname"].astype(str).str.strip()
+        df.loc[df["industry"].isin(["", "nan", "None"]), "industry"] = np.nan
+    else:
+        df["industry"] = np.nan
+
+    # adj_factor: daily_forward 已是前复权，factor=1.0
+    # (instrument_detail.ZAF 是涨跌幅不是复权因子，不可用作 adj_factor)
+    if "adj_factor" not in df.columns:
+        df["adj_factor"] = 1.0
+    else:
+        df["adj_factor"] = 1.0  # 前复权数据 factor 恒 1.0
+
+    # listing_market: 从 tdx_dycode 推断
+    if "tdx_dycode" in df.columns:
+        df["listing_market"] = df["tdx_dycode"].astype(str).apply(
+            lambda x: "SH" if x in ("1", "7") else ("SZ" if x in ("2", "8") else "BJ")
+        )
+    else:
+        df["listing_market"] = "Unknown"
+
+    # 指数成分标记
+    if "BelongHS300" in df.columns:
+        df["idx_hs300"] = pd.to_numeric(df["BelongHS300"], errors="coerce").fillna(0).astype(int)
+    else:
+        df["idx_hs300"] = 0
+    if "BelongRZRQ" in df.columns:
+        df["idx_margin"] = pd.to_numeric(df["BelongRZRQ"], errors="coerce").fillna(0).astype(int)
+    else:
+        df["idx_margin"] = 0
+
+    # ind_code_l1: rs_hycode_sim → CatBoost 整数编码
+    if "rs_hycode_sim" in df.columns:
+        df["ind_code_l1"] = pd.Categorical(df["rs_hycode_sim"]).codes.astype(np.float32)
+        df.loc[df["rs_hycode_sim"].isna() | (df["rs_hycode_sim"] == ""), "ind_code_l1"] = -1
+    else:
+        df["ind_code_l1"] = -1.0
+
+    df["ind_code_l2"] = -1.0
+    df["idx_all"] = 1  # 所有 A 股
+    df["idx_zz1000"] = 0
+    df["idx_chinext"] = 0
+
+    return df[["symbol", "is_st", "industry", "adj_factor", "listing_market",
+               "idx_all", "idx_hs300", "idx_zz1000", "idx_chinext", "idx_margin",
+               "ind_code_l1", "ind_code_l2"]]
+
+
+def _read_sector_concepts() -> pd.DataFrame:
+    """从 sector_members.parquet 读取概念标签，转为 0/1 列。
+
+    返回: DataFrame[symbol, concept_ai, concept_chip, ...]
+    """
+    sm_path = QDB_SECTOR_DIR / "sector_concept" / "sector_members.parquet"
+    if not sm_path.exists():
+        _log(f"  sector_members.parquet 不存在: {sm_path}")
+        return pd.DataFrame()
+
+    _log("  读取 sector_concept")
+    df = pd.read_parquet(sm_path)
+
+    # 概念名称 → 列名映射
+    CONCEPT_MAP = {
+        "人工智能": "concept_ai", "AI": "concept_ai",
+        "芯片": "concept_chip", "半导体": "concept_chip",
+        "新能源": "concept_new_energy",
+        "光伏": "concept_pv",
+        "军工": "concept_military", "国防": "concept_military",
+        "医药": "concept_medical", "医疗": "concept_medical",
+        "金融科技": "concept_fintech", "互金": "concept_fintech",
+        "消费": "concept_consumption",
+        "国企": "concept_state_owned", "央企": "concept_state_owned",
+        "锂电": "concept_lithium", "锂电池": "concept_lithium",
+    }
+
+    # 过滤概念类型
+    concept_df = df[df.get("SectorType", "").astype(str).str.contains("概念", na=False)] if "SectorType" in df.columns else df
+
+    # 构建映射
+    sym_col = "Symbol" if "Symbol" in concept_df.columns else "symbol"
+    concept_df = concept_df.rename(columns={sym_col: "symbol", "SectorName": "concept_name"})
+    concept_df["symbol"] = concept_df["symbol"].astype(str).str.strip()
+    concept_df["col_name"] = concept_df["concept_name"].map(CONCEPT_MAP)
+
+    valid = concept_df[concept_df["col_name"].notna()]
+    if valid.empty:
+        # 返回空 DataFrame 带所有 concept 列
+        return pd.DataFrame(columns=["symbol"] + list(CONCEPT_MAP.values()))
+
+    # pivot: symbol × concept_col → 0/1
+    pivot = valid.groupby(["symbol", "col_name"]).size().reset_index(name="_cnt")
+    pivot = pivot.pivot(index="symbol", columns="col_name", values="_cnt").fillna(0).astype(int)
+    pivot.columns = list(pivot.columns)  # flatten
+
+    # 确保所有 concept 列都存在
+    for col in CONCEPT_MAP.values():
+        if col not in pivot.columns:
+            pivot[col] = 0
+
+    pivot = pivot.reset_index()
+    return pivot
+
+
+def fetch_data_from_quantdb(since: date, until: date, lookback_days: int = DEFAULT_LOOKBACK_DAYS) -> pd.DataFrame:
+    """从 QuantDB 本地 parquet 读取全部数据（含 lookback 窗口）。
+
+    合并 daily_forward (OHLCV) + valuation (估值) + technical_indicators (技术指标)
+         + instrument_detail (行业/ST/复权因子) + sector_concepts (概念标签)
+    """
+    data_since = since - timedelta(days=lookback_days)
+
+    # 1. 前复权 OHLCV
+    kline = _read_kline_forward(data_since, until)
+    if kline.empty:
+        _log("  daily_forward 无数据")
+        return pd.DataFrame()
+    _log(f"  OHLCV: {len(kline):,} 行, {kline['symbol'].nunique()} 只股票")
+
+    # 2. 估值数据
+    val = _read_valuation(data_since, until)
+    if not val.empty:
+        _log(f"  估值: {len(val):,} 行")
+
+    # 3. 技术指标
+    ti = _read_technical_indicators(data_since, until)
+    if not ti.empty:
+        _log(f"  技术指标: {len(ti):,} 行")
+
+    # 4. 静态信息 (行业/ST/复权因子/指数成分)
+    inst = _read_instrument_detail()
+    if not inst.empty:
+        _log(f"  instrument_detail: {len(inst)} 只股票")
+
+    # 5. 概念标签
+    concepts = _read_sector_concepts()
+    if not concepts.empty:
+        _log(f"  概念标签: {len(concepts)} 只股票")
+
+    # ── 合并 ──
+    df = kline
+
+    # 合并估值 (按 symbol + trade_date)
+    if not val.empty:
+        val_cols = [c for c in val.columns if c not in df.columns]
+        if val_cols:
+            df = df.merge(val[["symbol", "trade_date"] + val_cols],
+                          on=["symbol", "trade_date"], how="left")
+
+    # 合并技术指标 (按 symbol + trade_date)
+    if not ti.empty:
+        ti_cols = [c for c in ti.columns if c not in df.columns]
+        if ti_cols:
+            df = df.merge(ti[["symbol", "trade_date"] + ti_cols],
+                          on=["symbol", "trade_date"], how="left")
+
+    # 合并静态信息 (按 symbol, 广播到所有日期)
+    if not inst.empty:
+        inst_cols = [c for c in inst.columns if c not in df.columns]
+        if inst_cols:
+            df = df.merge(inst[["symbol"] + inst_cols], on="symbol", how="left")
+
+    # 合并概念标签 (按 symbol, 广播到所有日期)
+    if not concepts.empty:
+        concept_cols = [c for c in concepts.columns if c not in df.columns]
+        if concept_cols:
+            df = df.merge(concepts[["symbol"] + concept_cols], on="symbol", how="left")
+
+    # 填充缺失的 concept / index 列为 0
+    for col in DB_CONCEPT_COLS + DB_INDEX_COLS:
+        if col in df.columns:
+            df[col] = pd.to_numeric(df[col], errors="coerce").fillna(0).astype(int)
+        else:
+            df[col] = 0
+
+    # 填充缺失的 is_st
+    if "is_st" in df.columns:
+        df["is_st"] = pd.to_numeric(df["is_st"], errors="coerce").fillna(0).astype(int)
+    else:
+        df["is_st"] = 0
+
+    # 填充缺失的 adj_factor
+    if "adj_factor" not in df.columns:
+        df["adj_factor"] = 1.0
+    else:
+        df["adj_factor"] = pd.to_numeric(df["adj_factor"], errors="coerce").fillna(1.0)
+
+    # 排序
+    df = df.sort_values(["symbol", "trade_date"]).reset_index(drop=True)
+    return df
 
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -157,7 +511,12 @@ FEATURE_COLS = [
     "style_ln_mv_total", "style_ln_mv_float", "style_beta_20", "style_beta_60",
     "style_idio_vol_20", "style_residual_ret_20",
     # 行业
-    "ind_ret_1d", "ind_ret_20d", "ind_strength_20", "ind_momentum_rank_20",
+    "ind_ret_1d", "ind_ret_5d", "ind_ret_10d", "ind_ret_20d",
+    "ind_strength_20", "ind_strength_60", "ind_momentum_rank_20",
+    "ind_vol_20", "ind_turnover_20", "ind_amount_20",
+    "ind_dispersion_20", "ind_up_breadth_20", "ind_down_breadth_20",
+    "ind_relative_volume_20", "ind_relative_volatility_20", "ind_relative_flow_20",
+    "ind_value_rank", "ind_size_rank",
     # 新增动量
     "mom_ret_3d", "mom_ret_60d", "mom_ret_120d",
     "mom_ma_gap_10", "mom_ma_gap_60", "mom_ma_gap_120",
@@ -219,6 +578,8 @@ FEATURE_COLS = [
     "alpha_high_20d_ratio", "alpha_low_20d_ratio", "alpha_close_open_gap",
     # 基本面补充
     "fund_pe_percentile", "fund_pb_percentile",
+    # 行业编码 (CatBoost cat_features, 从 instrument_detail 填充)
+    "ind_code_l1", "ind_code_l2",
     # 分类列 (keep as-is, no NaN fill needed)
     # "industry", "is_st", "listing_market",
 ]
@@ -428,6 +789,14 @@ def _compute_features_core(g: pd.DataFrame) -> pd.DataFrame:
     g["vol_jump_sjv_ratio"] = (jump_var / rv_sq.replace(0, np.nan)).fillna(0).clip(upper=1)
 
     # ═══ 新增流动性特征 ═══
+    # turnover_rate: 换手率 = volume / circulating_capital，QuantDB 不直接提供
+    if "turnover_rate" in g.columns and g["turnover_rate"].notna().any():
+        g["turnover_rate"] = pd.to_numeric(g["turnover_rate"], errors="coerce").fillna(
+            v / v.rolling(250, min_periods=20).mean().clip(lower=1)
+        )
+    else:
+        # Fallback: 用 volume / 250日均量 近似换手率
+        g["turnover_rate"] = v / v.rolling(250, min_periods=20).mean().clip(lower=1)
     g["liq_turnover_tl"] = g["turnover_rate"]  # alias
     g["liq_volume_ma_5"] = v.rolling(5, min_periods=1).mean()
     g["liq_volume_ma_10"] = v.rolling(10, min_periods=1).mean()
@@ -805,6 +1174,44 @@ def _normalize_industry(series: pd.Series) -> pd.Series:
     return s
 
 
+def _compute_industry_codes(df: pd.DataFrame) -> pd.DataFrame:
+    """从 instrument_detail.parquet 填充 ind_code_l1 / ind_code_l2 行业编码。
+
+    instrument_detail.parquet 包含 rs_hycode_sim (CSRC 行业编码)，
+    将其映射为 CatBoost 可用的整数类别编码，缺失行业填 -1。
+
+    注意: instrument_detail 的 Symbol 已是后缀格式 (如 "600036.SH")，
+    无需 zfill + 加后缀，直接 merge 即可。
+    """
+    from pathlib import Path as _Path
+
+    ind_path = QDB_SECTOR_DIR / "instrument_detail" / "instrument_detail.parquet"
+    if not ind_path.exists():
+        _log("    instrument_detail.parquet 不存在，行业编码填充为 -1")
+        df["ind_code_l1"] = -1.0
+        df["ind_code_l2"] = -1.0
+        return df
+
+    ind_df = pd.read_parquet(ind_path, columns=["Symbol", "rs_hycode_sim"])
+    sym_col = "Symbol" if "Symbol" in ind_df.columns else "symbol"
+    ind_map = ind_df.rename(columns={sym_col: "symbol", "rs_hycode_sim": "ind_code_l1"})
+    # Symbol 已是 "600036.SH" 格式，直接用，不要 zfill(6)
+    ind_map["symbol"] = ind_map["symbol"].astype(str).str.strip()
+    ind_map["ind_code_l1"] = pd.Categorical(ind_map["ind_code_l1"]).codes.astype(np.float32)
+    ind_map["ind_code_l2"] = -1.0
+
+    # 删除 df 中已有的 ind_code_l1/l2 (可能来自 fetch_data_from_quantdb 的静态信息)
+    for col in ["ind_code_l1", "ind_code_l2"]:
+        if col in df.columns:
+            df = df.drop(columns=[col])
+
+    df = df.merge(ind_map[["symbol", "ind_code_l1", "ind_code_l2"]], on="symbol", how="left")
+    df["ind_code_l1"] = df["ind_code_l1"].fillna(-1)
+    df["ind_code_l2"] = df["ind_code_l2"].fillna(-1)
+    _log(f"    行业编码填充完成: {ind_map['ind_code_l1'].nunique()} 个 L1 行业")
+    return df
+
+
 def _compute_industry_features(all_feat: pd.DataFrame) -> pd.DataFrame:
     """跨股票计算行业因子（需要在全部股票特征计算完成后执行）。"""
     # 过滤无行业的行
@@ -813,40 +1220,87 @@ def _compute_industry_features(all_feat: pd.DataFrame) -> pd.DataFrame:
         _log("    行业数据不足，跳过行业因子计算")
         return all_feat
 
-    # 1. 行业日收益 = 行业内所有股票当日收益的中位数
+    # 1. 行业日聚合指标
     ind_daily = all_feat[valid_ind].groupby(["industry", "trade_date"]).agg(
         ind_close=("close", "median"),
         ind_flow=("flow_net_amount", "mean"),
+        ind_volume=("volume", "sum"),
+        ind_amount=("amount", "sum"),
+        ind_turnover=("liq_turnover_os", "mean"),
+        ind_mv=("ln_mv_total", "mean"),
+        ind_ret_1d_stock=("mom_ret_1d", "median"),
     ).reset_index()
 
     ind_daily = ind_daily.sort_values(["industry", "trade_date"])
 
-    # 行业收益率
+    # 行业收益率 (1d, 5d, 10d, 20d)
     ind_daily["ind_ret_1d"] = ind_daily.groupby("industry")["ind_close"].pct_change()
+    ind_daily["ind_ret_5d"] = ind_daily.groupby("industry")["ind_close"].pct_change(5)
+    ind_daily["ind_ret_10d"] = ind_daily.groupby("industry")["ind_close"].pct_change(10)
     ind_daily["ind_ret_20d"] = ind_daily.groupby("industry")["ind_close"].pct_change(20)
 
-    # 行业强度 (20日收益/波动)
+    # 行业波动率 (20日)
     ind_ret = ind_daily.groupby("industry")["ind_close"].pct_change()
-    ind_std = ind_ret.rolling(20, min_periods=5).std().clip(lower=1e-8)
-    ind_daily["ind_strength_20"] = ind_daily["ind_ret_20d"] / ind_std
+    ind_daily["ind_vol_20"] = ind_ret.rolling(20, min_periods=5).std()
+
+    # 行业强度 (20日/60日)
+    ind_std_20 = ind_ret.rolling(20, min_periods=5).std().clip(lower=1e-8)
+    ind_daily["ind_strength_20"] = ind_daily["ind_ret_20d"] / ind_std_20
+    ind_std_60 = ind_ret.rolling(60, min_periods=10).std().clip(lower=1e-8)
+    ind_daily["ind_strength_60"] = ind_daily.groupby("industry")["ind_close"].pct_change(60) / ind_std_60
+
+    # 行业换手率/成交额 (20日均值)
+    ind_daily["ind_turnover_20"] = ind_daily.groupby("industry")["ind_turnover"].rolling(20, min_periods=5).mean().values
+    ind_daily["ind_amount_20"] = ind_daily.groupby("industry")["ind_amount"].rolling(20, min_periods=5).mean().values
 
     # 行业内动量排名（截面排名）
     ind_daily["ind_momentum_rank_20"] = ind_daily.groupby("trade_date")["ind_ret_20d"].rank(pct=True)
 
+    # 行业离散度 (20日个股收益标准差)
+    stock_disp = all_feat[valid_ind].groupby(["industry", "trade_date"])["mom_ret_1d"].std().reset_index()
+    stock_disp.columns = ["industry", "trade_date", "ind_dispersion_20"]
+    ind_daily = ind_daily.merge(stock_disp, on=["industry", "trade_date"], how="left")
+
+    # 行业涨跌家数
+    stock_breadth = all_feat[valid_ind].groupby(["industry", "trade_date"]).agg(
+        ind_up_breadth_20=("mom_ret_1d", lambda x: (x > 0).sum()),
+        ind_down_breadth_20=("mom_ret_1d", lambda x: (x < 0).sum()),
+    ).reset_index()
+    ind_daily = ind_daily.merge(stock_breadth, on=["industry", "trade_date"], how="left")
+
+    # 行业相对指标 (行业/全市场)
+    mkt_daily = all_feat.groupby("trade_date").agg(
+        mkt_volume=("volume", "sum"),
+        mkt_amount=("amount", "sum"),
+    ).reset_index()
+    ind_daily = ind_daily.merge(mkt_daily, on="trade_date", how="left")
+    ind_daily["ind_relative_volume_20"] = (ind_daily["ind_volume"] / ind_daily["mkt_volume"].clip(lower=1)).clip(0, 1)
+    ind_daily["ind_relative_volatility_20"] = (ind_daily["ind_vol_20"] / ind_daily.groupby("trade_date")["ind_vol_20"].transform("median").clip(lower=1e-8)).clip(0, 5)
+    ind_daily["ind_relative_flow_20"] = (ind_daily["ind_flow"] / ind_daily["mkt_amount"].clip(lower=1)).clip(0, 1)
+
+    # 行业市值/价值排名
+    ind_daily["ind_value_rank"] = ind_daily.groupby("trade_date")["ind_mv"].rank(pct=True)
+    ind_daily["ind_size_rank"] = ind_daily.groupby("trade_date")["ind_volume"].rank(pct=True)
+
+    # 清理临时列
+    drop_cols = [c for c in ["ind_volume", "ind_amount", "ind_turnover", "ind_mv",
+                              "ind_ret_1d_stock", "mkt_volume", "mkt_amount"] if c in ind_daily.columns]
+    ind_daily = ind_daily.drop(columns=drop_cols)
+
     # Merge 回主表
-    merge_cols = ["industry", "trade_date", "ind_ret_1d", "ind_ret_20d", "ind_strength_20", "ind_momentum_rank_20"]
+    merge_cols = [c for c in ind_daily.columns if c not in ["industry", "trade_date"]]
     # 先删除主表中已有的占位列
-    for col in ["ind_ret_1d", "ind_ret_20d", "ind_strength_20", "ind_momentum_rank_20"]:
+    for col in merge_cols:
         if col in all_feat.columns:
             all_feat = all_feat.drop(columns=[col])
 
     all_feat = all_feat.merge(
-        ind_daily[merge_cols],
+        ind_daily,
         on=["industry", "trade_date"],
         how="left",
     )
 
-    _log(f"    行业因子计算完成: {ind_daily['industry'].nunique()} 个行业")
+    _log(f"    行业因子计算完成: {ind_daily['industry'].nunique()} 个行业, {len(merge_cols)} 个因子")
     return all_feat
 
 
@@ -861,7 +1315,7 @@ def compute_all_features(df: pd.DataFrame, target_dates: set) -> pd.DataFrame:
     total = df["symbol"].nunique()
     done = 0
 
-    for sym, group in df.groupby("symbol"):
+    for _sym, group in df.groupby("symbol"):
         feat = compute_features_for_group(group)
         results.append(feat)
         done += 1
@@ -873,6 +1327,10 @@ def compute_all_features(df: pd.DataFrame, target_dates: set) -> pd.DataFrame:
     # 跨股票计算行业因子
     _log("  计算行业因子...")
     all_feat = _compute_industry_features(all_feat)
+
+    # 填充行业编码 (CatBoost cat_features)
+    _log("  填充行业编码...")
+    all_feat = _compute_industry_codes(all_feat)
 
     all_feat = all_feat[all_feat["trade_date"].isin(target_dates)].copy()
     return all_feat
@@ -888,27 +1346,36 @@ def main():
     parser.add_argument("--until", default="", help="截止日期 (默认: 今天)")
     parser.add_argument("--dry-run", action="store_true", help="仅检查不写入")
     parser.add_argument("--rebuild", action="store_true", help="重建全部特征")
+    parser.add_argument("--year", type=int, default=0, help="指定年份 (默认: 当前年份)")
     args = parser.parse_args()
 
+    year = args.year or date.today().year
+    PARQUET_PATH = _parquet_path_for_year(year)
+
     if not PARQUET_PATH.exists():
-        _log(f"ERROR: parquet 文件不存在: {PARQUET_PATH}")
-        sys.exit(1)
+        _log(f"parquet 文件不存在，将创建: {PARQUET_PATH}")
+        # 创建空 parquet 以便后续逻辑正常工作
+        empty_df = pd.DataFrame({"trade_date": pd.Series(dtype="object"), "symbol": pd.Series(dtype="str")})
+        empty_df.to_parquet(str(PARQUET_PATH), index=False, engine="pyarrow")
 
     # 读取现有 parquet
     _log(f"读取现有 parquet: {PARQUET_PATH}")
     existing = pd.read_parquet(PARQUET_PATH, engine="pyarrow")
     existing["trade_date"] = pd.to_datetime(existing["trade_date"]).dt.date
-    max_date = existing["trade_date"].max()
-    _log(f"  现有数据: {len(existing):,} 行, {existing['symbol'].nunique()} 只股票")
-    _log(f"  日期范围: {existing['trade_date'].min()} ~ {max_date}")
+    max_date = existing["trade_date"].max() if len(existing) else date(year, 1, 1) - timedelta(days=1)
+    _log(f"  现有数据: {len(existing):,} 行, {existing['symbol'].nunique() if len(existing) else 0} 只股票")
+    if len(existing):
+        _log(f"  日期范围: {existing['trade_date'].min()} ~ {max_date}")
 
     # 确定日期范围
-    since = date.fromisoformat(args.since) if args.since else max_date + timedelta(days=1)
-    until = date.fromisoformat(args.until) if args.until else date.today()
+    year_start = date(year, 1, 1)
+    year_end = date(year, 12, 31)
+    since = date.fromisoformat(args.since) if args.since else (max_date + timedelta(days=1) if len(existing) else year_start)
+    until = date.fromisoformat(args.until) if args.until else min(date.today(), year_end)
 
     if args.rebuild:
-        since = existing["trade_date"].min()
-        _log(f"  REBUILD 模式: 重建 {since} ~ {until}")
+        since = year_start
+        _log(f"  REBUILD 模式: 重建 {year} 年 {since} ~ {until}")
 
     _log(f"  需要补充: {since} ~ {until}")
 
@@ -920,9 +1387,9 @@ def main():
         _log("DRY RUN 模式，不写入")
         return
 
-    # 从 DB 读取数据
-    _log("从 stock_daily_latest 读取数据（含 120 天 lookback）...")
-    db_df = asyncio.run(fetch_data(since, until, lookback_days=120))
+    # 从 QuantDB 读取数据
+    _log(f"从 QuantDB 本地 parquet 读取数据（含 {DEFAULT_LOOKBACK_DAYS} 天 lookback）...")
+    db_df = fetch_data_from_quantdb(since, until, lookback_days=DEFAULT_LOOKBACK_DAYS)
 
     if db_df.empty:
         _log("DB 中没有新数据")
@@ -946,7 +1413,7 @@ def main():
 
     # 确定输出列（parquet 已有列 + 新增列，去重）
     existing_cols = set(existing.columns)
-    new_cols = set(new_data.columns)
+    _new_cols = set(new_data.columns)
     all_cols = list(dict.fromkeys(list(existing.columns) + [c for c in new_data.columns if c not in existing_cols]))
 
     # 类型感知的填充：string/object 列用 None/空字符串，数值列用 NaN（不是 0）
@@ -958,7 +1425,7 @@ def main():
         # new_data 缺这一列，需要补
         if col in existing.columns:
             dtype = existing[col].dtype
-            if dtype == object or pd.api.types.is_string_dtype(dtype):
+            if dtype is np.dtype('O') or pd.api.types.is_string_dtype(dtype):
                 new_data[col] = None
             elif pd.api.types.is_integer_dtype(dtype):
                 new_data[col] = pd.NA  # 用 nullable Int
@@ -981,7 +1448,7 @@ def main():
             if c not in existing.columns:
                 if c in new_data.columns:
                     dtype = new_data[c].dtype
-                    if dtype == object or pd.api.types.is_string_dtype(dtype):
+                    if dtype is np.dtype('O') or pd.api.types.is_string_dtype(dtype):
                         existing[c] = None
                     elif pd.api.types.is_integer_dtype(dtype):
                         existing[c] = pd.NA
@@ -1027,6 +1494,31 @@ def main():
         _log(f"  [{col_group}] {', '.join(coverage)}")
 
     _log("完成!")
+
+    # 生成 metadata.json
+    try:
+        import json as _json
+        meta_path = PARQUET_PATH.with_suffix(".metadata.json")
+        feature_cols = [c for c in combined.columns if c not in ("trade_date", "symbol", "instrument")]
+        meta = {
+            "year": year,
+            "calc_start_date": str(since - timedelta(days=DEFAULT_LOOKBACK_DAYS)),
+            "output_start_date": str(combined["trade_date"].min()),
+            "output_end_date": str(combined["trade_date"].max()),
+            "lookback_days": DEFAULT_LOOKBACK_DAYS,
+            "trading_days": int(combined["trade_date"].nunique()),
+            "row_count": len(combined),
+            "symbol_count": int(combined["symbol"].nunique()),
+            "implemented_feature_count": len(feature_cols),
+            "feature_columns": feature_cols,
+            "source": "quantdb",
+            "data_source": "quantdb_local_parquet",
+            "adjust": "qfq",
+        }
+        meta_path.write_text(_json.dumps(meta, ensure_ascii=False, indent=2), encoding="utf-8")
+        _log(f"已写入 metadata: {meta_path}")
+    except Exception as exc:
+        _log(f"metadata.json 写入失败: {exc}")
 
 
 if __name__ == "__main__":

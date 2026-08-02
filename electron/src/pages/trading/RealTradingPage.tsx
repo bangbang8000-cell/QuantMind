@@ -464,12 +464,12 @@ const RealTradingPage: React.FC = () => {
 
     const tabs: Array<{ id: ActiveTab; label: string; icon: LucideIcon }> = [
         { id: 'manage', label: '策略管理', icon: LayoutDashboard },
+        { id: 'replay', label: '时光回放', icon: Clock },
         { id: 'manual-task', label: '手动任务', icon: ClipboardList },
-        { id: 'personal', label: '个人中心', icon: User },
         { id: 'position', label: '持仓监控', icon: PieChart },
         { id: 'history', label: '交易记录', icon: FileText },
+        { id: 'personal', label: '个人中心', icon: User },
         { id: 'settings', label: '设置', icon: Settings },
-        { id: 'replay', label: '时光回放', icon: Clock },
     ];
 
     return (
