@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react';
-import { LayoutDashboard, PieChart, FileText, Settings, User, ClipboardList, AlertTriangle } from 'lucide-react';
+import { LayoutDashboard, PieChart, FileText, Settings, User, ClipboardList, AlertTriangle, Clock } from 'lucide-react';
 import HelpCenterLink from '../../components/common/HelpCenterLink';
 import type { LucideIcon } from 'lucide-react';
 import { Button, Collapse, Modal, Spin, Tag, message } from 'antd';
@@ -10,6 +10,7 @@ import PersonalCenter from './tabs/PersonalCenter';
 import PositionMonitor from './tabs/PositionMonitor';
 import TradingHistory from './tabs/TradingHistory';
 import SettingsCenter from './tabs/SettingsCenter';
+import ReplayPage from './tabs/ReplayPage';
 import type { RealTradingStatus, AccountInfo, PreflightCheckResponse, PreflightCheckItem } from '../../services/realTradingService';
 import { authService } from '../../features/auth/services/authService';
 import type { StrategyFile } from '../../types/backtest/strategy';
@@ -22,7 +23,7 @@ import LiveTradeConfigWizard from './components/LiveTradeConfigWizard';
 import type { DeployMode, ExecutionConfig, LiveTradeConfig } from '../../types/liveTrading';
 
 type TradingMode = 'simulation';  // 仅支持模拟盘（实盘通道因政策原因已下线）
-type ActiveTab = 'manage' | 'manual-task' | 'personal' | 'position' | 'history' | 'settings';
+type ActiveTab = 'manage' | 'manual-task' | 'personal' | 'position' | 'history' | 'settings' | 'replay';
 type PreflightStage = 'trading-readiness' | 'preflight';
 type PendingDeploy = {
     strategyId: string;
@@ -468,6 +469,7 @@ const RealTradingPage: React.FC = () => {
         { id: 'position', label: '持仓监控', icon: PieChart },
         { id: 'history', label: '交易记录', icon: FileText },
         { id: 'settings', label: '设置', icon: Settings },
+        { id: 'replay', label: '时光回放', icon: Clock },
     ];
 
     return (
@@ -575,6 +577,7 @@ const RealTradingPage: React.FC = () => {
                         />
                     )}
                     {activeTab === 'settings' && <SettingsCenter userId={userId} isActive={activeTab === 'settings'} />}
+                    {activeTab === 'replay' && <ReplayPage />}
                 </div>
             </div>
 
