@@ -39,7 +39,7 @@ class Position:
     entry_time: datetime
     current_price: float = 0.0
     highest_price: float = 0.0
-    lowest_price: float = float("in")
+    lowest_price: float = float("inf")
     unrealized_pnl: float = 0.0
     realized_pnl: float = 0.0
     stop_loss_price: float = 0.0
