@@ -11,7 +11,8 @@ import {
 } from 'lucide-react';
 import { SERVICE_URLS } from '../../../config/services';
 
-interface ApiKeyBootstrapInfo {
+// 与后端 ApiKeyInfo 对齐：/api-keys/init 是幂等接口，永不返回 secret_key
+interface ApiKeyInfo {
   id: number;
   access_key: string;
   name: string;
@@ -20,8 +21,6 @@ interface ApiKeyBootstrapInfo {
   created_at: string;
   expires_at?: string | null;
   last_used_at?: string | null;
-  secret_key?: string | null;
-  just_created?: boolean;
 }
 
 interface RotateSecretInfo {
@@ -42,7 +41,7 @@ const SettingsCenter: React.FC<SettingsCenterProps> = ({ userId, isActive }) => 
   });
 
   const [copied, setCopied] = useState('');
-  const [keyInfo, setKeyInfo] = useState<ApiKeyBootstrapInfo | null>(null);
+  const [keyInfo, setKeyInfo] = useState<ApiKeyInfo | null>(null);
   const [loading, setLoading] = useState(false);
   const [showAccessKey, setShowAccessKey] = useState(false);
   const [showSecretKey, setShowSecretKey] = useState(false);
@@ -59,22 +58,20 @@ const SettingsCenter: React.FC<SettingsCenterProps> = ({ userId, isActive }) => 
   const fetchBootstrap = async () => {
     setLoading(true);
     try {
-      const res = await fetch(`${apiGatewayBase}/api/v1/api-keys/bootstrap`, {
+      const res = await fetch(`${apiGatewayBase}/api/v1/api-keys/init`, {
         method: 'POST',
         headers: authHeader(),
       });
       if (!res.ok) {
-        throw new Error('bootstrap failed');
+        throw new Error('init failed');
       }
-      const data: ApiKeyBootstrapInfo = await res.json();
+      const data: ApiKeyInfo = await res.json();
       setKeyInfo({
         ...data,
         access_key: String(data.access_key || '').trim(),
-        secret_key: data.secret_key ? String(data.secret_key).trim() : null,
       });
-      setSecretKey(data.secret_key ? String(data.secret_key).trim() : null);
     } catch (e) {
-      console.error('Failed to bootstrap api key', e);
+      console.error('Failed to init api key', e);
     } finally {
       setLoading(false);
     }
@@ -130,7 +127,7 @@ const SettingsCenter: React.FC<SettingsCenterProps> = ({ userId, isActive }) => 
               <div>
                 <div className="text-sm font-bold text-gray-900">接入凭证</div>
                 <div className="text-xs text-gray-500 mt-1">
-                  Access Key 用于鉴权，Secret Key 仅在首次创建或重置后展示一次。
+                  Access Key 用于鉴权，Secret Key 仅在重置后展示一次，请立即保存。
                 </div>
               </div>
               <button

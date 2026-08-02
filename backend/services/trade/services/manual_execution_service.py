@@ -23,6 +23,13 @@ except ImportError:  # pragma: no cover - optional in local/unit test env
     xcals = None
 
 from backend.services.trade.redis_client import get_redis
+from backend.services.trade.simulation.services.ashare_matcher import (
+    MatchConfig,
+    match_order,
+)
+from backend.services.trade.simulation.services.local_market_data import (
+    get_local_market_data,
+)
 from backend.services.trade.trade_config import settings
 from backend.shared.database_manager_v2 import get_session
 from backend.shared.fundamental_aligner import fundamental_aligner
@@ -162,16 +169,6 @@ def _normalize_to_broker_symbol(sym: str) -> str:
     elif s.startswith("BJ") and len(s) > 2:
         return f"{s[2:]}.BJ"
     return s
-
-
-def _manual_task_agent_protect_price_ratio() -> float:
-    ratio = _to_float(
-        os.getenv("MANUAL_TASK_AGENT_PROTECT_PRICE_RATIO", "0.002"),
-        0.002,
-    )
-    if ratio <= 0:
-        return 0.002
-    return min(ratio, 0.1)
 
 
 def _manual_task_wait_next_account_timeout_seconds() -> int:
@@ -1353,7 +1350,7 @@ class ManualExecutionService:
         if not account_snapshot:
             raise HTTPException(
                 status_code=400,
-                detail="未检测到最新实盘账户快照，请先确认 QMT Agent 已上报账户数据",
+                detail="未检测到最新模拟账户快照，请先完成模拟账户初始化",
             )
 
         signal_rows = await self._load_signal_rows(
@@ -1791,7 +1788,7 @@ class ManualExecutionService:
         if not latest_snapshot:
             raise HTTPException(
                 status_code=400,
-                detail="未检测到最新实盘账户快照，请先确认 QMT Agent 已上报账户数据",
+                detail="未检测到最新模拟账户快照，请先完成模拟账户初始化",
             )
         normalized_signals = await self._load_signal_rows(
             tenant_id=prepared.tenant_id,
@@ -2115,9 +2112,7 @@ class ManualExecutionService:
                         user_id=user_id,
                     )
                 if not latest_snapshot:
-                    error_msg = (
-                        "未检测到最新实盘账户快照，请先确认 QMT Agent 已上报账户数据"
-                    )
+                    error_msg = "未检测到最新模拟账户快照，请先完成模拟账户初始化"
                     await manual_execution_persistence.update_task(
                         task_id=task_id,
                         status="failed",
@@ -2203,6 +2198,9 @@ class ManualExecutionService:
             from .trading_engine import TradingEngine
 
             trading_engine = TradingEngine(db, get_redis())
+            market_data = get_local_market_data()
+            match_config = MatchConfig()
+            match_trade_date = market_data.latest_trade_date()
 
             await manual_execution_persistence.update_task(
                 task_id=task_id,
@@ -2227,78 +2225,34 @@ class ManualExecutionService:
                 failed_count=0,
             )
 
-            # ─── 链路自检：Agent 连通性探测 (仅 REAL 模式必需) ──────────────────
-            if trading_mode == "REAL":
+            # ─── 链路自检：本地行情可用性（模拟撮合的唯一前置条件）─────────────
+            if match_trade_date is None:
+                error_msg = "诊断失败: 本地行情数据不可用，无法进行模拟撮合"
                 manual_execution_log_stream.append_log(
                     task_id=task_id,
                     tenant_id=tenant_id,
                     user_id=user_id,
-                    level="info",
+                    level="error",
                     stage="dispatching",
-                    line="[链路诊断] 正在探测 QMT Agent 连通性...",
+                    line=error_msg,
                 )
-                heartbeat_key = (
-                    f"trade:agent:heartbeat:{tenant_id}:{str(user_id).zfill(8)}"
-                )
-                redis_client = get_redis().client
-
-                hb_raw = redis_client.get(heartbeat_key)
-
-                if not hb_raw:
-                    error_msg = f"诊断失败: QMT Agent 离线 (未发现心跳: {heartbeat_key})，请检查 Windows 端服务是否启动"
-                    manual_execution_log_stream.append_log(
-                        task_id=task_id,
-                        tenant_id=tenant_id,
-                        user_id=user_id,
-                        level="error",
-                        stage="dispatching",
-                        line=error_msg,
-                    )
-                    await manual_execution_persistence.update_task(
-                        task_id=task_id,
-                        status="failed",
-                        stage="dispatching",
-                        error_stage="dispatching",
-                        error_message=error_msg,
-                    )
-                    return
-
-                manual_execution_log_stream.append_log(
+                await manual_execution_persistence.update_task(
                     task_id=task_id,
-                    tenant_id=tenant_id,
-                    user_id=user_id,
-                    level="info",
+                    status="failed",
                     stage="dispatching",
-                    line="[链路诊断] QMT Agent 在线，心跳正常",
+                    error_stage="dispatching",
+                    error_message=error_msg,
                 )
-                async with get_session(read_only=True) as account_session:
-                    from backend.services.trade.routers.real_trading_utils import (
-                        _fetch_latest_real_account_snapshot,
-                    )
+                return
 
-                    latest_snapshot = await _fetch_latest_real_account_snapshot(
-                        account_session,
-                        tenant_id=tenant_id,
-                        user_id=user_id,
-                    )
-                if not latest_snapshot:
-                    manual_execution_log_stream.append_log(
-                        task_id=task_id,
-                        tenant_id=tenant_id,
-                        user_id=user_id,
-                        level="warning",
-                        stage="dispatching",
-                        line="[注意] 未发现 PostgreSQL 账户快照，Agent 可能尚未完成柜台初始化",
-                    )
-                else:
-                    manual_execution_log_stream.append_log(
-                        task_id=task_id,
-                        tenant_id=tenant_id,
-                        user_id=user_id,
-                        level="info",
-                        stage="dispatching",
-                        line="[链路诊断] PostgreSQL 账户快照已就绪，准备派发指令",
-                    )
+            manual_execution_log_stream.append_log(
+                task_id=task_id,
+                tenant_id=tenant_id,
+                user_id=user_id,
+                level="info",
+                stage="dispatching",
+                line=f"[链路诊断] 本地行情就绪，撮合基准交易日: {match_trade_date.isoformat()}",
+            )
 
             manual_execution_log_stream.append_log(
                 task_id=task_id,
@@ -2313,8 +2267,27 @@ class ManualExecutionService:
                 ),
             )
 
-            async def _submit_one_order(row: dict[str, Any], index: int) -> None:
+            async def _finish_one_order(index: int) -> None:
                 nonlocal processed
+
+                processed = index
+                progress = int((processed / max(total, 1)) * 100)
+
+                # 实时更新进度
+                if index % 5 == 0 or index == total:
+                    await manual_execution_persistence.update_task(
+                        task_id=task_id,
+                        status="running" if index < total else "completed",
+                        progress=progress,
+                        order_count=index,
+                        success_count=success_count,
+                        failed_count=failed_count,
+                    )
+
+                # 给日志流一点喘息时间，避免瞬间冲刷
+                await asyncio.sleep(0.05)
+
+            async def _submit_one_order(row: dict[str, Any], index: int) -> None:
                 nonlocal success_count
                 nonlocal failed_count
                 nonlocal first_error
@@ -2337,25 +2310,59 @@ class ManualExecutionService:
                     .strip()
                     .upper()
                 )
-                # 手动任务统一改为 Agent 端临门查价，再转成保护限价单送入 QMT。
-                protect_price_ratio = _manual_task_agent_protect_price_ratio()
-                order_type = "MARKET"
                 quantity = _to_int(row.get("quantity"), 0)
+
+                # 撮合价由本地行情决定：先跑一遍 A 股撮合规则拿到成交价与整手数量，
+                # 再以该价格下限价单，避免市价单在无实时行情时被拒。
+                bar = market_data.get_bar(symbol, match_trade_date)
+                match_result = (
+                    match_order(
+                        side=side.lower(),
+                        quantity=quantity,
+                        bar=bar,
+                        cfg=match_config,
+                    )
+                    if bar is not None
+                    else None
+                )
+
+                if match_result is None or not match_result.success:
+                    failed_count += 1
+                    reason = (
+                        f"本地行情缺失 @ {match_trade_date.isoformat()}"
+                        if match_result is None
+                        else match_result.reason
+                    )
+                    manual_execution_log_stream.append_log(
+                        task_id=task_id,
+                        tenant_id=tenant_id,
+                        user_id=user_id,
+                        level="warning",
+                        stage="dispatching",
+                        line=f"  >> [拦截] 撮合前置检查未通过: {symbol} | 原因: {reason}",
+                    )
+                    if not first_error:
+                        first_error = f"{symbol}: {reason}"
+                    await _finish_one_order(index)
+                    return
+
+                match_price = match_result.fill_price
+                quantity = match_result.fill_quantity
 
                 order_payload = {
                     "symbol": symbol,
                     "side": side,
                     "quantity": quantity,
-                    "price": 0.0,
+                    "price": match_price,
                     "client_order_id": f"manual-{task_id[-8:]}-{index:04d}",
-                    "order_type": order_type,
+                    "order_type": "LIMIT",
                     "trading_mode": trading_mode,
-                    "agent_price_mode": "protect_limit",
-                    "protect_price_ratio": protect_price_ratio,
                     "remarks": (
                         f"manual_task={task_id} run_id={run_id} "
                         f"fusion_score={fusion_score:.6f} "
-                        f"agent_price_mode=protect_limit protect_ratio={protect_price_ratio:.6f} "
+                        f"match_date={match_trade_date.isoformat()} "
+                        f"match_price={match_price:.4f} "
+                        f"est_fee={match_result.total_fee:.2f} "
                         f"preview_price={preview_price:.4f} "
                         f"reason={str(row.get('reason') or '').strip()}"
                     ),
@@ -2376,7 +2383,7 @@ class ManualExecutionService:
                     line=(
                         f"[{index}/{total}] 正在提交委托: {side} {symbol} "
                         f"qty={quantity} preview={preview_price:.2f} "
-                        f"agent_price_mode=protect_limit protect_ratio={protect_price_ratio:.4f}"
+                        f"match_price={match_price:.2f} est_fee={match_result.total_fee:.2f}"
                     ),
                 )
 
@@ -2442,7 +2449,7 @@ class ManualExecutionService:
                         error_detail = (
                             submit_inner_res.get("message")
                             or result.get("detail")
-                            or "柜台拒绝或连接断开"
+                            or "模拟撮合拒绝"
                         )
                         line = f"  >> [失败] 执行异常: {symbol} | 详情: {error_detail}"
                         level = "error"
@@ -2474,22 +2481,7 @@ class ManualExecutionService:
                     if not first_error:
                         first_error = str(e)
 
-                processed = index
-                progress = int((processed / max(total, 1)) * 100)
-
-                # 实时更新进度
-                if index % 5 == 0 or index == total:
-                    await manual_execution_persistence.update_task(
-                        task_id=task_id,
-                        status="running" if index < total else "completed",
-                        progress=progress,
-                        order_count=index,
-                        success_count=success_count,
-                        failed_count=failed_count,
-                    )
-
-                # 给日志流一点喘息时间，避免瞬间冲刷
-                await asyncio.sleep(0.05)
+                await _finish_one_order(index)
 
             # Phase 1: 先提交卖单
             if sell_orders:
