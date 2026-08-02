@@ -6,7 +6,6 @@ Synthetic execution engine for simulation orders.
 """
 
 import logging
-from dataclasses import dataclass
 from datetime import datetime
 from typing import Any
 
@@ -60,15 +59,6 @@ class ExecutionResult:
         self.total_fee = total_fee
         self.price_source = price_source
         self.message = message
-
-
-@dataclass
-class MarketSnapshot:
-    price: float
-    price_source: str
-    limit_up: bool = False
-    limit_down: bool = False
-    suspended: bool = False
 
 
 def _match_to_exec(mr: MatchResult, price_source: str) -> ExecutionResult:

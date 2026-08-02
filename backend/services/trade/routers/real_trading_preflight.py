@@ -1,26 +1,58 @@
 import logging
 import os
 import time
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
+from pathlib import Path
 
 from fastapi import APIRouter
 from .real_trading_utils import *
 from .real_trading_utils import (
     _check_inference_model_exists,
     _fetch_latest_real_account_snapshot,
-    _get_stream_series_redis_client,
     _normalize_identity,
     _parse_user_id,
-    _resolve_preflight_symbols,
-    _resolve_runner_image_for_mode,
     _upsert_preflight_snapshot,
 )
 from backend.services.trade.services.signal_readiness_service import (
     signal_readiness_service,
 )
+from backend.services.trade.services.trading_precheck_service import (
+    _check_local_market_data_freshness,
+    _previous_trading_day,
+)
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
+
+_FEATURE_PARQUET_DIR = Path(
+    os.getenv("FEATURE_SNAPSHOT_DIR", "/app/db/feature_snapshots")
+)
+
+
+def _check_feature_parquet_coverage(
+    expected_trade_date: date,
+) -> tuple[bool, str, dict]:
+    """推理特征 parquet 是否覆盖到目标交易日。
+
+    只读 parquet 的 trade_date 列最大值，不加载全表（单年文件可达数 GB）。
+    """
+    path = _FEATURE_PARQUET_DIR / f"model_features_{expected_trade_date.year}.parquet"
+    details = {"path": str(path), "expected_trade_date": expected_trade_date.isoformat()}
+    if not path.exists():
+        return False, f"特征 parquet 不存在: {path}", details
+
+    import pandas as pd
+
+    latest_raw = pd.read_parquet(path, columns=["trade_date"])["trade_date"].max()
+    latest = pd.Timestamp(latest_raw).date()
+    details["latest_trade_date"] = latest.isoformat()
+    if latest < expected_trade_date:
+        return (
+            False,
+            f"特征 parquet 最新交易日 {latest} 落后于目标 {expected_trade_date}，请先执行特征回补",
+            details,
+        )
+    return True, f"特征 parquet 已覆盖至 {latest}", details
 
 
 def _parse_snapshot_timestamp(raw: Any) -> float | None:
@@ -57,7 +89,7 @@ def _is_cn_trading_hours() -> bool:
 
 @router.get("/preflight")
 async def preflight_check(
-    trading_mode: str = "REAL",
+    trading_mode: str = "SIMULATION",
     user_id: Optional[str] = None,
     tenant_id: Optional[str] = None,
     auth: AuthContext = Depends(get_auth_context),
@@ -65,17 +97,19 @@ async def preflight_check(
     db: AsyncSession = Depends(get_db),
 ):
     """
-    启动前自检：
-    - K8s 客户端（REAL/SHADOW 必需）
-    - Redis 连通性（必需）
-    - DB 连通性（必需）
-    - Runner 镜像配置（REAL/SHADOW 必需）
-    - INTERNAL_CALL_SECRET 配置（必需）
+    模拟盘启动前自检：
+    - Redis / PostgreSQL 连通性
+    - 默认模型已配置且模型文件可加载
+    - 本地 quantdb 行情与特征 parquet 覆盖到最新交易日
+    - 沙箱进程池与模拟盘关键表
     """
     resolved_user_id, resolved_tenant_id = _normalize_identity(auth, user_id=user_id, tenant_id=tenant_id)
-    mode = str(trading_mode or "REAL").strip().upper()
-    if mode not in {"REAL", "SHADOW", "SIMULATION"}:
-        raise HTTPException(status_code=400, detail=f"unsupported trading_mode: {mode}")
+    mode = str(trading_mode or "SIMULATION").strip().upper()
+    if mode != "SIMULATION":
+        raise HTTPException(
+            status_code=400,
+            detail=f"实盘交易已下线（政策原因），仅支持模拟盘。收到 trading_mode={mode}",
+        )
 
     checks = []
 
@@ -150,8 +184,8 @@ async def preflight_check(
     except Exception as exc:
         signal_readiness = {
             "available": False,
-            "blocking": mode == "REAL",
-            "trading_permission": "blocked" if mode == "REAL" else "observe_only",
+            "blocking": False,
+            "trading_permission": "observe_only",
             "message": f"读取默认模型托管状态失败: {exc}",
         }
         await db.rollback()
@@ -186,38 +220,7 @@ async def preflight_check(
         ),
     )
 
-    # 5) Runner 镜像
-    image, image_source = _resolve_runner_image_for_mode()
-    image_required = mode in {"REAL", "SHADOW"}
-    image_ok = bool(image)
-    if image_required:
-        add_check(
-            "strategy_runner_image",
-            "Runner 镜像",
-            image_ok,
-            image_required,
-            (
-                "已配置 STRATEGY_RUNNER_IMAGE"
-                if image_source == "configured"
-                else f"未配置 STRATEGY_RUNNER_IMAGE，已回退默认镜像: {image}"
-            ),
-            {"image": image, "image_source": image_source},
-        )
-
-    # 6) 容器编排客户端 (Docker/K8s)
-    orchestration_required = mode in {"REAL", "SHADOW"}
-    orchestration_ok = bool(k8s_manager.api and k8s_manager.core_api)
-    orchestration_label = "Docker 引擎" if k8s_manager.mode == "docker" else "K8s 集群"
-    if orchestration_required:
-        add_check(
-            "orchestration",
-            orchestration_label,
-            orchestration_ok,
-            orchestration_required,
-            f"{orchestration_label} 客户端已就绪" if orchestration_ok else f"{orchestration_label} 客户端未初始化",
-        )
-
-    # 7) 实盘账户快照（miniQMT 在线状态检测已随实盘通道下线一并移除）
+    # 5) 账户快照（用于双向交易信用字段探测）
     account_report: dict | None = None
     try:
         account_snapshot = await _fetch_latest_real_account_snapshot(
@@ -269,373 +272,201 @@ async def preflight_check(
                 f"融资融券股票池加载失败: {e}",
             )
 
-        real_short_required = mode == "REAL"
-        long_short_enabled = bool(getattr(settings, "ENABLE_LONG_SHORT_REAL", False))
-        add_check(
-            "long_short_real_feature",
-            "实盘多空灰度开关",
-            long_short_enabled or not real_short_required,
-            real_short_required,
-            "ENABLE_LONG_SHORT_REAL 已开启" if long_short_enabled else "ENABLE_LONG_SHORT_REAL 未开启",
-        )
-        whitelist_users = {
-            item.strip()
-            for item in str(getattr(settings, "LONG_SHORT_WHITELIST_USERS", "")).split(",")
-            if item and item.strip()
-        }
-        in_whitelist = str(resolved_user_id) in whitelist_users
-        add_check(
-            "long_short_whitelist",
-            "实盘多空白名单",
-            in_whitelist or not real_short_required,
-            real_short_required,
-            "当前用户在 LONG_SHORT_WHITELIST_USERS 白名单内"
-            if in_whitelist
-            else "当前用户不在 LONG_SHORT_WHITELIST_USERS 白名单",
-        )
+    # 6) 模拟盘：模型、本地数据、沙箱与关键表
+    # 6.1 默认模型检测（检查用户是否配置了默认模型）
+    try:
+        from backend.shared.model_registry import model_registry_service
 
-        short_real_ok = bool(getattr(settings, "ENABLE_SHORT_SELLING_REAL", False))
+        default_model = await model_registry_service.get_default_model(
+            tenant_id=resolved_tenant_id,
+            user_id=resolved_user_id,
+        )
+        model_configured = bool(default_model)
         add_check(
-            "broker_margin_trade_support",
-            "信用交易动作支持",
-            short_real_ok or not real_short_required,
-            real_short_required,
+            "default_model_configured",
+            "默认模型已配置",
+            model_configured,
+            True,
             (
-                "实盘信用交易动作已开启"
-                if short_real_ok
-                else "未开启 ENABLE_SHORT_SELLING_REAL，实盘不会发送融券交易动作"
+                f"默认模型已配置 (model_id={default_model.get('model_id')})"
+                if model_configured
+                else "未配置默认模型，请先在模型管理中设置默认模型"
             ),
+            {
+                "model_id": default_model.get("model_id") if model_configured else None,
+                "model_name": default_model.get("model_name") if model_configured else None,
+            },
+        )
+    except Exception as e:
+        add_check(
+            "default_model_configured",
+            "默认模型已配置",
+            False,
+            True,
+            f"默认模型检测失败: {e}",
         )
 
-        account_has_credit_fields = isinstance(account_report, dict) and any(
-            key in account_report for key in ("liabilities", "credit_limit", "short_market_value")
-        )
+    # 6.2 推理模型就绪度（检查生产模型目录是否有模型文件）
+    try:
+        model_ok, model_detail = _check_inference_model_exists()
         add_check(
-            "margin_account_state",
-            "信用账户状态",
-            account_has_credit_fields or mode != "REAL",
-            mode == "REAL",
+            "inference_database_ready",
+            "推理模型已就绪",
+            model_ok,
+            True,
+            model_detail,
+        )
+    except Exception as e:
+        add_check(
+            "inference_database_ready",
+            "推理模型已就绪",
+            False,
+            True,
+            f"推理模型检测失败: {e}",
+        )
+
+    # 6.3 本地 quantdb 行情 + 特征 parquet 覆盖度
+    #     模拟撮合只读本地 parquet，这两项取代了原「stream 行情新鲜度」检查。
+    expected_trade_date = _previous_trading_day(date.today())
+    try:
+        ok, detail = _check_local_market_data_freshness(expected_trade_date)
+        add_check(
+            "local_market_data_freshness",
+            "本地行情数据",
+            ok,
+            True,
+            detail,
+            {"expected_trade_date": expected_trade_date.isoformat()},
+        )
+    except Exception as e:
+        add_check(
+            "local_market_data_freshness",
+            "本地行情数据",
+            False,
+            True,
+            f"本地行情检测失败: {e}",
+        )
+
+    try:
+        ok, detail, feature_details = _check_feature_parquet_coverage(expected_trade_date)
+        add_check(
+            "feature_parquet_coverage",
+            "推理特征 parquet",
+            ok,
+            True,
+            detail,
+            feature_details,
+        )
+    except Exception as e:
+        add_check(
+            "feature_parquet_coverage",
+            "推理特征 parquet",
+            False,
+            True,
+            f"特征 parquet 检测失败: {e}",
+        )
+
+    # 6.4 沙箱进程池
+    try:
+        from backend.services.trade.sandbox.manager import sandbox_manager
+
+        workers = list(getattr(sandbox_manager, "_workers", {}).values())
+        worker_total = len(workers)
+        alive_total = sum(1 for proc in workers if bool(proc and proc.is_alive()))
+        pool_ok = alive_total > 0
+        add_check(
+            "simulation_sandbox_pool",
+            "模拟盘沙箱池",
+            pool_ok,
+            True,
             (
-                "账户快照已包含信用账户字段"
-                if account_has_credit_fields
-                else "当前账户快照未包含 liabilities/short_market_value 等信用字段"
+                f"沙箱进程池可用（alive={alive_total}/{worker_total}）"
+                if pool_ok
+                else "沙箱进程池不可用（无存活 worker）"
             ),
-            account_report if account_has_credit_fields else {},
+            {"worker_total": worker_total, "alive_total": alive_total},
         )
-        short_admission_ready = isinstance(account_report, dict) and bool(account_report.get("credit_enabled", False)) and (
-            int(account_report.get("shortable_symbols_count") or 0) > 0
-        )
+    except Exception as e:
         add_check(
-            "short_admission_capability",
-            "做空准入能力可用",
-            short_admission_ready or mode != "REAL",
-            mode == "REAL",
-            (
-                f"credit_enabled={bool(account_report.get('credit_enabled'))}, "
-                f"shortable_symbols_count={int(account_report.get('shortable_symbols_count') or 0)}, "
-                f"last_short_check_at={account_report.get('last_short_check_at')}"
-            )
-            if isinstance(account_report, dict)
-            else "未检测到账户快照",
+            "simulation_sandbox_pool",
+            "模拟盘沙箱池",
+            False,
+            True,
+            f"沙箱进程池检测失败: {e}",
         )
 
-    # 8~10) Stream 探针：REAL/SHADOW/SIMULATION 均检测行情质量
-    if mode in {"REAL", "SHADOW", "SIMULATION"}:
-        # 1. Stream时序序列 (始终阻断)
-        try:
-            res = check_stream_series_freshness(redis_client=redis.client)
-            add_check(
-                "stream_series_freshness",
-                "Stream时序序列",
-                res["ok"],
-                True,
-                res["message"],
-                res["details"],
+    # 6.5 模拟盘关键表（防止库被清空后启动才报错）
+    try:
+        table_probe_sql = text("""
+            SELECT
+                to_regclass('public.sim_orders') IS NOT NULL AS sim_orders,
+                to_regclass('public.sim_trades') IS NOT NULL AS sim_trades,
+                to_regclass('public.simulation_fund_snapshots') IS NOT NULL AS simulation_fund_snapshots
+            """)
+        table_probe_row = (await db.execute(table_probe_sql)).mappings().one()
+        missing_tables = [
+            name
+            for name in (
+                "sim_orders",
+                "sim_trades",
+                "simulation_fund_snapshots",
             )
-        except Exception as e:
-            add_check(
-                "stream_series_freshness",
-                "Stream时序序列",
-                False,
-                True,
-                f"行情检测异常: {e}",
-            )
-
-        # 2. Stream行情落库 (始终阻断)
-        try:
-            res = check_stream_quote_persist_rate(redis_client=redis.client)
-            add_check(
-                "stream_quote_persist_rate",
-                "Stream行情落库",
-                res["ok"],
-                True,
-                res["message"],
-                res["details"],
-            )
-        except Exception as e:
-            add_check(
-                "stream_quote_persist_rate",
-                "Stream行情落库",
-                False,
-                True,
-                f"行情落库检测失败: {e}",
-            )
-            await db.rollback()
-
-        # 10) Stream K线拉取可用性（只做可用性探针，默认非阻断）
-        kline_required = False
-        kline_symbol = _resolve_preflight_symbols()[0]
-        stream_base_url = str(settings.MARKET_DATA_SERVICE_URL or "http://quantmind-stream:8003").rstrip("/")
-        kline_url = f"{stream_base_url}/api/v1/klines/{kline_symbol}"
-        try:
-            async with httpx.AsyncClient(timeout=httpx.Timeout(5.0, connect=2.0)) as client:
-                resp = await client.get(
-                    kline_url,
-                    params={"interval": "1d", "limit": 3, "use_cache": False},
-                )
-            if resp.status_code != 200:
-                add_check(
-                    "stream_kline_fetch",
-                    "Stream K线抓取",
-                    False,
-                    kline_required,
-                    f"K线接口返回异常: HTTP {resp.status_code}",
-                    {"endpoint": kline_url, "status_code": resp.status_code},
-                )
-            else:
-                payload = resp.json() if resp.content else {}
-                kline_total = int(payload.get("total", 0) or 0)
-                kline_ok = kline_total > 0
-                add_check(
-                    "stream_kline_fetch",
-                    "Stream K线抓取",
-                    kline_ok,
-                    kline_required,
-                    "K线接口可用" if kline_ok else "K线接口可达，但未返回有效数据",
-                    {
-                        "endpoint": kline_url,
-                        "symbol": kline_symbol,
-                        "kline_total": kline_total,
-                    },
-                )
-        except Exception as e:
-            add_check(
-                "stream_kline_fetch",
-                "Stream K线抓取",
-                False,
-                kline_required,
-                f"K线探针失败: {e}",
-                {"endpoint": kline_url, "symbol": kline_symbol},
-            )
-
-    # 11) 模拟盘专用：沙箱进程池与关键表可用性
-    simulation_required = mode == "SIMULATION"
-    if simulation_required:
-        # 11.0 默认模型检测（检查用户是否配置了默认模型）
-        try:
-            from backend.shared.model_registry import model_registry_service
-
-            default_model = await model_registry_service.get_default_model(
-                tenant_id=resolved_tenant_id,
-                user_id=resolved_user_id,
-            )
-            model_configured = bool(default_model)
-            add_check(
-                "default_model_configured",
-                "默认模型已配置",
-                model_configured,
-                True,
-                (
-                    f"默认模型已配置 (model_id={default_model.get('model_id')})"
-                    if model_configured
-                    else "未配置默认模型，请先在模型管理中设置默认模型"
-                ),
-                {
-                    "model_id": default_model.get("model_id") if model_configured else None,
-                    "model_name": default_model.get("model_name") if model_configured else None,
-                },
-            )
-        except Exception as e:
-            add_check(
-                "default_model_configured",
-                "默认模型已配置",
-                False,
-                True,
-                f"默认模型检测失败: {e}",
-            )
-
-        # 11.1 推理模型就绪度（检查生产模型目录是否有模型文件）
-        try:
-            model_ok, model_detail = _check_inference_model_exists()
-            add_check(
-                "inference_database_ready",
-                "推理模型已就绪",
-                model_ok,
-                True,
-                model_detail,
-            )
-        except Exception as e:
-            add_check(
-                "inference_database_ready",
-                "推理模型已就绪",
-                False,
-                True,
-                f"推理模型检测失败: {e}",
-            )
-
-        # 11.2 沙箱进程池
-        try:
-            from backend.services.trade.sandbox.manager import sandbox_manager
-
-            workers = list(getattr(sandbox_manager, "_workers", {}).values())
-            worker_total = len(workers)
-            alive_total = sum(1 for proc in workers if bool(proc and proc.is_alive()))
-            pool_ok = alive_total > 0
-            add_check(
-                "simulation_sandbox_pool",
-                "模拟盘沙箱池",
-                pool_ok,
-                True,
-                (
-                    f"沙箱进程池可用（alive={alive_total}/{worker_total}）"
-                    if pool_ok
-                    else "沙箱进程池不可用（无存活 worker）"
-                ),
-                {"worker_total": worker_total, "alive_total": alive_total},
-            )
-        except Exception as e:
-            add_check(
-                "simulation_sandbox_pool",
-                "模拟盘沙箱池",
-                False,
-                True,
-                f"沙箱进程池检测失败: {e}",
-            )
-
-        # 11.3 模拟盘关键表（防止库被清空后启动才报错）
-        try:
-            table_probe_sql = text("""
-                SELECT
-                    to_regclass('public.sim_orders') IS NOT NULL AS sim_orders,
-                    to_regclass('public.sim_trades') IS NOT NULL AS sim_trades,
-                    to_regclass('public.simulation_fund_snapshots') IS NOT NULL AS simulation_fund_snapshots
-                """)
-            table_probe_row = (await db.execute(table_probe_sql)).mappings().one()
-            missing_tables = [
-                name
-                for name in (
+            if not bool(table_probe_row.get(name))
+        ]
+        tables_ok = len(missing_tables) == 0
+        add_check(
+            "simulation_tables",
+            "模拟盘数据表",
+            tables_ok,
+            True,
+            "模拟盘关键表已就绪" if tables_ok else f"缺少模拟盘关键表: {', '.join(missing_tables)}",
+            {
+                "required_tables": [
                     "sim_orders",
                     "sim_trades",
                     "simulation_fund_snapshots",
-                )
-                if not bool(table_probe_row.get(name))
-            ]
-            tables_ok = len(missing_tables) == 0
-            add_check(
-                "simulation_tables",
-                "模拟盘数据表",
-                tables_ok,
-                True,
-                "模拟盘关键表已就绪" if tables_ok else f"缺少模拟盘关键表: {', '.join(missing_tables)}",
-                {
-                    "required_tables": [
-                        "sim_orders",
-                        "sim_trades",
-                        "simulation_fund_snapshots",
-                    ],
-                    "missing_tables": missing_tables,
-                },
-            )
-        except Exception as e:
-            add_check(
-                "simulation_tables",
-                "模拟盘数据表",
-                False,
-                True,
-                f"模拟盘关键表检测失败: {e}",
-            )
-            # 回滚事务以清除 aborted 状态
-            await db.rollback()
-
-        # 11.4 资金快照任务配置（非阻断，便于排障）
-        snapshot_enabled = str(os.getenv("SIM_FUND_SNAPSHOT_ENABLED", "true")).strip().lower() != "false"
-        interval_raw = str(os.getenv("SIM_FUND_SNAPSHOT_INTERVAL_SECONDS", "300")).strip()
-        try:
-            interval_seconds = int(interval_raw)
-        except Exception:
-            interval_seconds = 300
-        snapshot_config_ok = (not snapshot_enabled) or interval_seconds > 0
-        add_check(
-            "simulation_snapshot_worker_config",
-            "模拟盘资金快照任务",
-            snapshot_config_ok,
-            False,
-            (
-                f"已启用（interval={interval_seconds}s）"
-                if snapshot_enabled and snapshot_config_ok
-                else (
-                    "已关闭（SIM_FUND_SNAPSHOT_ENABLED=false）"
-                    if not snapshot_enabled
-                    else "配置异常（SIM_FUND_SNAPSHOT_INTERVAL_SECONDS 应大于 0）"
-                )
-            ),
-            {
-                "enabled": snapshot_enabled,
-                "interval_seconds": interval_seconds,
+                ],
+                "missing_tables": missing_tables,
             },
         )
+    except Exception as e:
+        add_check(
+            "simulation_tables",
+            "模拟盘数据表",
+            False,
+            True,
+            f"模拟盘关键表检测失败: {e}",
+        )
+        # 回滚事务以清除 aborted 状态
+        await db.rollback()
 
-        try:
-            stream_symbols = _resolve_preflight_symbols()
-            stream_redis, stream_redis_host, stream_redis_port = _get_stream_series_redis_client()
-            stream_redis.ping()
-            matched_symbol = None
-            latest_age_sec = None
-            for symbol in stream_symbols:
-                key = f"market:series:{symbol}"
-                latest = stream_redis.zrevrange(key, 0, 0, withscores=True)
-                if latest:
-                    _, score = latest[0]
-                    age = max(0, int(time.time() - float(score)))
-                    if latest_age_sec is None or age < latest_age_sec:
-                        matched_symbol = symbol
-                        latest_age_sec = age
-            stream_ok = latest_age_sec is not None and latest_age_sec < 300
-            threshold_sec = 300
-            # 交易时段（9:15-15:00 工作日）严格检查，非交易时段仅警告
-            is_trading_hours = _is_cn_trading_hours()
-            stream_required = is_trading_hours
-            add_check(
-                "stream_series_freshness",
-                "实时行情服务",
-                stream_ok if is_trading_hours else True,
-                stream_required,
-                (
-                    f"行情新鲜（{matched_symbol} 延迟 {latest_age_sec}s）"
-                    if stream_ok
-                    else (
-                        f"行情不新鲜（{matched_symbol} 延迟 {latest_age_sec}s > {threshold_sec}s）"
-                        if matched_symbol
-                        else "未发现可用行情序列"
-                    )
-                ),
-                {
-                    "matched_symbol": matched_symbol,
-                    "age_seconds": latest_age_sec,
-                    "threshold_seconds": threshold_sec,
-                    "is_trading_hours": is_trading_hours,
-                    "series_redis": f"{stream_redis_host}:{stream_redis_port}",
-                },
+    # 6.6 资金快照任务配置（非阻断，便于排障）
+    snapshot_enabled = str(os.getenv("SIM_FUND_SNAPSHOT_ENABLED", "true")).strip().lower() != "false"
+    interval_raw = str(os.getenv("SIM_FUND_SNAPSHOT_INTERVAL_SECONDS", "300")).strip()
+    try:
+        interval_seconds = int(interval_raw)
+    except Exception:
+        interval_seconds = 300
+    snapshot_config_ok = (not snapshot_enabled) or interval_seconds > 0
+    add_check(
+        "simulation_snapshot_worker_config",
+        "模拟盘资金快照任务",
+        snapshot_config_ok,
+        False,
+        (
+            f"已启用（interval={interval_seconds}s）"
+            if snapshot_enabled and snapshot_config_ok
+            else (
+                "已关闭（SIM_FUND_SNAPSHOT_ENABLED=false）"
+                if not snapshot_enabled
+                else "配置异常（SIM_FUND_SNAPSHOT_INTERVAL_SECONDS 应大于 0）"
             )
-        except Exception as e:
-            is_trading_hours = _is_cn_trading_hours()
-            add_check(
-                "stream_series_freshness",
-                "实时行情服务",
-                not is_trading_hours,
-                is_trading_hours,
-                f"行情检测失败: {e}",
-            )
+        ),
+        {
+            "enabled": snapshot_enabled,
+            "interval_seconds": interval_seconds,
+        },
+    )
 
     check_order: list[str] = []
     checks_by_key: dict[str, dict] = {}
