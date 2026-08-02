@@ -1404,6 +1404,20 @@ CREATE TABLE IF NOT EXISTS replay_equity_snapshots (
     CONSTRAINT uq_replay_equity_session_date UNIQUE (session_id, trade_date)
 );
 
+CREATE TABLE IF NOT EXISTS replay_signals (
+    id              SERIAL PRIMARY KEY,
+    session_id      UUID NOT NULL REFERENCES replay_sessions(session_id) ON DELETE CASCADE,
+    trade_date      DATE NOT NULL,
+    symbol          VARCHAR(20) NOT NULL,
+    score           FLOAT NOT NULL,
+    created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    CONSTRAINT uq_replay_signal_session_date_symbol UNIQUE (session_id, trade_date, symbol)
+);
+
+CREATE INDEX IF NOT EXISTS idx_replay_signal_session_date
+    ON replay_signals (session_id, trade_date);
+
 -- ========================
 -- DONE - 所有缺失表已创建
 -- ========================

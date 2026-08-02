@@ -23,6 +23,7 @@ from backend.services.trade.routers import (
     trading_history,
     trading_orders,
 )
+from backend.services.trade.simulation.replay.router import router as replay_router
 from backend.shared.config_manager import init_unified_config
 from backend.shared.cors import resolve_cors_origins
 from backend.shared.error_contract import install_error_contract_handlers
@@ -238,6 +239,7 @@ app.include_router(simulation_orders.router, prefix="/api/v1/simulation", tags=[
 app.include_router(simulation_history.router, prefix="/api/v1/simulation", tags=["Simulation-Trades"])
 app.include_router(simulation_batch.router)
 app.include_router(internal_strategy.router)
+app.include_router(replay_router)
 
 app.add_middleware(
     CORSMiddleware,

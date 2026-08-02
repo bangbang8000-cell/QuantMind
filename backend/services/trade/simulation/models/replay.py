@@ -30,7 +30,11 @@ from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.orm import Mapped, mapped_column
 
 from backend.services.trade.simulation.models import Base, TimestampMixin
-from backend.services.trade.simulation.models.order import OrderSide, OrderStatus, OrderType
+from backend.services.trade.simulation.models.order import (
+    OrderSide,
+    OrderStatus,
+    OrderType,
+)
 
 
 def _enum(py_enum):
@@ -77,8 +81,7 @@ class ReplaySession(Base, TimestampMixin):
     name: Mapped[str] = mapped_column(String(128), nullable=False, default="")
 
     model_id: Mapped[str | None] = mapped_column(String(128), nullable=True)
-    strategy_params: Mapped[dict] = mapped_column(
-        JSONB, nullable=False, default=dict)
+    strategy_params: Mapped[dict] = mapped_column(JSONB, nullable=False, default=dict)
     initial_cash: Mapped[float] = mapped_column(Float, nullable=False)
 
     start_date: Mapped[date] = mapped_column(Date, nullable=False)
@@ -89,10 +92,8 @@ class ReplaySession(Base, TimestampMixin):
     # 预计算的下一步，避免每次点击都查日历
     next_date: Mapped[date | None] = mapped_column(Date, nullable=True)
 
-    sessions_total: Mapped[int] = mapped_column(
-        Integer, nullable=False, default=0)
-    sessions_done: Mapped[int] = mapped_column(
-        Integer, nullable=False, default=0)
+    sessions_total: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    sessions_done: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
 
     status: Mapped[ReplayStatus] = mapped_column(
         _enum(ReplayStatus),
@@ -100,11 +101,9 @@ class ReplaySession(Base, TimestampMixin):
         default=ReplayStatus.CREATING,
         index=True,
     )
-    signal_progress: Mapped[dict] = mapped_column(
-        JSONB, nullable=False, default=dict)
+    signal_progress: Mapped[dict] = mapped_column(JSONB, nullable=False, default=dict)
 
-    auto_trade: Mapped[bool] = mapped_column(
-        Boolean, nullable=False, default=True)
+    auto_trade: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
     stop_loss_pct: Mapped[float | None] = mapped_column(Float, nullable=True)
     # 手动模式下当日待用户确认的提案
     pending_orders: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
@@ -112,16 +111,14 @@ class ReplaySession(Base, TimestampMixin):
     error_message: Mapped[str | None] = mapped_column(Text, nullable=True)
 
     __table_args__ = (
-        Index("idx_replay_session_scope_status",
-              "tenant_id", "user_id", "status"),
+        Index("idx_replay_session_scope_status", "tenant_id", "user_id", "status"),
     )
 
 
 class ReplayOrder(Base, TimestampMixin):
     __tablename__ = "replay_orders"
 
-    id: Mapped[int] = mapped_column(
-        Integer, primary_key=True, autoincrement=True)
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     order_id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True), unique=True, nullable=False, default=uuid.uuid4, index=True
     )
@@ -156,12 +153,10 @@ class ReplayOrder(Base, TimestampMixin):
     )
 
     quantity: Mapped[float] = mapped_column(Float, nullable=False)
-    filled_quantity: Mapped[float] = mapped_column(
-        Float, nullable=False, default=0.0)
+    filled_quantity: Mapped[float] = mapped_column(Float, nullable=False, default=0.0)
     price: Mapped[float | None] = mapped_column(Float, nullable=True)
     average_price: Mapped[float | None] = mapped_column(Float, nullable=True)
-    filled_value: Mapped[float] = mapped_column(
-        Float, nullable=False, default=0.0)
+    filled_value: Mapped[float] = mapped_column(Float, nullable=False, default=0.0)
     total_fee: Mapped[float] = mapped_column(Float, nullable=False, default=0.0)
 
     reject_reason: Mapped[str | None] = mapped_column(String(200), nullable=True)
@@ -175,8 +170,7 @@ class ReplayOrder(Base, TimestampMixin):
 class ReplayTrade(Base, TimestampMixin):
     __tablename__ = "replay_trades"
 
-    id: Mapped[int] = mapped_column(
-        Integer, primary_key=True, autoincrement=True)
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     trade_id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True), unique=True, nullable=False, default=uuid.uuid4, index=True
     )
@@ -208,12 +202,9 @@ class ReplayTrade(Base, TimestampMixin):
     quantity: Mapped[float] = mapped_column(Float, nullable=False)
     price: Mapped[float] = mapped_column(Float, nullable=False)
     trade_value: Mapped[float] = mapped_column(Float, nullable=False)
-    commission: Mapped[float] = mapped_column(
-        Float, nullable=False, default=0.0)
-    stamp_duty: Mapped[float] = mapped_column(
-        Float, nullable=False, default=0.0)
-    transfer_fee: Mapped[float] = mapped_column(
-        Float, nullable=False, default=0.0)
+    commission: Mapped[float] = mapped_column(Float, nullable=False, default=0.0)
+    stamp_duty: Mapped[float] = mapped_column(Float, nullable=False, default=0.0)
+    transfer_fee: Mapped[float] = mapped_column(Float, nullable=False, default=0.0)
     total_fee: Mapped[float] = mapped_column(Float, nullable=False, default=0.0)
     price_source: Mapped[str | None] = mapped_column(String(64), nullable=True)
     # 墙钟时间仅供排障，盈亏归因一律用 trade_date
@@ -226,11 +217,44 @@ class ReplayTrade(Base, TimestampMixin):
     )
 
 
+class ReplaySignal(Base, TimestampMixin):
+    """回放专用信号表 —— 与 engine_signal_scores 完全隔离。
+
+    隔离理由：
+    - engine_signal_scores 有 30 天保留期清理，回放历史信号会被误删
+    - 写入 engine_signal_scores 会覆写 Redis qm:signal:latest，干扰实盘门禁
+    - ST 名单按当天算，历史回放会引入前视偏差
+    - 回放信号只需 (symbol, score)，不需要 run_id/feature_version 等推理管线字段
+    """
+
+    __tablename__ = "replay_signals"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    session_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("replay_sessions.session_id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    trade_date: Mapped[date] = mapped_column(Date, nullable=False)
+    symbol: Mapped[str] = mapped_column(String(20), nullable=False, index=True)
+    score: Mapped[float] = mapped_column(Float, nullable=False)
+
+    __table_args__ = (
+        UniqueConstraint(
+            "session_id",
+            "trade_date",
+            "symbol",
+            name="uq_replay_signal_session_date_symbol",
+        ),
+        Index("idx_replay_signal_session_date", "session_id", "trade_date"),
+    )
+
+
 class ReplayEquitySnapshot(Base, TimestampMixin):
     __tablename__ = "replay_equity_snapshots"
 
-    id: Mapped[int] = mapped_column(
-        Integer, primary_key=True, autoincrement=True)
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     session_id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True),
         ForeignKey("replay_sessions.session_id", ondelete="CASCADE"),
@@ -240,14 +264,11 @@ class ReplayEquitySnapshot(Base, TimestampMixin):
     trade_date: Mapped[date] = mapped_column(Date, nullable=False)
 
     cash: Mapped[float] = mapped_column(Float, nullable=False, default=0.0)
-    market_value: Mapped[float] = mapped_column(
-        Float, nullable=False, default=0.0)
-    total_asset: Mapped[float] = mapped_column(
-        Float, nullable=False, default=0.0)
+    market_value: Mapped[float] = mapped_column(Float, nullable=False, default=0.0)
+    total_asset: Mapped[float] = mapped_column(Float, nullable=False, default=0.0)
     day_pnl: Mapped[float] = mapped_column(Float, nullable=False, default=0.0)
     cum_pnl: Mapped[float] = mapped_column(Float, nullable=False, default=0.0)
-    position_count: Mapped[int] = mapped_column(
-        Integer, nullable=False, default=0)
+    position_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     positions: Mapped[dict] = mapped_column(JSONB, nullable=False, default=dict)
 
     __table_args__ = (

@@ -55,9 +55,9 @@ from backend.services.trade.simulation.services.rebalance_calculator import (
     StrategyConfig,
     WeightMode,
 )
-from backend.services.trade.simulation.services.signal_loader import (
-    SignalLoader,
-    signal_loader,
+from backend.services.trade.simulation.replay.signal_generator import (
+    ReplaySignalLoader,
+    replay_signal_loader,
 )
 
 logger = logging.getLogger(__name__)
@@ -93,11 +93,11 @@ class ReplayDayRunner:
     def __init__(
         self,
         market_data: LocalMarketData | None = None,
-        loader: SignalLoader | None = None,
+        loader: ReplaySignalLoader | None = None,
         match_config: MatchConfig | None = None,
     ):
         self._market_data = market_data or get_local_market_data()
-        self._loader = loader or signal_loader
+        self._loader = loader or replay_signal_loader
         # 回放按开盘价撮合：信号是昨收后算出来的，次日开盘才可交易
         self._cfg = match_config or MatchConfig(price_mode="open")
         self._calculator = RebalanceCalculator()
@@ -128,8 +128,7 @@ class ReplayDayRunner:
         held = list((account_data.get("positions") or {}).keys())
         signals = await self._loader.load_signals_for_date(
             db=db,
-            tenant_id=tenant_id,
-            user_id=user_id,
+            session_id=session_id,
             trade_date=trade_date,
         )
         result.signal_count = len(signals)
@@ -156,8 +155,16 @@ class ReplayDayRunner:
         # 5. 撮合：先卖后买
         for order in sorted(orders, key=lambda o: 0 if o.side == "SELL" else 1):
             await self._execute(
-                db, session_id, trade_date, accounts, bars, order, result,
-                origin=OrderOrigin.MANUAL if approved_orders is not None else OrderOrigin.SIGNAL,
+                db,
+                session_id,
+                trade_date,
+                accounts,
+                bars,
+                order,
+                result,
+                origin=OrderOrigin.MANUAL
+                if approved_orders is not None
+                else OrderOrigin.SIGNAL,
             )
 
         # 6. 收盘估值 + 快照
@@ -211,23 +218,41 @@ class ReplayDayRunner:
                 price=fill_price,
             )
             if not update.get("success"):
-                result.rejected.append({
-                    "symbol": symbol, "side": "SELL", "origin": "stop_loss",
-                    "reason": update.get("reason", "BALANCE_UPDATE_FAILED"),
-                })
+                result.rejected.append(
+                    {
+                        "symbol": symbol,
+                        "side": "SELL",
+                        "origin": "stop_loss",
+                        "reason": update.get("reason", "BALANCE_UPDATE_FAILED"),
+                    }
+                )
                 continue
 
             await self._persist_fill(
-                db, session_id, trade_date, symbol, OrderSide.SELL,
-                OrderOrigin.STOP_LOSS, qty, fill_price,
-                commission, stamp_duty, transfer_fee, total_fee,
+                db,
+                session_id,
+                trade_date,
+                symbol,
+                OrderSide.SELL,
+                OrderOrigin.STOP_LOSS,
+                qty,
+                fill_price,
+                commission,
+                stamp_duty,
+                transfer_fee,
+                total_fee,
                 price_source="stop_loss",
             )
-            result.stop_loss_fills.append({
-                "symbol": symbol, "quantity": qty, "price": fill_price,
-                "stop_price": round(stop_price, 4), "total_fee": round(total_fee, 2),
-                "gap_down": bar.open < stop_price,
-            })
+            result.stop_loss_fills.append(
+                {
+                    "symbol": symbol,
+                    "quantity": qty,
+                    "price": fill_price,
+                    "stop_price": round(stop_price, 4),
+                    "total_fee": round(total_fee, 2),
+                    "gap_down": bar.open < stop_price,
+                }
+            )
 
     def _build_orders(
         self,
@@ -245,13 +270,15 @@ class ReplayDayRunner:
                 bar = bars.get(symbol)
                 if bar is None:
                     continue
-                out.append(Order(
-                    symbol=symbol,
-                    side=str(item.get("side") or "BUY").upper(),
-                    quantity=int(item.get("quantity") or 0),
-                    price=bar.open or bar.close,
-                    reason="manual",
-                ))
+                out.append(
+                    Order(
+                        symbol=symbol,
+                        side=str(item.get("side") or "BUY").upper(),
+                        quantity=int(item.get("quantity") or 0),
+                        price=bar.open or bar.close,
+                        reason="manual",
+                    )
+                )
             return out
 
         if not signals:
@@ -261,8 +288,12 @@ class ReplayDayRunner:
             sym: Quote(
                 symbol=sym,
                 current_price=bar.open or bar.close,
-                is_limit_up=(bar.close >= bar.limit_up) if math.isfinite(bar.limit_up) else False,
-                is_limit_down=(bar.close <= bar.limit_down) if bar.limit_down > 0 else False,
+                is_limit_up=(bar.close >= bar.limit_up)
+                if math.isfinite(bar.limit_up)
+                else False,
+                is_limit_down=(bar.close <= bar.limit_down)
+                if bar.limit_down > 0
+                else False,
                 is_suspended=bar.suspended,
                 pre_close=bar.pre_close if bar.pre_close > 0 else None,
             )
@@ -298,9 +329,13 @@ class ReplayDayRunner:
     ) -> None:
         bar = bars.get(order.symbol)
         if bar is None:
-            result.rejected.append({
-                "symbol": order.symbol, "side": order.side, "reason": "NO_MARKET_DATA",
-            })
+            result.rejected.append(
+                {
+                    "symbol": order.symbol,
+                    "side": order.side,
+                    "reason": "NO_MARKET_DATA",
+                }
+            )
             return
 
         side = order.side.lower()
@@ -322,9 +357,13 @@ class ReplayDayRunner:
             available_volume=available_volume,
         )
         if not mr.success:
-            result.rejected.append({
-                "symbol": order.symbol, "side": order.side, "reason": mr.reason,
-            })
+            result.rejected.append(
+                {
+                    "symbol": order.symbol,
+                    "side": order.side,
+                    "reason": mr.reason,
+                }
+            )
             await self._persist_rejected(
                 db, session_id, trade_date, order, origin, mr.reason
             )
@@ -344,26 +383,43 @@ class ReplayDayRunner:
         )
         if not update.get("success"):
             reason = update.get("reason", "BALANCE_UPDATE_FAILED")
-            result.rejected.append({
-                "symbol": order.symbol, "side": order.side, "reason": reason,
-            })
+            result.rejected.append(
+                {
+                    "symbol": order.symbol,
+                    "side": order.side,
+                    "reason": reason,
+                }
+            )
             await self._persist_rejected(
                 db, session_id, trade_date, order, origin, reason
             )
             return
 
         await self._persist_fill(
-            db, session_id, trade_date, order.symbol,
+            db,
+            session_id,
+            trade_date,
+            order.symbol,
             OrderSide.BUY if side == "buy" else OrderSide.SELL,
-            origin, mr.fill_quantity, mr.fill_price,
-            mr.commission, mr.stamp_duty, mr.transfer_fee, mr.total_fee,
+            origin,
+            mr.fill_quantity,
+            mr.fill_price,
+            mr.commission,
+            mr.stamp_duty,
+            mr.transfer_fee,
+            mr.total_fee,
             price_source=f"local_{self._cfg.price_mode}",
         )
-        result.filled.append({
-            "symbol": order.symbol, "side": order.side,
-            "quantity": mr.fill_quantity, "price": mr.fill_price,
-            "total_fee": round(mr.total_fee, 2), "reason": order.reason,
-        })
+        result.filled.append(
+            {
+                "symbol": order.symbol,
+                "side": order.side,
+                "quantity": mr.fill_quantity,
+                "price": mr.fill_price,
+                "total_fee": round(mr.total_fee, 2),
+                "reason": order.reason,
+            }
+        )
 
     async def _persist_fill(
         self,
@@ -399,22 +455,24 @@ class ReplayDayRunner:
         )
         db.add(order_row)
         await db.flush()
-        db.add(ReplayTrade(
-            session_id=session_id,
-            order_id=order_row.order_id,
-            trade_date=trade_date,
-            symbol=symbol,
-            side=side,
-            origin=origin,
-            quantity=quantity,
-            price=price,
-            trade_value=quantity * price,
-            commission=commission,
-            stamp_duty=stamp_duty,
-            transfer_fee=transfer_fee,
-            total_fee=total_fee,
-            price_source=price_source,
-        ))
+        db.add(
+            ReplayTrade(
+                session_id=session_id,
+                order_id=order_row.order_id,
+                trade_date=trade_date,
+                symbol=symbol,
+                side=side,
+                origin=origin,
+                quantity=quantity,
+                price=price,
+                trade_value=quantity * price,
+                commission=commission,
+                stamp_duty=stamp_duty,
+                transfer_fee=transfer_fee,
+                total_fee=total_fee,
+                price_source=price_source,
+            )
+        )
 
     async def _persist_rejected(
         self,
@@ -425,18 +483,20 @@ class ReplayDayRunner:
         origin: OrderOrigin,
         reason: str,
     ) -> None:
-        db.add(ReplayOrder(
-            session_id=session_id,
-            trade_date=trade_date,
-            symbol=order.symbol,
-            side=OrderSide.BUY if order.side.lower() == "buy" else OrderSide.SELL,
-            order_type=OrderType.MARKET,
-            status=OrderStatus.REJECTED,
-            origin=origin,
-            quantity=order.quantity,
-            price=order.price,
-            reject_reason=reason[:200],
-        ))
+        db.add(
+            ReplayOrder(
+                session_id=session_id,
+                trade_date=trade_date,
+                symbol=order.symbol,
+                side=OrderSide.BUY if order.side.lower() == "buy" else OrderSide.SELL,
+                order_type=OrderType.MARKET,
+                status=OrderStatus.REJECTED,
+                origin=origin,
+                quantity=order.quantity,
+                price=order.price,
+                reject_reason=reason[:200],
+            )
+        )
 
     async def _mark_to_market(
         self,
@@ -453,7 +513,9 @@ class ReplayDayRunner:
         market_value = 0.0
         for symbol, pos in positions.items():
             bar = bars.get(symbol)
-            close = bar.close if bar and bar.close > 0 else float(pos.get("price") or 0.0)
+            close = (
+                bar.close if bar and bar.close > 0 else float(pos.get("price") or 0.0)
+            )
             volume = float(pos.get("volume") or 0.0)
             pos["price"] = close
             pos["market_value"] = close * volume
@@ -472,23 +534,35 @@ class ReplayDayRunner:
         trade_date: date,
         account: dict[str, Any],
     ) -> dict[str, Any]:
-        prev = (await db.execute(
-            select(ReplayEquitySnapshot)
-            .where(ReplayEquitySnapshot.session_id == session_id)
-            .order_by(ReplayEquitySnapshot.trade_date.desc())
-            .limit(1)
-        )).scalars().first()
+        prev = (
+            (
+                await db.execute(
+                    select(ReplayEquitySnapshot)
+                    .where(ReplayEquitySnapshot.session_id == session_id)
+                    .order_by(ReplayEquitySnapshot.trade_date.desc())
+                    .limit(1)
+                )
+            )
+            .scalars()
+            .first()
+        )
 
         total_asset = float(account.get("total_asset") or 0.0)
         day_pnl = total_asset - float(prev.total_asset) if prev else 0.0
         positions = account.get("positions") or {}
 
-        existing = (await db.execute(
-            select(ReplayEquitySnapshot).where(
-                ReplayEquitySnapshot.session_id == session_id,
-                ReplayEquitySnapshot.trade_date == trade_date,
+        existing = (
+            (
+                await db.execute(
+                    select(ReplayEquitySnapshot).where(
+                        ReplayEquitySnapshot.session_id == session_id,
+                        ReplayEquitySnapshot.trade_date == trade_date,
+                    )
+                )
             )
-        )).scalars().first()
+            .scalars()
+            .first()
+        )
 
         row = existing or ReplayEquitySnapshot(
             session_id=session_id, trade_date=trade_date
