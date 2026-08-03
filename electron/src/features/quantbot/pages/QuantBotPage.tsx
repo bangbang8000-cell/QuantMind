@@ -5,15 +5,17 @@
  * 执行命令、写代码、跑回测、跑因子挖掘、获取股票数据 AI 分析、获取新闻数据等。
  *
  * 加载策略：
- * - Electron 桌面端：直接访问 http://127.0.0.1:8089（QwenPaw 容器宿主映射端口）
- * - Web 浏览器端：通过 API 网关 /api/v1/qwenpaw-ui/ 反向代理
+ * - Web 浏览器端：通过当前域名的 /api/v1/qwenpaw-ui/ 反向代理（局域网访问同样适用）
+ * - Electron 桌面端：通过用户配置的服务器地址代理；未配置时回退本机 8089
  */
 
 import React, { useEffect, useMemo, useRef, useState, useCallback } from 'react';
 import { Bot, RefreshCw, Wifi, WifiOff, ExternalLink, AlertTriangle } from 'lucide-react';
-import { isElectronEnv } from '../../../config/services';
+import { isElectronEnv, SERVICE_URLS } from '../../../config/services';
 
-const QWENPAW_DESKTOP_URL = 'http://127.0.0.1:8089/';
+const QWENPAW_UI_PATH = '/api/v1/qwenpaw-ui/';
+/** 无任何服务器配置时的兜底地址（QwenPaw 容器宿主映射端口） */
+const QWENPAW_LOCAL_FALLBACK_URL = 'http://127.0.0.1:8089/';
 
 /** iframe 加载超时时间（毫秒） */
 const IFRAME_LOAD_TIMEOUT_MS = 15_000;
@@ -27,14 +29,16 @@ const QuantBotPage: React.FC = () => {
   const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const embedUrl = useMemo(() => {
-    if (isElectronEnv()) {
-      return QWENPAW_DESKTOP_URL;
+    // Web 模式：走当前访问域名的 nginx 代理，天然支持局域网/公网访问
+    if (!isElectronEnv() && typeof window !== 'undefined') {
+      return `${window.location.origin}${QWENPAW_UI_PATH}`;
     }
-    // Web 模式：始终通过当前域名的 nginx 代理访问，忽略 Electron 桌面端保存的 serverUrl
-    if (typeof window !== 'undefined') {
-      return `${window.location.origin}/api/v1/qwenpaw-ui/`;
+    // 桌面端：走用户配置的服务器地址代理，避免硬编码 127.0.0.1 在远程/局域网场景拒连
+    const gateway = SERVICE_URLS.API_GATEWAY;
+    if (gateway) {
+      return `${gateway}${QWENPAW_UI_PATH}`;
     }
-    return '/api/v1/qwenpaw-ui/';
+    return QWENPAW_LOCAL_FALLBACK_URL;
   }, []);
 
   const clearTimer = useCallback(() => {
@@ -53,11 +57,7 @@ const QuantBotPage: React.FC = () => {
   }, [clearTimer]);
 
   const handleOpenExternal = useCallback(() => {
-    if (isElectronEnv()) {
-      window.open(QWENPAW_DESKTOP_URL, '_blank');
-    } else {
-      window.open(embedUrl, '_blank');
-    }
+    window.open(embedUrl, '_blank');
   }, [embedUrl]);
 
   const handleIframeLoad = useCallback(() => {
