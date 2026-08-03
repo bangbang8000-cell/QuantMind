@@ -380,70 +380,76 @@ function CreateSessionForm({ onCreate }: { onCreate: (s: ReplaySession) => void 
         );
     };
 
-    // --- Step 2: Strategy template ---
-    const renderStrategyStep = () => (
-        <div className="space-y-3">
-            <p className="text-xs text-gray-500">选择策略模板，自动填充调仓参数和止损规则。不选则使用默认参数。</p>
+    // --- Step 2: Strategy template (dropdown) ---
+    const renderStrategyStep = () => {
+        // Group templates by category for optgroup rendering
+        const categories: string[] = [];
+        for (const t of templates) {
+            if (!categories.includes(t.category)) categories.push(t.category);
+        }
 
-            {templatesLoading ? (
-                <div className="flex items-center gap-2 py-4 text-gray-400">
-                    <Loader2 size={16} className="animate-spin" />
-                    <span className="text-xs">加载策略模板…</span>
-                </div>
-            ) : templates.length === 0 ? (
-                <p className="text-xs text-gray-400 py-2">暂无策略模板，将使用默认参数。</p>
-            ) : (
-                <div className="space-y-1.5">
-                    {templates.map(t => (
-                        <button
-                            key={t.id}
-                            onClick={() => setSelectedTemplateId(t.id)}
-                            className={`w-full text-left px-3 py-2.5 rounded-lg border transition-colors ${
-                                selectedTemplateId === t.id
-                                    ? 'border-blue-300 bg-blue-50'
-                                    : 'border-gray-100 hover:border-gray-200 hover:bg-gray-50'
-                            }`}
+        const difficultyLabel = (d: string) =>
+            d === 'beginner' ? '入门' : d === 'intermediate' ? '进阶' : '高级';
+
+        return (
+            <div className="space-y-3">
+                <p className="text-xs text-gray-500">选择策略模板，自动填充调仓参数和止损规则。不选则使用默认参数。</p>
+
+                {templatesLoading ? (
+                    <div className="flex items-center gap-2 py-4 text-gray-400">
+                        <Loader2 size={16} className="animate-spin" />
+                        <span className="text-xs">加载策略模板…</span>
+                    </div>
+                ) : templates.length === 0 ? (
+                    <p className="text-xs text-gray-400 py-2">暂无策略模板，将使用默认参数。</p>
+                ) : (
+                    <>
+                        <select
+                            value={selectedTemplateId ?? ''}
+                            onChange={e => setSelectedTemplateId(e.target.value || null)}
+                            className="w-full px-3 py-2.5 rounded-lg border border-gray-200 text-sm focus:outline-none focus:ring-2 focus:ring-blue-200 bg-white"
                         >
-                            <div className="flex items-center justify-between">
+                            <option value="">— 使用默认参数 —</option>
+                            {categories.map(cat => (
+                                <optgroup key={cat} label={cat}>
+                                    {templates.filter(t => t.category === cat).map(t => (
+                                        <option key={t.id} value={t.id}>
+                                            {t.name} [{difficultyLabel(t.difficulty)}]
+                                        </option>
+                                    ))}
+                                </optgroup>
+                            ))}
+                        </select>
+
+                        {/* Selected template detail card */}
+                        {selectedTemplate && (
+                            <div className="px-3 py-2.5 rounded-lg border border-blue-100 bg-blue-50/50 space-y-1.5">
                                 <div className="flex items-center gap-2">
-                                    <span className="text-sm font-medium text-gray-800">{t.name}</span>
-                                    <span className="px-1.5 py-0.5 rounded bg-gray-100 text-gray-500 text-[10px]">{t.category}</span>
+                                    <span className="text-sm font-medium text-gray-800">{selectedTemplate.name}</span>
+                                    <span className="px-1.5 py-0.5 rounded bg-gray-100 text-gray-500 text-[10px]">{selectedTemplate.category}</span>
                                     <span className={`px-1.5 py-0.5 rounded text-[10px] font-medium ${
-                                        t.difficulty === 'beginner' ? 'bg-green-50 text-green-600' :
-                                        t.difficulty === 'intermediate' ? 'bg-amber-50 text-amber-600' :
+                                        selectedTemplate.difficulty === 'beginner' ? 'bg-green-50 text-green-600' :
+                                        selectedTemplate.difficulty === 'intermediate' ? 'bg-amber-50 text-amber-600' :
                                         'bg-red-50 text-red-600'
                                     }`}>
-                                        {t.difficulty === 'beginner' ? '入门' : t.difficulty === 'intermediate' ? '进阶' : '高级'}
+                                        {difficultyLabel(selectedTemplate.difficulty)}
                                     </span>
                                 </div>
-                                {selectedTemplateId === t.id && <CheckSquare size={14} className="text-blue-500" />}
-                            </div>
-                            <p className="text-[10px] text-gray-400 mt-0.5 line-clamp-2">{t.description}</p>
-                            {/* Show key replay params preview */}
-                            {selectedTemplateId === t.id && (
-                                <div className="flex items-center gap-3 mt-1.5 text-[10px] text-gray-500">
-                                    {t.replay_params.topk != null && <span>TopK={String(t.replay_params.topk)}</span>}
-                                    {t.replay_params.weight_mode != null && <span>权重={String(t.replay_params.weight_mode)}</span>}
-                                    {t.replay_params.max_position_pct != null && <span>最大持仓={String(t.replay_params.max_position_pct)}</span>}
-                                    {t.replay_params.stop_loss_pct != null && <span>止损={(Number(t.replay_params.stop_loss_pct) * 100).toFixed(1)}%</span>}
+                                <p className="text-[10px] text-gray-500 leading-relaxed">{selectedTemplate.description}</p>
+                                {/* Key replay params preview */}
+                                <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-[10px] text-gray-600">
+                                    {selectedTemplate.replay_params.topk != null && <span>TopK={String(selectedTemplate.replay_params.topk)}</span>}
+                                    {selectedTemplate.replay_params.weight_mode != null && <span>权重={String(selectedTemplate.replay_params.weight_mode)}</span>}
+                                    {selectedTemplate.replay_params.max_position_pct != null && <span>最大持仓={String(selectedTemplate.replay_params.max_position_pct)}</span>}
+                                    {selectedTemplate.replay_params.stop_loss_pct != null && <span>止损={(Number(selectedTemplate.replay_params.stop_loss_pct) * 100).toFixed(1)}%</span>}
                                 </div>
-                            )}
-                        </button>
-                    ))}
-
-                    {/* Clear selection */}
-                    {selectedTemplateId && (
-                        <button
-                            onClick={() => setSelectedTemplateId(null)}
-                            className="text-xs text-gray-400 hover:text-gray-600 underline"
-                        >
-                            清除选择（使用默认参数）
-                        </button>
-                    )}
-                </div>
-            )}
-        </div>
-    );
+                            </div>
+                        )}
+                    </>
+                )}
+            </div>
+        );
+    };
 
     // --- Step 3: Params ---
     const renderParamsStep = () => {
