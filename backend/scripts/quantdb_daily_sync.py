@@ -1,0 +1,819 @@
+#!/usr/bin/env python3
+"""
+QuantDB 每日数据同步 — A 股唯一数据同步入口
+=============================================
+
+数据流:
+  1. QuantDB SDK sync_dataset() → data/quantdb/ (parquet 增量更新)
+  2. 从 parquet 批量填充 PG stock_daily_latest (DuckDB join + execute_values)
+  3. 增量更新 Qlib 缓存 (从 parquet 生成 → data/quantdb/.qlib_cache/cn_data)
+
+用法:
+  # 每日增量同步 (推荐 cron 任务)
+  python backend/scripts/quantdb_daily_sync.py
+
+  # 全量重灌 (从 2016-01-04 起)
+  python backend/scripts/quantdb_daily_sync.py --full
+
+  # 仅同步 parquet (不更新 PG/Qlib)
+  python backend/scripts/quantdb_daily_sync.py --parquet-only
+
+  # 指定数据集
+  python backend/scripts/quantdb_daily_sync.py --datasets daily_forward,valuation
+
+  # 查看状态
+  python backend/scripts/quantdb_daily_sync.py --status
+"""
+
+from __future__ import annotations
+
+import argparse
+import hashlib
+import json
+import logging
+import os
+import sys
+import time
+from concurrent.futures import ThreadPoolExecutor, as_completed
+from datetime import date, datetime, timedelta
+from pathlib import Path
+from typing import Optional
+
+import pandas as pd
+
+PROJECT_ROOT = Path(__file__).resolve().parents[2]
+sys.path.insert(0, str(PROJECT_ROOT))
+
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s [%(levelname)s] %(message)s",
+    datefmt="%H:%M:%S",
+)
+log = logging.getLogger("quantdb_daily_sync")
+
+# ---------------------------------------------------------------------------
+# Config
+# ---------------------------------------------------------------------------
+QUANTDB_DATA_DIR = Path(os.getenv("QM_QUANTDB_DATA_DIR", str(PROJECT_ROOT / "data" / "quantdb")))
+API_KEY = os.getenv("QUANTDB_API_KEY", "")
+
+# V2 分区数据集 (按交易日分区, sync_dataset 增量同步)
+V2_DATASETS = [
+    {"category_id": "1", "sub_category": "daily_unadjusted", "dir": "1_kline_data"},
+    {"category_id": "1", "sub_category": "daily_forward", "dir": "1_kline_data"},
+    {"category_id": "1", "sub_category": "daily_backward", "dir": "1_kline_data"},
+    {"category_id": "1", "sub_category": "index_daily", "dir": "1_kline_data"},
+    {"category_id": "2", "sub_category": "margin_trading", "dir": "2_base_sector"},
+    {"category_id": "5", "sub_category": "valuation", "dir": "5_technical_derived"},
+    {"category_id": "5", "sub_category": "technical_indicators", "dir": "5_technical_derived"},
+    {"category_id": "5", "sub_category": "market_sentiment", "dir": "5_technical_derived"},
+    {"category_id": "6", "sub_category": "features_daily", "dir": "6_ml_datasets"},
+    {"category_id": "6", "sub_category": "l1_factors", "dir": "6_ml_datasets"},
+    {"category_id": "6", "sub_category": "l2_factors", "dir": "6_ml_datasets"},
+]
+
+# V1 非分区数据集 (全量 ETag 增量)
+V1_DATASETS = [
+    {"category_id": "2", "sub_category": "sector_concept", "dir": "2_base_sector"},
+    {"category_id": "2", "sub_category": "instrument_detail", "dir": "2_base_sector"},
+    {"category_id": "2", "sub_category": "index_weights", "dir": "2_base_sector"},
+    {"category_id": "2", "sub_category": "trading_calendar", "dir": "2_base_sector"},
+    {"category_id": "3", "sub_category": "balance", "dir": "3_financial_data"},
+    {"category_id": "3", "sub_category": "income", "dir": "3_financial_data"},
+    {"category_id": "3", "sub_category": "cashflow", "dir": "3_financial_data"},
+    {"category_id": "3", "sub_category": "capital", "dir": "3_financial_data"},
+    {"category_id": "3", "sub_category": "pershare_index", "dir": "3_financial_data"},
+    {"category_id": "3", "sub_category": "dividend_factors", "dir": "3_financial_data"},
+    {"category_id": "3", "sub_category": "holder_num", "dir": "3_financial_data"},
+]
+
+# DB config
+DB_HOST = os.getenv("DB_HOST", os.getenv("DB_MASTER_HOST", "127.0.0.1"))
+DB_PORT = int(os.getenv("DB_PORT", os.getenv("DB_MASTER_PORT", "5432")))
+DB_NAME = os.getenv("DB_NAME", "quantmind")
+DB_USER = os.getenv("DB_USER", "quantmind")
+DB_PASS = os.getenv("DB_PASSWORD", "quantmind")
+
+
+# ---------------------------------------------------------------------------
+# SDK client
+# ---------------------------------------------------------------------------
+def _make_client():
+    from quantdb_sdk import QuantDBClient
+    if not API_KEY:
+        raise RuntimeError("QUANTDB_API_KEY 未配置")
+    return QuantDBClient(api_key=API_KEY, timeout=(15, 300), max_retries=3)
+
+
+# ---------------------------------------------------------------------------
+# Phase 1: sync_dataset() → parquet
+# ---------------------------------------------------------------------------
+SYNC_WORKERS = 8
+
+# SDK 把同步状态库放在 ~/.quantdb_state/，文件名由 save_dir 路径生成。
+_STATE_DIR = Path(os.path.expanduser("~/.quantdb_state"))
+
+
+def _state_path() -> Path:
+    root = str(QUANTDB_DATA_DIR.resolve())
+    name = "quantdb_sync_" + root.replace("/", "_").replace("\\", "_").strip("_") + ".sqlite"
+    return _STATE_DIR / name
+
+
+def _open_state():
+    import sqlite3
+
+    _STATE_DIR.mkdir(parents=True, exist_ok=True)
+    conn = sqlite3.connect(str(_state_path()), timeout=60)
+    conn.execute("PRAGMA journal_mode=WAL")
+    conn.execute("PRAGMA busy_timeout=60000")
+    conn.execute(
+        "CREATE TABLE IF NOT EXISTS objects ("
+        "key TEXT PRIMARY KEY, etag TEXT, sha256 TEXT, size INTEGER,"
+        " path TEXT, layout TEXT, dataset TEXT)"
+    )
+    conn.execute(
+        "CREATE TABLE IF NOT EXISTS releases (dataset TEXT PRIMARY KEY, release_id TEXT NOT NULL)"
+    )
+    return conn
+
+
+def _is_patch_key(key: str) -> bool:
+    """patches/ 是上游重算的中间态快照，与 dt=* 分区重复且复权基准可能过期。
+
+    实测 20260727.2/20260801.3 等 patch 在自身末日违反「前复权末日价==不复权价」
+    不变式（如 300806.SZ 报 41.05、当日实际 57.48），而 dt 分区 5529/5529 全部满足。
+    dt 分区已吸收更晚 release 的重算结果，故跳过 patches 可省流量且避免引入过期基准。
+    """
+    return "/patches/" in key or key.startswith("releases/")
+
+
+def _download_object(client, dataset: str, cat_id: str, key: str, target: Path, layout: str):
+    """下载单个对象，返回 (sha256, md5, size)。不校验服务端声明的 size。"""
+    params = {"category_id": cat_id, "sub_category": dataset, "layout": layout}
+    if layout == "v2":
+        params["object_key"] = key
+    else:
+        params["symbol"] = ""
+    resp = client._download_stream(params)
+    if resp.status_code != 200:
+        raise RuntimeError(f"HTTP {resp.status_code}")
+
+    target.parent.mkdir(parents=True, exist_ok=True)
+    tmp = target.with_suffix(target.suffix + ".part")
+    h_sha, h_md5 = hashlib.sha256(), hashlib.md5()
+    try:
+        with open(tmp, "wb") as fh:
+            for chunk in resp.iter_content(1 << 20):
+                if chunk:
+                    fh.write(chunk)
+                    h_sha.update(chunk)
+                    h_md5.update(chunk)
+        size = tmp.stat().st_size
+        tmp.replace(target)
+    except BaseException:
+        tmp.unlink(missing_ok=True)
+        raise
+    return h_sha.hexdigest(), h_md5.hexdigest(), size
+
+
+def _sync_v2_dataset(client, state, cat_id: str, dataset: str) -> tuple[int, int]:
+    """同步 V2 分区数据集。跳过 patches，不校验服务端 size 声明。"""
+    data = client._get("/api/v1/data/releases", {"datasets": dataset, "after_release": ""})
+    releases = data.get("releases", [])
+    if not releases:
+        return 0, 0
+
+    # 同一 key 可被多份 manifest 引用，以 cursor 序列中最新一份为准。
+    latest: dict[str, dict] = {}
+    for rel in releases:
+        for obj in rel.get("objects", []):
+            key = client._normalise_release_key(obj["key"])
+            if _is_patch_key(key):
+                continue
+            latest[key] = obj
+
+    pending = []
+    for key, obj in latest.items():
+        rel_path = obj.get("relative_path") or key
+        target = QUANTDB_DATA_DIR / rel_path
+        row = state.execute("SELECT path FROM objects WHERE key=?", (key,)).fetchone()
+        if row and Path(row[0]).exists() and Path(row[0]).stat().st_size > 0:
+            continue
+        pending.append((key, obj, target))
+
+    if not pending:
+        return 0, 0
+
+    log.info("[V2] %s: 需下载 %d / %d", dataset, len(pending), len(latest))
+    done = errors = 0
+
+    def work(item):
+        key, obj, target = item
+        sha, _md5, size = _download_object(client, dataset, cat_id, key, target, "v2")
+        return key, obj, target, sha, size
+
+    with ThreadPoolExecutor(max_workers=SYNC_WORKERS) as pool:
+        futures = {pool.submit(work, it): it[0] for it in pending}
+        for fut in as_completed(futures):
+            try:
+                key, obj, target, sha, size = fut.result()
+            except Exception as exc:
+                errors += 1
+                log.warning("[V2] %s: %s 失败 %s", dataset, futures[fut], str(exc)[:90])
+                continue
+            state.execute(
+                "INSERT OR REPLACE INTO objects(key,etag,sha256,size,path,layout,dataset)"
+                " VALUES(?,?,?,?,?,?,?)",
+                (key, obj.get("etag", ""), sha, size, str(target), "v2_daily_partition", dataset),
+            )
+            done += 1
+            if done % 200 == 0:
+                log.info("[V2] %s: %d/%d", dataset, done, len(pending))
+
+    state.execute(
+        "INSERT OR REPLACE INTO releases(dataset,release_id) VALUES(?,?)",
+        (dataset, releases[-1]["release_id"]),
+    )
+    state.commit()
+    log.info("[V2] %s: 下载 %d, 失败 %d", dataset, done, errors)
+    return done, errors
+
+
+def _sync_v1_dataset(client, state, cat_id: str, dataset: str) -> tuple[int, int]:
+    """同步 V1 全量数据集。用 etag(md5) 校验，跳过服务端 size 声明。"""
+    manifest = client.query_manifest(category_id=cat_id, sub_category=dataset)
+    if not manifest:
+        return 0, 0
+
+    pending = []
+    for obj in manifest:
+        key = obj["key"]
+        rel_path = obj.get("relative_path") or key
+        target = QUANTDB_DATA_DIR / rel_path
+        row = state.execute("SELECT path FROM objects WHERE key=?", (key,)).fetchone()
+        if row and Path(row[0]).exists() and Path(row[0]).stat().st_size > 0:
+            continue
+        pending.append((key, obj, target))
+
+    if not pending:
+        return 0, 0
+
+    log.info("[V1] %s: 需下载 %d / %d", dataset, len(pending), len(manifest))
+    done = errors = 0
+
+    def work(item):
+        key, obj, target = item
+        params = {
+            "category_id": cat_id,
+            "sub_category": dataset,
+            "layout": "v1",
+            "symbol": obj.get("symbol", ""),
+        }
+        resp = client._download_stream(params)
+        if resp.status_code != 200:
+            raise RuntimeError(f"HTTP {resp.status_code}")
+        target.parent.mkdir(parents=True, exist_ok=True)
+        tmp = target.with_suffix(target.suffix + ".part")
+        h_sha, h_md5 = hashlib.sha256(), hashlib.md5()
+        try:
+            with open(tmp, "wb") as fh:
+                for chunk in resp.iter_content(1 << 20):
+                    if chunk:
+                        fh.write(chunk)
+                        h_sha.update(chunk)
+                        h_md5.update(chunk)
+            size = tmp.stat().st_size
+            expected = (obj.get("etag") or "").strip('"')
+            if expected and "-" not in expected and h_md5.hexdigest() != expected:
+                raise RuntimeError(f"MD5 不符 期望{expected[:10]} 实际{h_md5.hexdigest()[:10]}")
+            tmp.replace(target)
+        except BaseException:
+            tmp.unlink(missing_ok=True)
+            raise
+        return key, obj, target, h_sha.hexdigest(), h_md5.hexdigest(), size
+
+    with ThreadPoolExecutor(max_workers=SYNC_WORKERS) as pool:
+        futures = {pool.submit(work, it): it[0] for it in pending}
+        for fut in as_completed(futures):
+            try:
+                key, obj, target, sha, md5, size = fut.result()
+            except Exception as exc:
+                errors += 1
+                log.warning("[V1] %s: %s 失败 %s", dataset, futures[fut], str(exc)[:90])
+                continue
+            state.execute(
+                "INSERT OR REPLACE INTO objects(key,etag,sha256,size,path,layout,dataset)"
+                " VALUES(?,?,?,?,?,?,?)",
+                (key, f'"{md5}"', sha, size, str(target), "v1_symbol", dataset),
+            )
+            done += 1
+
+    state.commit()
+    log.info("[V1] %s: 下载 %d, 失败 %d", dataset, done, errors)
+    return done, errors
+
+
+def reseed_state(datasets: list[dict] | None = None) -> dict:
+    """用本地已有文件的哈希重建 SDK 状态库。
+
+    状态库按 save_dir 路径命名，换目录（如 NAS→本地）后是空库，
+    不重建会导致已有数据被全量重下。
+    """
+    if datasets is None:
+        datasets = V2_DATASETS + V1_DATASETS
+
+    client = _make_client()
+    state = _open_state()
+    summary = {"seeded": 0, "per_dataset": {}}
+
+    def sha256_of(path: Path) -> str:
+        h = hashlib.sha256()
+        with open(path, "rb") as fh:
+            for block in iter(lambda: fh.read(1 << 20), b""):
+                h.update(block)
+        return h.hexdigest()
+
+    def md5_of(path: Path) -> str:
+        h = hashlib.md5()
+        with open(path, "rb") as fh:
+            for block in iter(lambda: fh.read(1 << 20), b""):
+                h.update(block)
+        return h.hexdigest()
+
+    for ds in datasets:
+        sub, cat_id = ds["sub_category"], ds["category_id"]
+        is_v2 = ds in V2_DATASETS
+        rows = []
+
+        if is_v2:
+            data = client._get("/api/v1/data/releases", {"datasets": sub, "after_release": ""})
+            releases = data.get("releases", [])
+            latest = {}
+            for rel in releases:
+                for obj in rel.get("objects", []):
+                    key = client._normalise_release_key(obj["key"])
+                    if _is_patch_key(key):
+                        continue
+                    latest[key] = obj
+
+            def check_v2(item, _sub=sub):
+                key, obj = item
+                target = QUANTDB_DATA_DIR / (obj.get("relative_path") or key)
+                if not target.exists() or target.stat().st_size == 0:
+                    return None
+                expected = (obj.get("sha256") or "").lower()
+                actual = sha256_of(target)
+                if expected and actual != expected:
+                    return None
+                return (key, obj.get("etag", ""), actual, target.stat().st_size,
+                        str(target), "v2_daily_partition", _sub)
+
+            with ThreadPoolExecutor(max_workers=SYNC_WORKERS) as pool:
+                rows = [r for r in pool.map(check_v2, latest.items()) if r]
+            if releases:
+                state.execute(
+                    "INSERT OR REPLACE INTO releases(dataset,release_id) VALUES(?,?)",
+                    (sub, releases[-1]["release_id"]),
+                )
+        else:
+            manifest = client.query_manifest(category_id=cat_id, sub_category=sub)
+
+            def check_v1(obj, _sub=sub):
+                key = obj["key"]
+                target = QUANTDB_DATA_DIR / (obj.get("relative_path") or key)
+                if not target.exists() or target.stat().st_size == 0:
+                    return None
+                expected = (obj.get("etag") or "").strip('"')
+                actual_md5 = md5_of(target)
+                if expected and "-" not in expected and actual_md5 != expected:
+                    return None
+                return (key, f'"{actual_md5}"', sha256_of(target), target.stat().st_size,
+                        str(target), "v1_symbol", _sub)
+
+            with ThreadPoolExecutor(max_workers=SYNC_WORKERS) as pool:
+                rows = [r for r in pool.map(check_v1, manifest) if r]
+
+        if rows:
+            state.executemany(
+                "INSERT OR REPLACE INTO objects(key,etag,sha256,size,path,layout,dataset)"
+                " VALUES(?,?,?,?,?,?,?)",
+                rows,
+            )
+            state.commit()
+        summary["per_dataset"][sub] = len(rows)
+        summary["seeded"] += len(rows)
+        log.info("[RESEED] %s: 登记 %d 个已验证文件", sub, len(rows))
+
+    state.close()
+    log.info("状态库重建完成: 共 %d 个对象", summary["seeded"])
+    return summary
+
+
+def sync_parquet(datasets: list[dict] | None = None, *, dry_run: bool = False) -> dict:
+    """增量同步 QuantDB parquet 数据。
+
+    不走 SDK 的 sync_dataset()：服务端 manifest 的 size 声明与实际文件不符
+    （如 trading_calendar 声明 15224、实际 15203），SDK 会因 size 校验失败
+    整个数据集中断。这里改为自行下载 + 哈希校验，并跳过 patches 对象。
+    """
+    if datasets is None:
+        datasets = V2_DATASETS + V1_DATASETS
+
+    if dry_run:
+        log.info("dry-run: 跳过实际下载")
+        return {"synced": 0, "up_to_date": 0, "errors": [], "total_downloaded": 0}
+
+    client = _make_client()
+    state = _open_state()
+    results = {"synced": 0, "up_to_date": 0, "errors": [], "total_downloaded": 0}
+
+    for ds in datasets:
+        sub, cat_id = ds["sub_category"], ds["category_id"]
+        is_v2 = ds in V2_DATASETS
+        try:
+            if is_v2:
+                done, errs = _sync_v2_dataset(client, state, cat_id, sub)
+            else:
+                done, errs = _sync_v1_dataset(client, state, cat_id, sub)
+            if done:
+                results["synced"] += 1
+                results["total_downloaded"] += done
+            else:
+                results["up_to_date"] += 1
+                log.info("[OK] %s: 已最新", sub)
+            if errs:
+                results["errors"].append(f"{sub}: {errs} 个对象下载失败")
+        except Exception as exc:
+            results["errors"].append(f"{sub}: {exc}")
+            log.warning("[FAIL] %s: %s", sub, exc)
+            client = _make_client()
+
+    state.close()
+    log.info(
+        "Parquet sync: %d synced, %d up-to-date, %d errors, %d files downloaded",
+        results["synced"], results["up_to_date"], len(results["errors"]),
+        results["total_downloaded"],
+    )
+    return results
+
+
+# ---------------------------------------------------------------------------
+# Phase 2: parquet → PG fill
+# ---------------------------------------------------------------------------
+def _get_engine():
+    from sqlalchemy import create_engine
+    from urllib.parse import quote_plus as _q
+    db_url = os.getenv("DATABASE_URL", "").strip()
+    if not db_url:
+        db_url = f"postgresql+psycopg2://{DB_USER}:{_q(DB_PASS)}@{DB_HOST}:{DB_PORT}/{DB_NAME}"
+    elif "asyncpg" in db_url:
+        db_url = db_url.replace("asyncpg", "psycopg2")
+    elif db_url.startswith("postgresql://"):
+        db_url = db_url.replace("postgresql://", "postgresql+psycopg2://", 1)
+    return create_engine(db_url, pool_pre_ping=True)
+
+
+def _to_internal(symbol: str) -> str:
+    """600036.SH -> SH600036 (PG internal format)"""
+    s = symbol.strip().upper()
+    if "." in s:
+        code, ex = s.split(".", 1)
+        return f"{ex}{code}"
+    return s
+
+
+QUANTDB_EPOCH = date(2016, 1, 4)
+
+# PG stock_daily_latest <- QuantDB 视图列映射
+_KLINE_COLS = ("open", "high", "low", "close", "volume", "amount")
+
+# features_daily = technical_indicators + valuation 合并表，覆盖 2016~今全序列。
+# 不用 qdb_technical_indicators：它只有 595 天（2018-06~2026-07 整段缺失）。
+_FEATURE_COLS = {
+    "pe_ttm": "pe_ttm",
+    "pb": "pb",
+    "total_mv": "total_mv",
+    "float_mv": "float_mv",
+    "ma5": "ma5", "ma10": "ma10", "ma20": "ma20", "ma60": "ma60",
+    "ma_gap_5": "ma_gap_5", "ma_gap_10": "ma_gap_10", "ma_gap_20": "ma_gap_20",
+    "return_1d": "return_1d", "return_3d": "return_3d", "return_5d": "return_5d",
+    "return_10d": "return_10d", "return_20d": "return_20d", "return_60d": "return_60d",
+    "vol_std_5": "vol_std_5", "vol_std_20": "vol_std_20", "vol_std_60": "vol_std_60",
+    "vol_atr_14": "vol_atr_14", "rsi_14": "rsi_14", "rsi_6": "rsi_6",
+    "macd_hist": "macd_hist", "kdj_k": "kdj_k", "beta_20": "beta_20",
+    "volume_ma_3": "volume_ma_5", "amount_ma_5": "amount_ma_5",
+    "pct_change": "pct_change",
+    "vol_to_ma5": "volume_ratio_5", "vol_to_ma20": "volume_ratio_20",
+}
+# PG volume_trend_3d 是 boolean（量能是否上升），QuantDB 同名列是数值趋势，语义不同，不映射
+
+
+def _trade_dates(hub, start: date, end: date) -> list[date]:
+    """从 daily_forward 分区目录枚举可用交易日。"""
+    root = Path(hub.data_dir) / "1_kline_data" / "daily_forward"
+    out = []
+    for p in sorted(root.glob("dt=*")):
+        try:
+            d = datetime.strptime(p.name[3:], "%Y%m%d").date()
+        except ValueError:
+            continue
+        if start <= d <= end:
+            out.append(d)
+    return out
+
+
+def fill_pg_from_parquet(
+    symbols: list[str] | None = None,
+    *,
+    start_date: date | None = None,
+    end_date: date | None = None,
+    batch_days: int = 20,
+) -> dict:
+    """从 QuantDB parquet 批量填充 PG stock_daily_latest。
+
+    按交易日分批，单条 SQL join kline+valuation+technical_indicators，
+    用 execute_values 批量 upsert（逐行 execute 在全量场景下不可用）。
+    """
+    from psycopg2.extras import execute_values
+
+    from backend.services.engine.data_platform.quantdb_hub import QuantDBDataHub
+
+    hub = QuantDBDataHub(QUANTDB_DATA_DIR)
+    if not hub.available:
+        return {"status": "skipped", "reason": "QuantDB data dir not available"}
+
+    start = start_date or QUANTDB_EPOCH
+    end = end_date or date.today()
+    days = _trade_dates(hub, start, end)
+    if not days:
+        return {"status": "skipped", "reason": f"no trade dates in {start}~{end}"}
+
+    feat_cols = list(_FEATURE_COLS)
+    pg_cols = (
+        ["trade_date", "symbol", "adj_factor"]
+        + list(_KLINE_COLS)
+        + [_FEATURE_COLS[c] for c in feat_cols]
+    )
+    non_pk = [c for c in pg_cols if c not in ("trade_date", "symbol")]
+    update_set = ", ".join(f"{c}=EXCLUDED.{c}" for c in non_pk)
+    insert_sql = (
+        f"INSERT INTO stock_daily_latest ({', '.join(pg_cols)}) VALUES %s "
+        f"ON CONFLICT (trade_date, symbol) DO UPDATE SET {update_set}"
+    )
+
+    conn_duck = hub._get_duck_conn()
+    engine = _get_engine()
+    has_feat = hub._view_exists("qdb_features_daily")
+    if not has_feat:
+        log.warning("qdb_features_daily 视图缺失，仅写入 OHLCV")
+
+    sym_filter = ""
+    if symbols:
+        qdb_syms = {s for s in symbols} | {
+            f"{s[2:]}.{s[:2]}" for s in symbols if len(s) > 2 and s[:2] in ("SH", "SZ", "BJ")
+        }
+        quoted = ", ".join("'" + s.replace("'", "''") + "'" for s in sorted(qdb_syms))
+        sym_filter = f" AND k.symbol IN ({quoted})"
+
+    total_rows = 0
+    failed_days: list[str] = []
+
+    for i in range(0, len(days), batch_days):
+        chunk = days[i:i + batch_days]
+        lo, hi = chunk[0], chunk[-1]
+        feat_sel = "".join(
+            f", f.{src} AS {dst}" for src, dst in _FEATURE_COLS.items()
+        ) if has_feat else "".join(
+            f", NULL AS {dst}" for dst in _FEATURE_COLS.values()
+        )
+        feat_join = (
+            " LEFT JOIN qdb_features_daily f ON f.symbol = k.symbol AND f.dt = k.dt"
+            if has_feat else ""
+        )
+        sql = (
+            f"SELECT k.dt, k.symbol, k.open, k.high, k.low, k.close, "
+            f"k.volume, k.amount{feat_sel} "
+            f"FROM qdb_daily_forward k{feat_join} "
+            f"WHERE k.dt >= {lo:%Y%m%d} AND k.dt <= {hi:%Y%m%d}{sym_filter}"
+        )
+
+        try:
+            df = conn_duck.execute(sql).fetchdf()
+        except Exception as exc:
+            log.warning("duckdb query failed %s~%s: %s", lo, hi, exc)
+            failed_days.append(f"{lo}~{hi}")
+            continue
+
+        if df.empty:
+            continue
+
+        df["symbol"] = df["symbol"].map(lambda s: _to_internal(str(s)))
+        df["adj_factor"] = 1.0
+
+        for c in _KLINE_COLS:
+            df[c] = pd.to_numeric(df[c], errors="coerce")
+
+        # dt 为 Hive 分区整数 YYYYMMDD -> PG DATE
+        df["trade_date"] = pd.to_datetime(
+            df["dt"].astype("int64").astype(str), format="%Y%m%d"
+        ).dt.date
+        df = df.drop(columns=["dt"])
+        df = df.replace([float("inf"), float("-inf")], None)
+        df = df.astype(object).where(pd.notna(df), None)
+
+        records = [tuple(r) for r in df[pg_cols].itertuples(index=False, name=None)]
+        try:
+            raw = engine.raw_connection()
+            try:
+                with raw.cursor() as cur:
+                    execute_values(cur, insert_sql, records, page_size=5000)
+                raw.commit()
+            finally:
+                raw.close()
+            total_rows += len(records)
+            log.info("PG fill %s~%s: %d rows (total %d)", lo, hi, len(records), total_rows)
+        except Exception as exc:
+            log.warning("PG upsert failed %s~%s: %s", lo, hi, exc)
+            failed_days.append(f"{lo}~{hi}")
+
+    log.info("PG fill done: %d rows, %d failed batches", total_rows, len(failed_days))
+    return {
+        "status": "ok" if not failed_days else "partial",
+        "rows": total_rows,
+        "trade_dates": len(days),
+        "failed_batches": failed_days,
+    }
+
+
+# ---------------------------------------------------------------------------
+# Phase 3: Qlib cache incremental update
+# ---------------------------------------------------------------------------
+def update_qlib_cache() -> dict:
+    """增量更新 Qlib 缓存 (从 QuantDB parquet 生成)。"""
+    try:
+        from backend.services.engine.qlib_data_builder import ensure_qlib_cache
+        provider_uri = ensure_qlib_cache(QUANTDB_DATA_DIR)
+        return {"status": "ok", "provider_uri": provider_uri}
+    except Exception as exc:
+        log.warning("Qlib cache update failed: %s", exc)
+        return {"status": "error", "reason": str(exc)}
+
+
+# ---------------------------------------------------------------------------
+# Status
+# ---------------------------------------------------------------------------
+def show_status() -> dict:
+    """显示 QuantDB 数据同步状态。"""
+    status = {
+        "quantdb_dir": str(QUANTDB_DATA_DIR),
+        "quantdb_exists": QUANTDB_DATA_DIR.is_dir(),
+    }
+
+    if QUANTDB_DATA_DIR.is_dir():
+        # 统计各数据集文件数
+        for ds in V2_DATASETS + V1_DATASETS:
+            sub = ds["sub_category"]
+            parent = ds["dir"]
+            p = QUANTDB_DATA_DIR / parent / sub
+            count = sum(1 for _ in p.rglob("*.parquet")) if p.exists() else 0
+            status[f"{parent}/{sub}"] = count
+
+    # Qlib cache
+    qlib_cache = QUANTDB_DATA_DIR / ".qlib_cache" / "cn_data"
+    if qlib_cache.is_dir():
+        cal_file = qlib_cache / "calendars" / "day.txt"
+        if cal_file.exists():
+            lines = cal_file.read_text().strip().splitlines()
+            status["qlib_cache_calendar"] = len(lines)
+            if lines:
+                status["qlib_cache_range"] = f"{lines[0]} ~ {lines[-1]}"
+        feat_dir = qlib_cache / "features"
+        if feat_dir.exists():
+            status["qlib_cache_symbols"] = sum(1 for d in feat_dir.iterdir() if d.is_dir())
+
+    # PG status
+    try:
+        engine = _get_engine()
+        from sqlalchemy import text as sql_text
+        with engine.begin() as conn:
+            row = conn.execute(
+                sql_text("SELECT MAX(trade_date), COUNT(DISTINCT symbol) FROM stock_daily_latest")
+            ).fetchone()
+            if row and row[0]:
+                status["pg_latest_date"] = row[0].isoformat()
+                status["pg_symbol_count"] = row[1]
+    except Exception:
+        pass
+
+    return status
+
+
+# ---------------------------------------------------------------------------
+# Main
+# ---------------------------------------------------------------------------
+def run_daily_sync(
+    *,
+    parquet_only: bool = False,
+    datasets: list[str] | None = None,
+    skip_parquet: bool = False,
+    skip_pg: bool = False,
+    skip_qlib: bool = False,
+    full: bool = False,
+    dry_run: bool = False,
+) -> dict:
+    """执行每日同步流程。"""
+    result = {
+        "started": datetime.now().isoformat(),
+        "parquet": None,
+        "pg_fill": None,
+        "qlib_cache": None,
+    }
+
+    # Phase 1: sync parquet
+    if not skip_parquet:
+        log.info("=== Phase 1: Sync QuantDB parquet ===")
+        ds_list = None
+        if datasets:
+            all_ds = V2_DATASETS + V1_DATASETS
+            ds_list = [ds for ds in all_ds if ds["sub_category"] in datasets]
+        result["parquet"] = sync_parquet(ds_list, dry_run=dry_run)
+
+    if parquet_only:
+        result["finished"] = datetime.now().isoformat()
+        return result
+
+    # Phase 2: fill PG from parquet
+    if not skip_pg:
+        log.info("=== Phase 2: Fill PG from parquet ===")
+        if full:
+            result["pg_fill"] = fill_pg_from_parquet(start_date=QUANTDB_EPOCH)
+        else:
+            result["pg_fill"] = fill_pg_from_parquet()
+
+    # Phase 3: update Qlib cache
+    if not skip_qlib:
+        log.info("=== Phase 3: Update Qlib cache ===")
+        result["qlib_cache"] = update_qlib_cache()
+
+    result["finished"] = datetime.now().isoformat()
+    log.info("Daily sync complete")
+    return result
+
+
+def main():
+    parser = argparse.ArgumentParser(description="QuantDB 每日数据同步")
+    parser.add_argument("--parquet-only", action="store_true", help="仅同步 parquet")
+    parser.add_argument("--skip-parquet", action="store_true", help="跳过 parquet 同步")
+    parser.add_argument("--skip-pg", action="store_true", help="跳过 PG 填充")
+    parser.add_argument("--skip-qlib", action="store_true", help="跳过 Qlib 缓存更新")
+    parser.add_argument("--full", action="store_true", help="全量重灌 PG (从 2016-01-04 起)")
+    parser.add_argument("--datasets", type=str, help="指定数据集 (逗号分隔)")
+    parser.add_argument("--dry-run", action="store_true", help="仅检查，不下载")
+    parser.add_argument("--status", action="store_true", help="查看同步状态")
+    parser.add_argument(
+        "--reseed-state",
+        action="store_true",
+        help="用本地已有文件重建 SDK 状态库（换数据目录后必须先跑，否则会全量重下）",
+    )
+    args = parser.parse_args()
+
+    if args.status:
+        status = show_status()
+        print(json.dumps(status, indent=2, ensure_ascii=False))
+        return 0
+
+    datasets = args.datasets.split(",") if args.datasets else None
+
+    if args.reseed_state:
+        ds_list = None
+        if datasets:
+            all_ds = V2_DATASETS + V1_DATASETS
+            ds_list = [d for d in all_ds if d["sub_category"] in datasets]
+        summary = reseed_state(ds_list)
+        print(json.dumps(summary, indent=2, ensure_ascii=False))
+        return 0
+
+    result = run_daily_sync(
+        parquet_only=args.parquet_only,
+        datasets=datasets,
+        skip_parquet=args.skip_parquet,
+        skip_pg=args.skip_pg,
+        skip_qlib=args.skip_qlib,
+        full=args.full,
+        dry_run=args.dry_run,
+    )
+
+    log.info("Result: %s", json.dumps(result, indent=2, ensure_ascii=False, default=str))
+    return 0
+
+
+if __name__ == "__main__":
+    try:
+        sys.exit(main())
+    except KeyboardInterrupt:
+        print("\nInterrupted")
+        sys.exit(1)
+    except Exception as e:
+        log.error("FATAL: %s", e, exc_info=True)
+        sys.exit(1)

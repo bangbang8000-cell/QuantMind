@@ -464,6 +464,80 @@ class QlibDataBuilder:
 
         return True
 
+    def build_features_bulk(self) -> dict:
+        """一次扫描全市场 parquet，按标的分组写 bin。
+
+        逐标的构建需要对每个 symbol 各做两次全库扫描（前复权 + 不复权），
+        5500 个标的会重复扫 2500+ 个分区，容器内直接 OOM。这里改为整体读入
+        再 groupby，代价是一次约 10GB 的 DataFrame。
+        """
+        import duckdb
+
+        cal_dates = self._load_calendar()
+        if not cal_dates:
+            logger.warning("请先构建日历 (build_calendar)")
+            return {"updated": 0, "skipped": 0}
+        cal_index = {d: i for i, d in enumerate(cal_dates)}
+
+        fwd = str(self._hub.data_dir / "1_kline_data/daily_forward/dt=*/data.parquet")
+        unadj = str(self._hub.data_dir / "1_kline_data/daily_unadjusted/dt=*/data.parquet")
+
+        con = duckdb.connect(config={"memory_limit": "8GB", "threads": "4"})
+        try:
+            df = con.execute(
+                f"""
+                SELECT f.symbol, CAST(f.time AS DATE) d,
+                       f.open, f.high, f.low, f.close, f.volume, f.amount,
+                       u.close AS close_unadj
+                FROM read_parquet('{fwd}') f
+                LEFT JOIN read_parquet('{unadj}') u
+                  ON u.symbol = f.symbol AND CAST(u.time AS DATE) = CAST(f.time AS DATE)
+                ORDER BY f.symbol, d
+                """
+            ).fetchdf()
+        finally:
+            con.close()
+
+        if df.empty:
+            return {"updated": 0, "skipped": 0}
+
+        df["ci"] = df["d"].astype(str).map(cal_index)
+        df = df[df["ci"].notna()]
+        df["ci"] = df["ci"].astype(np.int64)
+
+        updated = skipped = 0
+        for qdb_sym, group in df.groupby("symbol", sort=False):
+            qlib_sym = self._to_qlib_symbol(qdb_sym)
+            positions = group["ci"].values
+            start_idx = int(positions.min())
+            span = int(positions.max()) - start_idx + 1
+            offsets = positions - start_idx
+
+            feat_dir = self._qlib_dir / "features" / qlib_sym
+            feat_dir.mkdir(parents=True, exist_ok=True)
+
+            close_unadj = group["close_unadj"].values.astype(np.float64)
+            close_qfq = group["close"].values.astype(np.float64)
+            with np.errstate(divide="ignore", invalid="ignore"):
+                factor = np.where(close_unadj > 0, close_qfq / close_unadj, 1.0)
+            factor = np.nan_to_num(factor, nan=1.0, posinf=1.0, neginf=1.0)
+
+            try:
+                for field in ("open", "high", "low", "close", "volume", "amount"):
+                    aligned = np.full(span, np.nan, dtype=np.float32)
+                    aligned[offsets] = group[field].values.astype(np.float32)
+                    self._write_bin_file(feat_dir / f"{field}.day.bin", start_idx, aligned)
+                aligned = np.full(span, np.nan, dtype=np.float32)
+                aligned[offsets] = factor.astype(np.float32)
+                self._write_bin_file(feat_dir / "factor.day.bin", start_idx, aligned)
+                updated += 1
+            except Exception as exc:
+                logger.warning("构建 %s features 失败: %s", qlib_sym, exc)
+                skipped += 1
+
+        logger.info("Qlib features (bulk): updated=%d, skipped=%d", updated, skipped)
+        return {"updated": updated, "skipped": skipped}
+
     @staticmethod
     def _write_bin_file(path: Path, start_idx: int, values: np.ndarray) -> None:
         """写入 Qlib binary 文件。
