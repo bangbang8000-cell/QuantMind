@@ -5,7 +5,12 @@ from __future__ import annotations
 from fastapi import APIRouter, Depends, Query
 
 import backend.services.api.routers.research_service as _research_service
+from backend.services.api.routers.research_features_service import (
+    get_batch_full_features as get_batch_full_features_service,
+    get_symbol_full_features as get_symbol_full_features_service,
+)
 from backend.services.api.routers.research_schemas import (
+    BatchFeaturesRequest,
     PoolAddRequest,
     SymbolsFeaturesRequest,
     WatchlistAddRequest,
@@ -152,3 +157,20 @@ async def get_symbols_features(
 async def get_stock_kline(symbol: str, days: int = Query(60), current_user: dict = Depends(get_current_user)):
     _ = current_user
     return await get_stock_kline_service(symbol, days)
+
+
+@router.get("/features/{symbol}")
+async def get_symbol_full_features(symbol: str, current_user: dict = Depends(get_current_user)):
+    """单只股票的 QuantDB 全量特征（估值/技术/因子/微观结构，按类别分组）。"""
+    _ = current_user
+    return await get_symbol_full_features_service(symbol)
+
+
+@router.post("/batch-features")
+async def get_batch_full_features(
+    req: BatchFeaturesRequest,
+    current_user: dict = Depends(get_current_user),
+):
+    """批量股票的 QuantDB 全量特征（用于投研表格增强）。"""
+    _ = current_user
+    return await get_batch_full_features_service(req.symbols, req.fields)

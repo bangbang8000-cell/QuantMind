@@ -1,8 +1,8 @@
 import axios, { AxiosInstance } from 'axios';
 import { SERVICE_ENDPOINTS } from '../config/services';
 import { authService } from '../features/auth/services/authService';
-import type { ResearchModelOption, ResearchStockRow } from '../features/research/types';
-export type { ResearchModelOption, ResearchStockRow } from '../features/research/types';
+import type { QuantDbFeatures, ResearchModelOption, ResearchStockRow } from '../features/research/types';
+export type { QuantDbFeatures, ResearchModelOption, ResearchStockRow } from '../features/research/types';
 
 export type ResearchSignal = 'buy' | 'hold' | 'sell';
 export type ResearchConfidence = 'high' | 'medium' | 'watch';
@@ -234,6 +234,65 @@ class ResearchService {
     const lite = options?.lite ? '?lite=true' : '';
     const resp = await this.client.post<{ data: { items: ResearchStockRow[] } }>(`/research/symbols/features${lite}`, { symbols });
     return resp.data?.data?.items || [];
+  }
+
+  // ============ QuantDB 全字段特征接口 ============
+
+  async getQuantDbFeatures(symbol: string): Promise<QuantDbFeatures | null> {
+    try {
+      const resp = await this.client.get<{ code: number; data: QuantDbFeatures | null }>(
+        `/research/features/${encodeURIComponent(symbol)}`
+      );
+      if (resp.data?.code !== 200) return null;
+      return resp.data?.data || null;
+    } catch (error) {
+      console.error('[ResearchService] getQuantDbFeatures failed:', error);
+      return null;
+    }
+  }
+
+  /** 批量查询，返回以规范代码（600036.SH）为键的映射。后端单次上限 200 只。 */
+  async getBatchQuantDbFeatures(symbols: string[]): Promise<Record<string, QuantDbFeatures>> {
+    if (!symbols || symbols.length === 0) return {};
+    try {
+      const resp = await this.client.post<{
+        code: number;
+        data: { items: QuantDbFeatures[]; total: number; missing: string[]; truncated?: boolean };
+      }>('/research/batch-features', { symbols });
+      const items = resp.data?.data?.items || [];
+      return items.reduce<Record<string, QuantDbFeatures>>((acc, item) => {
+        if (item?.symbol) acc[item.symbol] = item;
+        return acc;
+      }, {});
+    } catch (error) {
+      console.error('[ResearchService] getBatchQuantDbFeatures failed:', error);
+      return {};
+    }
+  }
+
+  /**
+   * 投影模式批量查询：只取 fields 指定的 camelCase 字段。
+   * 响应体远小于全量，用于一次性富化整个候选池（筛选/排序需要全池数据）。
+   */
+  async getProjectedQuantDbFeatures(
+    symbols: string[],
+    fields: string[]
+  ): Promise<Record<string, Record<string, number>>> {
+    if (!symbols?.length || !fields?.length) return {};
+    try {
+      const resp = await this.client.post<{
+        code: number;
+        data: { items: Array<{ symbol: string; values: Record<string, number> }> };
+      }>('/research/batch-features', { symbols, fields });
+      const items = resp.data?.data?.items || [];
+      return items.reduce<Record<string, Record<string, number>>>((acc, item) => {
+        if (item?.symbol) acc[item.symbol] = item.values || {};
+        return acc;
+      }, {});
+    } catch (error) {
+      console.error('[ResearchService] getProjectedQuantDbFeatures failed:', error);
+      return {};
+    }
   }
 
   // ============ K 线数据接口 ============

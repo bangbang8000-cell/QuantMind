@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import math
 import os
 import time
@@ -14,6 +15,8 @@ from sqlalchemy import text
 from backend.shared.database_manager_v2 import get_session
 from backend.shared.redis_sentinel_client import get_redis_sentinel_client
 from backend.shared.stock_utils import StockCodeUtil
+
+logger = logging.getLogger(__name__)
 
 _UNIVERSE_CACHE_TTL_SECONDS = 90
 _UNIVERSE_CACHE_MAX_ENTRIES = 64
@@ -66,7 +69,9 @@ def _redis_set_json(key: str, value: dict[str, Any], ttl_seconds: int) -> None:
 
 
 def _sdl_redis_key(trade_date: date) -> str:
-    return f"qm:research:sdl:{trade_date.isoformat()}:v2"
+    # v4：LEFT JOIN stocks 表兜底 stock_name（stock_daily_latest.stock_name 自 2026-06-18 起全为 NULL），
+    # 必须换 key 让 36 小时 TTL 内的旧缓存立即失效。
+    return f"qm:research:sdl:{trade_date.isoformat()}:v4"
 
 
 async def _load_sdl_day_map(session, trade_date: date, market: str | None = None) -> dict[str, dict[str, Any]]:
@@ -83,17 +88,30 @@ async def _load_sdl_day_map(session, trade_date: date, market: str | None = None
     # Use 'name' column for non-CN markets, 'stock_name' for CN
     is_cn = not market or market.upper() == "CN"
     name_col = "stock_name" if is_cn else "name"
+    # stocks 表兜底：stock_daily_latest.stock_name 自 2026-06-18 起全为 NULL，
+    # 而 stocks.name 有完整的 A 股名称（如 300998.SZ → 宁波方正）。
+    # 用相关子查询而非 LEFT JOIN —— stocks 与 sdl 共有 symbol/industry 两列，
+    # JOIN 会让下面几十处未加限定的列引用变成 ambiguous。
+    stocks_name = (
+        f"""COALESCE(sdl.stock_name, (
+                SELECT st.name FROM stocks st
+                WHERE {_norm_symbol_sql("st.symbol")} = {_norm_symbol_sql("sdl.symbol")}
+                LIMIT 1
+            ), '')"""
+        if is_cn
+        else f"COALESCE({name_col}, '')"
+    )
     sql = f"""
         SELECT
             symbol,
-            COALESCE({name_col}, '') AS stock_name,
+            {stocks_name} AS stock_name,
             COALESCE(industry, '') AS industry,
             COALESCE(close, 0) AS close_price,
             COALESCE(pe_ttm, 0) AS pe,
             COALESCE(pb, 0) AS pb,
             COALESCE(roe, 0) AS roe,
             COALESCE(adj_factor, 1) AS adj_factor,
-            COALESCE(turnover_rate, 0) * 100 AS turnover_rate,
+            COALESCE(turnover_rate, 0) AS turnover_rate,
             COALESCE(amount, 0) AS amount,
             COALESCE(total_mv, 0) AS total_mv,
             COALESCE(float_mv, 0) AS float_mv,
@@ -158,17 +176,33 @@ async def _load_sdl_day_map(session, trade_date: date, market: str | None = None
               '[]'::jsonb
             ) AS index_tags,
             COALESCE(consecutive_limit_up_days, 0) AS consecutive_limit_up_days_sdl
-        FROM {sdl_table}
-        WHERE trade_date = :trade_date
-          AND volume > 0
+        FROM {sdl_table} sdl
+        WHERE sdl.trade_date = :trade_date
+          AND sdl.volume > 0
     """
     res = await session.execute(text(sql), {"trade_date": trade_date})
     symbol_map: dict[str, dict[str, Any]] = {}
+
+    def _info_score(payload: dict[str, Any]) -> int:
+        """该行携带的有效指标个数，用于在重复行之间取信息最全的那一行。"""
+        return sum(
+            1
+            for key in ("pe", "rsi_14", "total_mv", "turnover_rate", "ma5")
+            if payload.get(key)
+        )
+
     for row in res.mappings():
         payload = dict(row)
         symbol = StockCodeUtil.to_prefix(str(payload.get("symbol") or ""))
-        if symbol:
-            symbol_map[symbol] = payload
+        if not symbol:
+            continue
+        # stock_daily_latest 同一只股票同一天可能有两行：前缀格式（SZ002082）带全部指标，
+        # 后缀格式（002082.SZ）只有收盘价与成交量。两者归一化后是同一个 key，
+        # 若简单覆盖则可能留下没有指标的那一行，前端就会显示 “PE 0.0 / ROE 0.0% / RSI 0.0”。
+        existing = symbol_map.get(symbol)
+        if existing is not None and _info_score(existing) >= _info_score(payload):
+            continue
+        symbol_map[symbol] = payload
 
     _redis_set_json(
         cache_key,
@@ -212,7 +246,7 @@ def _norm_symbol_sql(symbol_expr: str) -> str:
 
 
 _SDL_SELECT_BY_RUN_DATE = """
-    COALESCE(sdl_run.stock_name, '') AS stock_name,
+    COALESCE(sdl_run.stock_name, st.name, '') AS stock_name,
     COALESCE(sdl_run.industry, '') AS industry,
     COALESCE(sdl_run.close, 0) AS close_price,
     COALESCE(sdl_run.pe_ttm, 0) AS pe,
@@ -297,101 +331,6 @@ _SDL_SELECT_BY_RUN_DATE = """
 """
 
 
-_SDL_LATEST = """
-    SELECT DISTINCT ON (symbol) symbol, trade_date, stock_name, industry,
-        close, pct_change, pe_ttm, pb, roe, adj_factor, turnover_rate, amount, total_mv, float_mv, listed_days, is_st,
-        idx_hs300, idx_zz1000, idx_chinext, idx_margin, idx_all,
-        ma5, ma10, ma_gap_5, ma_gap_10, ma_gap_20,
-        rsi_14, rsi_6, vol_atr_14, macd_hist, volume_ratio_5, volume_ratio_20, volume_trend_3d,
-        main_flow, flow_net_amount, inst_ownership, profit_growth,
-        concept_ai, concept_chip, concept_new_energy, concept_pv, concept_lithium, concept_military,
-        concept_medical, concept_fintech, concept_consumption, concept_state_owned,
-        consecutive_limit_up_days
-    FROM stock_daily_latest
-    WHERE volume > 0
-    ORDER BY symbol, trade_date DESC
-"""
-
-_SDL_SELECT_SIMPLE = """
-    COALESCE(sdl_latest.stock_name, '') AS stock_name,
-    COALESCE(sdl_latest.industry, '') AS industry,
-    COALESCE(sdl_latest.close, 0) AS close_price,
-    COALESCE(sdl_latest.pe_ttm, 0) AS pe,
-    COALESCE(sdl_latest.pb, 0) AS pb,
-    COALESCE(sdl_latest.roe, 0) AS roe,
-    COALESCE(sdl_latest.turnover_rate, 0) * 100 AS turnover_rate,
-    COALESCE(sdl_latest.amount, 0) AS amount,
-    COALESCE(sdl_latest.total_mv, 0) AS total_mv,
-    COALESCE(sdl_latest.float_mv, 0) AS float_mv,
-    COALESCE(sdl_latest.listed_days, 0) AS listed_days,
-    COALESCE(sdl_latest.is_st, 0) <> 0 AS is_st,
-    COALESCE(sdl_latest.idx_hs300, 0) <> 0 AS is_hs300,
-    0 <> 0 AS is_csi500,
-    COALESCE(sdl_latest.idx_zz1000, 0) <> 0 AS is_csi1000,
-    COALESCE(sdl_latest.pct_change, 0) AS latest_change_pct,
-    0 AS return_1d,
-    0 AS return_3d,
-    COALESCE(sdl_latest.ma5, 0) AS ma5,
-    COALESCE(sdl_latest.ma10, 0) AS ma10,
-    COALESCE(sdl_latest.ma_gap_5, 0) AS ma_gap_5,
-    COALESCE(sdl_latest.ma_gap_10, 0) AS ma_gap_10,
-    COALESCE(sdl_latest.ma_gap_20, 0) AS ma_gap_20,
-    COALESCE(sdl_latest.rsi_14, sdl_latest.rsi_6, 0) AS rsi,
-    COALESCE(sdl_latest.rsi_14, 0) AS rsi_14,
-    COALESCE(sdl_latest.vol_atr_14, 0) AS atr,
-    COALESCE(sdl_latest.macd_hist, 0) AS macd_hist,
-    COALESCE(sdl_latest.volume_ratio_5, 0) AS volume_ratio_5,
-    COALESCE(sdl_latest.volume_ratio_20, 0) AS volume_ratio_20,
-    CASE WHEN COALESCE(sdl_latest.volume_trend_3d, false) THEN 1 ELSE 0 END AS volume_trend_3d,
-    COALESCE(sdl_latest.main_flow, 0) AS main_flow,
-    COALESCE(sdl_latest.flow_net_amount, 0) AS flow_net_amount,
-    COALESCE(sdl_latest.inst_ownership, 0) AS inst_ownership,
-    COALESCE(sdl_latest.profit_growth, 0) AS profit_growth,
-    COALESCE(
-      (
-        SELECT to_jsonb(array_agg(tag))
-        FROM (
-          SELECT tag
-          FROM (
-            VALUES
-              ('AI', COALESCE(sdl_latest.concept_ai, 0)),
-              ('芯片', COALESCE(sdl_latest.concept_chip, 0)),
-              ('新能源', COALESCE(sdl_latest.concept_new_energy, 0)),
-              ('光伏', COALESCE(sdl_latest.concept_pv, 0)),
-              ('锂电', COALESCE(sdl_latest.concept_lithium, 0)),
-              ('军工', COALESCE(sdl_latest.concept_military, 0)),
-              ('医药', COALESCE(sdl_latest.concept_medical, 0)),
-              ('金融科技', COALESCE(sdl_latest.concept_fintech, 0)),
-              ('消费', COALESCE(sdl_latest.concept_consumption, 0)),
-              ('国企改革', COALESCE(sdl_latest.concept_state_owned, 0))
-          ) AS concept_scores(tag, score)
-          WHERE score > 0
-          ORDER BY score DESC
-          LIMIT 3
-        ) ranked_tags
-      ),
-      '[]'::jsonb
-    ) AS concept_tags,
-    COALESCE(
-      to_jsonb(array_remove(ARRAY[
-        CASE WHEN COALESCE(sdl_latest.idx_hs300, 0) <> 0 THEN '沪深300' END,
-        CASE WHEN 0 <> 0 THEN '中证500' END,
-        CASE WHEN COALESCE(sdl_latest.idx_zz1000, 0) <> 0 THEN '中证1000' END,
-        CASE WHEN COALESCE(sdl_latest.idx_chinext, 0) <> 0 THEN '创业板指数' END,
-        CASE WHEN COALESCE(sdl_latest.idx_margin, 0) <> 0 THEN '两融标的' END,
-        CASE WHEN COALESCE(sdl_latest.idx_all, 0) <> 0 THEN '全市场' END
-      ]::text[], NULL)),
-      '[]'::jsonb
-    ) AS index_tags,
-    sdl_latest.trade_date AS latest_trade_date,
-    COALESCE(sdl_latest.consecutive_limit_up_days, 0) AS consecutive_limit_up_days_sdl,
-    COALESCE(sdl_latest.adj_factor, 1) AS adj_factor
-"""
-
-
-def _sdl_join_condition(symbol_expr: str = "snap.symbol") -> str:
-    return f"(\n    sdl_latest.symbol = {_norm_symbol_sql(symbol_expr)}\n)"
-
 
 def _serialize_date(d: Any) -> str | None:
     return d.isoformat() if isinstance(d, (date, datetime)) else None
@@ -463,10 +402,6 @@ def _format_candidate_record(row: dict[str, Any]) -> dict[str, Any]:
     return_3d = _serialize_float(row.get("return_3d"))
     latest_change_pct = _serialize_float(row.get("latest_change_pct")) or 0.0
 
-    snapshot_turnover_rate = _serialize_float(row.get("snapshot_turnover_rate"))
-    live_turnover_rate = _serialize_float(row.get("turnover_rate") or 0.0) or 0.0
-    resolved_turnover_rate = snapshot_turnover_rate if snapshot_turnover_rate is not None else live_turnover_rate
-
     def _safe(v, default=0.0):
         """Return None for NULL DB values so frontend can display '-' instead of 0."""
         sv = _serialize_float(v)
@@ -483,7 +418,13 @@ def _format_candidate_record(row: dict[str, Any]) -> dict[str, Any]:
     amount_raw = _serialize_float(row.get("amount"))
     turnover_raw = _serialize_float(row.get("turnover_rate"))
     pe_raw = _serialize_float(row.get("pe"))
+    # PG `stock_daily_latest.roe` 存小数（0.1192 = 11.92%），而前端与 QuantDB 的
+    # fun_roe 都用百分数。统一在这里换算，覆盖所有进入本函数的查询路径；
+    # 阈值 1.5 之上视为已是百分数，避免对已换算的数据重复乘 100
+    # （A 股 ROE 超过 150% 的极少，且这类异常值本身不适合参与筛选）。
     roe_raw = _serialize_float(row.get("roe"))
+    if roe_raw is not None and abs(roe_raw) <= 1.5:
+        roe_raw = roe_raw * 100
     rsi_raw = _serialize_float(row.get("rsi"))
     rsi14_raw = _serialize_float(row.get("rsi_14"))
     atr_raw = _serialize_float(row.get("atr"))
@@ -690,6 +631,18 @@ async def _do_get_overview(
                 0 AS concept_state_owned, 0 AS consecutive_limit_up_days,
             """
 
+        # 去重优先级：CN 表用“指标非空个数”挑出信息最全的那一行；
+        # 其他市场表的指标列可能不存在，退化为按 symbol 排序（保证结果稳定即可）。
+        if is_cn:
+            dedup_rank_expr = """(
+                               (CASE WHEN sdl.pe_ttm IS NULL THEN 0 ELSE 1 END)
+                             + (CASE WHEN sdl.rsi_14 IS NULL THEN 0 ELSE 1 END)
+                             + (CASE WHEN sdl.total_mv IS NULL THEN 0 ELSE 1 END)
+                             + (CASE WHEN sdl.turnover_rate IS NULL THEN 0 ELSE 1 END)
+                           ) DESC, sdl.symbol ASC"""
+        else:
+            dedup_rank_expr = "sdl.symbol ASC"
+
         sql = f"""
         WITH snap_page AS (
             SELECT snap.*
@@ -708,6 +661,29 @@ async def _do_get_overview(
                 MAX(snap.data_trade_date) AS max_trade_date
             FROM snap_page snap
         ),
+        sdl_dedup AS (
+            /*
+             * stock_daily_latest 每只股票每天可能有两行：前缀格式（SZ002082）与后缀格式
+             * （002082.SZ）。前缀行带全部指标（PE/ROE/RSI/均线/市值/换手），后缀行只有
+             * 收盘价与成交量——2026-06-17 实测：前缀 5529 行指标齐备，后缀 5524 行全为 NULL。
+             * 归一化 symbol 后两行都能命中 JOIN，若不去重则由 Postgres 任意选一行，
+             * 选中后缀行时前端就会看到 “PE 0.0 / ROE 0.0% / RSI 0.0”。
+             * 因此这里按归一化代码 + 交易日去重，并优先保留指标非空的那一行。
+             */
+            SELECT * FROM (
+                SELECT sdl.*,
+                       ROW_NUMBER() OVER (
+                           PARTITION BY {_norm_symbol_sql("sdl.symbol")}, sdl.trade_date
+                           ORDER BY {dedup_rank_expr}
+                       ) AS _rank
+                FROM {sdl_table} sdl
+                INNER JOIN snap_symbols ss ON {_norm_symbol_sql("ss.symbol")} = {_norm_symbol_sql("sdl.symbol")}
+                CROSS JOIN snap_date_bounds b
+                WHERE sdl.volume > 0
+                  AND sdl.trade_date >= (b.min_trade_date - INTERVAL '10 day')
+                  AND sdl.trade_date <= (b.max_trade_date + INTERVAL '20 day')
+            ) ranked WHERE _rank = 1
+        ),
         sdl_run AS (
             SELECT
                 sdl.symbol,
@@ -721,18 +697,14 @@ async def _do_get_overview(
                 END AS volume_trend_3d_calc,
                 LEAD(sdl.close, 1) OVER (PARTITION BY sdl.symbol ORDER BY sdl.trade_date) AS close_next_1d,
                 LEAD(sdl.close, 3) OVER (PARTITION BY sdl.symbol ORDER BY sdl.trade_date) AS close_next_3d
-            FROM {sdl_table} sdl
-            INNER JOIN snap_symbols ss ON {_norm_symbol_sql("ss.symbol")} = {_norm_symbol_sql("sdl.symbol")}
-            CROSS JOIN snap_date_bounds b
-            WHERE sdl.volume > 0
-              AND sdl.trade_date >= (b.min_trade_date - INTERVAL '10 day')
-              AND sdl.trade_date <= (b.max_trade_date + INTERVAL '20 day')
+            FROM sdl_dedup sdl
         )
         SELECT snap.*, {_SDL_SELECT_BY_RUN_DATE}
         FROM snap_page snap
         LEFT JOIN sdl_run
             ON {_norm_symbol_sql("sdl_run.symbol")} = {_norm_symbol_sql("snap.symbol")}
            AND sdl_run.trade_date = snap.data_trade_date
+        {"LEFT JOIN stocks st ON " + _norm_symbol_sql("st.symbol") + " = " + _norm_symbol_sql("snap.symbol") if is_cn else ""}
         ORDER BY snap.score_rank ASC
         """
         result = await session.execute(text(sql), params)
@@ -1124,11 +1096,18 @@ async def get_symbols_features(tid: str, uid: str, symbols: list[str], lite: boo
                     FROM joined
                     WHERE total_mv IS NOT NULL AND total_mv > 0
                     ORDER BY raw_symbol, trade_date DESC
+                ),
+                stocks_name AS (
+                    SELECT DISTINCT ON ({_norm_symbol_sql("symbol")})
+                        {_norm_symbol_sql("symbol")} AS raw_symbol, name AS stock_name
+                    FROM stocks
+                    WHERE {_norm_symbol_sql("symbol")} IN (SELECT raw_symbol FROM miss)
+                    ORDER BY {_norm_symbol_sql("symbol")}
                 )
                 SELECT
                     l.raw_symbol,
-                    n.stock_name,
-                    n.industry,
+                    COALESCE(n.stock_name, sn.stock_name) AS stock_name,
+                    COALESCE(n.industry, '') AS industry,
                     l.close,
                     mv.pe_ttm, mv.pb, mv.roe,
                     mv.total_mv, mv.float_mv,
@@ -1136,6 +1115,7 @@ async def get_symbols_features(tid: str, uid: str, symbols: list[str], lite: boo
                 FROM latest l
                 LEFT JOIN latest_name n USING (raw_symbol)
                 LEFT JOIN latest_mv   mv USING (raw_symbol)
+                LEFT JOIN stocks_name sn USING (raw_symbol)
             """
             sdl_result = await session.execute(text(sdl_sql))
             for r in sdl_result.mappings():

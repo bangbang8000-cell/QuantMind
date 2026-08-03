@@ -38,7 +38,67 @@ export const fmtNullableSignedPercent2 = (value: unknown): string =>
   value === null || value === undefined ? '-' : fmtSignedPercent2(value);
 
 export const fmtMainFlowCn = (value: unknown): string => {
-  const v = safeNum(value, 0); // 后端口径：百万
+  const v = safeNum(value, 0);
   if (Math.abs(v) >= 10000) return `${(v / 10000).toFixed(2)}亿`;
   return `${v.toFixed(2)}百万`;
 };
+
+export const fmtFloat = (value: unknown, decimals = 3): string => {
+  const v = safeNum(value, 0);
+  return v.toFixed(decimals);
+};
+
+export const fmtNullableFloat = (value: unknown, decimals = 3): string =>
+  value === null || value === undefined ? '-' : fmtFloat(value, decimals);
+
+/**
+ * 用于 PE / ROE / RSI / 均线 / 市值这类“0 在现实中不可能”的指标。
+ *
+ * PG `stock_daily_latest` 在近期交易日未回填这些列，序列化后 NULL 变成了 0，
+ * 于是详情页出现 “PE 0.0 / ROE 0.0% / RSI 0.0” 这种看起来像真实数据的假值。
+ * 这里把 0 一并显示为 “-”，避免把缺失当成极端估值误导判断。
+ */
+export const fmtPositiveOrDash = (value: unknown, decimals = 2, suffix = ''): string => {
+  if (value === null || value === undefined) return '-';
+  const v = safeNum(value, 0);
+  if (!Number.isFinite(v) || v === 0) return '-';
+  return `${v.toFixed(decimals)}${suffix}`;
+};
+
+export const fmtSignedFloat = (value: unknown, decimals = 3): string => {
+  const v = safeNum(value, 0);
+  return `${v >= 0 ? '+' : ''}${v.toFixed(decimals)}`;
+};
+
+export const fmtNullableSignedFloat = (value: unknown, decimals = 3): string =>
+  value === null || value === undefined ? '-' : fmtSignedFloat(value, decimals);
+
+export const fmtPercent = (value: unknown, decimals = 2): string =>
+  `${safeNum(value, 0).toFixed(decimals)}%`;
+
+export const fmtNullablePercent = (value: unknown, decimals = 2): string =>
+  value === null || value === undefined ? '-' : fmtPercent(value, decimals);
+
+export const fmtSignedPercent = (value: unknown, decimals = 2): string => {
+  const v = safeNum(value, 0);
+  return `${v >= 0 ? '+' : ''}${v.toFixed(decimals)}%`;
+};
+
+export const fmtNullableSignedPercent = (value: unknown, decimals = 2): string =>
+  value === null || value === undefined ? '-' : fmtSignedPercent(value, decimals);
+
+export const fmtYi = (value: unknown, decimals = 2): string => {
+  const v = safeNum(value, 0) / 100_000_000;
+  return `${v.toFixed(decimals)}亿`;
+};
+
+export const fmtNullableYi = (value: unknown, decimals = 2): string =>
+  value === null || value === undefined ? '-' : fmtYi(value, decimals);
+
+export const fmtExponential = (value: unknown, decimals = 2): string => {
+  const v = safeNum(value, 0);
+  return v.toExponential(decimals);
+};
+
+export const fmtNullableExponential = (value: unknown, decimals = 2): string =>
+  value === null || value === undefined ? '-' : fmtExponential(value, decimals);

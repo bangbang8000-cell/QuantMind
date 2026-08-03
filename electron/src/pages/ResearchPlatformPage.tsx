@@ -4,11 +4,11 @@ import {
   Activity,
   BarChart3,
   CandlestickChart,
+  Columns3,
   Download,
   Filter,
   Flame,
   LibraryBig,
-  LayoutDashboard,
   Microscope,
   Quote,
   RefreshCw,
@@ -19,7 +19,7 @@ import {
 import ReactECharts from 'echarts-for-react';
 import {
   Button,
-  Card,
+  Checkbox,
   Collapse,
   Empty,
   Input,
@@ -27,21 +27,20 @@ import {
   message,
   Modal,
   Pagination,
+  Popover,
   Segmented,
   Select,
-  Slider,
   Switch,
   Table,
   Tag,
-  Typography,
 } from 'antd';
-import type { ColumnsType } from 'antd/es/table';
+import type { ColumnsType, ColumnType } from 'antd/es/table';
 import { PAGE_LAYOUT } from '../config/pageLayout';
-import { modelTrainingService } from '../services/modelTrainingService';
 import { researchService, type ResearchRunOption } from '../services/researchService';
 import RiskScoreCard from '../components/Research/RiskScoreCard';
 import {
   BUTTON_STYLES,
+  COLUMN_GROUPS,
   DEFAULT_RESEARCH_FILTERS,
   FIELD_STYLES,
   PRESET_FILTER_MAP,
@@ -50,6 +49,8 @@ import {
 import {
   type DataSourceTab,
   type FilterSectionKey,
+  type QuantDbFeatures,
+  type ResearchFiltersState,
   type ResearchModelOption,
   type ResearchPoolRow,
   type ResearchStockRow,
@@ -60,20 +61,685 @@ import {
 import {
   fmt2,
   fmtMainFlowCn,
+  fmtNullableExponential,
+  fmtNullableFloat,
   fmtNullableSignedPercent2,
+  fmtNullableYi,
   fmtPercent2,
+  fmtPositiveOrDash,
   fmtSignedPercent2,
   normalizeRoe,
   normalizeSymbol,
-  normalizeYiValue,
   safeNum,
 } from '../features/research/utils/formatters';
+import {
+  flattenProjectedValues,
+  flattenQuantDbFeatures,
+  mergePoolFeatures,
+  mergeQuantDbFeatures,
+  toSuffixSymbol,
+} from '../features/research/utils/featureMapper';
+import { FactorPanel } from '../features/research/components/FactorPanel';
 import '../styles/research-next-theme.css';
 import { useAppSelector } from '../store';
 import { selectCurrentMarket } from '../store/slices/uiSlice';
 import { getMarketConfig } from '../config/marketConfig';
 
-const { Text, Title, Paragraph } = Typography;
+/* ------------------------------------------------------------------ *
+ * 常量与工具
+ * ------------------------------------------------------------------ */
+
+const VISIBLE_GROUPS_STORAGE_KEY = 'research.visibleColumnGroups';
+
+/** snake_case -> camelCase，用于兼容后端两种字段命名 */
+const toCamelKey = (key: string): string => key.replace(/_([a-z0-9])/g, (_, c: string) => c.toUpperCase());
+
+/** 将后端返回的行做 camelCase 补齐（不覆盖已有 camelCase 字段） */
+const camelizeRow = (item: Record<string, any>): Record<string, any> => {
+  const out: Record<string, any> = { ...item };
+  Object.keys(item).forEach((key) => {
+    if (!key.includes('_')) return;
+    const camel = toCamelKey(key);
+    if (out[camel] === undefined) out[camel] = item[key];
+  });
+  return out;
+};
+
+/** 深拷贝筛选状态（数组字段需断开引用，避免误改默认值） */
+const cloneFilters = (source: ResearchFiltersState): ResearchFiltersState => {
+  const out: Record<string, any> = {};
+  Object.entries(source).forEach(([key, value]) => {
+    out[key] = Array.isArray(value) ? [...value] : value;
+  });
+  return out as ResearchFiltersState;
+};
+
+const isSameRange = (left: unknown, right: unknown): boolean =>
+  Array.isArray(left) && Array.isArray(right) && left[0] === right[0] && left[1] === right[1];
+
+/* ------------------------------------------------------------------ *
+ * 表格列渲染器
+ * ------------------------------------------------------------------ */
+
+const DASH = <span className="font-medium text-slate-300">-</span>;
+
+const isNil = (value: unknown): boolean =>
+  value === null || value === undefined || (typeof value === 'number' && !Number.isFinite(value)) || Number.isNaN(Number(value));
+
+type CellRenderer = (value: any, record: ResearchStockRow, index: number) => React.ReactNode;
+
+/** 普通数值：固定小数位 + 可选后缀 */
+const rNum = (digits: number, suffix = ''): CellRenderer => (value) =>
+  isNil(value) ? DASH : (
+    <span className="whitespace-nowrap font-medium text-slate-600">
+      {Number(value).toFixed(digits)}{suffix}
+    </span>
+  );
+
+/** 仅正数有意义（PE / PS 等） */
+const rPositive = (digits: number): CellRenderer => (value) =>
+  isNil(value) || Number(value) <= 0 ? DASH : (
+    <span className="whitespace-nowrap font-medium text-slate-600">{Number(value).toFixed(digits)}</span>
+  );
+
+/** 涨跌类：红涨绿跌 + 正号 */
+const rSigned = (digits: number, suffix = '%'): CellRenderer => (value) => {
+  if (isNil(value)) return DASH;
+  const n = Number(value);
+  return (
+    <span className={`whitespace-nowrap font-semibold ${n >= 0 ? 'text-rose-500' : 'text-emerald-500'}`}>
+      {n >= 0 ? '+' : ''}{n.toFixed(digits)}{suffix}
+    </span>
+  );
+};
+
+/** 红绿着色但不加正号（MACD / 动量因子等） */
+const rColored = (digits: number, suffix = ''): CellRenderer => (value) => {
+  if (isNil(value)) return DASH;
+  const n = Number(value);
+  return (
+    <span className={`whitespace-nowrap ${n >= 0 ? 'text-rose-500' : 'text-emerald-500'}`}>
+      {n.toFixed(digits)}{suffix}
+    </span>
+  );
+};
+
+/** 乖离率：正值高亮 */
+const rGap: CellRenderer = (value) => {
+  if (isNil(value)) return DASH;
+  const n = Number(value);
+  return (
+    <span className={`whitespace-nowrap ${n >= 0 ? 'font-medium text-indigo-500' : 'text-slate-400'}`}>
+      {n > 0 ? '+' : ''}{n.toFixed(2)}%
+    </span>
+  );
+};
+
+/** RSI：超买红 / 超卖绿 */
+const rRsi: CellRenderer = (value) => {
+  if (isNil(value)) return DASH;
+  const n = Number(value);
+  return (
+    <span className={`whitespace-nowrap ${n >= 70 ? 'font-bold text-rose-500' : n <= 30 ? 'text-emerald-500' : 'text-slate-600'}`}>
+      {n.toFixed(1)}
+    </span>
+  );
+};
+
+/** ROE：过滤明显异常值 */
+const rRoe: CellRenderer = (value) => {
+  if (isNil(value)) return DASH;
+  const n = Number(value);
+  if (n <= -100 || n >= 100) return DASH;
+  return <span className="whitespace-nowrap font-bold text-rose-500">{n.toFixed(1)}%</span>;
+};
+
+/** 科学计数法（Amihud 等极小量级指标） */
+const rExp: CellRenderer = (value) =>
+  isNil(value) ? DASH : <span className="whitespace-nowrap text-xs text-slate-600">{Number(value).toExponential(2)}</span>;
+
+/** 资金流：后端口径为百万，统一走 fmtMainFlowCn */
+const rFlow: CellRenderer = (value) => {
+  if (isNil(value)) return DASH;
+  const n = Number(value);
+  return (
+    <span className={`whitespace-nowrap font-medium ${n >= 0 ? 'text-rose-500' : 'text-emerald-500'}`}>
+      {fmtMainFlowCn(n)}
+    </span>
+  );
+};
+
+/** 原始元 -> 亿元 */
+const rYuanToYi: CellRenderer = (value) =>
+  isNil(value) ? DASH : (
+    <span className="whitespace-nowrap font-medium text-slate-600">{(Number(value) / 100000000).toFixed(2)}亿</span>
+  );
+
+/** 整数（排名类） */
+const rInt: CellRenderer = (value) =>
+  isNil(value) ? DASH : <span className="whitespace-nowrap font-medium text-slate-600">{Number(value).toFixed(0)}</span>;
+
+/** 量能趋势标签 */
+const rVolumeTrend: CellRenderer = (value) => {
+  if (isNil(value)) return DASH;
+  const trend = Number(value);
+  if (trend > 0) return <Tag color="orange" className="rounded-lg border-none font-bold">递增</Tag>;
+  if (trend < 0) return <Tag color="blue" className="rounded-lg border-none font-bold">递减</Tag>;
+  return <Tag color="default" className="rounded-lg border-none font-bold">平缓</Tag>;
+};
+
+/** 自选/研究池：涨跌幅口径可能是小数，做一次量级归一 */
+const rScaledChange: CellRenderer = (value) => {
+  if (isNil(value)) return DASH;
+  const n = Number(value);
+  const display = Math.abs(n) > 1.0 ? n : n * 100;
+  return (
+    <span className={`whitespace-nowrap font-bold ${display >= 0 ? 'text-rose-500' : 'text-emerald-500'}`}>
+      {display >= 0 ? '+' : ''}{display.toFixed(2)}%
+    </span>
+  );
+};
+
+interface ColumnDef {
+  title: string;
+  width: number;
+  /** 与 key 不同名时显式声明数据字段 */
+  dataIndex?: string;
+  /** 依赖整行数据渲染，不绑定 dataIndex */
+  custom?: boolean;
+  render?: CellRenderer;
+  ellipsis?: boolean;
+}
+
+/**
+ * 全量列定义表。COLUMN_GROUPS 中的每个列 key 都必须在此登记。
+ */
+const COLUMN_DEFS: Record<string, ColumnDef> = {
+  // ---- 标识 ----
+  rank: {
+    title: '排名',
+    width: 60,
+    render: (value) => <span className="whitespace-nowrap font-bold text-slate-700">{value}</span>,
+  },
+  stock: {
+    title: '股票',
+    width: 132,
+    custom: true,
+    render: (_value, record) => (
+      <div className="whitespace-nowrap text-center">
+        <div className="whitespace-nowrap font-bold text-slate-900">{record.name}</div>
+        <div className="whitespace-nowrap text-xs text-slate-500">{record.code}</div>
+      </div>
+    ),
+  },
+  score: {
+    title: '模型分数',
+    width: 98,
+    render: (value) => (
+      <span className="whitespace-nowrap font-black text-blue-400">{safeNum(value, 0).toFixed(3)}</span>
+    ),
+  },
+  latestChange: { title: '涨跌幅', width: 96, render: rSigned(2) },
+
+  // ---- 收益 ----
+  nextDayReturn: { title: '次日收益', width: 96, render: rSigned(2) },
+  day3Return: { title: '3日收益', width: 96, render: rSigned(2) },
+  return1d: { title: '1日收益', width: 96, render: rSigned(2) },
+  return3d: { title: '3日收益', width: 96, render: rSigned(2) },
+  return5d: { title: '5日收益', width: 96, render: rSigned(2) },
+  // 10/20/60 日收益上游数据不可用（见动量筛选区注释），改用 momRet* 动量列展示中长期强弱
+
+  // ---- 连板 ----
+  consecutiveLimitUpDays: { title: '连板', width: 54 },
+  volumeTrend3d: { title: '3日量能', width: 92, render: rVolumeTrend },
+
+  // ---- 流动性 ----
+  turnoverRate: { title: '换手率', width: 90, render: rNum(2, '%') },
+  amount: { title: '成交额', width: 108, render: rNum(2, '亿') },
+  volRatio5: { title: '5日量比', width: 90, render: rNum(2) },
+  volRatio20: { title: '20日量比', width: 90, render: rNum(2) },
+  liqAmountMa5: { title: '5日均额', width: 100, render: rYuanToYi },
+  liqMfi14: { title: 'MFI(14)', width: 80, render: rNum(1) },
+  liqAmihud20: { title: 'Amihud', width: 85, render: rExp },
+
+  // ---- 基本面 ----
+  pe: { title: 'PE(TTM)', width: 92, render: rPositive(1) },
+  pb: { title: 'PB', width: 80, render: rNum(2) },
+  roe: { title: 'ROE(%)', width: 92, render: rRoe },
+  psTtm: { title: 'PS(TTM)', width: 92, render: rPositive(1) },
+  profitGrowth: { title: '利润增速', width: 92, render: rNum(1, '%') },
+  totalMv: { title: '总市值', width: 100, render: rNum(2, '亿') },
+  floatMv: { title: '流通市值', width: 100, render: rNum(2, '亿') },
+  listedDays: { title: '上市天数', width: 85, render: rInt },
+
+  // ---- 技术面 ----
+  ma5: { title: 'MA5', width: 80, render: rNum(2) },
+  ma10: { title: 'MA10', width: 80, render: rNum(2) },
+  ma20: { title: 'MA20', width: 80, render: rNum(2) },
+  maGap5: { title: '5日乖离', width: 92, render: rGap },
+  maGap10: { title: '10日乖离', width: 92, render: rGap },
+  maGap20: { title: '20日乖离', width: 92, render: rGap },
+  rsi: { title: 'RSI(6)', width: 76, render: rRsi },
+  rsi14: { title: 'RSI(14)', width: 76, render: rRsi },
+  atr: { title: 'ATR', width: 80, render: rNum(3) },
+  macdHist: { title: 'MACD', width: 80, render: rColored(3) },
+  kdjK: { title: 'KDJ-K', width: 76, dataIndex: 'momKdjK', render: rNum(1) },
+  kdjD: { title: 'KDJ-D', width: 76, dataIndex: 'momKdjD', render: rNum(1) },
+  kdjJ: { title: 'KDJ-J', width: 76, dataIndex: 'momKdjJ', render: rNum(1) },
+  bbPos: { title: 'BB位置', width: 80, dataIndex: 'techBbPos', render: rNum(2) },
+  adx14: { title: 'ADX(14)', width: 80, dataIndex: 'techAdx14', render: rNum(1) },
+
+  // ---- 动量 ----
+  momRet1d: { title: '动1日', width: 80, render: rColored(3) },
+  momRet3d: { title: '动3日', width: 80, render: rColored(3) },
+  momRet5d: { title: '动5日', width: 80, render: rColored(3) },
+  momRet10d: { title: '动10日', width: 80, render: rColored(3) },
+  momRet20d: { title: '动20日', width: 80, render: rColored(3) },
+  momRet60d: { title: '动60日', width: 80, render: rColored(3) },
+  momRet120d: { title: '动120日', width: 85, render: rColored(3) },
+  momEmaGap12: { title: 'EMA12偏离', width: 90, render: rNum(3) },
+
+  // ---- 波动率 ----
+  volStd5: { title: '波5日', width: 80, render: rNum(4) },
+  volStd20: { title: '波20日', width: 80, render: rNum(4) },
+  volStd60: { title: '波60日', width: 80, render: rNum(4) },
+  volAtr14: { title: 'ATR14', width: 80, render: rNum(3) },
+  volParkinson20: { title: 'Parkinson', width: 85, render: rNum(4) },
+  volUpDownRatio: { title: '涨跌波比', width: 90, render: rNum(3) },
+  volSkew: { title: '波动偏度', width: 85, render: rNum(3) },
+  volRealizedRv: { title: '已实现波', width: 85, render: rNum(4) },
+
+  // ---- 资金流 ----
+  mainFlow: { title: '主力净流入', width: 100, render: rFlow },
+  flowNetAmount: { title: '净流入', width: 100, render: rFlow },
+  flowLargeNet: { title: '大单净额', width: 100, render: rFlow },
+  flowMediumNet: { title: '中单净额', width: 100, render: rFlow },
+  flowSmallNet: { title: '小单净额', width: 100, render: rFlow },
+  flowNetRatio: { title: '净流入比', width: 90, render: rNum(2, '%') },
+  flowLargeRatio: { title: '大单比', width: 80, render: rNum(2, '%') },
+  flowImbalanceVolume: { title: '买卖失衡', width: 90, render: rNum(3) },
+  flowMoneyFlowIndex: { title: '资金MFI', width: 85, render: rNum(1) },
+
+  // ---- 风格 ----
+  styleBeta20: { title: 'β20', width: 70, render: rNum(2) },
+  styleBeta60: { title: 'β60', width: 70, render: rNum(2) },
+  styleIdioVol20: { title: '特质波', width: 80, render: rNum(4) },
+  styleValue20: { title: '价值', width: 70, render: rNum(2) },
+  styleSize20: { title: '规模', width: 70, render: rNum(2) },
+  styleMvRank: { title: '市值排名', width: 85, render: rInt },
+
+  // ---- 行业 ----
+  indStrength20: { title: '行业强度', width: 90, render: rNum(3) },
+  indStrength60: { title: '行业强度60', width: 95, render: rNum(3) },
+  indRet20: { title: '行业收益', width: 90, render: rColored(3) },
+  indRelativeMomentum20: { title: '相对动量', width: 90, render: rColored(3) },
+  indCrowding20: { title: '拥挤度', width: 80, render: rNum(3) },
+  indRotationSpeed20: { title: '行业轮动', width: 90, render: rNum(3) },
+
+  // ---- 筹码 ----
+  chipProfitRatio20: { title: '获利盘20', width: 90, render: rNum(3) },
+  chipProfitRatio60: { title: '获利盘60', width: 90, render: rNum(3) },
+  chipProfitRatio120: { title: '获利盘120', width: 90, render: rNum(3) },
+  chipCost90Width: { title: '成本90宽', width: 90, render: rNum(3) },
+  chipConcentration20: { title: '集中度', width: 80, render: rNum(3) },
+  chipPeakDistance: { title: '峰距', width: 80, render: rNum(3) },
+
+  // ---- 概念 ----
+  conceptHotScore: { title: '热度', width: 70, render: rNum(2) },
+  conceptMomentumTop3: { title: '动量TOP3', width: 90, render: rNum(2) },
+  conceptExposureTop1: { title: '暴露TOP1', width: 90, render: rNum(2) },
+  conceptLeaderScore: { title: '龙头分', width: 80, render: rNum(2) },
+  conceptVolumeRatio: { title: '概念量比', width: 90, render: rNum(3) },
+
+  // ---- 情绪 ----
+  sentimentLiquidityScore: { title: '流动性分', width: 90, render: rNum(2) },
+  sentimentBuyPressure: { title: '买压', width: 70, render: rNum(2) },
+  sentimentSellPressure: { title: '卖压', width: 70, render: rNum(2) },
+  sentimentBodyRatio: { title: '实体比', width: 75, render: rNum(2) },
+  sentimentIntradayVol: { title: '日内波', width: 75, render: rNum(2) },
+
+  // ---- 微观结构 ----
+  microVpin8: { title: 'VPIN8', width: 75, render: rNum(3) },
+  microVpin20: { title: 'VPIN20', width: 75, render: rNum(3) },
+  microVpin50: { title: 'VPIN50', width: 75, render: rNum(3) },
+  microEspEqual: { title: '有效价差', width: 85, render: rNum(4) },
+  microAmihudIlliquidity: { title: '非流动性', width: 90, render: rExp },
+  microJumpFlag: {
+    title: '跳跃',
+    width: 60,
+    render: (value) => (Number(value) === 1 ? <Tag color="orange" className="rounded-lg border-none font-bold">是</Tag> : DASH),
+  },
+  microDepthImbalance1: { title: '深度失衡', width: 85, render: rNum(3) },
+  microRealizedSpread: { title: '已实现价差', width: 95, render: rNum(5) },
+
+  // ---- 标签 ----
+  sector: { title: '行业', width: 100, ellipsis: true },
+  status: {
+    title: '指数/状态',
+    width: 160,
+    custom: true,
+    render: (_value, record) => (
+      <div className="flex flex-wrap justify-center gap-1 whitespace-nowrap">
+        {record.isSt && <Tag color="error" className="m-0 scale-90 text-[10px]">ST</Tag>}
+        {record.isHs300 && <Tag color="blue" className="m-0 scale-90 text-[10px]">HS300</Tag>}
+        {record.isCsi500 && <Tag color="cyan" className="m-0 scale-90 text-[10px]">ZZ500</Tag>}
+        {record.isCsi1000 && <Tag color="purple" className="m-0 scale-90 text-[10px]">ZZ1000</Tag>}
+      </div>
+    ),
+  },
+};
+
+const DEFAULT_COLUMN_WIDTH = 90;
+
+/** 根据列 key 构建 antd 列配置 */
+const buildColumn = (
+  key: string,
+  overrides: Partial<ColumnType<ResearchStockRow>> = {}
+): ColumnType<ResearchStockRow> | null => {
+  const def = COLUMN_DEFS[key];
+  if (!def) return null;
+  const column: ColumnType<ResearchStockRow> = {
+    key,
+    title: <span className="whitespace-nowrap">{def.title}</span>,
+    width: def.width,
+    align: 'center',
+    ...(def.custom ? {} : { dataIndex: def.dataIndex ?? key }),
+    ...(def.ellipsis ? { ellipsis: true } : {}),
+    ...(def.render ? { render: def.render } : {}),
+    ...overrides,
+  };
+  return column;
+};
+
+const buildColumns = (keys: string[]): ColumnsType<ResearchStockRow> =>
+  keys.map((key) => buildColumn(key)).filter((item): item is ColumnType<ResearchStockRow> => item !== null);
+
+const sumColumnWidth = (keys: string[]): number =>
+  keys.reduce((total, key) => total + (COLUMN_DEFS[key]?.width ?? DEFAULT_COLUMN_WIDTH), 0);
+
+/** 自选 / 研究池使用的精简列 */
+const SIMPLE_TABLE_COLUMN_KEYS = [
+  'rank', 'stock', 'score', 'latestChange', 'turnoverRate', 'amount', 'pe', 'roe', 'rsi', 'sector', 'status',
+];
+
+/* ------------------------------------------------------------------ *
+ * 筛选侧栏配置
+ * ------------------------------------------------------------------ */
+
+interface FilterFieldConfig {
+  key: keyof ResearchFiltersState;
+  label: string;
+  step?: number;
+  suffix?: string;
+}
+
+interface FilterSectionConfig {
+  key: FilterSectionKey;
+  label: string;
+  fields: FilterFieldConfig[];
+}
+
+const FILTER_SECTIONS: FilterSectionConfig[] = [
+  {
+    key: 'common',
+    label: '核心指标',
+    fields: [
+      { key: 'minScore', label: '模型分数 (≥)', step: 0.01 },
+      { key: 'limitUpDays', label: '连板天数 (≥)', suffix: '天' },
+    ],
+  },
+  {
+    key: 'market',
+    label: '行情与流动性',
+    fields: [
+      { key: 'amountRange', label: '成交额 (亿)', suffix: '亿' },
+      { key: 'turnoverRange', label: '换手率 (%)', suffix: '%', step: 0.1 },
+      { key: 'totalMvRange', label: '总市值 (亿)', suffix: '亿' },
+      { key: 'floatMvRange', label: '流通市值 (亿)', suffix: '亿' },
+      { key: 'volRatio5Range', label: '5日量比 (≥)', step: 0.5 },
+      { key: 'volRatio20Range', label: '20日量比 (≥)', step: 0.5 },
+    ],
+  },
+  {
+    key: 'momentum',
+    label: '动量与趋势',
+    fields: [
+      { key: 'return1dRange', label: '1日收益 (%)', suffix: '%', step: 0.1 },
+      { key: 'return3dRange', label: '3日收益 (%)', suffix: '%', step: 0.1 },
+      { key: 'return5dRange', label: '5日收益 (%)', suffix: '%', step: 0.1 },
+      // 10/20/60 日收益无可用数据源：technical_indicators.return_* 自 2018 年起全为 NaN，
+      // l1_factors.mom_ret_10d/20d/60d 约 35% 的值失真（|涨幅|>100%），不足以支撑筛选。
+      // 中长期强弱改由本节末尾的“120日动量”表达。
+      { key: 'maGap5Range', label: '5日乖离率 (%)', suffix: '%', step: 0.1 },
+      { key: 'maGap20Range', label: '20日乖离率 (%)', suffix: '%', step: 0.1 },
+      { key: 'rsiRange', label: 'RSI (6日)', step: 1 },
+      { key: 'kdjKRange', label: 'KDJ-K', step: 1 },
+      { key: 'macdHistRange', label: 'MACD 柱', step: 0.01 },
+      { key: 'breakout20dRange', label: '120日动量', step: 0.01 },
+    ],
+  },
+  {
+    key: 'volatility',
+    label: '波动率',
+    fields: [
+      { key: 'volStd5Range', label: '5日波动率', step: 0.001 },
+      { key: 'volStd20Range', label: '20日波动率', step: 0.001 },
+      { key: 'volStd60Range', label: '60日波动率', step: 0.001 },
+      { key: 'atr14Range', label: 'ATR(14)', step: 0.01 },
+      { key: 'volDownside20Range', label: '涨跌波动比', step: 0.001 },
+      { key: 'volUpside20Range', label: '波动偏度', step: 0.1 },
+      { key: 'volRealizedRvRange', label: '已实现波动率', step: 0.001 },
+    ],
+  },
+  {
+    key: 'technical',
+    label: '技术指标',
+    fields: [
+      { key: 'maGap10Range', label: '10日乖离率 (%)', suffix: '%', step: 0.1 },
+      { key: 'rsi14Range', label: 'RSI (14日)', step: 1 },
+      { key: 'mfi14Range', label: 'MFI (14日)', step: 1 },
+      { key: 'bbPosRange', label: '布林带位置', step: 0.01 },
+      { key: 'adx14Range', label: 'ADX (14日)', step: 1 },
+    ],
+  },
+  {
+    key: 'fundFlow',
+    label: '资金流',
+    fields: [
+      { key: 'mainFlowRange', label: '主力净流入 (百万)', step: 10 },
+      { key: 'flowNetAmountRange', label: '净流入 (百万)', step: 10 },
+      { key: 'flowLargeNetRange', label: '大单净额 (百万)', step: 10 },
+      { key: 'flowImbalanceRange', label: '买卖失衡', step: 0.01 },
+      { key: 'flowMfiRange', label: '资金 MFI', step: 1 },
+    ],
+  },
+  {
+    key: 'style',
+    label: '风格因子',
+    fields: [
+      { key: 'beta20Range', label: 'Beta (20日)', step: 0.1 },
+      { key: 'beta60Range', label: 'Beta (60日)', step: 0.1 },
+      { key: 'idioVol20Range', label: '特质波动率', step: 0.001 },
+    ],
+  },
+  {
+    key: 'industry',
+    label: '行业因子',
+    fields: [
+      { key: 'indStrength20Range', label: '行业强度 (20日)', step: 0.01 },
+      { key: 'indRet20Range', label: '行业收益 (20日)', step: 0.01 },
+      { key: 'indRelativeMomentum20Range', label: '相对动量 (20日)', step: 0.01 },
+    ],
+  },
+  {
+    key: 'chip',
+    label: '筹码分析',
+    fields: [
+      { key: 'chipProfitRatio20Range', label: '获利盘 (20日)', step: 0.01 },
+      { key: 'chipProfitRatio60Range', label: '获利盘 (60日)', step: 0.01 },
+      { key: 'chipFloatingRatioRange', label: '成本90分位宽度', step: 0.1 },
+    ],
+  },
+  {
+    key: 'fundamental',
+    label: '基本面',
+    fields: [
+      { key: 'peRange', label: 'PE (TTM)', step: 1 },
+      { key: 'roeRange', label: 'ROE (%)', suffix: '%', step: 0.1 },
+      { key: 'profitGrowthRange', label: '利润增速 (%)', suffix: '%', step: 0.1 },
+      { key: 'pbRange', label: 'PB', step: 0.1 },
+      { key: 'psTtmRange', label: 'PS (TTM)', step: 0.1 },
+      { key: 'instOwnershipRange', label: '机构持仓 (%)', suffix: '%', step: 0.1 },
+      { key: 'listedDaysRange', label: '上市天数', suffix: '天' },
+    ],
+  },
+  {
+    key: 'sector',
+    label: '行业/概念',
+    fields: [],
+  },
+];
+
+/**
+ * 区间筛选字段 -> 行数据字段映射。
+ * 仅当用户把区间从默认值改动过时才生效，保证默认状态即“全量候选”。
+ */
+interface RangeFilterBinding {
+  filterKey: keyof ResearchFiltersState;
+  field: keyof ResearchStockRow;
+  /** 缺失值视为 0（保持历史行为） */
+  coerceZero?: boolean;
+}
+
+const RANGE_FILTER_BINDINGS: RangeFilterBinding[] = [
+  { filterKey: 'amountRange', field: 'amount' },
+  { filterKey: 'turnoverRange', field: 'turnoverRate' },
+  { filterKey: 'totalMvRange', field: 'totalMv', coerceZero: true },
+  { filterKey: 'floatMvRange', field: 'floatMv', coerceZero: true },
+  { filterKey: 'return1dRange', field: 'return1d' },
+  { filterKey: 'return3dRange', field: 'return3d', coerceZero: true },
+  { filterKey: 'return5dRange', field: 'return5d' },
+  { filterKey: 'maGap5Range', field: 'maGap5' },
+  { filterKey: 'maGap10Range', field: 'maGap10' },
+  { filterKey: 'maGap20Range', field: 'maGap20' },
+  { filterKey: 'rsiRange', field: 'rsi' },
+  { filterKey: 'rsi14Range', field: 'rsi14' },
+  { filterKey: 'kdjKRange', field: 'momKdjK' },
+  { filterKey: 'macdHistRange', field: 'macdHist' },
+  { filterKey: 'breakout20dRange', field: 'momRet120d' },
+  { filterKey: 'volStd5Range', field: 'volStd5' },
+  { filterKey: 'volStd20Range', field: 'volStd20' },
+  { filterKey: 'volStd60Range', field: 'volStd60' },
+  { filterKey: 'atr14Range', field: 'volAtr14' },
+  { filterKey: 'volDownside20Range', field: 'volUpDownRatio' },
+  { filterKey: 'volUpside20Range', field: 'volSkew' },
+  { filterKey: 'volRealizedRvRange', field: 'volRealizedRv' },
+  { filterKey: 'mfi14Range', field: 'liqMfi14' },
+  { filterKey: 'bbPosRange', field: 'techBbPos' },
+  { filterKey: 'adx14Range', field: 'techAdx14' },
+  { filterKey: 'mainFlowRange', field: 'mainFlow' },
+  { filterKey: 'flowNetAmountRange', field: 'flowNetAmount' },
+  { filterKey: 'flowLargeNetRange', field: 'flowLargeNet' },
+  { filterKey: 'flowImbalanceRange', field: 'flowImbalanceVolume' },
+  { filterKey: 'flowMfiRange', field: 'flowMoneyFlowIndex' },
+  { filterKey: 'beta20Range', field: 'styleBeta20' },
+  { filterKey: 'beta60Range', field: 'styleBeta60' },
+  { filterKey: 'idioVol20Range', field: 'styleIdioVol20' },
+  { filterKey: 'indStrength20Range', field: 'indStrength20' },
+  { filterKey: 'indRet20Range', field: 'indRet20' },
+  { filterKey: 'indRelativeMomentum20Range', field: 'indRelativeMomentum20' },
+  { filterKey: 'chipProfitRatio20Range', field: 'chipProfitRatio20' },
+  { filterKey: 'chipProfitRatio60Range', field: 'chipProfitRatio60' },
+  { filterKey: 'chipFloatingRatioRange', field: 'chipCost90Width' },
+  { filterKey: 'peRange', field: 'pe' },
+  { filterKey: 'roeRange', field: 'roe' },
+  { filterKey: 'profitGrowthRange', field: 'profitGrowth' },
+  { filterKey: 'pbRange', field: 'pb', coerceZero: true },
+  { filterKey: 'psTtmRange', field: 'psTtm' },
+  { filterKey: 'listedDaysRange', field: 'listedDays', coerceZero: true },
+];
+
+const SORT_OPTIONS: Array<{ key: SortKey; label: string; field: keyof ResearchStockRow }> = [
+  { key: 'score', label: '分数', field: 'score' },
+  { key: 'limitUp', label: '连板', field: 'consecutiveLimitUpDays' },
+  { key: 'turnover', label: '换手', field: 'turnoverRate' },
+  { key: 'amount', label: '成交额', field: 'amount' },
+  { key: 'return1d', label: '1日', field: 'return1d' },
+  { key: 'return20d', label: '120日动量', field: 'momRet120d' },
+  { key: 'volStd20', label: '波动', field: 'volStd20' },
+  { key: 'mainFlow', label: '资金', field: 'mainFlow' },
+];
+
+/**
+ * 需要向 QuantDB 投影请求的字段集合。
+ *
+ * `/research/universe` 只返回 PG `stock_daily_latest` 的约 50 个字段，而筛选条件和
+ * 表格列引用了 100+ 字段——差额全部来自 QuantDB parquet。因此这里由筛选绑定、
+ * 表格列、排序字段共同推导出请求字段，避免手工维护列表与 UI 脱节。
+ */
+const QUANTDB_PROJECTION_FIELDS: string[] = Array.from(
+  new Set<string>([
+    ...RANGE_FILTER_BINDINGS.map((binding) => binding.field as string),
+    ...Object.keys(COLUMN_DEFS),
+    ...SORT_OPTIONS.map((option) => option.field as string),
+  ])
+);
+
+/** 自选 / 研究池在特征缺失时的占位行 */
+const makeFallbackRow = (key: string, code: string, name: string, score: number): ResearchStockRow => ({
+  key,
+  code,
+  name,
+  score,
+  modelId: '',
+  runId: '',
+  rank: 0,
+  signal: 'hold' as SignalType,
+  latestChange: 0,
+  totalReturn: null,
+  nextDayReturn: null,
+  day3Return: null,
+  consecutiveLimitUpDays: 0,
+  volumeTrend3d: 0,
+  volumeTrend5d: false,
+  turnoverRate: 0,
+  amount: 0,
+  sector: '',
+  concept: '',
+  conceptTags: [],
+  indexTags: [],
+  riskFlags: [],
+  closePrice: 0,
+  pe: 0,
+  roe: 0,
+  profitGrowth: 0,
+  rsi: 0,
+  mainFlow: 0,
+  flowNetAmount: 0,
+  instOwnership: 0,
+  ma5: 0,
+  ma10: 0,
+  maGap5: 0,
+  maGap10: 0,
+  maGap20: 0,
+  volRatio5: 0,
+  return1d: 0,
+  return3d: 0,
+  pb: 0,
+  totalMv: 0,
+  floatMv: 0,
+  listedDays: 0,
+  isSt: false,
+  isTradable: true,
+  isHs300: false,
+  isCsi500: false,
+  isCsi1000: false,
+  thesis: '',
+});
+
+/* ------------------------------------------------------------------ *
+ * 展示组件
+ * ------------------------------------------------------------------ */
 
 const ResearchMetricCard: React.FC<{
   icon: any;
@@ -83,15 +749,13 @@ const ResearchMetricCard: React.FC<{
   accentColor: string;
 }> = ({ icon: Icon, label, value, subLabel, accentColor }) => (
   <motion.div
-    whileHover={{ y: -6, scale: 1.02, transition: { type: "spring", stiffness: 400, damping: 10 } }}
+    whileHover={{ y: -6, scale: 1.02, transition: { type: 'spring', stiffness: 400, damping: 10 } }}
     className="research-stat-card group relative overflow-hidden rounded-[32px] border border-white p-7 shadow-xl shadow-slate-200/50 transition-all duration-500 hover:shadow-2xl hover:shadow-blue-500/10"
-    style={{
-      background: `linear-gradient(135deg, white 0%, ${accentColor}05 100%)`,
-    }}
+    style={{ background: `linear-gradient(135deg, white 0%, ${accentColor}05 100%)` }}
   >
     {/* 背景装饰光晕 */}
     <div
-      className="absolute -right-6 -top-6 h-32 w-32 rounded-full blur-3xl opacity-20 transition-all duration-700 group-hover:scale-150 group-hover:opacity-40"
+      className="absolute -right-6 -top-6 h-32 w-32 rounded-full opacity-20 blur-3xl transition-all duration-700 group-hover:scale-150 group-hover:opacity-40"
       style={{ backgroundColor: accentColor }}
     />
 
@@ -103,15 +767,18 @@ const ResearchMetricCard: React.FC<{
         </div>
 
         <div className="flex items-baseline gap-1">
-          <div className="text-5xl font-black text-slate-900 tracking-tight transition-all duration-500 group-hover:scale-110 origin-left">
+          <div className="origin-left text-5xl font-black tracking-tight text-slate-900 transition-all duration-500 group-hover:scale-110">
             {value}
           </div>
-          <div className="h-2 w-2 rounded-full opacity-0 transition-opacity duration-500 group-hover:opacity-100" style={{ backgroundColor: accentColor }} />
+          <div
+            className="h-2 w-2 rounded-full opacity-0 transition-opacity duration-500 group-hover:opacity-100"
+            style={{ backgroundColor: accentColor }}
+          />
         </div>
 
-        <div className="flex items-center gap-1.5 rounded-full bg-slate-50/50 py-1 pr-3 w-fit">
+        <div className="flex w-fit items-center gap-1.5 rounded-full bg-slate-50/50 py-1 pr-3">
           <div className="h-1 w-3 rounded-full" style={{ backgroundColor: accentColor }} />
-          <span className="text-[11px] font-bold text-slate-500/90 whitespace-nowrap">{subLabel}</span>
+          <span className="whitespace-nowrap text-[11px] font-bold text-slate-500/90">{subLabel}</span>
         </div>
       </div>
 
@@ -119,7 +786,7 @@ const ResearchMetricCard: React.FC<{
         className="flex h-14 w-14 items-center justify-center rounded-[22px] shadow-2xl transition-all duration-700 group-hover:rotate-12 group-hover:scale-110"
         style={{
           background: `linear-gradient(135deg, ${accentColor} 0%, ${accentColor}dd 100%)`,
-          boxShadow: `0 10px 20px -5px ${accentColor}40`
+          boxShadow: `0 10px 20px -5px ${accentColor}40`,
         }}
       >
         <Icon className="h-7 w-7 text-white" />
@@ -129,7 +796,8 @@ const ResearchMetricCard: React.FC<{
 );
 
 /**
- * 优雅的范围输入组件 - 用于投研筛选器手动输入
+ * 范围输入组件 - 用于投研筛选器手动输入
+ * 传入数组时渲染双端区间，传入数字时渲染单值阈值。
  */
 const RangeInput: React.FC<{
   label?: string;
@@ -138,17 +806,17 @@ const RangeInput: React.FC<{
   placeholder?: [string, string] | string;
   prefix?: string;
   suffix?: string;
-  isSingle?: boolean;
   step?: number;
-}> = ({ label, value, onChange, placeholder, prefix, suffix, isSingle, step = 1 }) => {
+}> = ({ label, value, onChange, placeholder, prefix, suffix, step = 1 }) => {
   const isRange = Array.isArray(value);
   return (
-    <div className="space-y-1.5">
-      {label && <div className="text-[11px] font-black text-slate-500 uppercase tracking-tight">{label}</div>}
-      <div className="flex items-center gap-1.5">
+    <div className="space-y-0.5">
+      {label && <div className="truncate text-[10px] font-black uppercase tracking-tight text-slate-500">{label}</div>}
+      <div className="flex items-center gap-1">
         <InputNumber
           className="research-next-input-number flex-1"
-          placeholder={isRange ? (Array.isArray(placeholder) ? placeholder[0] : "下限") : (typeof placeholder === 'string' ? placeholder : "数值")}
+          size="small"
+          placeholder={isRange ? (Array.isArray(placeholder) ? placeholder[0] : 'Min') : (typeof placeholder === 'string' ? placeholder : '阈值')}
           value={isRange ? value[0] : value}
           onChange={(v) => {
             if (isRange) onChange([v ?? 0, value[1]]);
@@ -161,10 +829,11 @@ const RangeInput: React.FC<{
         />
         {isRange && (
           <>
-            <div className="h-[1px] w-2 bg-slate-300" />
+            <div className="h-[1px] w-1.5 bg-slate-300" />
             <InputNumber
               className="research-next-input-number flex-1"
-              placeholder={Array.isArray(placeholder) ? placeholder[1] : "上限"}
+              size="small"
+              placeholder={Array.isArray(placeholder) ? placeholder[1] : 'Max'}
               value={value[1]}
               onChange={(v) => onChange([value[0], v ?? 0])}
               prefix={prefix}
@@ -179,31 +848,152 @@ const RangeInput: React.FC<{
   );
 };
 
+/** 列显示控制：按 COLUMN_GROUPS 分组勾选 */
+const ColumnVisibilityControl: React.FC<{
+  visibleGroups: Set<string>;
+  onChange: (next: Set<string>) => void;
+}> = ({ visibleGroups, onChange }) => {
+  const toggle = (key: string, checked: boolean) => {
+    const next = new Set(visibleGroups);
+    if (checked) next.add(key);
+    else next.delete(key);
+    onChange(next);
+  };
+
+  const visibleColumnCount = COLUMN_GROUPS
+    .filter((group) => visibleGroups.has(group.key))
+    .reduce((total, group) => total + group.columns.length, 0);
+
+  const content = (
+    <div className="w-[300px]">
+      <div className="mb-3 flex items-center justify-between">
+        <span className="text-[11px] font-black uppercase tracking-widest text-slate-400">列分组显示</span>
+        <span className="rounded-lg bg-slate-100 px-2 py-0.5 text-[10px] font-black text-slate-500">
+          {visibleColumnCount} 列
+        </span>
+      </div>
+      <div className="grid max-h-[320px] grid-cols-2 gap-y-2 overflow-y-auto custom-scrollbar pr-1">
+        {COLUMN_GROUPS.map((group) => (
+          <Checkbox
+            key={group.key}
+            checked={visibleGroups.has(group.key)}
+            onChange={(e) => toggle(group.key, e.target.checked)}
+          >
+            <span className="text-xs font-bold text-slate-600">
+              {group.label}
+              <span className="ml-1 text-[10px] font-medium text-slate-400">({group.columns.length})</span>
+            </span>
+          </Checkbox>
+        ))}
+      </div>
+      <div className="mt-3 flex gap-2 border-t border-slate-100 pt-3">
+        <Button
+          size="small"
+          className="flex-1 rounded-lg text-[11px] font-bold"
+          onClick={() => onChange(new Set(COLUMN_GROUPS.map((group) => group.key)))}
+        >
+          全选
+        </Button>
+        <Button
+          size="small"
+          className="flex-1 rounded-lg text-[11px] font-bold"
+          onClick={() => onChange(new Set(COLUMN_GROUPS.filter((group) => group.defaultVisible).map((group) => group.key)))}
+        >
+          默认
+        </Button>
+        <Button
+          size="small"
+          className="flex-1 rounded-lg text-[11px] font-bold"
+          onClick={() => onChange(new Set(['identity']))}
+        >
+          最简
+        </Button>
+      </div>
+    </div>
+  );
+
+  return (
+    <Popover content={content} trigger="click" placement="bottomRight">
+      <Button
+        icon={<Columns3 className="h-4 w-4" />}
+        className="h-10 rounded-[18px] border-slate-200 px-3 text-xs font-bold text-slate-600 transition-all hover:border-blue-400 hover:text-blue-500"
+      >
+        列显示 ({visibleGroups.size})
+      </Button>
+    </Popover>
+  );
+};
+
+/* ------------------------------------------------------------------ *
+ * 主页面
+ * ------------------------------------------------------------------ */
+
 export const ResearchPlatformPage: React.FC = () => {
   const currentMarket = useAppSelector(selectCurrentMarket);
   const marketConfig = getMarketConfig(currentMarket);
+
+  // ---- 数据源状态 ----
   const [availableModels, setAvailableModels] = React.useState<ResearchModelOption[]>([]);
   const [selectedModelId, setSelectedModelId] = React.useState<string>('');
   const [availableRuns, setAvailableRuns] = React.useState<ResearchRunOption[]>([]);
   const [selectedRunId, setSelectedRunId] = React.useState<string>('');
   const [candidatePool, setCandidatePool] = React.useState<ResearchStockRow[]>([]);
+  const [overview, setOverview] = React.useState<any>(null);
   const [overviewLoading, setOverviewLoading] = React.useState<boolean>(false);
   const [modelsLoading, setModelsLoading] = React.useState<boolean>(false);
   const [modelsError, setModelsError] = React.useState<string | null>(null);
   const [runsLoading, setRunsLoading] = React.useState<boolean>(false);
   const [runsError, setRunsError] = React.useState<string | null>(null);
   const [syncing, setSyncing] = React.useState<boolean>(false);
+  const [refreshNonce, setRefreshNonce] = React.useState<number>(0);
+  const [loadRange, setLoadRange] = React.useState<number>(500);
+
+  // ---- QuantDB 全字段因子缓存（ref 承担去重判断，state 触发重渲染） ----
+  const [quantDbFeatures, setQuantDbFeatures] = React.useState<Record<string, Partial<ResearchStockRow>>>({});
+  const quantDbFeaturesRef = React.useRef<Record<string, Partial<ResearchStockRow>>>({});
+  const quantDbRawRef = React.useRef<Record<string, QuantDbFeatures>>({});
+  // 详情弹窗需要原始分类结构（FactorPanel 按类别渲染），与摊平版本分开保存
+  const [quantDbRaw, setQuantDbRaw] = React.useState<Record<string, QuantDbFeatures>>({});
+  // 全池投影因子：筛选与排序在分页之前执行，必须覆盖整个候选池而非当前页
+  const [universeFeatures, setUniverseFeatures] = React.useState<Record<string, Partial<ResearchStockRow>>>({});
+  const [universeFeaturesLoading, setUniverseFeaturesLoading] = React.useState<boolean>(false);
+
+  // ---- 视图状态 ----
   const [keyword, setKeyword] = React.useState<string>('');
   const [activeDataSource, setActiveDataSource] = React.useState<DataSourceTab>('candidates');
+  const [sortKey, setSortKey] = React.useState<SortKey>('score');
   const [detailModalOpen, setDetailModalOpen] = React.useState<boolean>(false);
   const [selectedStockKey, setSelectedStockKey] = React.useState<string | null>(null);
   const [klineData, setKlineData] = React.useState<any[]>([]);
   const [klineLoading, setKlineLoading] = React.useState<boolean>(false);
   const [riskScore, setRiskScore] = React.useState<import('../services/researchService').RiskScoreData | null>(null);
   const [riskLoading, setRiskLoading] = React.useState<boolean>(false);
-  const [sortKey, setSortKey] = React.useState<SortKey>('score');
 
-  // 分页状态
+  // ---- 列显示控制 ----
+  const [tableDensity, setTableDensity] = React.useState<'compact' | 'default' | 'relaxed'>('compact');
+  const [visibleGroups, setVisibleGroups] = React.useState<Set<string>>(() => {
+    const fallback = new Set(COLUMN_GROUPS.filter((group) => group.defaultVisible).map((group) => group.key));
+    try {
+      const stored = window.localStorage.getItem(VISIBLE_GROUPS_STORAGE_KEY);
+      if (!stored) return fallback;
+      const parsed = JSON.parse(stored);
+      if (!Array.isArray(parsed) || parsed.length === 0) return fallback;
+      const known = parsed.filter((key: unknown) => typeof key === 'string' && COLUMN_GROUPS.some((group) => group.key === key));
+      return known.length > 0 ? new Set(known as string[]) : fallback;
+    } catch {
+      return fallback;
+    }
+  });
+
+  React.useEffect(() => {
+    try {
+      window.localStorage.setItem(VISIBLE_GROUPS_STORAGE_KEY, JSON.stringify(Array.from(visibleGroups)));
+    } catch {
+      // localStorage 不可用时静默降级，不影响主流程
+    }
+  }, [visibleGroups]);
+
+  // ---- 分页状态 ----
   const [candidatePage, setCandidatePage] = React.useState<number>(1);
   const [candidatePageSize, setCandidatePageSize] = React.useState<number>(10);
   const [watchlistPage, setWatchlistPage] = React.useState<number>(1);
@@ -211,249 +1001,144 @@ export const ResearchPlatformPage: React.FC = () => {
   const [poolPage, setPoolPage] = React.useState<number>(1);
   const [poolPageSize, setPoolPageSize] = React.useState<number>(12);
 
-  // 自选和研究池数据
+  // ---- 自选 / 研究池 ----
   const [watchlistData, setWatchlistData] = React.useState<WatchlistRow[]>([]);
   const [watchlistLoading, setWatchlistLoading] = React.useState<boolean>(false);
   const [watchlistTotal, setWatchlistTotal] = React.useState<number>(0);
   const [poolData, setPoolData] = React.useState<ResearchPoolRow[]>([]);
   const [poolLoading, setPoolLoading] = React.useState<boolean>(false);
   const [poolTotal, setPoolTotal] = React.useState<number>(0);
-
-  // 自选/研究池特征富化映射
   const [watchlistFeatures, setWatchlistFeatures] = React.useState<Record<string, ResearchStockRow>>({});
   const [poolFeatures, setPoolFeatures] = React.useState<Record<string, ResearchStockRow>>({});
 
-  const [minScore, setMinScore] = React.useState<number>(DEFAULT_RESEARCH_FILTERS.minScore);
-  const [limitUpDays, setLimitUpDays] = React.useState<number>(DEFAULT_RESEARCH_FILTERS.limitUpDays);
-  const [amountRange, setAmountRange] = React.useState<[number, number]>(DEFAULT_RESEARCH_FILTERS.amountRange);
-  const [turnoverRange, setTurnoverRange] = React.useState<[number, number]>(DEFAULT_RESEARCH_FILTERS.turnoverRange);
-  const [volumeTrendOnly, setVolumeTrendOnly] = React.useState<boolean>(DEFAULT_RESEARCH_FILTERS.volumeTrendOnly);
-  const [highConfidenceOnly, setHighConfidenceOnly] = React.useState<boolean>(DEFAULT_RESEARCH_FILTERS.highConfidenceOnly);
-  const [selectedSectors, setSelectedSectors] = React.useState<string[]>(DEFAULT_RESEARCH_FILTERS.selectedSectors);
-  const [selectedConcepts, setSelectedConcepts] = React.useState<string[]>(DEFAULT_RESEARCH_FILTERS.selectedConcepts);
-  const [selectedIndices, setSelectedIndices] = React.useState<string[]>(DEFAULT_RESEARCH_FILTERS.selectedIndices);
-
-  const [peRange, setPeRange] = React.useState<[number, number]>(DEFAULT_RESEARCH_FILTERS.peRange);
-  const [roeRange, setRoeRange] = React.useState<[number, number]>(DEFAULT_RESEARCH_FILTERS.roeRange);
-  const [profitGrowthRange, setProfitGrowthRange] = React.useState<[number, number]>(DEFAULT_RESEARCH_FILTERS.profitGrowthRange);
-  const [pbRange, setPbRange] = React.useState<[number, number]>(DEFAULT_RESEARCH_FILTERS.pbRange);
-  const [totalMvRange, setTotalMvRange] = React.useState<[number, number]>(DEFAULT_RESEARCH_FILTERS.totalMvRange);
-  const [floatMvRange, setFloatMvRange] = React.useState<[number, number]>(DEFAULT_RESEARCH_FILTERS.floatMvRange);
-  const [listedDaysRange, setListedDaysRange] = React.useState<[number, number]>(DEFAULT_RESEARCH_FILTERS.listedDaysRange);
-  const [return3dRange, setReturn3dRange] = React.useState<[number, number]>(DEFAULT_RESEARCH_FILTERS.return3dRange);
-
-  const [rsiRange, setRsiRange] = React.useState<[number, number]>(DEFAULT_RESEARCH_FILTERS.rsiRange);
-  const [mainFlowRange, setMainFlowRange] = React.useState<[number, number]>(DEFAULT_RESEARCH_FILTERS.mainFlowRange);
-  const [instOwnershipRange, setInstOwnershipRange] = React.useState<[number, number]>(DEFAULT_RESEARCH_FILTERS.instOwnershipRange);
-
+  // ---- 筛选状态：草稿(draft) 与 已应用(applied) 分离 ----
+  const [draftFilters, setDraftFilters] = React.useState<ResearchFiltersState>(() => cloneFilters(DEFAULT_RESEARCH_FILTERS));
+  const [appliedFilters, setAppliedFilters] = React.useState<ResearchFiltersState>(() => cloneFilters(DEFAULT_RESEARCH_FILTERS));
   const [activePreset, setActivePreset] = React.useState<string | null>(null);
   const [activeFilterSections, setActiveFilterSections] = React.useState<FilterSectionKey[]>(['common']);
 
-  // 扩展的研究条件
-  const [maGap5Range, setMaGap5Range] = React.useState<[number, number]>(DEFAULT_RESEARCH_FILTERS.maGap5Range);
-  const [maGap10Range, setMaGap10Range] = React.useState<[number, number]>(DEFAULT_RESEARCH_FILTERS.maGap10Range);
-  const [maGap20Range, setMaGap20Range] = React.useState<[number, number]>(DEFAULT_RESEARCH_FILTERS.maGap20Range);
-  const [volRatio5Range, setVolRatio5Range] = React.useState<number>(DEFAULT_RESEARCH_FILTERS.volRatio5Range);
-  const [volRatio20Range, setVolRatio20Range] = React.useState<number>(DEFAULT_RESEARCH_FILTERS.volRatio20Range);
-  const [rsi14Range, setRsi14Range] = React.useState<[number, number]>(DEFAULT_RESEARCH_FILTERS.rsi14Range);
-  const [return1dRange, setReturn1dRange] = React.useState<[number, number]>(DEFAULT_RESEARCH_FILTERS.return1dRange);
-  const [excludeSt, setExcludeSt] = React.useState<boolean>(DEFAULT_RESEARCH_FILTERS.excludeSt);
-  const [marketType, setMarketType] = React.useState<string>(DEFAULT_RESEARCH_FILTERS.marketType);
-  const [advancedFiltersEnabled, setAdvancedFiltersEnabled] = React.useState<boolean>(DEFAULT_RESEARCH_FILTERS.advancedFiltersEnabled);
+  // 用 ref 递增刷新计数：异步回调里读取 state 会拿到过期闭包值
+  const refreshCounter = React.useRef<number>(0);
+  const triggerRefresh = (): void => {
+    refreshCounter.current += 1;
+    setRefreshNonce(refreshCounter.current);
+  };
 
-  const [appliedFilters, setAppliedFilters] = React.useState({
-    minScore, limitUpDays, amountRange, turnoverRange, volumeTrendOnly, highConfidenceOnly, selectedSectors, selectedConcepts, selectedIndices,
-    peRange, roeRange, profitGrowthRange, rsiRange, mainFlowRange, instOwnershipRange,
-    maGap5Range, maGap10Range, maGap20Range, volRatio5Range, volRatio20Range, rsi14Range, return1dRange,
-    pbRange, totalMvRange, floatMvRange, listedDaysRange, return3dRange, advancedFiltersEnabled,
-    excludeSt, marketType
-  });
+  const setFilterField = <K extends keyof ResearchFiltersState>(key: K, value: ResearchFiltersState[K]): void => {
+    setDraftFilters({ ...draftFilters, [key]: value });
+  };
 
-  const [loadRange, setLoadRange] = React.useState<number>(500);
+  const hasPendingFilterChanges = React.useMemo(
+    () => JSON.stringify(draftFilters) !== JSON.stringify(appliedFilters),
+    [draftFilters, appliedFilters]
+  );
 
-  const hasPendingFilterChanges = React.useMemo(() => {
-    return JSON.stringify({
-      minScore, limitUpDays, amountRange, turnoverRange, volumeTrendOnly, highConfidenceOnly, selectedSectors, selectedConcepts, selectedIndices,
-      peRange, roeRange, profitGrowthRange, rsiRange, mainFlowRange, instOwnershipRange,
-      maGap5Range, maGap10Range, maGap20Range, volRatio5Range, volRatio20Range, rsi14Range, return1dRange,
-      pbRange, totalMvRange, floatMvRange, listedDaysRange, return3dRange, advancedFiltersEnabled,
-      excludeSt, marketType
-    }) !== JSON.stringify(appliedFilters);
-  }, [
-    minScore, limitUpDays, amountRange, turnoverRange, volumeTrendOnly, highConfidenceOnly, selectedSectors, selectedConcepts, selectedIndices,
-    peRange, roeRange, profitGrowthRange, rsiRange, mainFlowRange, instOwnershipRange,
-    maGap5Range, maGap10Range, maGap20Range, volRatio5Range, volRatio20Range, rsi14Range, return1dRange,
-    pbRange, totalMvRange, floatMvRange, listedDaysRange, return3dRange, advancedFiltersEnabled,
-    appliedFilters
-  ]);
-
-  const applyCurrentFilters = () => {
-    setAppliedFilters({
-      minScore, limitUpDays, amountRange, turnoverRange, volumeTrendOnly, highConfidenceOnly, selectedSectors, selectedConcepts, selectedIndices,
-      peRange, roeRange, profitGrowthRange, rsiRange, mainFlowRange, instOwnershipRange,
-      maGap5Range, maGap10Range, maGap20Range, volRatio5Range, volRatio20Range, rsi14Range, return1dRange,
-      pbRange, totalMvRange, floatMvRange, listedDaysRange, return3dRange, advancedFiltersEnabled,
-      excludeSt, marketType
-    });
+  const applyCurrentFilters = React.useCallback(() => {
+    setAppliedFilters(cloneFilters(draftFilters));
     setCandidatePage(1);
     message.success('筛选条件已成功应用');
-  };
+  }, [draftFilters]);
 
-  const resetFilters = () => {
-    // 1. 重置 UI 状态（滑动条、输入框等）
-    setMinScore(DEFAULT_RESEARCH_FILTERS.minScore);
-    setLimitUpDays(DEFAULT_RESEARCH_FILTERS.limitUpDays);
-    setAmountRange([...DEFAULT_RESEARCH_FILTERS.amountRange]);
-    setTurnoverRange([...DEFAULT_RESEARCH_FILTERS.turnoverRange]);
-    setVolumeTrendOnly(DEFAULT_RESEARCH_FILTERS.volumeTrendOnly);
-    setHighConfidenceOnly(DEFAULT_RESEARCH_FILTERS.highConfidenceOnly);
-    setSelectedSectors([...DEFAULT_RESEARCH_FILTERS.selectedSectors]);
-    setSelectedConcepts([...DEFAULT_RESEARCH_FILTERS.selectedConcepts]);
-    setSelectedIndices([...DEFAULT_RESEARCH_FILTERS.selectedIndices]);
-    setPeRange([...DEFAULT_RESEARCH_FILTERS.peRange]);
-    setRoeRange([...DEFAULT_RESEARCH_FILTERS.roeRange]);
-    setProfitGrowthRange([...DEFAULT_RESEARCH_FILTERS.profitGrowthRange]);
-    setPbRange([...DEFAULT_RESEARCH_FILTERS.pbRange]);
-    setTotalMvRange([...DEFAULT_RESEARCH_FILTERS.totalMvRange]);
-    setFloatMvRange([...DEFAULT_RESEARCH_FILTERS.floatMvRange]);
-    setListedDaysRange([...DEFAULT_RESEARCH_FILTERS.listedDaysRange]);
-    setReturn3dRange([...DEFAULT_RESEARCH_FILTERS.return3dRange]);
-    setRsiRange([...DEFAULT_RESEARCH_FILTERS.rsiRange]);
-    setMainFlowRange([...DEFAULT_RESEARCH_FILTERS.mainFlowRange]);
-    setInstOwnershipRange([...DEFAULT_RESEARCH_FILTERS.instOwnershipRange]);
-    setMaGap5Range([...DEFAULT_RESEARCH_FILTERS.maGap5Range]);
-    setMaGap10Range([...DEFAULT_RESEARCH_FILTERS.maGap10Range]);
-    setMaGap20Range([...DEFAULT_RESEARCH_FILTERS.maGap20Range]);
-    setVolRatio5Range(DEFAULT_RESEARCH_FILTERS.volRatio5Range);
-    setVolRatio20Range(DEFAULT_RESEARCH_FILTERS.volRatio20Range);
-    setRsi14Range([...DEFAULT_RESEARCH_FILTERS.rsi14Range]);
-    setReturn1dRange([...DEFAULT_RESEARCH_FILTERS.return1dRange]);
-    setExcludeSt(DEFAULT_RESEARCH_FILTERS.excludeSt);
-    setMarketType(DEFAULT_RESEARCH_FILTERS.marketType);
-    setAdvancedFiltersEnabled(DEFAULT_RESEARCH_FILTERS.advancedFiltersEnabled);
+  const resetFilters = React.useCallback(() => {
+    const fresh = cloneFilters(DEFAULT_RESEARCH_FILTERS);
+    setDraftFilters(fresh);
+    setAppliedFilters(cloneFilters(DEFAULT_RESEARCH_FILTERS));
     setActivePreset(null);
-
-    // 2. 立即同步应用到已应用滤镜，确保“全量”即刻生效
-    setAppliedFilters({
-      ...DEFAULT_RESEARCH_FILTERS,
-      amountRange: [...DEFAULT_RESEARCH_FILTERS.amountRange],
-      turnoverRange: [...DEFAULT_RESEARCH_FILTERS.turnoverRange],
-      selectedSectors: [...DEFAULT_RESEARCH_FILTERS.selectedSectors],
-      selectedConcepts: [...DEFAULT_RESEARCH_FILTERS.selectedConcepts],
-      selectedIndices: [...DEFAULT_RESEARCH_FILTERS.selectedIndices],
-      peRange: [...DEFAULT_RESEARCH_FILTERS.peRange],
-      roeRange: [...DEFAULT_RESEARCH_FILTERS.roeRange],
-      profitGrowthRange: [...DEFAULT_RESEARCH_FILTERS.profitGrowthRange],
-      pbRange: [...DEFAULT_RESEARCH_FILTERS.pbRange],
-      totalMvRange: [...DEFAULT_RESEARCH_FILTERS.totalMvRange],
-      floatMvRange: [...DEFAULT_RESEARCH_FILTERS.floatMvRange],
-      listedDaysRange: [...DEFAULT_RESEARCH_FILTERS.listedDaysRange],
-      return3dRange: [...DEFAULT_RESEARCH_FILTERS.return3dRange],
-      rsiRange: [...DEFAULT_RESEARCH_FILTERS.rsiRange],
-      mainFlowRange: [...DEFAULT_RESEARCH_FILTERS.mainFlowRange],
-      instOwnershipRange: [...DEFAULT_RESEARCH_FILTERS.instOwnershipRange],
-      maGap5Range: [...DEFAULT_RESEARCH_FILTERS.maGap5Range],
-      maGap10Range: [...DEFAULT_RESEARCH_FILTERS.maGap10Range],
-      maGap20Range: [...DEFAULT_RESEARCH_FILTERS.maGap20Range],
-      rsi14Range: [...DEFAULT_RESEARCH_FILTERS.rsi14Range],
-      return1dRange: [...DEFAULT_RESEARCH_FILTERS.return1dRange],
-    });
     setCandidatePage(1);
-  };
+  }, []);
 
-  const applyPreset = (presetName: string) => {
+  /**
+   * 参与筛选/排序的池：universe 基础字段优先，QuantDB 投影仅补空缺。
+   * 声明在 applyPreset 之前——模板阈值要按本池的分位数实时推导。
+   */
+  const enrichedPool = React.useMemo(
+    () => (Object.keys(universeFeatures).length ? mergePoolFeatures(candidatePool, universeFeatures) : candidatePool),
+    [candidatePool, universeFeatures]
+  );
+
+  /**
+   * 应用快速模板：先回到全量宽松状态，再叠加模板参数，
+   * 同时写入 draft 与 applied，做到一键生效。
+   */
+  const applyPreset = React.useCallback((presetName: string) => {
     const config = PRESET_FILTER_MAP[presetName];
     if (!config) return;
 
-    // 1. 先彻底重置为全量宽松状态
-    resetFilters();
+    const next = cloneFilters(DEFAULT_RESEARCH_FILTERS);
 
-    // 2. 应用特定模板参数
-    let nextMinScore = -1.0;
-    let nextLimitUpDays = 0;
-    let nextRoeRange: [number, number] = [-1000, 1000];
-    let nextTotalMvRange: [number, number] = [0, 1000000];
-    let nextTurnoverRange: [number, number] = [0, 100];
-    let nextMaGap20Range: [number, number] = [-100, 100];
-    let nextRsiRange: [number, number] = [0, 100];
+    /**
+     * 按当前池的分位数取阈值。
+     *
+     * 各批次的数据分布差异很大（不同模型、不同交易日，PG 与 QuantDB 的覆盖也不同：
+     * 例如 chipProfitRatio20 在某批次 p25 就已到 1.00，而另一批次 p25 仅 0.04），
+     * 写死阈值必然在部分批次上退化成“选不出”或“全选中”。这里改为按分位取值。
+     */
+    const quantile = (field: keyof ResearchStockRow, percentile: number): number | null => {
+      const xs = enrichedPool
+        .map((item) => item[field])
+        .filter((v): v is number => typeof v === 'number' && Number.isFinite(v))
+        .sort((a, b) => a - b);
+      if (!xs.length) return null;
+      const idx = Math.min(xs.length - 1, Math.max(0, Math.round((xs.length - 1) * percentile)));
+      return xs[idx];
+    };
 
-    if (config.minScore !== undefined) {
-      setMinScore(config.minScore);
-      nextMinScore = config.minScore;
-    }
-    if (config.limitUpDays !== undefined) {
-      setLimitUpDays(config.limitUpDays);
-      nextLimitUpDays = config.limitUpDays;
-    }
-    if (config.roeMin !== undefined) {
-      const val: [number, number] = [config.roeMin, 100];
-      setRoeRange(val);
-      nextRoeRange = val;
-    }
-    if (config.totalMvMin !== undefined) {
-      const val: [number, number] = [config.totalMvMin, 20000];
-      setTotalMvRange(val);
-      nextTotalMvRange = val;
-    }
-    if (config.turnoverMin !== undefined) {
-      const val: [number, number] = [config.turnoverMin, 100];
-      setTurnoverRange(val);
-      nextTurnoverRange = val;
-    }
-    if (config.amountMin !== undefined) {
-      setAmountRange([config.amountMin, 200]);
-    }
-    if (config.maGap20Max !== undefined) {
-      const val: [number, number] = [-50, config.maGap20Max];
-      setMaGap20Range(val);
-      nextMaGap20Range = val;
-    }
-    if (config.rsiMax !== undefined) {
-      const val: [number, number] = [0, config.rsiMax];
-      setRsiRange(val);
-      nextRsiRange = val;
+    /** 取该字段的高分位作为下限（选“强”的一端） */
+    const setMin = (
+      key: keyof ResearchFiltersState,
+      field: keyof ResearchStockRow,
+      percentile: number,
+      upper: number
+    ): void => {
+      const cut = quantile(field, percentile);
+      if (cut !== null) (next[key] as [number, number]) = [cut, upper];
+    };
+
+    /** 取该字段的低分位作为上限（选“低/便宜”的一端） */
+    const setMax = (
+      key: keyof ResearchFiltersState,
+      field: keyof ResearchStockRow,
+      percentile: number,
+      lower: number
+    ): void => {
+      const cut = quantile(field, percentile);
+      if (cut !== null) (next[key] as [number, number]) = [lower, cut];
+    };
+
+    if (config.limitUpDays !== undefined) next.limitUpDays = config.limitUpDays;
+
+    // 模型评分没有固定量纲（不同模型/批次可能整体为负），绝对阈值会失效
+    if (config.scoreTopPercent !== undefined) {
+      const cut = quantile('score', 1 - config.scoreTopPercent / 100);
+      if (cut !== null) next.minScore = cut;
     }
 
-    // 3. 模板一键生效（直接更新 appliedFilters，无需用户二次点击）
-    setAppliedFilters({
-      minScore: nextMinScore,
-      limitUpDays: nextLimitUpDays,
-      roeRange: nextRoeRange,
-      totalMvRange: nextTotalMvRange,
-      turnoverRange: nextTurnoverRange,
-      maGap20Range: nextMaGap20Range,
-      rsiRange: nextRsiRange,
-      excludeSt,
-      marketType,
-      amountRange,
-      volumeTrendOnly,
-      highConfidenceOnly,
-      selectedSectors,
-      selectedConcepts,
-      selectedIndices,
-      peRange,
-      profitGrowthRange,
-      mainFlowRange,
-      instOwnershipRange,
-      maGap5Range,
-      maGap10Range,
-      volRatio5Range,
-      volRatio20Range,
-      rsi14Range,
-      return1dRange,
-      pbRange,
-      floatMvRange,
-      listedDaysRange,
-      return3dRange,
-      advancedFiltersEnabled,
-    });
+    if (config.roeTop !== undefined) setMin('roeRange', 'roe', 1 - config.roeTop, 100000);
+    if (config.totalMvTop !== undefined) setMin('totalMvRange', 'totalMv', 1 - config.totalMvTop, 1000000);
+    if (config.turnoverTop !== undefined) setMin('turnoverRange', 'turnoverRate', 1 - config.turnoverTop, 100000);
+    if (config.amountTop !== undefined) setMin('amountRange', 'amount', 1 - config.amountTop, 100000);
+    if (config.volStd20Top !== undefined) setMin('volStd20Range', 'volStd20', 1 - config.volStd20Top, 100000);
+    if (config.momRet120dTop !== undefined) setMin('breakout20dRange', 'momRet120d', 1 - config.momRet120dTop, 100000);
+    if (config.indStrength20Top !== undefined)
+      setMin('indStrength20Range', 'indStrength20', 1 - config.indStrength20Top, 100000);
+    if (config.flowNetAmountTop !== undefined)
+      setMin('flowNetAmountRange', 'flowNetAmount', 1 - config.flowNetAmountTop, 1000000);
+    if (config.chipProfitRatio20Top !== undefined)
+      setMin('chipProfitRatio20Range', 'chipProfitRatio20', 1 - config.chipProfitRatio20Top, 1);
 
+    if (config.maGap20Bottom !== undefined) setMax('maGap20Range', 'maGap20', config.maGap20Bottom, -100000);
+    if (config.rsiBottom !== undefined) setMax('rsiRange', 'rsi', config.rsiBottom, 0);
+    if (config.peBottom !== undefined) setMax('peRange', 'pe', config.peBottom, 0);
+    if (config.pbBottom !== undefined) setMax('pbRange', 'pb', config.pbBottom, 0);
+
+    setDraftFilters(next);
+    setAppliedFilters(cloneFilters(next));
     setActivePreset(presetName);
+    setCandidatePage(1);
     message.success(`已应用模板：${presetName}`);
-  };
+  }, [enrichedPool]);
 
-  const [overview, setOverview] = React.useState<any>(null);
-  const [refreshNonce, setRefreshNonce] = React.useState<number>(0);
+  /* ------------------------------ 数据加载 ------------------------------ */
 
   // 初始化加载模型
   React.useEffect(() => {
@@ -465,12 +1150,11 @@ export const ResearchPlatformPage: React.FC = () => {
         const models = await researchService.getAvailableModels(currentMarket);
         if (cancelled) return;
         setAvailableModels(models);
-        if (models.length > 0 && !selectedModelId) {
-          setSelectedModelId(models[0].modelId);
-        }
+        // 该 effect 仅在市场切换时执行，因此总是重置到新市场的首个模型
+        setSelectedModelId(models.length > 0 ? models[0].modelId : '');
       } catch (error) {
         console.error('[ResearchPlatformPage] load models failed:', error);
-        setModelsError('加载模型列表失败');
+        if (!cancelled) setModelsError('加载模型列表失败');
       } finally {
         if (!cancelled) setModelsLoading(false);
       }
@@ -494,14 +1178,10 @@ export const ResearchPlatformPage: React.FC = () => {
         const runs = await researchService.getInferenceRuns(selectedModelId);
         if (cancelled) return;
         setAvailableRuns(runs);
-        if (runs.length > 0) {
-          setSelectedRunId(runs[0].runId);
-        } else {
-          setSelectedRunId('');
-        }
+        setSelectedRunId(runs.length > 0 ? runs[0].runId : '');
       } catch (error) {
         console.error('[ResearchPlatformPage] load runs failed:', error);
-        setRunsError('加载推理批次失败');
+        if (!cancelled) setRunsError('加载推理批次失败');
       } finally {
         if (!cancelled) setRunsLoading(false);
       }
@@ -523,50 +1203,55 @@ export const ResearchPlatformPage: React.FC = () => {
         const result = await researchService.getResearchUniverse(selectedRunId, 10000);
         if (cancelled) return;
         setCandidatePool(
-          (result.candidates || []).map((item: any) => ({
-            ...item,
-            score: safeNum(item?.score, 0),
-            latestChange: safeNum(item?.latestChange, 0),
-            nextDayReturn: item?.nextDayReturn != null ? safeNum(item?.nextDayReturn, 0) : null,
-            day3Return: item?.day3Return != null ? safeNum(item?.day3Return, 0) : null,
-            consecutiveLimitUpDays: safeNum(item?.consecutiveLimitUpDays, 0),
-            turnoverRate: item?.turnoverRate != null ? safeNum(item?.turnoverRate, 0) : null,
-            amount: item?.amount != null ? safeNum(item?.amount, 0) : null,
-            pe: item?.pe != null ? safeNum(item?.pe, 0) : null,
-            roe: item?.roe != null ? normalizeRoe(item?.roe) : null,
-            rsi: item?.rsi != null ? safeNum(item?.rsi, 0) : null,
-            profitGrowth: item?.profitGrowth ?? item?.profit_growth ?? null,
-            mainFlow: item?.mainFlow ?? item?.main_flow ?? null,
-            instOwnership: item?.instOwnership ?? item?.inst_ownership ?? null,
-            ma5: item?.ma5 != null ? safeNum(item?.ma5, 0) : null,
-            ma10: item?.ma10 != null ? safeNum(item?.ma10, 0) : null,
-            pb: item?.pb != null ? safeNum(item?.pb, 0) : null,
-            totalMv: item?.totalMv ?? item?.total_mv ?? item?.marketCap ?? null,
-            floatMv: item?.floatMv ?? item?.float_mv ?? null,
-            listedDays: item?.listedDays ?? item?.listed_days ?? null,
-            return3d: item?.return3d ?? item?.return_3d ?? null,
-            maGap10: item?.maGap10 ?? item?.ma_gap_10 ?? null,
-            maGap20: item?.maGap20 ?? item?.ma_gap_20 ?? null,
-            rsi14: item?.rsi14 ?? item?.rsi_14 ?? item?.rsi ?? null,
-            volRatio20: item?.volumeRatio20 ?? item?.volume_ratio_20 ?? null,
-            atr: item?.atr ?? null,
-            macdHist: item?.macdHist ?? item?.macd_hist ?? null,
-            conceptTags: Array.isArray(item?.conceptTags) ? item.conceptTags : [],
-            indexTags: Array.isArray(item?.indexTags) ? item.indexTags : [],
-            concept: item?.concept || '',
-            isSt: Boolean(item?.isSt),
-            isTradable: item?.isTradable !== undefined ? Boolean(item?.isTradable) : true,
-            isHs300: Boolean(item?.isHs300),
-            isCsi500: Boolean(item?.isCsi500),
-            isCsi1000: Boolean(item?.isCsi1000),
-            maGap5: item?.maGap5 ?? item?.ma_gap_5 ?? null,
-            volRatio5: item?.volRatio5 ?? item?.volume_ratio_5 ?? null,
-            confidence: item?.confidence || 'watch',
-          }))
+          (result.candidates || []).map((raw: any) => {
+            const item = camelizeRow(raw || {});
+            return {
+              ...item,
+              score: safeNum(item?.score, 0),
+              latestChange: safeNum(item?.latestChange, 0),
+              nextDayReturn: item?.nextDayReturn != null ? safeNum(item?.nextDayReturn, 0) : null,
+              day3Return: item?.day3Return != null ? safeNum(item?.day3Return, 0) : null,
+              consecutiveLimitUpDays: safeNum(item?.consecutiveLimitUpDays, 0),
+              turnoverRate: item?.turnoverRate != null ? safeNum(item?.turnoverRate, 0) : null,
+              amount: item?.amount != null ? safeNum(item?.amount, 0) : null,
+              pe: item?.pe != null ? safeNum(item?.pe, 0) : null,
+              roe: item?.roe != null ? normalizeRoe(item?.roe) : null,
+              rsi: item?.rsi != null ? safeNum(item?.rsi, 0) : null,
+              profitGrowth: item?.profitGrowth ?? null,
+              mainFlow: item?.mainFlow ?? null,
+              instOwnership: item?.instOwnership ?? null,
+              ma5: item?.ma5 != null ? safeNum(item?.ma5, 0) : null,
+              ma10: item?.ma10 != null ? safeNum(item?.ma10, 0) : null,
+              ma20: item?.ma20 != null ? safeNum(item?.ma20, 0) : null,
+              pb: item?.pb != null ? safeNum(item?.pb, 0) : null,
+              totalMv: item?.totalMv ?? item?.marketCap ?? null,
+              floatMv: item?.floatMv ?? null,
+              listedDays: item?.listedDays ?? null,
+              return3d: item?.return3d ?? null,
+              maGap5: item?.maGap5 ?? null,
+              maGap10: item?.maGap10 ?? null,
+              maGap20: item?.maGap20 ?? null,
+              rsi14: item?.rsi14 ?? item?.rsi ?? null,
+              volRatio5: item?.volRatio5 ?? item?.volumeRatio5 ?? null,
+              volRatio20: item?.volRatio20 ?? item?.volumeRatio20 ?? null,
+              atr: item?.atr ?? item?.volAtr14 ?? null,
+              macdHist: item?.macdHist ?? null,
+              conceptTags: Array.isArray(item?.conceptTags) ? item.conceptTags : [],
+              indexTags: Array.isArray(item?.indexTags) ? item.indexTags : [],
+              riskFlags: Array.isArray(item?.riskFlags) ? item.riskFlags : [],
+              concept: item?.concept || '',
+              isSt: Boolean(item?.isSt),
+              isTradable: item?.isTradable !== undefined ? Boolean(item?.isTradable) : true,
+              isHs300: Boolean(item?.isHs300),
+              isCsi500: Boolean(item?.isCsi500),
+              isCsi1000: Boolean(item?.isCsi1000),
+              confidence: item?.confidence || 'watch',
+            } as ResearchStockRow;
+          })
         );
         setOverview(result);
-      } catch (e) {
-        console.error('Load universe failed', e);
+      } catch (error) {
+        console.error('[ResearchPlatformPage] load universe failed:', error);
         if (!cancelled) setCandidatePool([]);
       } finally {
         if (!cancelled) setOverviewLoading(false);
@@ -574,7 +1259,7 @@ export const ResearchPlatformPage: React.FC = () => {
     };
     void loadUniverse();
     return () => { cancelled = true; };
-  }, [selectedRunId, appliedFilters.minScore, appliedFilters.excludeSt, refreshNonce, loadRange]); // 只在关键变更时重刷
+  }, [selectedRunId, appliedFilters.minScore, appliedFilters.excludeSt, refreshNonce, loadRange]);
 
   const handleSyncCandidates = async () => {
     if (!selectedModelId) {
@@ -583,7 +1268,7 @@ export const ResearchPlatformPage: React.FC = () => {
     }
     setSyncing(true);
     try {
-      setRefreshNonce(refreshNonce + 1);
+      triggerRefresh();
       message.success('候选池同步请求已发起');
     } finally {
       // 延迟一个 tick，避免按钮闪烁
@@ -665,12 +1350,14 @@ export const ResearchPlatformPage: React.FC = () => {
       setWatchlistFeatures({});
       return;
     }
-    const symbols = watchlistData.map(item => item.symbol);
-    researchService.getFeaturesBySymbols(symbols).then(features => {
-      const map: Record<string, ResearchStockRow> = {};
-      features.forEach(f => { map[f.code] = f; });
-      setWatchlistFeatures(map);
-    }).catch(() => setWatchlistFeatures({}));
+    const symbols = watchlistData.map((item) => item.symbol);
+    researchService.getFeaturesBySymbols(symbols)
+      .then((features) => {
+        const map: Record<string, ResearchStockRow> = {};
+        features.forEach((f) => { map[f.code] = f; });
+        setWatchlistFeatures(map);
+      })
+      .catch(() => setWatchlistFeatures({}));
   }, [watchlistData]);
 
   // 富化研究池特征数据
@@ -679,13 +1366,17 @@ export const ResearchPlatformPage: React.FC = () => {
       setPoolFeatures({});
       return;
     }
-    const symbols = poolData.map(item => item.symbol);
-    researchService.getFeaturesBySymbols(symbols).then(features => {
-      const map: Record<string, ResearchStockRow> = {};
-      features.forEach(f => { map[f.code] = f; });
-      setPoolFeatures(map);
-    }).catch(() => setPoolFeatures({}));
+    const symbols = poolData.map((item) => item.symbol);
+    researchService.getFeaturesBySymbols(symbols)
+      .then((features) => {
+        const map: Record<string, ResearchStockRow> = {};
+        features.forEach((f) => { map[f.code] = f; });
+        setPoolFeatures(map);
+      })
+      .catch(() => setPoolFeatures({}));
   }, [poolData]);
+
+  /* ------------------------------ 自选/研究池操作 ------------------------------ */
 
   const handleAddToWatchlist = async (stock: ResearchStockRow) => {
     try {
@@ -695,9 +1386,9 @@ export const ResearchPlatformPage: React.FC = () => {
         featuresSnapshot: stock as unknown as Record<string, unknown>,
       });
       message.success(`已加入自选: ${stock.name}`);
-      setRefreshNonce(refreshNonce + 1);
+      triggerRefresh();
     } catch (error) {
-      console.error('Add to watchlist failed', error);
+      console.error('[ResearchPlatformPage] add to watchlist failed:', error);
       message.error('加入自选失败');
     }
   };
@@ -713,9 +1404,9 @@ export const ResearchPlatformPage: React.FC = () => {
         featuresSnapshot: stock as unknown as Record<string, unknown>,
       });
       message.success(`已加入研究池: ${stock.name}`);
-      setRefreshNonce(refreshNonce + 1);
+      triggerRefresh();
     } catch (error) {
-      console.error('Add to research pool failed', error);
+      console.error('[ResearchPlatformPage] add to research pool failed:', error);
       message.error('加入研究池失败');
     }
   };
@@ -724,9 +1415,9 @@ export const ResearchPlatformPage: React.FC = () => {
     try {
       await researchService.removeFromWatchlist(symbol);
       message.success(`已从自选移除: ${stockName || symbol}`);
-      setRefreshNonce(refreshNonce + 1);
+      triggerRefresh();
     } catch (error) {
-      console.error('Remove from watchlist failed', error);
+      console.error('[ResearchPlatformPage] remove from watchlist failed:', error);
       message.error('移出自选失败');
     }
   };
@@ -735,168 +1426,200 @@ export const ResearchPlatformPage: React.FC = () => {
     try {
       await researchService.removeFromResearchPool(symbol);
       message.success(`已从研究池移除: ${stockName || symbol}`);
-      setRefreshNonce(refreshNonce + 1);
+      triggerRefresh();
     } catch (error) {
-      console.error('Remove from pool failed', error);
+      console.error('[ResearchPlatformPage] remove from pool failed:', error);
       message.error('移出研究池失败');
     }
   };
 
+  /* ------------------------------ 筛选与排序 ------------------------------ */
+
+  /** 只保留被用户改动过的区间条件，默认值一律跳过 */
+  const activeRangeFilters = React.useMemo(
+    () => RANGE_FILTER_BINDINGS.filter((binding) => {
+      const applied = appliedFilters[binding.filterKey];
+      const fallback = DEFAULT_RESEARCH_FILTERS[binding.filterKey];
+      return Array.isArray(applied) && !isSameRange(applied, fallback);
+    }),
+    [appliedFilters]
+  );
+
+  /**
+   * 全池 QuantDB 投影富化。
+   *
+   * 筛选与排序发生在分页之前，若只富化当前页，任何依赖 QuantDB 字段的条件
+   * （动量/波动/资金流/筹码/风格等 29 项）都会因为字段为 undefined 而静默失效。
+   * 因此候选池加载完成后，一次性按投影字段拉取整池。
+   */
+  React.useEffect(() => {
+    const symbols = Array.from(
+      new Set(candidatePool.map((item) => toSuffixSymbol(item.code)).filter(Boolean))
+    );
+    if (!symbols.length) {
+      setUniverseFeatures({});
+      return;
+    }
+
+    let cancelled = false;
+    setUniverseFeaturesLoading(true);
+    void researchService
+      .getProjectedQuantDbFeatures(symbols, QUANTDB_PROJECTION_FIELDS)
+      .then((bySymbol) => {
+        if (cancelled) return;
+        const next: Record<string, Partial<ResearchStockRow>> = {};
+        Object.entries(bySymbol).forEach(([symbol, values]) => {
+          next[symbol] = flattenProjectedValues(values);
+        });
+        setUniverseFeatures(next);
+      })
+      .finally(() => {
+        if (!cancelled) setUniverseFeaturesLoading(false);
+      });
+    return () => { cancelled = true; };
+  }, [candidatePool]);
+
+  /** 参与筛选/排序的池：universe 基础字段优先，QuantDB 投影仅补空缺 */
+
   const filteredRows = React.useMemo(() => {
-    // 1. 分离匹配和不匹配的股票
     const matches: ResearchStockRow[] = [];
-    const nonMatches: ResearchStockRow[] = [];
+    const lowerKeyword = keyword.trim().toLowerCase();
 
-    candidatePool.forEach((item) => {
-      let isMatch = true;
+    enrichedPool.forEach((item) => {
+      // --- 核心阈值 ---
+      if (safeNum(item.score, 0) < appliedFilters.minScore) return;
+      if (safeNum(item.consecutiveLimitUpDays, 0) < appliedFilters.limitUpDays) return;
 
-      if (item.score < appliedFilters.minScore) isMatch = false;
-      else if (item.consecutiveLimitUpDays < appliedFilters.limitUpDays) isMatch = false;
-      else {
-        const amountRange = appliedFilters.amountRange || [0, 10000];
-        if (item.amount != null && (item.amount < amountRange[0] || item.amount > amountRange[1])) isMatch = false;
+      // --- 高置信标的 ---
+      if (appliedFilters.highConfidenceOnly && item.confidence !== 'high') return;
 
-        const turnoverRange = appliedFilters.turnoverRange || [0, 100];
-        if (item.turnoverRate != null && (item.turnoverRate < turnoverRange[0] || item.turnoverRate > turnoverRange[1])) isMatch = false;
+      // --- 量能持续放大 ---
+      if (appliedFilters.volumeTrendOnly && !item.volumeTrend5d) return;
 
-        // 高置信标的筛选
-        if (isMatch && appliedFilters.highConfidenceOnly && item.confidence !== 'high') isMatch = false;
-
-        // 行业筛选
-        if (isMatch && (appliedFilters.selectedSectors?.length || 0) > 0) {
-          if (!appliedFilters.selectedSectors.includes(item.sector)) isMatch = false;
-        }
-
-        // 概念筛选
-        if (isMatch && (appliedFilters.selectedConcepts?.length || 0) > 0) {
-          const itemConcepts = item.conceptTags || [];
-          const hasMatch = appliedFilters.selectedConcepts.some(c => itemConcepts.includes(c));
-          if (!hasMatch) isMatch = false;
-        }
-        if (isMatch && (appliedFilters.selectedIndices?.length || 0) > 0) {
-          const itemIndices = item.indexTags || [];
-          const hasIndexMatch = appliedFilters.selectedIndices.some((idx) => itemIndices.includes(idx));
-          if (!hasIndexMatch) isMatch = false;
-        }
-
-        // 财务/估值筛选
-        if (isMatch) {
-          const roeRange = appliedFilters.roeRange || [-1000, 1000];
-          if (item.roe < roeRange[0] || item.roe > roeRange[1]) isMatch = false;
-        }
-
-        if (isMatch) {
-          const profitGrowthRange = appliedFilters.profitGrowthRange || [-500, 500];
-          if (item.profitGrowth < profitGrowthRange[0] || item.profitGrowth > profitGrowthRange[1]) isMatch = false;
-        }
-
-        if (isMatch) {
-          const pbRange = appliedFilters.pbRange || [0, 100];
-          if ((item.pb || 0) < pbRange[0] || (item.pb || 0) > pbRange[1]) isMatch = false;
-        }
-
-        if (isMatch) {
-          const totalMvRange = appliedFilters.totalMvRange || [0, 1000000];
-          if ((item.totalMv || 0) < totalMvRange[0] || (item.totalMv || 0) > totalMvRange[1]) isMatch = false;
-        }
-
-        if (isMatch) {
-          const floatMvRange = appliedFilters.floatMvRange || [0, 1000000];
-          if ((item.floatMv || 0) < floatMvRange[0] || (item.floatMv || 0) > floatMvRange[1]) isMatch = false;
-        }
-
-        if (isMatch) {
-          const listedDaysRange = appliedFilters.listedDaysRange || [0, 30000];
-          if ((item.listedDays || 0) < listedDaysRange[0] || (item.listedDays || 0) > listedDaysRange[1]) isMatch = false;
-        }
-
-        if (isMatch) {
-          const return3dRange = appliedFilters.return3dRange || [-100, 100];
-          if ((item.return3d || 0) < return3dRange[0] || (item.return3d || 0) > return3dRange[1]) isMatch = false;
-        }
-
-        // 技术指标筛选
-        if (isMatch) {
-          const rsiRange = appliedFilters.rsiRange || [0, 100];
-          if (item.rsi != null && (item.rsi < rsiRange[0] || item.rsi > rsiRange[1])) isMatch = false;
-        }
-
-        if (isMatch) {
-          const mainFlowRange = appliedFilters.mainFlowRange || [-100000, 100000];
-          if (item.mainFlow != null && (item.mainFlow < mainFlowRange[0] || item.mainFlow > mainFlowRange[1])) isMatch = false;
-        }
-
-        // 修正机构持仓过滤逻辑：由于底层数据存在负值异常，默认不进行下限过滤，除非用户明确设置
-        if (isMatch && appliedFilters.instOwnershipRange && appliedFilters.instOwnershipRange[0] > 0) {
-          if (item.instOwnership != null && item.instOwnership < appliedFilters.instOwnershipRange[0]) isMatch = false;
-        }
-
-        // 特殊标签/状态：多维校验排除 ST / 退市股票
-        if (isMatch && appliedFilters.excludeSt) {
-          const upperName = item.name.toUpperCase();
-          const isStByName = upperName.includes('ST') || upperName.includes('*ST');
-          const isDelisting = item.name.includes('退') || upperName.includes('退市');
-          if (
-            item.isSt ||
-            !item.isTradable ||
-            item.riskFlags?.some(f => f.includes('ST')) ||
-            isStByName ||
-            isDelisting
-          ) isMatch = false;
-        }
-        if (isMatch && appliedFilters.marketType && appliedFilters.marketType !== 'all' && appliedFilters.marketType !== '全市场') {
-          const idxTags = item.indexTags || [];
-          if (appliedFilters.marketType === 'hs300' && !idxTags.includes('沪深300')) isMatch = false;
-          if (appliedFilters.marketType === 'zz500' && !idxTags.includes('中证500')) isMatch = false;
-          if (appliedFilters.marketType === 'zz1000' && !idxTags.includes('中证1000')) isMatch = false;
-        }
-
-        if (isMatch && appliedFilters.volRatio5Range > 0) {
-          const vr = item.volRatio5;
-          if (vr != null && vr < appliedFilters.volRatio5Range) isMatch = false;
-        }
-
-        if (isMatch) {
-          const maGap5Range = appliedFilters.maGap5Range || [-100, 100];
-          if (item.maGap5 != null && (item.maGap5 < maGap5Range[0] || item.maGap5 > maGap5Range[1])) isMatch = false;
-        }
-
-        if (isMatch) {
-          const maGap20Range = appliedFilters.maGap20Range || [-100, 100];
-          if (item.maGap20 != null && (item.maGap20 < maGap20Range[0] || item.maGap20 > maGap20Range[1])) isMatch = false;
-        }
-
-        if (isMatch) {
-          const peRange = appliedFilters.peRange || [-10000, 100000];
-          if (item.pe != null && (item.pe < peRange[0] || item.pe > peRange[1])) isMatch = false;
-        }
+      // --- 剔除 ST / 退市：多维校验 ---
+      if (appliedFilters.excludeSt) {
+        const upperName = (item.name || '').toUpperCase();
+        const isStByName = upperName.includes('ST');
+        const isDelisting = (item.name || '').includes('退') || upperName.includes('退市');
+        if (
+          item.isSt ||
+          item.isTradable === false ||
+          item.riskFlags?.some((flag) => flag.includes('ST')) ||
+          isStByName ||
+          isDelisting
+        ) return;
       }
 
-      if (keyword && isMatch) {
-        const k = keyword.toLowerCase();
-        if (!item.name.toLowerCase().includes(k) && !item.code.toLowerCase().includes(k)) isMatch = false;
+      // --- 行业 / 概念 / 指数 ---
+      if (appliedFilters.selectedSectors.length > 0 && !appliedFilters.selectedSectors.includes(item.sector)) return;
+
+      if (appliedFilters.selectedConcepts.length > 0) {
+        const itemConcepts = item.conceptTags || [];
+        if (!appliedFilters.selectedConcepts.some((concept) => itemConcepts.includes(concept))) return;
       }
 
-      if (isMatch) {
-        matches.push({ ...item, isMatched: true });
-      } else {
-        nonMatches.push({ ...item, isMatched: false });
+      if (appliedFilters.selectedIndices.length > 0) {
+        const itemIndices = item.indexTags || [];
+        if (!appliedFilters.selectedIndices.some((index) => itemIndices.includes(index))) return;
       }
+
+      // --- 指数归属快捷筛选 ---
+      const marketType = appliedFilters.marketType;
+      if (marketType && marketType !== 'all' && marketType !== '全市场') {
+        const idxTags = item.indexTags || [];
+        if (marketType === 'hs300' && !idxTags.includes('沪深300')) return;
+        if (marketType === 'zz500' && !idxTags.includes('中证500')) return;
+        if (marketType === 'zz1000' && !idxTags.includes('中证1000')) return;
+      }
+
+      // --- 量比阈值（单值，> 0 才生效） ---
+      if (appliedFilters.volRatio5Range > 0) {
+        const vr = item.volRatio5;
+        if (vr != null && vr < appliedFilters.volRatio5Range) return;
+      }
+      if (appliedFilters.volRatio20Range > 0) {
+        const vr = item.volRatio20;
+        if (vr != null && vr < appliedFilters.volRatio20Range) return;
+      }
+
+      // --- 机构持仓：底层数据存在负值异常，仅在用户明确设置下限时过滤 ---
+      if (appliedFilters.instOwnershipRange[0] > 0) {
+        if (item.instOwnership != null && item.instOwnership < appliedFilters.instOwnershipRange[0]) return;
+      }
+
+      // --- 通用区间条件（仅改动过的才参与） ---
+      for (const binding of activeRangeFilters) {
+        const [min, max] = appliedFilters[binding.filterKey] as [number, number];
+        const raw = item[binding.field];
+        if (raw == null) {
+          if (!binding.coerceZero) continue;
+          if (0 < min || 0 > max) return;
+          continue;
+        }
+        const value = Number(raw);
+        if (!Number.isFinite(value)) continue;
+        if (value < min || value > max) return;
+      }
+
+      // --- 关键词 ---
+      if (lowerKeyword) {
+        const nameHit = (item.name || '').toLowerCase().includes(lowerKeyword);
+        const codeHit = (item.code || '').toLowerCase().includes(lowerKeyword);
+        if (!nameHit && !codeHit) return;
+      }
+
+      matches.push({ ...item, isMatched: true });
     });
 
-    const sortFn = (left: ResearchStockRow, right: ResearchStockRow) => {
-      if (sortKey === 'limitUp') return right.consecutiveLimitUpDays - left.consecutiveLimitUpDays || right.score - left.score;
-      if (sortKey === 'turnover') return right.turnoverRate - left.turnoverRate || right.score - left.score;
-      if (sortKey === 'amount') return right.amount - left.amount || right.score - left.score;
-      return right.score - left.score || left.rank - right.rank;
-    };
+    const sortField = SORT_OPTIONS.find((option) => option.key === sortKey)?.field ?? 'score';
+    matches.sort((left, right) => {
+      const leftValue = safeNum(left[sortField], Number.NEGATIVE_INFINITY);
+      const rightValue = safeNum(right[sortField], Number.NEGATIVE_INFINITY);
+      if (rightValue !== leftValue) return rightValue - leftValue;
+      return safeNum(right.score, 0) - safeNum(left.score, 0);
+    });
 
-    // 2. 排序并返回符合条件的记录，并受限于 loadRange
-    matches.sort(sortFn);
-
-    // 只展示筛选后的结果，不再顺延不匹配的股票
     return matches.slice(0, loadRange).map((item, index) => ({ ...item, rank: index + 1 }));
-  }, [appliedFilters, candidatePool, keyword, overview, sortKey, loadRange]);
+  }, [appliedFilters, activeRangeFilters, enrichedPool, keyword, sortKey, loadRange]);
+
+  // 当前分页的行（表格展示范围）
+  const visibleCandidateRows = React.useMemo(
+    () => filteredRows.slice((candidatePage - 1) * candidatePageSize, candidatePage * candidatePageSize),
+    [filteredRows, candidatePage, candidatePageSize]
+  );
+
+  /**
+   * 仅为选中个股拉取 QuantDB 全量分类特征（详情弹窗的 FactorPanel 需要全部 371 字段）。
+   * 表格列已由全池投影覆盖，无需在此重复拉取整页，避免单次数 MB 的响应。
+   */
+  React.useEffect(() => {
+    if (!selectedStockKey) return;
+    const selected = filteredRows.find((item) => item.key === selectedStockKey);
+    const symbol = selected?.code ? toSuffixSymbol(selected.code) : '';
+    if (!symbol || quantDbFeaturesRef.current[symbol] !== undefined) return;
+
+    let cancelled = false;
+    void researchService.getBatchQuantDbFeatures([symbol]).then((bySymbol) => {
+      if (cancelled) return;
+      const features = bySymbol[symbol];
+      // 未命中也写入空对象，避免同一 symbol 被反复请求
+      const next = {
+        ...quantDbFeaturesRef.current,
+        [symbol]: features ? flattenQuantDbFeatures(features) : {},
+      };
+      quantDbFeaturesRef.current = next;
+      setQuantDbFeatures(next);
+      quantDbRawRef.current = { ...quantDbRawRef.current, ...bySymbol };
+      setQuantDbRaw(quantDbRawRef.current);
+    });
+    return () => { cancelled = true; };
+  }, [selectedStockKey, filteredRows]);
+
+  // 表格行：全池投影已在 enrichedPool 合并，这里只叠加选中个股的全量字段
+  const enrichedCandidateRows = React.useMemo(
+    () => mergeQuantDbFeatures(visibleCandidateRows, quantDbFeatures),
+    [visibleCandidateRows, quantDbFeatures]
+  );
 
   React.useEffect(() => {
     if (!filteredRows.length) {
@@ -908,10 +1631,145 @@ export const ResearchPlatformPage: React.FC = () => {
     }
   }, [filteredRows, selectedStockKey]);
 
-  const selectedStock = React.useMemo(
-    () => filteredRows.find((item) => item.key === selectedStockKey) || null,
-    [filteredRows, selectedStockKey]
+  // 详情弹窗需要全字段，优先取已富化的行
+  const selectedStock = React.useMemo(() => {
+    const base = filteredRows.find((item) => item.key === selectedStockKey);
+    if (!base) return null;
+    const features = quantDbFeatures[toSuffixSymbol(base.code)];
+    if (!features) return base;
+    // 不能直接 { ...base, ...features }：QuantDB 全量路径的市值/资金流可能未换算，
+    // 且不含 stock_name，无条件覆盖会导致"总市值 21 亿 亿"和"两行都显示代码"。
+    const merged: Record<string, unknown> = { ...base };
+    for (const [key, value] of Object.entries(features)) {
+      const current = merged[key];
+      if (current != null && current !== 0 && key !== 'name' && key !== 'code') {
+        // 市值/资金流：PG 已换算为亿/百万，QuantDB 全量路径可能仍是原始元
+        if (['totalMv', 'floatMv', 'marketCap', 'mainFlow', 'flowNetAmount', 'flowLargeNet', 'flowMediumNet', 'flowSmallNet', 'amount'].includes(key)) continue;
+      }
+      merged[key] = value;
+    }
+    return merged as unknown as ResearchStockRow;
+  }, [filteredRows, selectedStockKey, quantDbFeatures]);
+
+  /* ------------------------------ 表格列 ------------------------------ */
+
+  /** 按 COLUMN_GROUPS 顺序展开可见分组的列 key */
+  const visibleColumnKeys = React.useMemo(
+    () => COLUMN_GROUPS
+      .filter((group) => visibleGroups.has(group.key))
+      .flatMap((group) => group.columns)
+      .filter((key) => COLUMN_DEFS[key] !== undefined),
+    [visibleGroups]
   );
+
+  const columns = React.useMemo<ColumnsType<ResearchStockRow>>(
+    () => buildColumns(visibleColumnKeys),
+    [visibleColumnKeys]
+  );
+
+  const candidateScrollX = React.useMemo(
+    () => Math.max(sumColumnWidth(visibleColumnKeys), 600),
+    [visibleColumnKeys]
+  );
+
+  const watchlistColumns = React.useMemo<ColumnsType<ResearchStockRow>>(
+    () => [
+      ...buildColumns(SIMPLE_TABLE_COLUMN_KEYS).map((column) =>
+        column.key === 'latestChange' ? { ...column, width: 102, render: rScaledChange } : column
+      ),
+      {
+        key: 'actions',
+        title: <span className="whitespace-nowrap">操作</span>,
+        width: 80,
+        fixed: 'right',
+        align: 'center',
+        render: (_value, record) => (
+          <div className="flex items-center justify-center" onClick={(e) => e.stopPropagation()}>
+            <Button
+              size="small"
+              type="text"
+              danger
+              onClick={() => handleRemoveFromWatchlist(record.code, record.name)}
+              title="从自选移除"
+            >
+              <span className="text-[10px]">移除</span>
+            </Button>
+          </div>
+        ),
+      },
+    ],
+    []
+  );
+
+  const poolColumns = React.useMemo<ColumnsType<ResearchStockRow>>(
+    () => [
+      ...buildColumns(SIMPLE_TABLE_COLUMN_KEYS).map((column) =>
+        column.key === 'latestChange' ? { ...column, width: 102, render: rScaledChange } : column
+      ),
+      {
+        key: 'actions',
+        title: <span className="whitespace-nowrap">操作</span>,
+        width: 80,
+        fixed: 'right',
+        align: 'center',
+        render: (_value, record) => (
+          <div className="flex items-center justify-center" onClick={(e) => e.stopPropagation()}>
+            <Button
+              size="small"
+              type="text"
+              danger
+              onClick={() => handleRemoveFromPool(record.code, record.name)}
+              title="从研究池移除"
+            >
+              <span className="text-[10px]">移除</span>
+            </Button>
+          </div>
+        ),
+      },
+    ],
+    []
+  );
+
+  const simpleTableScrollX = React.useMemo(() => sumColumnWidth(SIMPLE_TABLE_COLUMN_KEYS) + 80, []);
+
+  /** 自选表格数据（特征富化 + 分页 + 关键词过滤） */
+  const filteredWatchlist = React.useMemo(
+    () => watchlistData.filter(
+      (item) => !keyword || item.symbol.includes(keyword) || (item.stockName?.includes(keyword) ?? false)
+    ),
+    [watchlistData, keyword]
+  );
+
+  const watchlistRows = React.useMemo<ResearchStockRow[]>(
+    () => filteredWatchlist
+      .slice((watchlistPage - 1) * watchlistPageSize, watchlistPage * watchlistPageSize)
+      .map((item, index) => ({
+        ...(watchlistFeatures[item.symbol] || makeFallbackRow(item.key, item.symbol, item.stockName || '-', 0)),
+        rank: (watchlistPage - 1) * watchlistPageSize + index + 1,
+        key: item.key,
+      })),
+    [filteredWatchlist, watchlistFeatures, watchlistPage, watchlistPageSize]
+  );
+
+  const filteredPool = React.useMemo(
+    () => poolData.filter(
+      (item) => !keyword || item.symbol.includes(keyword) || (item.stockName?.includes(keyword) ?? false)
+    ),
+    [poolData, keyword]
+  );
+
+  const poolRows = React.useMemo<ResearchStockRow[]>(
+    () => filteredPool
+      .slice((poolPage - 1) * poolPageSize, poolPage * poolPageSize)
+      .map((item, index) => ({
+        ...(poolFeatures[item.symbol] || makeFallbackRow(item.key, item.symbol, item.stockName || '-', item.fusionScore ?? 0)),
+        rank: (poolPage - 1) * poolPageSize + index + 1,
+        key: item.key,
+      })),
+    [filteredPool, poolFeatures, poolPage, poolPageSize]
+  );
+
+  /* ------------------------------ 详情面板衍生数据 ------------------------------ */
 
   const radarMetrics = React.useMemo(() => {
     if (!selectedStock) return null;
@@ -924,6 +1782,10 @@ export const ResearchPlatformPage: React.FC = () => {
     const profitabilityScore = clamp(roe <= 0 ? 0 : (roe / 50) * 100, 0, 100);
     const momentumScore = clamp(safeNum(selectedStock.rsi, 0), 0, 100);
     const activityScore = clamp((safeNum(selectedStock.turnoverRate, 0) / 30) * 100, 0, 100);
+    // 波动率越低得分越高（0.05 日波动率视为满档风险）
+    const stabilityScore = clamp(100 - (safeNum(selectedStock.volStd20, 0) / 0.05) * 100, 0, 100);
+    // 获利盘比例本身是 0~1，直接映射
+    const chipScore = clamp(safeNum(selectedStock.chipProfitRatio20, 0) * 100, 0, 100);
 
     return {
       indicator: [
@@ -932,11 +1794,12 @@ export const ResearchPlatformPage: React.FC = () => {
         { name: '盈利能力', max: 100 },
         { name: '动量强度', max: 100 },
         { name: '活跃度', max: 100 },
+        { name: '稳定性', max: 100 },
+        { name: '筹码获利', max: 100 },
       ],
-      value: [modelScore, valuationScore, profitabilityScore, momentumScore, activityScore],
+      value: [modelScore, valuationScore, profitabilityScore, momentumScore, activityScore, stabilityScore, chipScore],
     };
   }, [selectedStock]);
-
 
   // 加载 K 线数据
   React.useEffect(() => {
@@ -966,8 +1829,8 @@ export const ResearchPlatformPage: React.FC = () => {
   // 这样风险评分跟选股决策对齐到同一日，避免"用今天的状态评估当时的决策"
   const inferenceDate = React.useMemo(() => {
     if (!selectedRunId) return null;
-    const m = selectedRunId.match(/run_(\d{4})(\d{2})(\d{2})/);
-    return m ? `${m[1]}-${m[2]}-${m[3]}` : null;
+    const matched = selectedRunId.match(/run_(\d{4})(\d{2})(\d{2})/);
+    return matched ? `${matched[1]}-${matched[2]}-${matched[3]}` : null;
   }, [selectedRunId]);
 
   // 加载风险评分卡
@@ -980,10 +1843,7 @@ export const ResearchPlatformPage: React.FC = () => {
     const loadRisk = async () => {
       setRiskLoading(true);
       try {
-        const data = await researchService.getRiskScore(
-          normalizeSymbol(selectedStock.code),
-          inferenceDate,
-        );
+        const data = await researchService.getRiskScore(normalizeSymbol(selectedStock.code), inferenceDate);
         if (cancelled) return;
         setRiskScore(data);
       } catch (error) {
@@ -1000,7 +1860,7 @@ export const ResearchPlatformPage: React.FC = () => {
   // K 线图表配置
   const klineOption = React.useMemo(() => {
     if (!klineData.length) return null;
-    
+
     // 提取预测日期基准线
     const predictionMatch = selectedRunId.match(/run_(\d{4})(\d{2})(\d{2})/);
     const predictionDate = predictionMatch ? `${predictionMatch[1]}-${predictionMatch[2]}-${predictionMatch[3]}` : null;
@@ -1011,7 +1871,7 @@ export const ResearchPlatformPage: React.FC = () => {
 
     // 计算移动平均线
     const calculateMA = (dayCount: number) => {
-      const result = [];
+      const result: Array<number | string> = [];
       for (let i = 0, len = klineData.length; i < len; i++) {
         if (i < dayCount - 1) {
           result.push('-');
@@ -1028,14 +1888,38 @@ export const ResearchPlatformPage: React.FC = () => {
 
     const ma5 = calculateMA(5);
     const ma10 = calculateMA(10);
-    
+
+    // 以预测日为中心，左右各 30 天的默认缩放窗口
+    const zoomWindow = (() => {
+      if (!predictionDate || dates.length <= 1) return { start: 0, end: 100 };
+      const idx = dates.indexOf(predictionDate);
+      if (idx === -1) return { start: 0, end: 100 };
+
+      let startIdx = idx - 30;
+      let endIdx = idx + 30;
+
+      if (endIdx > dates.length - 1) {
+        const overflow = endIdx - (dates.length - 1);
+        endIdx = dates.length - 1;
+        startIdx = Math.max(0, startIdx - overflow);
+      }
+      if (startIdx < 0) {
+        startIdx = 0;
+        endIdx = Math.min(dates.length - 1, startIdx + 60);
+      }
+
+      const totalPoints = dates.length - 1;
+      if (totalPoints <= 0) return { start: 0, end: 100 };
+      return { start: (startIdx / totalPoints) * 100, end: (endIdx / totalPoints) * 100 };
+    })();
+
     return {
       animation: false,
       legend: {
         show: true,
         data: ['K线', 'MA5', 'MA10'],
         top: 0,
-        textStyle: { color: '#64748b', fontSize: 10, fontWeight: 'bold' }
+        textStyle: { color: '#64748b', fontSize: 10, fontWeight: 'bold' },
       },
       tooltip: {
         trigger: 'axis',
@@ -1049,8 +1933,7 @@ export const ResearchPlatformPage: React.FC = () => {
           const idx = params[0].dataIndex;
           const d = klineData[idx];
           if (!d) return '';
-          
-          let html = `
+          return `
             <div style="font-size: 11px;">
               <div style="font-weight: bold; margin-bottom: 4px;">${d.date} ${d.date === predictionDate ? '<span style="color: #3b82f6;">[预测基准]</span>' : ''}</div>
               <div style="display: grid; grid-template-cols: 1fr 1fr; gap: 8px;">
@@ -1066,7 +1949,6 @@ export const ResearchPlatformPage: React.FC = () => {
               <div style="color: #64748b; margin-top: 2px;">成交量: ${(d.volume / 10000).toFixed(2)}万</div>
             </div>
           `;
-          return html;
         },
       },
       grid: [
@@ -1081,54 +1963,7 @@ export const ResearchPlatformPage: React.FC = () => {
         { scale: true, splitArea: { show: true } },
         { scale: true, gridIndex: 1, splitNumber: 2, axisLabel: { show: false }, axisLine: { show: false }, axisTick: { show: false }, splitLine: { show: false } },
       ],
-      dataZoom: [{
-        type: 'inside',
-        xAxisIndex: [0, 1],
-        start: (() => {
-          if (!predictionDate || dates.length <= 1) return 0;
-          const idx = dates.indexOf(predictionDate);
-          if (idx === -1) return 0;
-          
-          // 目标范围：左右各 30 天，总计 60 天
-          let startIdx = idx - 30;
-          let endIdx = idx + 30;
-          
-          // 如果右侧不足（即 endIdx 超过了数据总量），向左推移以保持 60 天跨度
-          if (endIdx > dates.length - 1) {
-            const overflow = endIdx - (dates.length - 1);
-            endIdx = dates.length - 1;
-            startIdx = Math.max(0, startIdx - overflow);
-          }
-          
-          // 如果左侧不足，向右补齐
-          if (startIdx < 0) {
-            startIdx = 0;
-            endIdx = Math.min(dates.length - 1, startIdx + 60);
-          }
-          
-          const totalPoints = dates.length - 1;
-          return totalPoints > 0 ? (startIdx / totalPoints) * 100 : 0;
-        })(),
-        end: (() => {
-          if (!predictionDate || dates.length <= 1) return 100;
-          const idx = dates.indexOf(predictionDate);
-          if (idx === -1) return 100;
-          
-          let startIdx = idx - 30;
-          let endIdx = idx + 30;
-          
-          if (endIdx > dates.length - 1) {
-            endIdx = dates.length - 1;
-          }
-          if (startIdx < 0) {
-            startIdx = 0;
-            endIdx = Math.min(dates.length - 1, startIdx + 60);
-          }
-          
-          const totalPoints = dates.length - 1;
-          return totalPoints > 0 ? (endIdx / totalPoints) * 100 : 100;
-        })()
-      }],
+      dataZoom: [{ type: 'inside', xAxisIndex: [0, 1], start: zoomWindow.start, end: zoomWindow.end }],
       series: [
         {
           name: 'K线',
@@ -1149,16 +1984,11 @@ export const ResearchPlatformPage: React.FC = () => {
                 padding: [2, 4],
                 borderRadius: 4,
                 fontSize: 10,
-                fontWeight: 'bold'
+                fontWeight: 'bold',
               },
-              lineStyle: {
-                color: '#3b82f6',
-                type: 'dashed',
-                width: 2,
-                opacity: 0.8
-              }
-            }]
-          } : undefined
+              lineStyle: { color: '#3b82f6', type: 'dashed', width: 2, opacity: 0.8 },
+            }],
+          } : undefined,
         },
         {
           name: 'MA5',
@@ -1167,7 +1997,7 @@ export const ResearchPlatformPage: React.FC = () => {
           smooth: true,
           showSymbol: false,
           lineStyle: { opacity: 0.8, width: 1, color: '#6366f1' },
-          itemStyle: { color: '#6366f1' }
+          itemStyle: { color: '#6366f1' },
         },
         {
           name: 'MA10',
@@ -1176,7 +2006,7 @@ export const ResearchPlatformPage: React.FC = () => {
           smooth: true,
           showSymbol: false,
           lineStyle: { opacity: 0.8, width: 1, color: '#f59e0b' },
-          itemStyle: { color: '#f59e0b' }
+          itemStyle: { color: '#f59e0b' },
         },
         {
           name: '成交量',
@@ -1196,6 +2026,8 @@ export const ResearchPlatformPage: React.FC = () => {
     };
   }, [klineData, selectedRunId]);
 
+  /* ------------------------------ 概览统计 ------------------------------ */
+
   const sectorBreakdown = React.useMemo(() => {
     const counter = new Map<string, number>();
     filteredRows.forEach((item) => {
@@ -1211,9 +2043,7 @@ export const ResearchPlatformPage: React.FC = () => {
   const availableSectorOptions = React.useMemo(() => {
     const counter = new Map<string, number>();
     candidatePool.forEach((item) => {
-      if (item.sector) {
-        counter.set(item.sector, (counter.get(item.sector) || 0) + 1);
-      }
+      if (item.sector) counter.set(item.sector, (counter.get(item.sector) || 0) + 1);
     });
     return Array.from(counter.entries())
       .map(([name, count]) => ({ value: name, label: `${name} (${count})` }))
@@ -1255,540 +2085,101 @@ export const ResearchPlatformPage: React.FC = () => {
       });
     });
 
-    return items.map(idx => {
-      const globalCount = idx.count;
-      const localCount = counter.get(idx.name) || 0;
-      const displayCount = globalCount > 0 ? globalCount : localCount;
-      return { value: idx.name, label: `${idx.name} (${displayCount})` };
-    }).filter(opt => opt.label.indexOf('(0)') === -1);
+    return items
+      .map((index) => {
+        const displayCount = index.count > 0 ? index.count : (counter.get(index.name) || 0);
+        return { value: index.name, label: `${index.name} (${displayCount})` };
+      })
+      .filter((option) => option.label.indexOf('(0)') === -1);
   }, [candidatePool, overview]);
+
+  /** 当前生效的筛选条件摘要（用于头部展示） */
+  const activeConditionSummary = React.useMemo(() => {
+    const summary: string[] = [];
+    if (appliedFilters.minScore > DEFAULT_RESEARCH_FILTERS.minScore) {
+      summary.push(`模型分数 ≥ ${appliedFilters.minScore.toFixed(2)}`);
+    }
+    if (appliedFilters.limitUpDays > 0) summary.push(`连板天数 ≥ ${appliedFilters.limitUpDays}`);
+    if (appliedFilters.excludeSt) summary.push('剔除 ST / 退市');
+    if (appliedFilters.highConfidenceOnly) summary.push('仅保留高置信标的');
+    if (appliedFilters.volumeTrendOnly) summary.push('近 5 日量能持续放大');
+    if (appliedFilters.volRatio5Range > 0) summary.push(`5日量比 ≥ ${appliedFilters.volRatio5Range}`);
+    if (appliedFilters.volRatio20Range > 0) summary.push(`20日量比 ≥ ${appliedFilters.volRatio20Range}`);
+    if (appliedFilters.instOwnershipRange[0] > 0) summary.push(`机构持仓 ≥ ${appliedFilters.instOwnershipRange[0]}%`);
+    if (appliedFilters.selectedSectors.length) summary.push(`行业：${appliedFilters.selectedSectors.length} 个选中`);
+    if (appliedFilters.selectedConcepts.length) summary.push(`概念：${appliedFilters.selectedConcepts.length} 个选中`);
+    if (appliedFilters.selectedIndices.length) summary.push(`指数：${appliedFilters.selectedIndices.length} 个选中`);
+
+    // 所有被改动过的区间条件
+    const fieldLabels = new Map<string, string>();
+    FILTER_SECTIONS.forEach((section) => {
+      section.fields.forEach((field) => fieldLabels.set(field.key as string, field.label));
+    });
+    activeRangeFilters.forEach((binding) => {
+      const [min, max] = appliedFilters[binding.filterKey] as [number, number];
+      const label = fieldLabels.get(binding.filterKey as string) ?? (binding.filterKey as string);
+      summary.push(`${label} ${min} ~ ${max}`);
+    });
+
+    return summary;
+  }, [appliedFilters, activeRangeFilters]);
 
   const avgScore = React.useMemo(() => {
     if (!filteredRows.length) return '0.000';
-    const sanitizedScores = filteredRows
-      .map((item) => (Number.isFinite(item.score) ? Math.max(item.score, 0) : 0));
-    const total = sanitizedScores.reduce((sum, score) => sum + score, 0);
-    return (total / sanitizedScores.length).toFixed(3);
+    const total = filteredRows.reduce((sum, item) => sum + Math.max(safeNum(item.score, 0), 0), 0);
+    return (total / filteredRows.length).toFixed(3);
   }, [filteredRows]);
-
-  const candidateTotal = overview?.pagination?.total ?? overview?.summary?.total ?? candidatePool.length;
 
   const selectedStockRiskBlocks = React.useMemo(() => {
     if (!selectedStock) return [];
     const blocks = [...(selectedStock.riskFlags || [])];
     if (!selectedStock.volumeTrend5d) blocks.push('近 5 日量能未持续放大');
-    if (selectedStock.turnoverRate > 20) blocks.push('换手率偏高，追涨风险上升');
-    if (selectedStock.latestChange > 5) blocks.push('短线涨幅较大，注意日内波动');
+    if (safeNum(selectedStock.turnoverRate, 0) > 20) blocks.push('换手率偏高，追涨风险上升');
+    if (safeNum(selectedStock.latestChange, 0) > 5) blocks.push('短线涨幅较大，注意日内波动');
     return Array.from(new Set(blocks));
   }, [selectedStock]);
 
-  const selectedStockMatchedConditions = React.useMemo(() => {
-    if (!selectedStock) return [];
-    const matches = [
-      `模型分数 ≥ ${appliedFilters.minScore.toFixed(2)}`,
-      `连板天数 ≥ ${appliedFilters.limitUpDays}`,
-      `成交额 ${appliedFilters.amountRange[0]} - ${appliedFilters.amountRange[1]} 亿`,
-      `换手率 ${appliedFilters.turnoverRange[0]} - ${appliedFilters.turnoverRange[1]}%`,
-    ];
-    if (appliedFilters.highConfidenceOnly) matches.push('仅保留高置信标的');
-    if (appliedFilters.selectedSectors.length) matches.push(`行业：${appliedFilters.selectedSectors.length} 个选中`);
-    if (appliedFilters.selectedConcepts.length) matches.push(`概念：${appliedFilters.selectedConcepts.length} 个选中`);
-    if (appliedFilters.selectedIndices.length) matches.push(`指数：${appliedFilters.selectedIndices.length} 个选中`);
-    if (appliedFilters.advancedFiltersEnabled && appliedFilters.peRange[1] < 100) matches.push(`PE < ${appliedFilters.peRange[1]}`);
-    if (appliedFilters.roeRange[0] > 0) matches.push(`ROE > ${appliedFilters.roeRange[0]}%`);
-    return matches;
-  }, [appliedFilters, selectedStock]);
+  /* ------------------------------ 导出 ------------------------------ */
 
-  const columns = React.useMemo<ColumnsType<ResearchStockRow>>(
-    () => [
-      {
-        title: <span className="whitespace-nowrap">排名</span>,
-        dataIndex: 'rank',
-        width: 60,
-        align: 'center',
-        render: (value: number) => <span className="whitespace-nowrap font-bold text-slate-700">{value}</span>,
-      },
-      {
-        title: <span className="whitespace-nowrap">股票</span>,
-        key: 'stock',
-        width: 132,
-        align: 'center',
-        render: (_, record) => (
-          <div className="text-center whitespace-nowrap">
-            <div className="font-bold text-slate-900 whitespace-nowrap">{record.name}</div>
-            <div className="text-xs text-slate-500 whitespace-nowrap">{record.code}</div>
-          </div>
-        ),
-      },
-      {
-        title: <span className="whitespace-nowrap">模型分数</span>,
-        dataIndex: 'score',
-        width: 98,
-        align: 'center',
-        render: (value: number) => <span className="font-black text-blue-400 whitespace-nowrap">{value.toFixed(3)}</span>,
-      },
-      {
-        title: <span className="whitespace-nowrap">涨跌幅</span>,
-        dataIndex: 'latestChange',
-        width: 96,
-        align: 'center',
-        render: (value: number) => (
-          <span className={`whitespace-nowrap ${value >= 0 ? 'font-semibold text-rose-500' : 'font-semibold text-emerald-500'}`}>
-            {value >= 0 ? '+' : ''}{value.toFixed(2)}%
-          </span>
-        ),
-      },
-      {
-        title: <span className="whitespace-nowrap">次日收益</span>,
-        dataIndex: 'nextDayReturn',
-        width: 96,
-        align: 'center',
-        render: (value: number | null | undefined) => {
-          if (value === null || value === undefined) {
-            return <span className="text-slate-300 font-medium">-</span>;
-          }
-          return (
-            <span className={`whitespace-nowrap ${value >= 0 ? 'font-semibold text-rose-500' : 'font-semibold text-emerald-500'}`}>
-              {value >= 0 ? '+' : ''}{value.toFixed(2)}%
-            </span>
-          );
-        },
-      },
-      {
-        title: <span className="whitespace-nowrap">3日收益</span>,
-        dataIndex: 'day3Return',
-        width: 96,
-        align: 'center',
-        render: (value: number | null | undefined) => {
-          if (value === null || value === undefined) {
-            return <span className="text-slate-300 font-medium">-</span>;
-          }
-          return (
-            <span className={`whitespace-nowrap ${value >= 0 ? 'font-semibold text-rose-500' : 'font-semibold text-emerald-500'}`}>
-              {value >= 0 ? '+' : ''}{value.toFixed(2)}%
-            </span>
-          );
-        },
-      },
-      {
-        title: <span className="whitespace-nowrap">连板</span>,
-        dataIndex: 'consecutiveLimitUpDays',
-        width: 54,
-        align: 'center',
-      },
-      {
-        title: <span className="whitespace-nowrap">3日量能</span>,
-        dataIndex: 'volumeTrend3d',
-        width: 92,
-        align: 'center',
-        render: (value: number | null | undefined) => {
-          if (value === null || value === undefined || Number.isNaN(Number(value))) {
-            return <span className="text-slate-300 font-medium">-</span>;
-          }
-          const trend = Number(value);
-          if (trend > 0) {
-            return <Tag color="orange" className="rounded-lg border-none font-bold">递增</Tag>;
-          }
-          if (trend < 0) {
-            return <Tag color="blue" className="rounded-lg border-none font-bold">递减</Tag>;
-          }
-          return <Tag color="default" className="rounded-lg border-none font-bold">平缓</Tag>;
-        },
-      },
-      {
-        title: <span className="whitespace-nowrap">换手率</span>,
-        dataIndex: 'turnoverRate',
-        width: 90,
-        align: 'center',
-        render: (value: number | null | undefined) => value != null ? <span className="text-slate-600 font-medium whitespace-nowrap">{value.toFixed(2)}%</span> : <span className="text-slate-300">-</span>,
-      },
-      {
-        title: <span className="whitespace-nowrap">成交额</span>,
-        dataIndex: 'amount',
-        width: 108,
-        align: 'center',
-        render: (value: number | null | undefined) => value != null ? <span className="text-slate-600 font-medium whitespace-nowrap">{value.toFixed(2)}亿</span> : <span className="text-slate-300">-</span>,
-      },
-      {
-        title: <span className="whitespace-nowrap">PE(TTM)</span>,
-        dataIndex: 'pe',
-        width: 92,
-        align: 'center',
-        render: (value: number | null | undefined) => value != null && value > 0 ? <span className="text-slate-600 font-medium whitespace-nowrap">{value.toFixed(1)}</span> : <span className="text-slate-300">-</span>,
-      },
-      {
-        title: <span className="whitespace-nowrap">ROE(%)</span>,
-        dataIndex: 'roe',
-        width: 92,
-        align: 'center',
-        render: (value: number | null | undefined) => (
-          <span className="text-rose-500 font-bold whitespace-nowrap">
-            {value != null && value > -100 && value < 100 ? `${value.toFixed(1)}%` : '-'}
-          </span>
-        ),
-      },
-      {
-        title: <span className="whitespace-nowrap">5日乖离</span>,
-        dataIndex: 'maGap5',
-        width: 92,
-        align: 'center',
-        render: (value: number | null | undefined) => (
-          <span className={`whitespace-nowrap ${value != null && value >= 0 ? 'text-indigo-500 font-medium' : 'text-slate-400'}`}>
-            {value != null ? `${value > 0 ? '+' : ''}${value.toFixed(2)}%` : '-'}
-          </span>
-        ),
-      },
-      {
-        title: <span className="whitespace-nowrap">RSI</span>,
-        dataIndex: 'rsi',
-        width: 76,
-        align: 'center',
-        render: (value: number | null | undefined) => (
-          <span className={`whitespace-nowrap ${value != null && value >= 70 ? 'text-rose-500 font-bold' : value != null && value <= 30 ? 'text-emerald-500' : 'text-slate-600'}`}>
-            {value != null ? value.toFixed(1) : '-'}
-          </span>
-        ),
-      },
-      {
-        title: <span className="whitespace-nowrap">ATR</span>,
-        dataIndex: 'atr',
-        width: 80,
-        align: 'center',
-        render: (value: number | null | undefined) => value != null ? <span className="text-slate-600 font-medium whitespace-nowrap">{value.toFixed(3)}</span> : <span className="text-slate-300">-</span>,
-      },
-      {
-        title: <span className="whitespace-nowrap">MACD</span>,
-        dataIndex: 'macdHist',
-        width: 80,
-        align: 'center',
-        render: (value: number | null | undefined) => (
-          <span className={`whitespace-nowrap ${value != null && value >= 0 ? 'text-rose-500' : 'text-emerald-500'}`}>
-            {value != null ? value.toFixed(3) : '-'}
-          </span>
-        ),
-      },
-      {
-        title: <span className="whitespace-nowrap">20日乖离</span>,
-        dataIndex: 'maGap20',
-        width: 92,
-        align: 'center',
-        render: (value: number | null | undefined) => (
-          <span className={`whitespace-nowrap ${value != null && value >= 0 ? 'text-indigo-500 font-medium' : 'text-slate-400'}`}>
-            {value != null ? `${value > 0 ? '+' : ''}${value.toFixed(2)}%` : '-'}
-          </span>
-        ),
-      },
-      {
-        title: <span className="whitespace-nowrap">行业</span>,
-        dataIndex: 'sector',
-        width: 100,
-        align: 'center',
-        ellipsis: true,
-      },
-      {
-        title: <span className="whitespace-nowrap">指数/状态</span>,
-        key: 'status',
-        width: 160,
-        align: 'center',
-        render: (_, record) => (
-          <div className="flex flex-wrap gap-1 justify-center whitespace-nowrap">
-            {record.isSt && <Tag color="error" className="m-0 text-[10px] scale-90">ST</Tag>}
-            {record.isHs300 && <Tag color="blue" className="m-0 text-[10px] scale-90">HS300</Tag>}
-            {record.isCsi500 && <Tag color="cyan" className="m-0 text-[10px] scale-90">ZZ500</Tag>}
-            {record.isCsi1000 && <Tag color="purple" className="m-0 text-[10px] scale-90">ZZ1000</Tag>}
-          </div>
-        ),
-      },
-    ],
-    []
-  );
-
-  const watchlistColumns = React.useMemo<ColumnsType<ResearchStockRow>>(
-    () => [
-      {
-        title: <span className="whitespace-nowrap">排名</span>,
-        dataIndex: 'rank',
-        width: 60,
-        align: 'center',
-        render: (value: number) => <span className="whitespace-nowrap font-bold text-slate-700">{value}</span>,
-      },
-      {
-        title: <span className="whitespace-nowrap">股票</span>,
-        key: 'stock',
-        width: 132,
-        align: 'center',
-        render: (_, record) => (
-          <div className="text-center whitespace-nowrap">
-            <div className="font-bold text-slate-900 whitespace-nowrap">{record.name}</div>
-            <div className="text-xs text-slate-500 whitespace-nowrap">{record.code}</div>
-          </div>
-        ),
-      },
-      {
-        title: <span className="whitespace-nowrap">模型分数</span>,
-        dataIndex: 'score',
-        width: 98,
-        align: 'center',
-        render: (value: number) => <span className="font-black text-blue-400 whitespace-nowrap">{value.toFixed(3)}</span>,
-      },
-      {
-        title: <span className="whitespace-nowrap">涨跌幅</span>,
-        dataIndex: 'latestChange',
-        width: 102,
-        align: 'center',
-        render: (value: number) => {
-          const displayValue = Math.abs(value) > 1.0 ? value : value * 100;
-          return (
-            <span className={`whitespace-nowrap font-bold ${displayValue >= 0 ? 'text-rose-500' : 'text-emerald-500'}`}>
-              {displayValue >= 0 ? '+' : ''}{displayValue.toFixed(2)}%
-            </span>
-          );
-        },
-      },
-      {
-        title: <span className="whitespace-nowrap">换手率</span>,
-        dataIndex: 'turnoverRate',
-        width: 90,
-        align: 'center',
-        render: (value: number) => <span className="text-slate-600 font-medium whitespace-nowrap">{value.toFixed(2)}%</span>,
-      },
-      {
-        title: <span className="whitespace-nowrap">成交额</span>,
-        dataIndex: 'amount',
-        width: 108,
-        align: 'center',
-        render: (value: number) => <span className="text-slate-600 font-medium whitespace-nowrap">{value.toFixed(2)}亿</span>,
-      },
-      {
-        title: <span className="whitespace-nowrap">PE(TTM)</span>,
-        dataIndex: 'pe',
-        width: 92,
-        align: 'center',
-        render: (value: number) => <span className="text-slate-600 font-medium whitespace-nowrap">{value >= 0 ? value.toFixed(1) : '-'}</span>,
-      },
-      {
-        title: <span className="whitespace-nowrap">ROE(%)</span>,
-        dataIndex: 'roe',
-        width: 92,
-        align: 'center',
-        render: (value: number) => (
-          <span className="text-rose-500 font-bold whitespace-nowrap">
-            {value > -100 && value < 100 ? `${value.toFixed(1)}%` : '-'}
-          </span>
-        ),
-      },
-      {
-        title: <span className="whitespace-nowrap">RSI</span>,
-        dataIndex: 'rsi',
-        width: 76,
-        align: 'center',
-        render: (value: number) => (
-          <span className={`whitespace-nowrap ${value >= 70 ? 'text-rose-500 font-bold' : value <= 30 ? 'text-emerald-500' : 'text-slate-600'}`}>
-            {value ? value.toFixed(1) : '-'}
-          </span>
-        ),
-      },
-      {
-        title: <span className="whitespace-nowrap">行业</span>,
-        dataIndex: 'sector',
-        width: 100,
-        align: 'center',
-        ellipsis: true,
-      },
-      {
-        title: <span className="whitespace-nowrap">指数/状态</span>,
-        key: 'status',
-        width: 160,
-        align: 'center',
-        render: (_, record) => (
-          <div className="flex flex-wrap gap-1 justify-center whitespace-nowrap">
-            {record.isSt && <Tag color="error" className="m-0 text-[10px] scale-90">ST</Tag>}
-            {record.isHs300 && <Tag color="blue" className="m-0 text-[10px] scale-90">HS300</Tag>}
-            {record.isCsi500 && <Tag color="cyan" className="m-0 text-[10px] scale-90">ZZ500</Tag>}
-            {record.isCsi1000 && <Tag color="purple" className="m-0 text-[10px] scale-90">ZZ1000</Tag>}
-          </div>
-        ),
-      },
-      {
-        title: <span className="whitespace-nowrap">操作</span>,
-        key: 'actions',
-        width: 80,
-        fixed: 'right',
-        align: 'center',
-        render: (_, record) => (
-          <div className="flex items-center justify-center" onClick={e => e.stopPropagation()}>
-            <Button
-              size="small"
-              type="text"
-              danger
-              icon={<span className="text-[10px]">移除</span>}
-              onClick={() => handleRemoveFromWatchlist(record.code, record.name)}
-              title="从自选移除"
-            />
-          </div>
-        ),
-      },
-    ],
-    [watchlistFeatures]
-  );
-
-  const poolColumns = React.useMemo<ColumnsType<ResearchStockRow>>(
-    () => [
-      {
-        title: <span className="whitespace-nowrap">排名</span>,
-        dataIndex: 'rank',
-        width: 60,
-        align: 'center',
-        render: (value: number) => <span className="whitespace-nowrap font-bold text-slate-700">{value}</span>,
-      },
-      {
-        title: <span className="whitespace-nowrap">股票</span>,
-        key: 'stock',
-        width: 132,
-        align: 'center',
-        render: (_, record) => (
-          <div className="text-center whitespace-nowrap">
-            <div className="font-bold text-slate-900 whitespace-nowrap">{record.name}</div>
-            <div className="text-xs text-slate-500 whitespace-nowrap">{record.code}</div>
-          </div>
-        ),
-      },
-      {
-        title: <span className="whitespace-nowrap">模型分数</span>,
-        dataIndex: 'score',
-        width: 98,
-        align: 'center',
-        render: (value: number) => <span className="font-black text-blue-400 whitespace-nowrap">{value.toFixed(3)}</span>,
-      },
-      {
-        title: <span className="whitespace-nowrap">涨跌幅</span>,
-        dataIndex: 'latestChange',
-        width: 102,
-        align: 'center',
-        render: (value: number) => {
-          const displayValue = Math.abs(value) > 1.0 ? value : value * 100;
-          return (
-            <span className={`whitespace-nowrap font-bold ${displayValue >= 0 ? 'text-rose-500' : 'text-emerald-500'}`}>
-              {displayValue >= 0 ? '+' : ''}{displayValue.toFixed(2)}%
-            </span>
-          );
-        },
-      },
-      {
-        title: <span className="whitespace-nowrap">换手率</span>,
-        dataIndex: 'turnoverRate',
-        width: 90,
-        align: 'center',
-        render: (value: number) => <span className="text-slate-600 font-medium whitespace-nowrap">{value.toFixed(2)}%</span>,
-      },
-      {
-        title: <span className="whitespace-nowrap">成交额</span>,
-        dataIndex: 'amount',
-        width: 108,
-        align: 'center',
-        render: (value: number) => <span className="text-slate-600 font-medium whitespace-nowrap">{value.toFixed(2)}亿</span>,
-      },
-      {
-        title: <span className="whitespace-nowrap">PE(TTM)</span>,
-        dataIndex: 'pe',
-        width: 92,
-        align: 'center',
-        render: (value: number) => <span className="text-slate-600 font-medium whitespace-nowrap">{value >= 0 ? value.toFixed(1) : '-'}</span>,
-      },
-      {
-        title: <span className="whitespace-nowrap">ROE(%)</span>,
-        dataIndex: 'roe',
-        width: 92,
-        align: 'center',
-        render: (value: number) => (
-          <span className="text-rose-500 font-bold whitespace-nowrap">
-            {value > -100 && value < 100 ? `${value.toFixed(1)}%` : '-'}
-          </span>
-        ),
-      },
-      {
-        title: <span className="whitespace-nowrap">RSI</span>,
-        dataIndex: 'rsi',
-        width: 76,
-        align: 'center',
-        render: (value: number) => (
-          <span className={`whitespace-nowrap ${value >= 70 ? 'text-rose-500 font-bold' : value <= 30 ? 'text-emerald-500' : 'text-slate-600'}`}>
-            {value ? value.toFixed(1) : '-'}
-          </span>
-        ),
-      },
-      {
-        title: <span className="whitespace-nowrap">行业</span>,
-        dataIndex: 'sector',
-        width: 100,
-        align: 'center',
-        ellipsis: true,
-      },
-      {
-        title: <span className="whitespace-nowrap">指数/状态</span>,
-        key: 'status',
-        width: 160,
-        align: 'center',
-        render: (_, record) => (
-          <div className="flex flex-wrap gap-1 justify-center whitespace-nowrap">
-            {record.isSt && <Tag color="error" className="m-0 text-[10px] scale-90">ST</Tag>}
-            {record.isHs300 && <Tag color="blue" className="m-0 text-[10px] scale-90">HS300</Tag>}
-            {record.isCsi500 && <Tag color="cyan" className="m-0 text-[10px] scale-90">ZZ500</Tag>}
-            {record.isCsi1000 && <Tag color="purple" className="m-0 text-[10px] scale-90">ZZ1000</Tag>}
-          </div>
-        ),
-      },
-      {
-        title: <span className="whitespace-nowrap">操作</span>,
-        key: 'actions',
-        width: 80,
-        fixed: 'right',
-        align: 'center',
-        render: (_, record) => (
-          <div className="flex items-center justify-center" onClick={e => e.stopPropagation()}>
-            <Button
-              size="small"
-              type="text"
-              danger
-              icon={<span className="text-[10px]">移除</span>}
-              onClick={() => handleRemoveFromPool(record.code, record.name)}
-              title="从研究池移除"
-            />
-          </div>
-        ),
-      },
-    ],
-    [poolFeatures]
-  );
-
-  // 导出 CSV
+  /** 导出 CSV：跟随当前可见列，保证「所见即所导」 */
   const handleExportCSV = () => {
     if (filteredRows.length === 0) {
       message.warning('暂无数据可导出');
       return;
     }
 
-    const headers = ['排名', '股票代码', '股票名称', '模型分数', '涨跌幅', '次日收益', '3日收益', '连板天数', '换手率', '成交额(亿)', '行业', 'PE(TTM)', 'ROE(%)', 'RSI', '5日乖离', '5日量比'];
-    const rows = filteredRows.map((item) => [
-      item.rank,
-      item.code,
-      item.name,
-      item.score.toFixed(3),
-      `${item.latestChange >= 0 ? '+' : ''}${item.latestChange.toFixed(2)}%`,
-      item.nextDayReturn !== null ? `${item.nextDayReturn >= 0 ? '+' : ''}${item.nextDayReturn.toFixed(2)}%` : '-',
-      item.day3Return !== null ? `${item.day3Return >= 0 ? '+' : ''}${item.day3Return.toFixed(2)}%` : '-',
-      item.consecutiveLimitUpDays,
-      item.turnoverRate.toFixed(2),
-      item.amount.toFixed(2),
-      item.sector,
-      item.pe.toFixed(1),
-      item.roe.toFixed(1),
-      item.rsi.toFixed(1),
-      (item.maGap5 || 0).toFixed(2),
-      (item.volRatio5 || 0).toFixed(2),
-    ]);
+    const exportKeys = visibleColumnKeys.filter((key) => key !== 'status');
+    const headers: string[] = [];
+    exportKeys.forEach((key) => {
+      if (key === 'stock') {
+        headers.push('股票代码', '股票名称');
+        return;
+      }
+      headers.push(COLUMN_DEFS[key]?.title ?? key);
+    });
 
-    const csvContent = [headers.join(','), ...rows.map((row) => row.join(','))].join('\n');
+    const serialize = (value: unknown): string => {
+      if (value === null || value === undefined) return '-';
+      const text = String(value);
+      // 逗号/引号/换行需按 RFC4180 转义，否则会破坏列结构
+      return /[",\n]/.test(text) ? `"${text.replace(/"/g, '""')}"` : text;
+    };
+
+    const rows = filteredRows.map((item) => {
+      const cells: string[] = [];
+      exportKeys.forEach((key) => {
+        if (key === 'stock') {
+          cells.push(serialize(item.code), serialize(item.name));
+          return;
+        }
+        const def = COLUMN_DEFS[key];
+        const field = (def?.dataIndex ?? key) as keyof ResearchStockRow;
+        cells.push(serialize(item[field]));
+      });
+      return cells;
+    });
+
+    const csvContent = [headers.map(serialize).join(','), ...rows.map((row) => row.join(','))].join('\n');
     const BOM = '﻿';
     const blob = new Blob([BOM + csvContent], { type: 'text/csv;charset=utf-8;' });
     const url = URL.createObjectURL(blob);
@@ -1802,6 +2193,132 @@ export const ResearchPlatformPage: React.FC = () => {
     URL.revokeObjectURL(url);
     message.success(`已导出 ${filteredRows.length} 条数据`);
   };
+
+  /* ------------------------------ 渲染 ------------------------------ */
+
+  const selectStyleFilter = (
+    fieldKey: 'selectedSectors' | 'selectedConcepts' | 'selectedIndices',
+    label: string,
+    placeholder: string,
+    options: Array<{ value: string; label: string }>
+  ) => (
+    <div className="space-y-2">
+      <div className="text-[11px] font-bold text-slate-500">{label}</div>
+      <Select
+        mode="multiple"
+        className={`w-full ${FIELD_STYLES.select}`}
+        value={draftFilters[fieldKey]}
+        onChange={(value: string[]) => setFilterField(fieldKey, value)}
+        placeholder={placeholder}
+        options={options}
+        maxTagCount={2}
+        maxTagPlaceholder={(omitted) => `+${omitted.length}`}
+        showSearch
+        filterOption={(input, option) => {
+          const optionLabel = (option as any)?.label;
+          return typeof optionLabel === 'string' && optionLabel.toLowerCase().includes(input.toLowerCase());
+        }}
+      />
+    </div>
+  );
+
+  const filterCollapseItems = FILTER_SECTIONS.map((section) => ({
+    key: section.key,
+    label: (
+      <span className="text-xs font-bold uppercase tracking-wide text-slate-700">
+        {section.label}
+        {section.fields.length > 0 && (
+          <span className="ml-1.5 text-[10px] font-medium text-slate-400">({section.fields.length})</span>
+        )}
+      </span>
+    ),
+    children: (
+      <div className="space-y-3 pt-1">
+        {section.key === 'common' && (
+          <>
+            <div className="flex items-center justify-between rounded-xl border border-slate-100 bg-slate-50/50 px-3 py-1.5">
+              <span className="text-[11px] font-bold text-slate-500">剔除 ST / 退市</span>
+              <Switch
+                size="small"
+                checked={draftFilters.excludeSt}
+                onChange={(checked) => setFilterField('excludeSt', checked)}
+              />
+            </div>
+            <div className="flex items-center justify-between rounded-xl border border-slate-100 bg-slate-50/50 px-3 py-1.5">
+              <span className="text-[11px] font-bold text-slate-500">仅高置信标的</span>
+              <Switch
+                size="small"
+                checked={draftFilters.highConfidenceOnly}
+                onChange={(checked) => setFilterField('highConfidenceOnly', checked)}
+              />
+            </div>
+            <div className="flex items-center justify-between rounded-xl border border-slate-100 bg-slate-50/50 px-3 py-1.5">
+              <span className="text-[11px] font-bold text-slate-500">近 5 日量能放大</span>
+              <Switch
+                size="small"
+                checked={draftFilters.volumeTrendOnly}
+                onChange={(checked) => setFilterField('volumeTrendOnly', checked)}
+              />
+            </div>
+          </>
+        )}
+
+        {section.fields.length > 2 ? (
+          <div className="grid grid-cols-2 gap-x-3 gap-y-2">
+            {section.fields.map((field) => (
+              <RangeInput
+                key={field.key as string}
+                label={field.label}
+                value={draftFilters[field.key] as [number, number] | number}
+                onChange={(value) => setFilterField(field.key, value)}
+                suffix={field.suffix}
+                step={field.step ?? 1}
+              />
+            ))}
+          </div>
+        ) : (
+          section.fields.map((field) => (
+            <RangeInput
+              key={field.key as string}
+              label={field.label}
+              value={draftFilters[field.key] as [number, number] | number}
+              onChange={(value) => setFilterField(field.key, value)}
+              suffix={field.suffix}
+              step={field.step ?? 1}
+            />
+          ))
+        )}
+
+        {section.key === 'sector' && (
+          <>
+            <div className="space-y-2">
+              <div className="text-[11px] font-bold text-slate-500">市场范围</div>
+              <Select
+                className={`w-full ${FIELD_STYLES.select}`}
+                value={draftFilters.marketType}
+                onChange={(value: string) => setFilterField('marketType', value)}
+                options={[
+                  { value: 'all', label: '全市场' },
+                  { value: 'hs300', label: '沪深 300' },
+                  { value: 'zz500', label: '中证 500' },
+                  { value: 'zz1000', label: '中证 1000' },
+                ]}
+              />
+            </div>
+            {selectStyleFilter('selectedSectors', '行业筛选', '选择行业（可多选）', availableSectorOptions)}
+            {selectStyleFilter('selectedConcepts', '概念筛选', '选择概念（可多选）', availableConceptOptions)}
+            {selectStyleFilter('selectedIndices', '指数筛选', '选择指数（可多选）', availableIndexOptions)}
+          </>
+        )}
+      </div>
+    ),
+  }));
+
+  const activeTableTotal = activeDataSource === 'candidates'
+    ? filteredRows.length
+    : activeDataSource === 'watchlist'
+      ? filteredWatchlist.length
+      : filteredPool.length;
 
   return (
     <>
@@ -1837,38 +2354,37 @@ export const ResearchPlatformPage: React.FC = () => {
             </div>
           </header>
 
-          <div className="flex-1 flex flex-col">
+          <div className="flex flex-1 flex-col">
             <div className={`${PAGE_LAYOUT.contentOuterClass}`}>
-              <div className="grid gap-4 2xl:grid-cols-[320px_minmax(0,1fr)] xl:grid-cols-[300px_minmax(0,1fr)]">
-                {/* 左侧侧边栏 - 吸顶且固定高度 */}
-                <div className="flex flex-col gap-4 sticky top-4 h-[calc(100vh-120px)] z-30">
-                  <div className="rounded-3xl border border-slate-200 bg-white p-5 shadow-sm flex-shrink-0">
-                    <div className="flex items-center gap-2 mb-4 text-[10px] font-black uppercase tracking-[0.2em] text-slate-500">
-                      <LibraryBig className="h-4 w-4" />
+              <div className="grid gap-4 xl:grid-cols-[340px_minmax(0,1fr)] 2xl:grid-cols-[360px_minmax(0,1fr)]">
+                {/* ---------------- 左侧筛选侧栏 ---------------- */}
+                <div className="sticky top-4 z-30 flex h-[calc(100vh-120px)] flex-col gap-4">
+                  <div className="flex-shrink-0 rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
+                    <div className="mb-3 flex items-center gap-2 text-[9px] font-black uppercase tracking-[0.2em] text-slate-500">
+                      <LibraryBig className="h-3.5 w-3.5" />
                       候选池入口
                     </div>
 
-                    <div className="space-y-4">
+                    <div className="space-y-3">
                       <div>
-                        <div className="mb-2 text-xs font-semibold text-slate-500">研究模型</div>
+                        <div className="mb-1 text-[10px] font-semibold text-slate-500">研究模型</div>
                         <Select
-                          className={`w-full ${FIELD_STYLES.select} mb-1`}
+                          className={`w-full ${FIELD_STYLES.select} mb-0.5`}
+                          size="small"
                           value={selectedModelId}
                           onChange={setSelectedModelId}
                           loading={modelsLoading}
                           placeholder="请选择投研模型"
-                          options={availableModels.map((item) => ({
-                            value: item.modelId,
-                            label: item.name,
-                          }))}
+                          options={availableModels.map((item) => ({ value: item.modelId, label: item.name }))}
                         />
-                        {modelsError && <div className="text-[10px] text-red-500 mb-2">{modelsError}</div>}
+                        {modelsError && <div className="mb-1 text-[9px] text-red-500">{modelsError}</div>}
                       </div>
 
                       <div>
-                        <div className="mb-2 text-xs font-semibold text-slate-500">推理批次</div>
+                        <div className="mb-1 text-[10px] font-semibold text-slate-500">推理批次</div>
                         <Select
-                          className={`w-full ${FIELD_STYLES.select} mb-1`}
+                          className={`w-full ${FIELD_STYLES.select} mb-0.5`}
+                          size="small"
                           value={selectedRunId}
                           onChange={setSelectedRunId}
                           loading={runsLoading}
@@ -1879,24 +2395,26 @@ export const ResearchPlatformPage: React.FC = () => {
                           }))}
                         />
                         {!runsLoading && !runsError && availableRuns.length === 0 && (
-                          <div className="text-[10px] text-amber-600 mb-2">
+                          <div className="mb-1 text-[9px] text-amber-600">
                             暂无历史推理数据，请先在模型训练/模型管理中生成推理批次。
                           </div>
                         )}
-                        {runsError && <div className="text-[10px] text-red-500 mb-2">{runsError}</div>}
+                        {runsError && <div className="mb-1 text-[9px] text-red-500">{runsError}</div>}
                       </div>
 
                       <div>
-                        <div className="mb-2 text-xs font-semibold text-slate-500">默认加载范围</div>
-                        <div className="flex flex-wrap gap-2 mb-4">
+                        <div className="mb-1 text-[10px] font-semibold text-slate-500">默认加载范围</div>
+                        <div className="flex flex-wrap gap-1.5">
                           {[100, 200, 500, 1000].map((range) => (
                             <button
                               key={range}
+                              type="button"
                               onClick={() => setLoadRange(range)}
-                              className={`flex-1 px-3 py-2 rounded-xl text-xs font-bold transition-all duration-200 border ${loadRange === range
-                                  ? 'bg-blue-600 text-white border-blue-600 shadow-md shadow-blue-500/20'
-                                  : 'bg-white text-slate-500 border-slate-200 hover:border-blue-300 hover:text-blue-500'
-                                }`}
+                              className={`flex-1 rounded-lg border px-2 py-1 text-[10px] font-bold transition-all duration-200 ${
+                                loadRange === range
+                                  ? 'border-blue-600 bg-blue-600 text-white shadow-md shadow-blue-500/20'
+                                  : 'border-slate-200 bg-white text-slate-500 hover:border-blue-300 hover:text-blue-500'
+                              }`}
                             >
                               {range}
                             </button>
@@ -1905,21 +2423,23 @@ export const ResearchPlatformPage: React.FC = () => {
                       </div>
 
                       <div>
-                        <div className="mb-2 text-xs font-semibold text-slate-500">快速模板</div>
-                        <div className="grid grid-cols-3 gap-2">
+                        <div className="mb-1 text-[10px] font-semibold text-slate-500">快速模板</div>
+                        <div className="grid grid-cols-3 gap-1.5">
                           {Object.keys(PRESET_FILTER_MAP).map((item) => (
                             <Tag
                               key={item}
-                              className={`preset-tag cursor-pointer rounded-full px-2.5 py-1 text-[10px] text-center font-bold transition-all duration-300 border ${activePreset === item ? TEMPLATE_BUTTON_STYLES.active : TEMPLATE_BUTTON_STYLES.idle
-                                }`}
+                              className={`preset-tag cursor-pointer rounded-full border px-2 py-0.5 text-center text-[9px] font-bold transition-all duration-300 ${
+                                activePreset === item ? TEMPLATE_BUTTON_STYLES.active : TEMPLATE_BUTTON_STYLES.idle
+                              }`}
                               onClick={() => applyPreset(item)}
                             >
                               {item}
                             </Tag>
                           ))}
                           <Tag
-                            className={`preset-tag cursor-pointer rounded-full px-2.5 py-1 text-[10px] text-center font-bold transition-all duration-300 border ${!activePreset ? 'bg-blue-600 text-white border-blue-600' : 'bg-slate-50 text-slate-500 border-slate-200'
-                              }`}
+                            className={`preset-tag cursor-pointer rounded-full border px-2 py-0.5 text-center text-[9px] font-bold transition-all duration-300 ${
+                              !activePreset ? 'border-blue-600 bg-blue-600 text-white' : 'border-slate-200 bg-slate-50 text-slate-500'
+                            }`}
                             onClick={resetFilters}
                           >
                             全量候选
@@ -1929,10 +2449,10 @@ export const ResearchPlatformPage: React.FC = () => {
                     </div>
                   </div>
 
-                  <div className="flex-1 min-h-0 flex flex-col rounded-3xl border border-slate-200 bg-white shadow-sm relative overflow-hidden">
-                    <div className="flex-1 overflow-y-auto custom-scrollbar p-5 pb-32">
-                      <div className="flex items-center gap-2 mb-4 text-[10px] font-black uppercase tracking-[0.2em] text-slate-500">
-                        <Filter className="h-4 w-4" />
+                  <div className="relative flex min-h-0 flex-1 flex-col overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm">
+                    <div className="custom-scrollbar flex-1 overflow-y-auto p-4 pb-28">
+                      <div className="mb-3 flex items-center gap-2 text-[9px] font-black uppercase tracking-[0.2em] text-slate-500">
+                        <Filter className="h-3.5 w-3.5" />
                         量化研究条件
                       </div>
 
@@ -1940,220 +2460,37 @@ export const ResearchPlatformPage: React.FC = () => {
                         className={FIELD_STYLES.collapse}
                         ghost
                         activeKey={activeFilterSections}
-                        onChange={(keys) => setActiveFilterSections(Array.isArray(keys) ? (keys as FilterSectionKey[]) : ([keys] as FilterSectionKey[]))}
-                        items={[
-                          {
-                            key: 'common',
-                            label: <span className="text-xs font-bold text-slate-700 uppercase tracking-wide">核心指标与范围</span>,
-                            children: (
-                              <div className="space-y-4 pt-1">
-                                <div className="flex items-center justify-between rounded-xl border border-slate-100 bg-slate-50/50 px-3 py-2">
-                                  <span className="text-[11px] font-bold text-slate-500">剔除 ST / 退市</span>
-                                  <Switch
-                                    size="small"
-                                    checked={excludeSt}
-                                    onChange={(val) => {
-                                      setExcludeSt(val);
-                                      setAppliedFilters({ ...appliedFilters, excludeSt: val });
-                                    }}
-                                  />
-                                </div>
-                                <RangeInput
-                                  label="模型分数 (≥)"
-                                  value={minScore}
-                                  onChange={setMinScore}
-                                  placeholder="最低分"
-                                  step={0.01}
-                                  isSingle
-                                />
-                                <RangeInput
-                                  label="连板天数 (≥)"
-                                  value={limitUpDays}
-                                  onChange={setLimitUpDays}
-                                  placeholder="连板数"
-                                  suffix="天"
-                                  isSingle
-                                />
-                              </div>
-                            )
-                          },
-                          {
-                            key: 'market',
-                            label: <span className="text-xs font-bold text-slate-700 uppercase tracking-wide">行情与流动性</span>,
-                            children: (
-                              <div className="space-y-4 pt-1">
-                                <RangeInput
-                                  label="成交额 (亿)"
-                                  value={amountRange}
-                                  onChange={(v) => setAmountRange(v)}
-                                  placeholder={["最小额", "最大额"]}
-                                  suffix="亿"
-                                />
-                                <RangeInput
-                                  label="换手率 (%)"
-                                  value={turnoverRange}
-                                  onChange={(v) => setTurnoverRange(v)}
-                                  placeholder={["最小换手", "最大换手"]}
-                                  suffix="%"
-                                  step={0.1}
-                                />
-                                <RangeInput
-                                  label="总市值 (亿)"
-                                  value={totalMvRange}
-                                  onChange={(v) => setTotalMvRange(v)}
-                                  placeholder={["最小市值", "最大市值"]}
-                                  suffix="亿"
-                                />
-                              </div>
-                            )
-                          },
-                          {
-                            key: 'technical',
-                            label: <span className="text-xs font-bold text-slate-700 uppercase tracking-wide">技术面过滤</span>,
-                            children: (
-                              <div className="space-y-4 pt-1">
-                                <RangeInput
-                                  label="5日乖离率 (%)"
-                                  value={maGap5Range}
-                                  onChange={(v) => setMaGap5Range(v)}
-                                  placeholder={["Min", "Max"]}
-                                  suffix="%"
-                                  step={0.1}
-                                />
-                                <RangeInput
-                                  label="20日乖离率 (%)"
-                                  value={maGap20Range}
-                                  onChange={(v) => setMaGap20Range(v)}
-                                  placeholder={["Min", "Max"]}
-                                  suffix="%"
-                                  step={0.1}
-                                />
-                                <RangeInput
-                                  label="5日量比 (≥)"
-                                  value={volRatio5Range}
-                                  onChange={setVolRatio5Range}
-                                  placeholder="量比值"
-                                  step={0.5}
-                                  isSingle
-                                />
-                                <RangeInput
-                                  label="RSI (6日)"
-                                  value={rsiRange}
-                                  onChange={(v) => setRsiRange(v)}
-                                  placeholder={["超卖", "超买"]}
-                                  step={1}
-                                />
-                              </div>
-                            )
-                          },
-                          {
-                            key: 'fundamental',
-                            label: <span className="text-xs font-bold text-slate-700 uppercase tracking-wide">财务估值 (基本面)</span>,
-                            children: (
-                              <div className="space-y-4 pt-1">
-                                <RangeInput
-                                  label="ROE (%) [≥]"
-                                  value={roeRange}
-                                  onChange={(v) => setRoeRange(v)}
-                                  placeholder={["Min", "Max"]}
-                                  suffix="%"
-                                  step={0.1}
-                                />
-                                <RangeInput
-                                  label="PE (TTM)"
-                                  value={peRange}
-                                  onChange={(v) => setPeRange(v)}
-                                  placeholder={["Min", "Max"]}
-                                  step={1}
-                                />
-                                <RangeInput
-                                  label="PB"
-                                  value={pbRange}
-                                  onChange={(v) => setPbRange(v)}
-                                  placeholder={["Min", "Max"]}
-                                  step={0.1}
-                                />
-                              </div>
-                            )
-                          },
-                          {
-                            key: 'sector',
-                            label: <span className="text-xs font-bold text-slate-700 uppercase tracking-wide">行业/概念分类</span>,
-                            children: (
-                              <div className="space-y-4 pt-1">
-                                <div className="space-y-2">
-                                  <div className="text-[11px] font-bold text-slate-500">行业筛选</div>
-                                  <Select
-                                    mode="multiple"
-                                    className={`w-full ${FIELD_STYLES.select}`}
-                                    value={selectedSectors}
-                                    onChange={setSelectedSectors}
-                                    placeholder="选择行业（可多选）"
-                                    options={availableSectorOptions}
-                                    maxTagCount={2}
-                                    maxTagPlaceholder={(omitted) => `+${omitted.length}`}
-                                    showSearch
-                                    filterOption={(input, option) => {
-                                      const label = (option as any)?.label;
-                                      return typeof label === 'string' && label.toLowerCase().includes(input.toLowerCase());
-                                    }}
-                                  />
-                                </div>
-                                <div className="space-y-2">
-                                  <div className="text-[11px] font-bold text-slate-500">概念筛选</div>
-                                  <Select
-                                    mode="multiple"
-                                    className={`w-full ${FIELD_STYLES.select}`}
-                                    value={selectedConcepts}
-                                    onChange={setSelectedConcepts}
-                                    placeholder="选择概念（可多选）"
-                                    options={availableConceptOptions}
-                                    maxTagCount={2}
-                                    maxTagPlaceholder={(omitted) => `+${omitted.length}`}
-                                    showSearch
-                                    filterOption={(input, option) => {
-                                      const label = (option as any)?.label;
-                                      return typeof label === 'string' && label.toLowerCase().includes(input.toLowerCase());
-                                    }}
-                                  />
-                                </div>
-                                <div className="space-y-2">
-                                  <div className="text-[11px] font-bold text-slate-500">指数筛选</div>
-                                  <Select
-                                    mode="multiple"
-                                    className={`w-full ${FIELD_STYLES.select}`}
-                                    value={selectedIndices}
-                                    onChange={setSelectedIndices}
-                                    placeholder="选择指数（可多选）"
-                                    options={availableIndexOptions}
-                                    maxTagCount={2}
-                                    maxTagPlaceholder={(omitted) => `+${omitted.length}`}
-                                    showSearch
-                                    filterOption={(input, option) => {
-                                      const label = (option as any)?.label;
-                                      return typeof label === 'string' && label.toLowerCase().includes(input.toLowerCase());
-                                    }}
-                                  />
-                                </div>
-                              </div>
-                            )
-                          }
-                        ]}
+                        onChange={(keys) =>
+                          setActiveFilterSections(
+                            (Array.isArray(keys) ? keys : [keys]) as FilterSectionKey[]
+                          )
+                        }
+                        items={filterCollapseItems}
                       />
                     </div>
 
-                    <div className="absolute bottom-0 left-0 right-0 z-40 rounded-b-3xl border-t border-slate-200/80 bg-white/95 p-4 shadow-[0_-10px_30px_-15px_rgba(0,0,0,0.1)] backdrop-blur-xl supports-[backdrop-filter]:bg-white/90">
-                      <div className="mb-3 text-[11px] font-medium text-slate-500 text-center">
-                        {hasPendingFilterChanges ? '筛选条件已变更，点击应用后生效。' : '当前筛选条件已同步。'}
+                    <div className="absolute bottom-0 left-0 right-0 z-40 rounded-b-3xl border-t border-slate-200/80 bg-white/95 px-4 py-3 shadow-[0_-10px_30px_-15px_rgba(0,0,0,0.1)] backdrop-blur-xl supports-[backdrop-filter]:bg-white/90">
+                      <div className="mb-2 text-center text-[10px] font-medium text-slate-500">
+                        {universeFeaturesLoading ? (
+                          <span className="text-sky-600">⏳ 正在加载 QuantDB 因子（{candidatePool.length} 只）…</span>
+                        ) : hasPendingFilterChanges ? (
+                          <span className="text-amber-600">⚠ 筛选条件已变更，点击应用后生效</span>
+                        ) : (
+                          <span className="text-emerald-600">✓ 当前筛选条件已同步</span>
+                        )}
                       </div>
-                      <div className="flex gap-3">
-                        <Button size="middle" className="flex-1 rounded-xl font-bold border-slate-200" onClick={resetFilters}>
+                      <div className="flex gap-2">
+                        <Button size="small" className="flex-1 rounded-xl border-slate-200 text-[11px] font-bold" onClick={resetFilters}>
                           恢复默认
                         </Button>
                         <Button
-                          size="middle"
+                          size="small"
                           type="primary"
-                          className={`flex-1 rounded-xl font-black transition-all shadow-md ${hasPendingFilterChanges ? 'bg-blue-600 hover:bg-blue-500 hover:-translate-y-0.5' : 'bg-slate-300 border-none shadow-none text-slate-50'}`}
+                          className={`flex-1 rounded-xl text-[11px] font-black shadow-md transition-all ${
+                            hasPendingFilterChanges
+                              ? 'bg-blue-600 hover:-translate-y-0.5 hover:bg-blue-500'
+                              : 'border-none bg-slate-300 text-slate-50 shadow-none'
+                          }`}
                           disabled={!hasPendingFilterChanges}
                           onClick={applyCurrentFilters}
                         >
@@ -2164,27 +2501,24 @@ export const ResearchPlatformPage: React.FC = () => {
                   </div>
                 </div>
 
-                {/* 右侧主内容 */}
+                {/* ---------------- 右侧主内容 ---------------- */}
                 <motion.div
-                  className="flex flex-col gap-4 min-w-0 flex-1 pb-20"
+                  className="flex min-w-0 flex-1 flex-col gap-4 pb-20"
                   initial="hidden"
                   animate="visible"
                   variants={{
                     hidden: { opacity: 0 },
-                    visible: {
-                      opacity: 1,
-                      transition: { staggerChildren: 0.1 }
-                    }
+                    visible: { opacity: 1, transition: { staggerChildren: 0.1 } },
                   }}
                 >
                   <motion.div
                     variants={{ hidden: { opacity: 0, y: 20 }, visible: { opacity: 1, y: 0 } }}
-                    className="grid gap-4 md:grid-cols-2 xl:grid-cols-3 flex-shrink-0"
+                    className="grid flex-shrink-0 gap-4 md:grid-cols-2 xl:grid-cols-4"
                   >
                     <ResearchMetricCard
                       icon={LibraryBig}
                       label="候选池"
-                      value={overview?.summary.total || 0}
+                      value={overview?.summary?.total || 0}
                       subLabel="当前批次预测总量"
                       accentColor="#3b82f6"
                     />
@@ -2198,58 +2532,69 @@ export const ResearchPlatformPage: React.FC = () => {
                     <ResearchMetricCard
                       icon={Flame}
                       label="高强度标的"
-                      value={overview?.summary.strongCount || 0}
+                      value={overview?.summary?.strongCount || 0}
                       subLabel="模型高分命中 (≥0.05)"
                       accentColor="#f43f5e"
                     />
+                    <ResearchMetricCard
+                      icon={BarChart3}
+                      label="平均分数"
+                      value={avgScore}
+                      subLabel="筛选结果均值"
+                      accentColor="#0ea5e9"
+                    />
                   </motion.div>
 
-                  <motion.div variants={{ hidden: { opacity: 0, y: 20 }, visible: { opacity: 1, y: 0 } }} className="flex-1 min-h-0 flex flex-col glass-panel rounded-3xl overflow-hidden p-1 shadow-sm">
+                  <motion.div
+                    variants={{ hidden: { opacity: 0, y: 20 }, visible: { opacity: 1, y: 0 } }}
+                    className="glass-panel flex min-h-0 flex-1 flex-col overflow-hidden rounded-3xl p-1 shadow-sm"
+                  >
                     <motion.div
                       initial={{ opacity: 0, y: 15 }}
                       animate={{ opacity: 1, y: 0 }}
-                      className="glass-panel rounded-[32px] border border-white/60 p-7 mb-6 shadow-xl shadow-slate-200/50 flex-shrink-0 bg-white/40"
+                      className="glass-panel mb-4 flex-shrink-0 rounded-2xl border border-white/60 bg-white/40 p-4 shadow-xl shadow-slate-200/50"
                     >
-                      {/* 顶层：核心身份与状态 */}
-                      <div className="flex flex-col md:flex-row md:items-end justify-between gap-6 pb-6 border-b border-slate-100/60">
-                        <div className="space-y-3">
-                          <div className="flex items-center gap-2 text-[10px] font-black uppercase tracking-widest text-slate-400">
+                      <div className="flex flex-col justify-between gap-3 border-b border-slate-100/60 pb-3 md:flex-row md:items-end">
+                        <div className="space-y-1">
+                          <div className="flex items-center gap-2 text-[9px] font-black uppercase tracking-widest text-slate-400">
                             <Sparkles className="h-3 w-3 text-blue-500" />
                             当前研究模型与批次
                           </div>
-                          <div className="flex items-end gap-4">
-                            <h2 className="text-4xl font-black text-slate-900 tracking-tight leading-none">
-                              {availableModels.find(m => m.modelId === selectedModelId)?.name || '未选择模型'}
+                          <div className="flex items-end gap-3">
+                            <h2 className="text-2xl font-black leading-none tracking-tight text-slate-900">
+                              {availableModels.find((item) => item.modelId === selectedModelId)?.name || '未选择模型'}
                             </h2>
-                            <div className="flex items-center gap-1.5 px-3 py-1 rounded-xl bg-slate-900 text-[11px] font-black text-white shadow-lg shadow-slate-900/20 mb-0.5">
-                              <Activity className="h-3 w-3" />
-                              {selectedRunId}
-                            </div>
+                            {selectedRunId && (
+                              <div className="mb-0.5 flex items-center gap-1 rounded-lg bg-slate-900 px-2 py-0.5 text-[10px] font-black text-white shadow-lg shadow-slate-900/20">
+                                <Activity className="h-2.5 w-2.5" />
+                                {selectedRunId}
+                              </div>
+                            )}
                           </div>
                         </div>
 
-                        <div className="flex flex-wrap items-center gap-4">
-                          <div className="flex flex-col gap-1 pr-6 border-r border-slate-100">
-                            <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">执行周期</span>
-                            <div className="flex items-center gap-3">
-                              <div className="flex items-center gap-1.5 text-[12px] font-black text-slate-700">
-                                <Target className="h-3.5 w-3.5 text-blue-500" />
-                                {availableRuns.find(r => r.runId === selectedRunId)?.inferenceDate || '-'}
+                        <div className="flex flex-wrap items-center gap-3">
+                          <div className="flex flex-col gap-0.5 border-r border-slate-100 pr-4">
+                            <span className="text-[9px] font-bold uppercase tracking-wider text-slate-400">执行周期</span>
+                            <div className="flex items-center gap-2">
+                              <div className="flex items-center gap-1 text-[11px] font-black text-slate-700">
+                                <Target className="h-3 w-3 text-blue-500" />
+                                {availableRuns.find((item) => item.runId === selectedRunId)?.inferenceDate || '-'}
                               </div>
                               <div className="h-1 w-1 rounded-full bg-slate-300" />
-                              <div className="flex items-center gap-1.5 text-[12px] font-black text-slate-700">
-                                <CandlestickChart className="h-3.5 w-3.5 text-emerald-500" />
-                                {availableRuns.find(r => r.runId === selectedRunId)?.targetDate || '-'}
+                              <div className="flex items-center gap-1 text-[11px] font-black text-slate-700">
+                                <CandlestickChart className="h-3 w-3 text-emerald-500" />
+                                {availableRuns.find((item) => item.runId === selectedRunId)?.targetDate || '-'}
                               </div>
                             </div>
                           </div>
 
-                          <div className="flex flex-col gap-1">
-                            <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">同步状态</span>
+                          <div className="flex flex-col gap-0.5">
+                            <span className="text-[9px] font-bold uppercase tracking-wider text-slate-400">同步状态</span>
                             <Tag
                               color={hasPendingFilterChanges ? 'warning' : 'success'}
-                              icon={hasPendingFilterChanges ? <RefreshCw className="h-3 w-3 animate-spin-slow" /> : <Search className="h-3 w-3" />}
-                              className="m-0 rounded-xl border-none px-4 py-1.5 font-black text-[11px] shadow-sm uppercase tracking-wide flex items-center gap-1.5"
+                              icon={hasPendingFilterChanges ? <RefreshCw className="h-2.5 w-2.5 animate-spin-slow" /> : <Search className="h-2.5 w-2.5" />}
+                              className="m-0 flex items-center gap-1 rounded-lg border-none px-2.5 py-0.5 text-[10px] font-black uppercase tracking-wide shadow-sm"
                             >
                               {hasPendingFilterChanges ? '待应用' : '已同步'}
                             </Tag>
@@ -2257,51 +2602,53 @@ export const ResearchPlatformPage: React.FC = () => {
                         </div>
                       </div>
 
-                      {/* 下层：筛选条件与板块概览 */}
-                      <div className="pt-6 grid grid-cols-1 lg:grid-cols-12 gap-8 items-center">
-                        <div className="lg:col-span-7 space-y-3">
-                          <div className="text-[10px] font-black text-slate-400 uppercase tracking-widest flex items-center gap-2">
-                            <Filter className="h-3 w-3" />
+                      <div className="grid grid-cols-1 items-start gap-4 pt-3 lg:grid-cols-12">
+                        <div className="space-y-1.5 lg:col-span-7">
+                          <div className="flex items-center gap-1.5 text-[9px] font-black uppercase tracking-widest text-slate-400">
+                            <Filter className="h-2.5 w-2.5" />
                             当前生效筛选条件
                           </div>
-                          <div className="flex flex-wrap gap-2">
-                            {selectedStockMatchedConditions.length > 0 ? (
-                              selectedStockMatchedConditions.map((condition, idx) => (
+                          <div className="flex flex-wrap gap-1.5">
+                            {activeConditionSummary.length > 0 ? (
+                              activeConditionSummary.map((condition) => (
                                 <motion.span
-                                  key={idx}
-                                  whileHover={{ y: -2 }}
-                                  className="bg-slate-100/80 hover:bg-white px-3 py-1.5 rounded-xl text-[11px] font-bold text-slate-600 flex items-center gap-1.5 border border-slate-200/50 transition-colors shadow-sm"
+                                  key={condition}
+                                  whileHover={{ y: -1 }}
+                                  className="flex items-center gap-1 rounded-lg border border-slate-200/50 bg-slate-100/80 px-2 py-0.5 text-[10px] font-bold text-slate-600 shadow-sm transition-colors hover:bg-white"
                                 >
-                                  <div className="h-1.5 w-1.5 rounded-full bg-blue-400" />
+                                  <div className="h-1 w-1 rounded-full bg-blue-400" />
                                   {condition}
                                 </motion.span>
                               ))
                             ) : (
-                              <span className="text-[11px] font-bold text-slate-400 italic">未应用特定条件筛选</span>
+                              <span className="text-[10px] font-bold italic text-slate-400">未应用特定条件筛选</span>
                             )}
                           </div>
                         </div>
 
-                        <div className="lg:col-span-5 space-y-3">
-                          <div className="text-[10px] font-black text-slate-400 uppercase tracking-widest flex items-center gap-2">
-                            <BarChart3 className="h-3 w-3" />
+                        <div className="space-y-1.5 lg:col-span-5">
+                          <div className="flex items-center gap-1.5 text-[9px] font-black uppercase tracking-widest text-slate-400">
+                            <BarChart3 className="h-2.5 w-2.5" />
                             核心板块分布
                           </div>
-                          <div className="flex flex-wrap gap-2">
+                          <div className="flex flex-wrap gap-1.5">
                             {sectorBreakdown.slice(0, 3).map((item, idx) => (
                               <motion.div
                                 key={item.name}
                                 whileHover={{ scale: 1.05 }}
-                                className="bg-white/80 border border-slate-200 px-3 py-1.5 rounded-xl font-bold text-[11px] flex items-center gap-2 shadow-sm"
+                                className="flex items-center gap-1.5 rounded-lg border border-slate-200 bg-white/80 px-2 py-0.5 text-[10px] font-bold shadow-sm"
                               >
                                 <span className="text-slate-600">{item.name}</span>
-                                <span className={`px-1.5 py-0.5 rounded-md text-[10px] ${idx === 0 ? 'bg-blue-500 text-white' : 'bg-slate-100 text-slate-500'}`}>
+                                <span className={`rounded px-1 py-0.5 text-[9px] ${idx === 0 ? 'bg-blue-500 text-white' : 'bg-slate-100 text-slate-500'}`}>
                                   {item.count}
                                 </span>
                               </motion.div>
                             ))}
                             {sectorBreakdown.length > 3 && (
-                              <div className="px-2 text-[10px] font-black text-slate-400 flex items-center cursor-help" title={sectorBreakdown.slice(3).map(s => `${s.name}(${s.count})`).join(', ')}>
+                              <div
+                                className="flex cursor-help items-center px-1.5 text-[9px] font-black text-slate-400"
+                                title={sectorBreakdown.slice(3).map((item) => `${item.name}(${item.count})`).join(', ')}
+                              >
                                 + {sectorBreakdown.length - 3} OTHERS
                               </div>
                             )}
@@ -2310,34 +2657,31 @@ export const ResearchPlatformPage: React.FC = () => {
                       </div>
                     </motion.div>
 
-                    <div className="flex items-center justify-between border-b border-slate-100 pb-4 mb-4 mt-2 gap-4 flex-shrink-0">
+                    {/* 工具栏：数据源 / 排序 / 搜索 / 列显示 */}
+                    <div className="mb-4 mt-2 flex flex-shrink-0 flex-wrap items-center justify-between gap-4 border-b border-slate-100 pb-4">
                       <Segmented
                         value={activeDataSource}
-                        onChange={v => setActiveDataSource(v as DataSourceTab)}
+                        onChange={(value) => setActiveDataSource(value as DataSourceTab)}
                         options={[
                           { label: <div className="flex items-center gap-2 px-2"><LibraryBig className="h-3.5 w-3.5" />候选池 ({filteredRows.length})</div>, value: 'candidates' },
                           { label: <div className="flex items-center gap-2 px-2"><Quote className="h-3.5 w-3.5" />自选 ({watchlistTotal})</div>, value: 'watchlist' },
-                          { label: <div className="flex items-center gap-2 px-2"><Microscope className="h-3.5 w-3.5" />研究池 ({poolTotal})</div>, value: 'pool' }
+                          { label: <div className="flex items-center gap-2 px-2"><Microscope className="h-3.5 w-3.5" />研究池 ({poolTotal})</div>, value: 'pool' },
                         ]}
                         className="research-next-segmented p-1.5"
                       />
-                      <div className="flex items-center gap-3">
+                      <div className="flex flex-wrap items-center gap-3">
                         {activeDataSource === 'candidates' && (
-                          <div className="flex items-center rounded-[18px] border border-slate-200 bg-slate-50/50 p-1 gap-1">
-                            {[
-                              { key: 'score', label: '分数' },
-                              { key: 'limitUp', label: '连板' },
-                              { key: 'turnover', label: '换手' },
-                              { key: 'amount', label: '成交额' },
-                            ].map((item) => (
+                          <div className="flex items-center gap-1 rounded-[18px] border border-slate-200 bg-slate-50/50 p-1">
+                            {SORT_OPTIONS.map((item) => (
                               <button
                                 key={item.key}
                                 type="button"
-                                onClick={() => setSortKey(item.key as SortKey)}
-                                className={`min-w-[60px] whitespace-nowrap rounded-xl px-2.5 py-1.5 text-[10.5px] font-black transition-all ${sortKey === item.key
-                                    ? 'bg-slate-800 text-white shadow-lg shadow-slate-400/20 scale-[1.02]'
-                                    : 'text-slate-500 hover:text-slate-700 hover:bg-white'
-                                  }`}
+                                onClick={() => setSortKey(item.key)}
+                                className={`min-w-[48px] whitespace-nowrap rounded-xl px-2 py-1.5 text-[10.5px] font-black transition-all ${
+                                  sortKey === item.key
+                                    ? 'scale-[1.02] bg-slate-800 text-white shadow-lg shadow-slate-400/20'
+                                    : 'text-slate-500 hover:bg-white hover:text-slate-700'
+                                }`}
                               >
                                 {item.label}
                               </button>
@@ -2345,27 +2689,61 @@ export const ResearchPlatformPage: React.FC = () => {
                           </div>
                         )}
                         <Input
-                          className="premium-search-bar rounded-[18px] border-slate-200 font-bold h-10 max-w-[240px]"
+                          className="premium-search-bar h-10 max-w-[240px] rounded-[18px] border-slate-200 font-bold"
                           placeholder="搜索代码/名称..."
                           prefix={<Search className="h-4 w-4 text-slate-400" />}
                           value={keyword}
-                          onChange={e => setKeyword(e.target.value)}
+                          onChange={(event) => setKeyword(event.target.value)}
+                          allowClear
                         />
+                        {activeDataSource === 'candidates' && (
+                          <ColumnVisibilityControl visibleGroups={visibleGroups} onChange={setVisibleGroups} />
+                        )}
+                        {activeDataSource === 'candidates' && (
+                          <div className="flex items-center gap-0.5 rounded-[18px] border border-slate-200 bg-slate-50/50 p-0.5">
+                            {(['compact', 'default', 'relaxed'] as const).map((density) => (
+                              <button
+                                key={density}
+                                type="button"
+                                onClick={() => setTableDensity(density)}
+                                className={`whitespace-nowrap rounded-xl px-2 py-1 text-[10px] font-black transition-all ${
+                                  tableDensity === density
+                                    ? 'bg-slate-800 text-white shadow-sm'
+                                    : 'text-slate-500 hover:bg-white hover:text-slate-700'
+                                }`}
+                              >
+                                {density === 'compact' ? '紧凑' : density === 'default' ? '标准' : '宽松'}
+                              </button>
+                            ))}
+                          </div>
+                        )}
                       </div>
                     </div>
 
-                    <div className="flex flex-col flex-1">
+                    <div className="flex flex-1 flex-col">
                       <div className="flex-1">
                         {activeDataSource === 'candidates' && (
                           <Table<ResearchStockRow>
                             className={FIELD_STYLES.table}
                             rowKey="key"
                             columns={columns}
-                            dataSource={filteredRows.slice((candidatePage - 1) * candidatePageSize, candidatePage * candidatePageSize)}
+                            dataSource={enrichedCandidateRows}
+                            loading={overviewLoading}
                             pagination={false}
-                            scroll={{ x: 1560 }}
-                            onRow={r => ({ onClick: () => { setSelectedStockKey(r.key); setDetailModalOpen(true); } })}
-                            rowClassName={r => `cursor-pointer transition-all ${r.key === selectedStockKey ? 'research-table-row-selected' : ''} ${r.isMatched === false ? 'opacity-40 grayscale-[0.5]' : 'font-medium'}`}
+                            scroll={{ x: candidateScrollX }}
+                            size={tableDensity === 'compact' ? 'small' : tableDensity === 'relaxed' ? 'large' : 'middle'}
+                            locale={{ emptyText: <Empty description="暂无符合条件的候选个股。" /> }}
+                            onRow={(record) => ({
+                              onClick: () => {
+                                setSelectedStockKey(record.key);
+                                setDetailModalOpen(true);
+                              },
+                            })}
+                            rowClassName={(record) =>
+                              `cursor-pointer transition-all ${record.key === selectedStockKey ? 'research-table-row-selected' : ''} ${
+                                record.isMatched === false ? 'opacity-40 grayscale-[0.5]' : 'font-medium'
+                              }`
+                            }
                           />
                         )}
                         {activeDataSource === 'watchlist' && (
@@ -2373,66 +2751,11 @@ export const ResearchPlatformPage: React.FC = () => {
                             className={FIELD_STYLES.table}
                             rowKey="key"
                             columns={watchlistColumns}
-                            dataSource={watchlistData
-                              .filter(item => !keyword || item.symbol.includes(keyword) || (item.stockName?.includes(keyword) ?? false))
-                              .slice((watchlistPage - 1) * watchlistPageSize, watchlistPage * watchlistPageSize)
-                              .map((item, idx) => ({
-                                ...(watchlistFeatures[item.symbol] || {
-                                  key: item.key,
-                                  code: item.symbol,
-                                  name: item.stockName || '-',
-                                  score: 0,
-                                  signal: 'hold' as SignalType,
-                                  latestChange: 0,
-                                  totalReturn: null,
-                                  nextDayReturn: null,
-                                  day3Return: null,
-                                  consecutiveLimitUpDays: 0,
-                                  volumeTrend3d: 0,
-                                  volumeTrend5d: false,
-                                  turnoverRate: 0,
-                                  amount: 0,
-                                  sector: '',
-                                  concept: '',
-                                  conceptTags: [],
-                                  indexTags: [],
-                                  riskFlags: [],
-                                  closePrice: 0,
-                                  pe: 0,
-                                  roe: 0,
-                                  profitGrowth: 0,
-                                  rsi: 0,
-                                  mainFlow: 0,
-                                  flowNetAmount: 0,
-                                  instOwnership: 0,
-                                  ma5: 0,
-                                  ma10: 0,
-                                  maGap5: 0,
-                                  maGap10: 0,
-                                  maGap20: 0,
-                                  volRatio5: 0,
-                                  return1d: 0,
-                                  pb: 0,
-                                  totalMv: 0,
-                                  floatMv: 0,
-                                  listedDays: 0,
-                                  return3d: 0,
-                                  isSt: false,
-                                  isTradable: true,
-                                  isHs300: false,
-                                  isCsi500: false,
-                                  isCsi1000: false,
-                                  thesis: '',
-                                  modelId: '',
-                                  runId: '',
-                                  rank: 0,
-                                }),
-                                rank: (watchlistPage - 1) * watchlistPageSize + idx + 1,
-                                key: item.key,
-                              } as ResearchStockRow))}
+                            dataSource={watchlistRows}
                             loading={watchlistLoading}
                             pagination={false}
-                            scroll={{ x: 1200 }}
+                            scroll={{ x: simpleTableScrollX }}
+                            locale={{ emptyText: <Empty description="自选列表为空。" /> }}
                           />
                         )}
                         {activeDataSource === 'pool' && (
@@ -2440,103 +2763,39 @@ export const ResearchPlatformPage: React.FC = () => {
                             className={FIELD_STYLES.table}
                             rowKey="key"
                             columns={poolColumns}
-                            dataSource={poolData
-                              .filter(item => !keyword || item.symbol.includes(keyword) || (item.stockName?.includes(keyword) ?? false))
-                              .slice((poolPage - 1) * poolPageSize, poolPage * poolPageSize)
-                              .map((item, idx) => ({
-                                ...(poolFeatures[item.symbol] || {
-                                  key: item.key,
-                                  code: item.symbol,
-                                  name: item.stockName || '-',
-                                  score: item.fusionScore ?? 0,
-                                  signal: 'hold' as SignalType,
-                                  latestChange: 0,
-                                  totalReturn: null,
-                                  nextDayReturn: null,
-                                  day3Return: null,
-                                  consecutiveLimitUpDays: 0,
-                                  volumeTrend3d: 0,
-                                  volumeTrend5d: false,
-                                  turnoverRate: 0,
-                                  amount: 0,
-                                  sector: '',
-                                  concept: '',
-                                  conceptTags: [],
-                                  indexTags: [],
-                                  riskFlags: [],
-                                  closePrice: 0,
-                                  pe: 0,
-                                  roe: 0,
-                                  profitGrowth: 0,
-                                  rsi: 0,
-                                  mainFlow: 0,
-                                  flowNetAmount: 0,
-                                  instOwnership: 0,
-                                  ma5: 0,
-                                  ma10: 0,
-                                  maGap5: 0,
-                                  maGap10: 0,
-                                  maGap20: 0,
-                                  volRatio5: 0,
-                                  return1d: 0,
-                                  pb: 0,
-                                  totalMv: 0,
-                                  floatMv: 0,
-                                  listedDays: 0,
-                                  return3d: 0,
-                                  isSt: false,
-                                  isTradable: true,
-                                  isHs300: false,
-                                  isCsi500: false,
-                                  isCsi1000: false,
-                                  thesis: '',
-                                  modelId: '',
-                                  runId: '',
-                                  rank: 0,
-                                }),
-                                rank: (poolPage - 1) * poolPageSize + idx + 1,
-                                key: item.key,
-                              } as ResearchStockRow))}
+                            dataSource={poolRows}
                             loading={poolLoading}
                             pagination={false}
-                            scroll={{ x: 1200 }}
+                            scroll={{ x: simpleTableScrollX }}
+                            locale={{ emptyText: <Empty description="研究池为空。" /> }}
                           />
                         )}
                       </div>
-                      <div className="flex justify-end items-center py-2 px-2 border-t border-slate-100 bg-white/80 backdrop-blur-sm">
-                        {activeDataSource === 'candidates' && (
-                          <Pagination
-                            current={candidatePage}
-                            pageSize={candidatePageSize}
-                            total={filteredRows.length}
-                            onChange={(page, pageSize) => { setCandidatePage(page); setCandidatePageSize(pageSize); }}
-                            size="small"
-                            showSizeChanger
-                            showTotal={t => `共 ${t} 条`}
-                          />
-                        )}
-                        {activeDataSource === 'watchlist' && (
-                          <Pagination
-                            current={watchlistPage}
-                            pageSize={watchlistPageSize}
-                            total={watchlistData.filter(item => !keyword || item.symbol.includes(keyword) || (item.stockName?.includes(keyword))).length}
-                            onChange={(page, pageSize) => { setWatchlistPage(page); setWatchlistPageSize(pageSize); }}
-                            size="small"
-                            showSizeChanger
-                            showTotal={t => `共 ${t} 条`}
-                          />
-                        )}
-                        {activeDataSource === 'pool' && (
-                          <Pagination
-                            current={poolPage}
-                            pageSize={poolPageSize}
-                            total={poolData.filter(item => !keyword || item.symbol.includes(keyword) || (item.stockName?.includes(keyword))).length}
-                            onChange={(page, pageSize) => { setPoolPage(page); setPoolPageSize(pageSize); }}
-                            size="small"
-                            showSizeChanger
-                            showTotal={t => `共 ${t} 条`}
-                          />
-                        )}
+                      <div className="flex items-center justify-end border-t border-slate-100 bg-white/80 px-2 py-2 backdrop-blur-sm">
+                        <Pagination
+                          current={
+                            activeDataSource === 'candidates' ? candidatePage : activeDataSource === 'watchlist' ? watchlistPage : poolPage
+                          }
+                          pageSize={
+                            activeDataSource === 'candidates' ? candidatePageSize : activeDataSource === 'watchlist' ? watchlistPageSize : poolPageSize
+                          }
+                          total={activeTableTotal}
+                          onChange={(page, pageSize) => {
+                            if (activeDataSource === 'candidates') {
+                              setCandidatePage(page);
+                              setCandidatePageSize(pageSize);
+                            } else if (activeDataSource === 'watchlist') {
+                              setWatchlistPage(page);
+                              setWatchlistPageSize(pageSize);
+                            } else {
+                              setPoolPage(page);
+                              setPoolPageSize(pageSize);
+                            }
+                          }}
+                          size="small"
+                          showSizeChanger
+                          showTotal={(total) => `共 ${total} 条`}
+                        />
                       </div>
                     </div>
                   </motion.div>
@@ -2547,113 +2806,147 @@ export const ResearchPlatformPage: React.FC = () => {
         </div>
       </div>
 
+      {/* ---------------- 个股详情弹窗 ---------------- */}
       <Modal
         centered
-        width={1040}
+        width={1200}
         open={detailModalOpen}
         onCancel={() => setDetailModalOpen(false)}
         destroyOnHidden
-        title={selectedStock ? (
-          <div className="flex items-center justify-between pr-8">
-            <div className="flex items-center gap-2">
-              <span className="text-slate-800 font-black tracking-tight">{selectedStock.name}</span>
-              <span className="text-slate-400 font-bold text-sm">({selectedStock.code})</span>
-              {selectedStock.isSt && <Tag color="error" className="ml-2 scale-90">ST</Tag>}
+        title={
+          selectedStock ? (
+            <div className="flex items-center justify-between pr-8">
+              <div className="flex items-center gap-2">
+                <span className="font-black tracking-tight text-slate-800">{selectedStock.name}</span>
+                <span className="text-sm font-bold text-slate-400">({selectedStock.code})</span>
+                {selectedStock.isSt && <Tag color="error" className="ml-2 scale-90">ST</Tag>}
+              </div>
+              <div className="flex items-center gap-2">
+                <Button
+                  size="small"
+                  icon={<Quote className="h-3.5 w-3.5" />}
+                  onClick={() => handleAddToWatchlist(selectedStock)}
+                  className="h-8 rounded-xl border-slate-200 text-xs font-bold transition-all hover:border-blue-400 hover:text-blue-500 active:scale-95"
+                >
+                  加入自选
+                </Button>
+                <Button
+                  size="small"
+                  type="primary"
+                  icon={<Sparkles className="h-3.5 w-3.5" />}
+                  onClick={() => handleAddToResearchPool(selectedStock)}
+                  className="h-8 rounded-xl border-none bg-blue-600 text-xs font-bold shadow-md shadow-blue-500/20 transition-all hover:bg-blue-500 active:scale-95"
+                >
+                  加入研究池
+                </Button>
+              </div>
             </div>
-            <div className="flex items-center gap-2">
-              <Button
-                size="small"
-                icon={<Quote className="h-3.5 w-3.5" />}
-                onClick={() => handleAddToWatchlist(selectedStock)}
-                className="h-8 rounded-xl font-bold border-slate-200 text-xs hover:border-blue-400 hover:text-blue-500 transition-all active:scale-95"
-              >
-                加入自选
-              </Button>
-              <Button
-                size="small"
-                type="primary"
-                icon={<Sparkles className="h-3.5 w-3.5" />}
-                onClick={() => handleAddToResearchPool(selectedStock)}
-                className="h-8 rounded-xl font-bold bg-blue-600 text-xs shadow-md shadow-blue-500/20 transition-all hover:bg-blue-500 active:scale-95 border-none"
-              >
-                加入研究池
-              </Button>
-            </div>
-          </div>
-        ) : '详情'}
+          ) : (
+            '详情'
+          )
+        }
         footer={null}
       >
         {selectedStock ? (
-          <div className="max-h-[70vh] overflow-y-auto pr-2 custom-scrollbar space-y-4 py-2">
-            <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
-              <div className="grid grid-cols-2 gap-4">
-                <div className="p-4 bg-slate-50 rounded-2xl text-center">
-                  <div className="text-[10px] font-bold text-slate-400">模型分数</div>
-                  <div className="text-xl font-black text-blue-500">{safeNum(selectedStock.score, 0).toFixed(3)}</div>
+          <div className="custom-scrollbar max-h-[75vh] space-y-3 overflow-y-auto py-2 pr-2">
+            <div className="grid grid-cols-1 gap-3 lg:grid-cols-2">
+              <div className="grid grid-cols-3 gap-2">
+                <div className="rounded-xl bg-slate-50 p-3 text-center">
+                  <div className="text-[9px] font-bold text-slate-400">模型分数</div>
+                  <div className="text-lg font-black text-blue-500">{safeNum(selectedStock.score, 0).toFixed(3)}</div>
                 </div>
-                <div className="p-4 bg-slate-50 rounded-2xl text-center">
-                  <div className="text-[10px] font-bold text-slate-400">PE (TTM)</div>
-                  <div className="text-xl font-black text-slate-700">{safeNum(selectedStock.pe, 0).toFixed(1)}</div>
+                <div className="rounded-xl bg-slate-50 p-3 text-center">
+                  <div className="text-[9px] font-bold text-slate-400">PE (TTM)</div>
+                  <div className="text-lg font-black text-slate-700">{fmtPositiveOrDash(selectedStock.pe, 1)}</div>
                 </div>
-                <div className="p-4 bg-slate-50 rounded-2xl text-center">
-                  <div className="text-[10px] font-bold text-slate-400">ROE</div>
-                  <div className="text-xl font-black text-rose-500">
-                    {Math.abs(safeNum(selectedStock.roe, 0)) <= 100 ? `${safeNum(selectedStock.roe, 0).toFixed(1)}%` : '-'}
+                <div className="rounded-xl bg-slate-50 p-3 text-center">
+                  <div className="text-[9px] font-bold text-slate-400">ROE</div>
+                  <div className="text-lg font-black text-rose-500">
+                    {Math.abs(safeNum(selectedStock.roe, 0)) <= 100
+                      ? fmtPositiveOrDash(selectedStock.roe, 1, '%')
+                      : '-'}
                   </div>
                 </div>
-                <div className="p-4 bg-slate-50 rounded-2xl text-center">
-                  <div className="text-[10px] font-bold text-slate-400">RSI</div>
-                  <div className="text-xl font-black text-emerald-500">{safeNum(selectedStock.rsi, 0).toFixed(1)}</div>
+                <div className="rounded-xl bg-slate-50 p-3 text-center">
+                  <div className="text-[9px] font-bold text-slate-400">RSI</div>
+                  <div className="text-lg font-black text-emerald-500">{fmtPositiveOrDash(selectedStock.rsi ?? selectedStock.rsi14, 1)}</div>
+                </div>
+                <div className="rounded-xl bg-slate-50 p-3 text-center">
+                  <div className="text-[9px] font-bold text-slate-400">20日波动</div>
+                  <div className="text-lg font-black text-amber-500">{fmtPositiveOrDash(selectedStock.volStd20, 2)}</div>
+                </div>
+                <div className="rounded-xl bg-slate-50 p-3 text-center">
+                  <div className="text-[9px] font-bold text-slate-400">获利盘</div>
+                  <div className="text-lg font-black text-indigo-500">{fmtNullableFloat(selectedStock.chipProfitRatio20, 3)}</div>
                 </div>
               </div>
-              <div className="bg-slate-50/50 rounded-2xl p-2 border border-slate-100">
+              <div className="rounded-2xl border border-slate-100 bg-slate-50/50 p-2">
                 <ReactECharts
                   option={{
                     radar: {
                       indicator: radarMetrics?.indicator || [],
                       radius: '65%',
-                      axisName: { color: '#94a3b8', fontSize: 10, fontWeight: 'bold' }
+                      axisName: { color: '#94a3b8', fontSize: 10, fontWeight: 'bold' },
                     },
-                    series: [{
-                      type: 'radar',
-                      data: radarMetrics ? [{
-                        value: radarMetrics.value,
-                        name: '综合评分',
-                        itemStyle: { color: '#3b82f6' },
-                        areaStyle: { color: 'rgba(59, 130, 246, 0.2)' }
-                      }] : []
-                    }]
+                    series: [
+                      {
+                        type: 'radar',
+                        data: radarMetrics
+                          ? [
+                              {
+                                value: radarMetrics.value,
+                                name: '综合评分',
+                                itemStyle: { color: '#3b82f6' },
+                                areaStyle: { color: 'rgba(59, 130, 246, 0.2)' },
+                              },
+                            ]
+                          : [],
+                      },
+                    ],
                   }}
                   style={{ height: '180px' }}
                 />
               </div>
             </div>
 
-            <div className="p-5 border border-slate-100 rounded-3xl bg-white shadow-sm">
-              <div className="text-[11px] font-black uppercase text-slate-500 mb-4 tracking-widest flex items-center gap-2">
-                <Activity className="h-4 w-4" /> 技术与资金面透视
+            {selectedStockRiskBlocks.length > 0 && (
+              <div className="rounded-2xl border border-amber-200 bg-amber-50/60 p-3">
+                <div className="mb-1.5 text-[10px] font-black uppercase tracking-widest text-amber-600">风险提示</div>
+                <div className="flex flex-wrap gap-1.5">
+                  {selectedStockRiskBlocks.map((flag) => (
+                    <span key={flag} className="rounded-lg border border-amber-200 bg-white px-2 py-0.5 text-[10px] font-bold text-amber-700">
+                      {flag}
+                    </span>
+                  ))}
+                </div>
               </div>
-              <div className="grid grid-cols-5 gap-3">
+            )}
+
+            <div className="rounded-2xl border border-slate-100 bg-white p-4 shadow-sm">
+              <div className="mb-2 flex items-center gap-2 text-[10px] font-black uppercase tracking-widest text-slate-500">
+                <Activity className="h-3.5 w-3.5" /> 技术与资金面透视
+              </div>
+              <div className="grid grid-cols-5 gap-2">
                 {[
                   { label: 'MA5', val: fmt2(selectedStock.ma5) },
                   { label: 'MA10', val: fmt2(selectedStock.ma10) },
                   { label: '资金净流入', val: fmtMainFlowCn(selectedStock.flowNetAmount) },
                   { label: '主力资金', val: fmtMainFlowCn(selectedStock.mainFlow) },
-                  { label: '利润增长', val: fmtPercent2(selectedStock.profitGrowth) }
-                ].map((i, idx) => (
-                  <div key={idx} className="bg-slate-50/50 p-3 rounded-xl text-center border border-slate-50">
-                    <div className="text-[8px] font-bold text-slate-400">{i.label}</div>
-                    <div className="text-xs font-black text-slate-800 mt-1">{i.val}</div>
+                  { label: '利润增长', val: fmtPercent2(selectedStock.profitGrowth) },
+                ].map((item) => (
+                  <div key={item.label} className="rounded-lg border border-slate-50 bg-slate-50/50 p-2 text-center">
+                    <div className="text-[8px] font-bold text-slate-400">{item.label}</div>
+                    <div className="mt-0.5 text-xs font-black text-slate-800">{item.val}</div>
                   </div>
                 ))}
               </div>
             </div>
 
-            <div className="p-5 border border-slate-100 rounded-3xl bg-white shadow-sm">
-              <div className="text-[11px] font-black uppercase text-slate-500 mb-3 tracking-widest flex items-center gap-2">
-                <BarChart3 className="h-4 w-4" /> 量化研究指标
+            <div className="rounded-2xl border border-slate-100 bg-white p-4 shadow-sm">
+              <div className="mb-2 flex items-center gap-2 text-[10px] font-black uppercase tracking-widest text-slate-500">
+                <BarChart3 className="h-3.5 w-3.5" /> 量化研究指标
               </div>
-              <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+              <div className="grid grid-cols-2 gap-2 md:grid-cols-4 lg:grid-cols-6">
                 {[
                   { label: '模型分数', val: safeNum(selectedStock.score, 0).toFixed(3) },
                   { label: '连板天数', val: `${safeNum(selectedStock.consecutiveLimitUpDays, 0)} 天` },
@@ -2662,36 +2955,94 @@ export const ResearchPlatformPage: React.FC = () => {
                   { label: '涨跌幅', val: fmtSignedPercent2(selectedStock.latestChange) },
                   { label: '次日收益', val: fmtNullableSignedPercent2(selectedStock.nextDayReturn) },
                   { label: '3日收益', val: fmtNullableSignedPercent2(selectedStock.day3Return) },
+                  { label: '5日收益', val: fmtNullableSignedPercent2(selectedStock.return5d) },
                   { label: '行业', val: selectedStock.sector || '-' },
                   { label: '概念', val: (selectedStock.conceptTags || []).slice(0, 3).join(' / ') || selectedStock.concept || '-' },
                   { label: '指数', val: (selectedStock.indexTags || []).slice(0, 3).join(' / ') || '-' },
                   { label: '总市值', val: `${safeNum(selectedStock.totalMv, 0).toFixed(2)} 亿` },
                   { label: '流通市值', val: `${safeNum(selectedStock.floatMv, 0).toFixed(2)} 亿` },
-                ].map((item, idx) => (
-                  <div key={idx} className="min-h-[72px] rounded-2xl border border-slate-100 bg-slate-50/70 p-3 text-center">
-                    <div className="text-[9px] font-black uppercase tracking-wide text-slate-400">{item.label}</div>
-                    <div className="mt-2 text-sm font-black leading-5 text-slate-800 break-words">{item.val}</div>
+                  { label: '20日波动率', val: fmt2(selectedStock.volStd20) },
+                  { label: '主力净流入', val: fmtMainFlowCn(selectedStock.mainFlow) },
+                  { label: '获利盘 (20日)', val: fmt2(selectedStock.chipProfitRatio20) },
+                ].map((item) => (
+                  <div key={item.label} className="min-h-[56px] rounded-xl border border-slate-100 bg-slate-50/70 p-2 text-center">
+                    <div className="text-[8px] font-black uppercase tracking-wide text-slate-400">{item.label}</div>
+                    <div className="mt-1 break-words text-xs font-black leading-4 text-slate-800">{item.val}</div>
                   </div>
                 ))}
               </div>
             </div>
 
+            <div className="grid grid-cols-1 gap-3 lg:grid-cols-2">
+              <div className="rounded-2xl border border-slate-100 bg-white p-4 shadow-sm">
+                <div className="mb-2 flex items-center gap-2 text-[10px] font-black uppercase tracking-widest text-slate-500">
+                  <Activity className="h-3.5 w-3.5" /> 资金流结构
+                </div>
+                <div className="grid grid-cols-3 gap-1.5">
+                  {[
+                    { label: '净流入', val: fmtNullableYi(selectedStock.flowNetAmount) },
+                    { label: '大单净额', val: fmtNullableYi(selectedStock.flowLargeNet) },
+                    { label: '中单净额', val: fmtNullableYi(selectedStock.flowMediumNet) },
+                    { label: '小单净额', val: fmtNullableYi(selectedStock.flowSmallNet) },
+                    { label: '净流入占比', val: fmtNullableFloat(selectedStock.flowNetRatio, 3) },
+                    { label: '大单占比', val: fmtNullableFloat(selectedStock.flowLargeRatio, 3) },
+                    { label: '量能失衡', val: fmtNullableFloat(selectedStock.flowImbalanceVolume, 3) },
+                    { label: '资金流指数', val: fmtNullableFloat(selectedStock.flowMoneyFlowIndex, 2) },
+                    { label: '大单成交比', val: fmtNullableFloat(selectedStock.flowBigTradeRatio, 3) },
+                  ].map((item) => (
+                    <div key={item.label} className="rounded-lg border border-slate-100 bg-slate-50/70 p-2 text-center">
+                      <div className="text-[8px] font-bold text-slate-400">{item.label}</div>
+                      <div className="mt-0.5 truncate text-[11px] font-black text-slate-800">{item.val}</div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+
+              <div className="rounded-2xl border border-slate-100 bg-white p-4 shadow-sm">
+                <div className="mb-2 flex items-center gap-2 text-[10px] font-black uppercase tracking-widest text-slate-500">
+                  <BarChart3 className="h-3.5 w-3.5" /> 微观结构 / 筹码
+                </div>
+                <div className="grid grid-cols-3 gap-1.5">
+                  {[
+                    { label: 'VPIN(8)', val: fmtNullableFloat(selectedStock.microVpin8, 3) },
+                    { label: 'VPIN(20)', val: fmtNullableFloat(selectedStock.microVpin20, 3) },
+                    { label: 'Kyle λ', val: fmtNullableExponential(selectedStock.microKyleLambda) },
+                    { label: '有效价差', val: fmtNullableFloat(selectedStock.microEspEqual, 4) },
+                    { label: '非流动性', val: fmtNullableExponential(selectedStock.microAmihudIlliquidity) },
+                    { label: '深度失衡', val: fmtNullableFloat(selectedStock.microDepthImbalance1, 3) },
+                    { label: '获利盘60', val: fmtNullableFloat(selectedStock.chipProfitRatio60, 3) },
+                    { label: '筹码集中', val: fmtNullableFloat(selectedStock.chipConcentration20, 3) },
+                    { label: '峰值距离', val: fmtNullableFloat(selectedStock.chipPeakDistance, 3) },
+                  ].map((item) => (
+                    <div key={item.label} className="rounded-lg border border-slate-100 bg-slate-50/70 p-2 text-center">
+                      <div className="text-[8px] font-bold text-slate-400">{item.label}</div>
+                      <div className="mt-0.5 truncate text-[11px] font-black text-slate-800">{item.val}</div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            </div>
+
+            <div className="rounded-2xl border border-slate-100 bg-white p-4 shadow-sm">
+              <FactorPanel features={quantDbRaw[toSuffixSymbol(selectedStock.code)] || null} />
+            </div>
+
             <RiskScoreCard data={riskScore} loading={riskLoading} requestedDate={inferenceDate} />
 
-            <div className="p-5 border border-slate-100 rounded-3xl bg-white shadow-sm mt-3">
-              <div className="text-[10px] font-black uppercase tracking-wider text-slate-500 mb-3">K 线走势 (近 60 日)</div>
+            <div className="mt-2 rounded-2xl border border-slate-100 bg-white p-4 shadow-sm">
+              <div className="mb-2 text-[10px] font-black uppercase tracking-wider text-slate-500">K 线走势 (近 120 日)</div>
               {klineLoading ? (
                 <div className="flex h-[240px] items-center justify-center text-slate-400">加载中...</div>
               ) : klineOption ? (
                 <ReactECharts
-                  key={`${selectedStock?.code}-${selectedRunId}`}
+                  key={`${selectedStock.code}-${selectedRunId}`}
                   option={klineOption}
                   style={{ height: '240px' }}
                   notMerge
                   lazyUpdate
                 />
               ) : (
-                <div className="flex h-[240px] items-center justify-center text-slate-400 text-xs">暂无 K 线数据</div>
+                <div className="flex h-[240px] items-center justify-center text-xs text-slate-400">暂无 K 线数据</div>
               )}
             </div>
           </div>
