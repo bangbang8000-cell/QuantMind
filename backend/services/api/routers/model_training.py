@@ -24,8 +24,14 @@ from backend.services.api.routers.admin.model_management import (
 )
 from backend.services.api.training_shap_summary import read_shap_summary_rows, to_int_or
 from backend.services.api.user_app.middleware.auth import get_current_user
+from backend.services.engine.inference.batch_orchestrator import (
+    batch_inference_orchestrator,
+)
 from backend.services.engine.inference.router_service import InferenceRouterService
 from backend.services.engine.inference.script_runner import InferenceScriptRunner
+from backend.services.engine.services.model_inference_batch_persistence import (
+    model_inference_batch_persistence,
+)
 from backend.services.engine.services.model_inference_persistence import model_inference_persistence
 from backend.shared.database_manager_v2 import get_session
 from backend.shared.inference_stats import compute_score_distribution
@@ -144,6 +150,22 @@ class InferenceSettingsRequest(BaseModel):
     schedule_time: str | None = Field(default=None, description="每日执行时间 HH:MM")
 
 
+class BatchInferenceRequest(BaseModel):
+    model_id: str
+    anchor_date: date = Field(..., description="锚定交易日 YYYY-MM-DD")
+    window_days: int | None = Field(
+        default=None,
+        ge=1,
+        le=60,
+        description="回溯窗口交易日数，缺省取模型持有期 H",
+    )
+    top_k: int = Field(default=20, ge=1, le=500, description="榜单 Top-K")
+    side: str = Field(default="both", description="long | short | both")
+    reuse_existing: bool = Field(
+        default=True, description="复用已有的当日成功推理结果"
+    )
+
+
 def _owner_scope(current_user: dict[str, Any]) -> tuple[str, str]:
     tenant_id = str(current_user.get("tenant_id") or "default")
     user_id = str(current_user.get("user_id") or current_user.get("sub") or "")
@@ -159,6 +181,26 @@ async def _resolve_inference_trade_date_with_calendar(
     market: str = "SSE",
 ) -> tuple[date, bool]:
     tenant_id, user_id = _owner_scope(current_user)
+    return await _resolve_trade_date_for_owner(
+        tenant_id=tenant_id,
+        user_id=user_id,
+        requested_date=requested_date,
+        market=market,
+    )
+
+
+async def _resolve_trade_date_for_owner(
+    *,
+    tenant_id: str,
+    user_id: str,
+    requested_date: date,
+    market: str = "SSE",
+) -> tuple[date, bool]:
+    """交易日回退：非交易日回退到上一交易日。返回 (交易日, 是否发生回退)。
+
+    与 _resolve_inference_trade_date_with_calendar 的区别是不依赖请求上下文，
+    供批量推理编排器（无 current_user）复用。
+    """
     is_td = await calendar_service.is_trading_day(
         market=market,
         trade_date=requested_date,
@@ -196,11 +238,13 @@ async def _resolve_requested_model(current_user: dict[str, Any], model_id: str):
     return requested_model_id, resolved
 
 
+from backend.shared.qlib_paths import resolve_qlib_provider_uri, resolve_qlib_calendar_path
+
 _MARKET_QLIB_DATA_PATH: dict[str, str] = {
-    "CN": "db/qlib_data",
-    "HK": "db/qlib_data/hk_data",
-    "US": "db/qlib_data/us_data",
-    "CRYPTO": "db/qlib_data/crypto_data",
+    "CN": resolve_qlib_provider_uri("CN"),
+    "HK": resolve_qlib_provider_uri("HK"),
+    "US": resolve_qlib_provider_uri("US"),
+    "CRYPTO": resolve_qlib_provider_uri("CRYPTO"),
 }
 
 _MARKET_CALENDAR: dict[str, str] = {
@@ -260,7 +304,7 @@ def _get_model_data_dir(model_dir: Path, metadata: dict | None = None) -> str:
         # 根据 data_source 判断
         data_source = str(metadata.get("data_source", "")).lower()
         if data_source == "qlib":
-            return "db/qlib_data"
+            return resolve_qlib_provider_uri()
 
     # 尝试从模型目录读取 metadata.json
     meta_file = model_dir / "metadata.json"
@@ -279,7 +323,7 @@ def _get_model_data_dir(model_dir: Path, metadata: dict | None = None) -> str:
 
             data_source = str(meta.get("data_source", "")).lower()
             if data_source == "qlib":
-                return "db/qlib_data"
+                return resolve_qlib_provider_uri()
         except Exception:
             pass
 
@@ -346,7 +390,7 @@ async def get_qlib_data_range(
     读取 db/qlib_data/calendars/day.txt 获取交易日历。
     """
     _ = current_user
-    qlib_data_dir = Path(os.getcwd()) / "db" / "qlib_data"
+    qlib_data_dir = Path(resolve_qlib_provider_uri())
     calendars_path = qlib_data_dir / "calendars" / "day.txt"
 
     result = {
@@ -825,18 +869,42 @@ async def precheck_inference(
     }
 
 
-@router.post("/inference/run", summary="执行模型推理（用户态）")
-async def run_model_inference(
-    payload: InferenceRunRequest,
-    current_user: dict[str, Any] = Depends(get_current_user),
-):
-    tenant_id, user_id = _owner_scope(current_user)
-    requested_model_id, resolved = await _resolve_requested_model(current_user, payload.model_id)
-    model_dir = Path(resolved.storage_path)
+def _build_inference_request_payload(
+    requested_model_id: str,
+    data_trade_date: str,
+    precheck: dict[str, Any],
+    batch_id: str | None,
+) -> dict[str, Any]:
+    payload: dict[str, Any] = {
+        "model_id": requested_model_id,
+        "inference_date": data_trade_date,
+        "precheck": precheck,
+    }
+    if batch_id:
+        payload["batch_id"] = batch_id
+    return payload
+
+
+async def _execute_single_day_inference(
+    *,
+    requested_model_id: str,
+    resolved: Any,
+    model_dir: Path,
+    requested_date: date,
+    tenant_id: str,
+    user_id: str,
+    batch_id: str | None = None,
+) -> dict[str, Any]:
+    """单日推理执行体：预检 → 数据回退 → 执行 → 落库 → 返回 run payload。
+
+    由 POST /inference/run（单日）与批量推理编排器共用。batch_id 仅写入
+    request_json 供追溯，不改变执行逻辑。
+    """
     model_calendar = _get_model_calendar(model_dir)
-    requested_inference_date = payload.inference_date
-    resolved_data_trade_date, calendar_adjusted = await _resolve_inference_trade_date_with_calendar(
-        current_user=current_user,
+    requested_inference_date = requested_date
+    resolved_data_trade_date, calendar_adjusted = await _resolve_trade_date_for_owner(
+        tenant_id=tenant_id,
+        user_id=user_id,
         requested_date=requested_inference_date,
         market=model_calendar,
     )
@@ -936,7 +1004,7 @@ async def run_model_inference(
             data_trade_date=date.fromisoformat(data_trade_date),
             prediction_trade_date=date.fromisoformat(prediction_trade_date),
             status="failed",
-            request_payload={"model_id": requested_model_id, "inference_date": data_trade_date, "precheck": precheck},
+            request_payload=_build_inference_request_payload(requested_model_id, data_trade_date, precheck, batch_id),
             created_at=run_created_at,
         )
         await model_inference_persistence.update_run(
@@ -1014,7 +1082,7 @@ async def run_model_inference(
             data_trade_date=date.fromisoformat(data_trade_date),
             prediction_trade_date=date.fromisoformat(prediction_trade_date),
             status="failed",
-            request_payload={"model_id": requested_model_id, "inference_date": data_trade_date, "precheck": precheck},
+            request_payload=_build_inference_request_payload(requested_model_id, data_trade_date, precheck, batch_id),
             created_at=inference_started_at,
         )
         await model_inference_persistence.update_run(
@@ -1084,7 +1152,7 @@ async def run_model_inference(
         data_trade_date=date.fromisoformat(data_trade_date),
         prediction_trade_date=date.fromisoformat(prediction_trade_date),
         status="completed" if result.success else "failed",
-        request_payload={"model_id": requested_model_id, "inference_date": data_trade_date, "precheck": precheck},
+        request_payload=_build_inference_request_payload(requested_model_id, data_trade_date, precheck, batch_id),
         created_at=inference_started_at,
     )
     await model_inference_persistence.update_run(
@@ -1112,6 +1180,132 @@ async def run_model_inference(
         run_payload=success_payload,
     )
     return success_payload
+
+
+@router.post("/inference/run", summary="执行模型推理（用户态）")
+async def run_model_inference(
+    payload: InferenceRunRequest,
+    current_user: dict[str, Any] = Depends(get_current_user),
+):
+    tenant_id, user_id = _owner_scope(current_user)
+    requested_model_id, resolved = await _resolve_requested_model(current_user, payload.model_id)
+    return await _execute_single_day_inference(
+        requested_model_id=requested_model_id,
+        resolved=resolved,
+        model_dir=Path(resolved.storage_path),
+        requested_date=payload.inference_date,
+        tenant_id=tenant_id,
+        user_id=user_id,
+    )
+
+
+def _get_model_horizon_days(model_dir: Path, default: int = 10) -> int:
+    """读模型 metadata.json 的 target_horizon_days（持有期 H）。"""
+    meta_file = model_dir / "metadata.json"
+    if meta_file.is_file():
+        try:
+            meta = json.loads(meta_file.read_text(encoding="utf-8"))
+            raw = meta.get("target_horizon_days") or meta.get("horizon_days")
+            if raw:
+                return max(1, int(raw))
+        except Exception:
+            pass
+    return default
+
+
+@router.post("/inference/batch", status_code=202, summary="提交批量多日推理（用户态）")
+async def submit_batch_inference(
+    payload: BatchInferenceRequest,
+    current_user: dict[str, Any] = Depends(get_current_user),
+):
+    """提交后立即返回 batch_id，逐日推理在后台执行，通过 GET 轮询进度。"""
+    tenant_id, user_id = _owner_scope(current_user)
+    requested_model_id, resolved = await _resolve_requested_model(current_user, payload.model_id)
+    model_dir = Path(resolved.storage_path)
+    horizon_days = _get_model_horizon_days(model_dir)
+    # 默认 N = H：所有信号梯队在锚定日仍持有中，等价于每日 1/H 建仓的滚动组合
+    window_days = int(payload.window_days or horizon_days)
+    market = _get_model_market(model_dir)
+
+    async def _execute_day(*, requested_date: date, batch_id: str) -> dict[str, Any]:
+        return await _execute_single_day_inference(
+            requested_model_id=requested_model_id,
+            resolved=resolved,
+            model_dir=model_dir,
+            requested_date=requested_date,
+            tenant_id=tenant_id,
+            user_id=user_id,
+            batch_id=batch_id,
+        )
+
+    try:
+        return await batch_inference_orchestrator.submit(
+            tenant_id=tenant_id,
+            user_id=user_id,
+            model_id=requested_model_id,
+            anchor_date=payload.anchor_date,
+            window_days=window_days,
+            horizon_days=horizon_days,
+            market=market,
+            params={
+                "model_id": requested_model_id,
+                "effective_model_id": resolved.effective_model_id,
+                "top_k": int(payload.top_k),
+                "side": payload.side,
+            },
+            execute_day=_execute_day,            reuse_existing=bool(payload.reuse_existing),
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except RuntimeError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+
+@router.get("/inference/batches", summary="查询批量推理历史（用户态）")
+async def list_batch_inferences(
+    model_id: str | None = Query(None, description="模型ID，可选"),
+    status: str | None = Query(None, description="状态，可选"),
+    page: int = Query(1, ge=1),
+    page_size: int = Query(20, ge=1, le=200),
+    current_user: dict[str, Any] = Depends(get_current_user),
+):
+    tenant_id, user_id = _owner_scope(current_user)
+    return await model_inference_batch_persistence.list_batches(
+        tenant_id=tenant_id,
+        user_id=user_id,
+        model_id=model_id,
+        status=status,
+        page=page,
+        page_size=page_size,
+    )
+
+
+@router.get("/inference/batch/{batch_id}", summary="查询批量推理进度（用户态）")
+async def get_batch_inference(
+    batch_id: str,
+    current_user: dict[str, Any] = Depends(get_current_user),
+):
+    tenant_id, user_id = _owner_scope(current_user)
+    batch = await model_inference_batch_persistence.get_batch(
+        batch_id=batch_id, tenant_id=tenant_id, user_id=user_id
+    )
+    if not batch:
+        raise HTTPException(status_code=404, detail="批次不存在")
+    return batch
+
+
+@router.delete("/inference/batch/{batch_id}", summary="删除批量推理记录（用户态）")
+async def delete_batch_inference(
+    batch_id: str,
+    current_user: dict[str, Any] = Depends(get_current_user),
+):
+    tenant_id, user_id = _owner_scope(current_user)
+    result = await model_inference_batch_persistence.delete_batch(
+        batch_id=batch_id, tenant_id=tenant_id, user_id=user_id
+    )
+    if not result.get("deleted"):
+        raise HTTPException(status_code=404, detail="批次不存在或已删除")
+    return result
 
 
 @router.get("/inference/runs", summary="查询模型推理历史（用户态）")
@@ -1155,6 +1349,35 @@ async def get_model_inference_run_detail(
                     await session.execute(
                         text(
                             """
+                            WITH scored AS (
+                                SELECT
+                                    ess.*,
+                                    -- 归一化到规范 suffix 格式（600036.SH），口径与
+                                    -- backend/shared/stock_utils.py StockCodeUtil.to_suffix 一致。
+                                    -- 推理脚本写入的是 prefix 格式（SH600519），旧 JOIN 只处理
+                                    -- 纯数字与直连后缀式，导致 stock_name 恒为空。
+                                    CASE
+                                        WHEN UPPER(ess.symbol) ~ '^[0-9]{6}[.](SH|SZ|BJ)$'
+                                            THEN UPPER(ess.symbol)
+                                        WHEN UPPER(ess.symbol) ~ '^(SH|SZ|BJ)[0-9]{6}$'
+                                            THEN SUBSTRING(UPPER(ess.symbol), 3)
+                                                 || '.' || SUBSTRING(UPPER(ess.symbol), 1, 2)
+                                        WHEN ess.symbol ~ '^[0-9]{6}$'
+                                            THEN ess.symbol || CASE
+                                                WHEN LEFT(ess.symbol, 2) IN ('60', '68', '90') THEN '.SH'
+                                                WHEN LEFT(ess.symbol, 2) IN ('00', '30', '20') THEN '.SZ'
+                                                WHEN LEFT(ess.symbol, 2) IN ('83', '43', '87', '88') THEN '.BJ'
+                                                ELSE ''
+                                            END
+                                        WHEN ess.symbol ~ '^[0-9]{4,5}$'
+                                            THEN LPAD(ess.symbol, 5, '0') || '.HK'
+                                        ELSE UPPER(ess.symbol)
+                                    END AS canonical_symbol
+                                FROM engine_signal_scores ess
+                                WHERE ess.run_id = :run_id
+                                  AND ess.tenant_id = :tenant_id
+                                  AND ess.user_id = :user_id
+                            )
                             SELECT
                                 ess.symbol,
                                 ess.fusion_score,
@@ -1166,19 +1389,10 @@ async def get_model_inference_run_detail(
                                 ess.quality,
                                 ess.created_at,
                                 COALESCE(s.name, '') AS stock_name
-                            FROM engine_signal_scores ess
-                            LEFT JOIN stocks s ON s.symbol = ess.symbol
-                                OR (LENGTH(ess.symbol) BETWEEN 4 AND 5 AND ess.symbol ~ '^[0-9]+$'
-                                    AND s.symbol = LPAD(ess.symbol, 5, '0') || '.HK')
-                                OR (LENGTH(ess.symbol) = 6 AND ess.symbol ~ '^[0-9]+$'
-                                    AND s.symbol = CASE
-                                        WHEN ess.symbol LIKE '6%' THEN ess.symbol || '.SH'
-                                        WHEN ess.symbol LIKE '0%' OR ess.symbol LIKE '3%' THEN ess.symbol || '.SZ'
-                                        WHEN ess.symbol LIKE '4%' OR ess.symbol LIKE '8%' THEN ess.symbol || '.BJ'
-                                    END)
-                            WHERE ess.run_id = :run_id
-                              AND ess.tenant_id = :tenant_id
-                              AND ess.user_id = :user_id
+                            FROM scored ess
+                            LEFT JOIN stocks s
+                                ON s.symbol = ess.canonical_symbol
+                                OR s.symbol = ess.symbol
                             ORDER BY ess.fusion_score DESC NULLS LAST, ess.symbol ASC
                             """
                         ),
