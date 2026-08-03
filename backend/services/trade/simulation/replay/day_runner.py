@@ -133,8 +133,13 @@ class ReplayDayRunner:
         stop_loss_pct: float | None = None,
         approved_orders: list[dict[str, Any]] | None = None,
         initial_cash: float = 0.0,
+        match_config: MatchConfig | None = None,
     ) -> DayResult:
         result = DayResult(trade_date=trade_date)
+
+        # bug 8 fix: 如果传入了临时 match_config（含 strategy_params 中的撮合参数），
+        # 覆盖 __init__ 中的默认值。不直接修改 self._cfg 以保持构造时的引用不变。
+        cfg = match_config or self._cfg
 
         account_data = await accounts.get()
         if not account_data:
@@ -159,7 +164,7 @@ class ReplayDayRunner:
         # 3. 止损扫描
         if stop_loss_pct and stop_loss_pct > 0:
             await self._run_stop_loss(
-                db, session_id, trade_date, accounts, bars, stop_loss_pct, result
+                db, session_id, trade_date, accounts, bars, stop_loss_pct, result, cfg
             )
             account_data = await accounts.get() or {}
 
@@ -185,6 +190,7 @@ class ReplayDayRunner:
                 origin=OrderOrigin.MANUAL
                 if approved_orders is not None
                 else OrderOrigin.SIGNAL,
+                cfg=cfg,
             )
 
         # 6. 收盘估值 + 快照
@@ -211,7 +217,9 @@ class ReplayDayRunner:
         bars: dict[str, DailyBar],
         stop_loss_pct: float,
         result: DayResult,
+        cfg: MatchConfig | None = None,
     ) -> None:
+        cfg = cfg or self._cfg
         account_data = await accounts.get() or {}
         for symbol, pos in list((account_data.get("positions") or {}).items()):
             bar = bars.get(symbol)
@@ -233,7 +241,7 @@ class ReplayDayRunner:
             if fill_price <= 0:
                 continue
             commission, stamp_duty, transfer_fee, total_fee = compute_fees(
-                qty, fill_price, "sell", self._cfg
+                qty, fill_price, "sell", cfg
             )
             gross = qty * fill_price
             update = await accounts.apply_fill(
@@ -338,6 +346,17 @@ class ReplayDayRunner:
             min_score=float(strategy_params.get("min_score", 0.0)),
             max_position_pct=float(strategy_params.get("max_position_pct", 0.15)),
             lot_size=int(strategy_params.get("lot_size", 100)),
+            # 回放全量启用 R2 修正（实盘沿用默认 False，行为不变）
+            enable_min_score="min_score" in strategy_params,
+            renormalize_weights=bool(
+                strategy_params.get("renormalize_weights", True)
+            ),
+            deterministic_buy_order=bool(
+                strategy_params.get("deterministic_buy_order", True)
+            ),
+            force_exit_on_limit_down=bool(
+                strategy_params.get("force_exit_on_limit_down", True)
+            ),
         )
         account = SimulationAccount(
             cash=float(account_data.get("cash", 0)),
@@ -358,7 +377,9 @@ class ReplayDayRunner:
         order: Order,
         result: DayResult,
         origin: OrderOrigin,
+        cfg: MatchConfig | None = None,
     ) -> None:
+        cfg = cfg or self._cfg
         bar = bars.get(order.symbol)
         if bar is None:
             result.rejected.append(
@@ -391,7 +412,7 @@ class ReplayDayRunner:
             side=side,
             quantity=int(order.quantity),
             bar=bar,
-            cfg=self._cfg,
+            cfg=cfg,
             available_volume=available_volume,
         )
         if not mr.success:
@@ -446,7 +467,7 @@ class ReplayDayRunner:
             mr.stamp_duty,
             mr.transfer_fee,
             mr.total_fee,
-            price_source=f"local_{self._cfg.price_mode}",
+            price_source=f"local_{cfg.price_mode}",
             avg_cost_before=avg_cost_before,
             holding_days=holding_days,
         )

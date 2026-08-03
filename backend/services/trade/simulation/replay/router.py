@@ -1,10 +1,11 @@
 """时光回放 API 端点。
 
-POST   /sessions              创建回放会话（后台生成信号，轮询进度）
-GET    /sessions              列出当前用户的会话
-GET    /sessions/{id}         查看会话详情 + 进度
-POST   /sessions/{id}/step    单步推演（执行下一个交易日）
-DELETE /sessions/{id}         丢弃会话
+POST   /sessions                   创建回放会话（后台生成信号，轮询进度）
+GET    /sessions                   列出当前用户的会话
+GET    /sessions/{id}              查看会话详情 + 进度
+POST   /sessions/{id}/step         单步推演（执行下一个交易日）
+DELETE /sessions/{id}              丢弃会话
+GET    /strategy-templates         可选策略模板（含参数定义，供前端渲染表单）
 """
 
 from __future__ import annotations
@@ -30,6 +31,7 @@ from backend.services.trade.simulation.replay.day_runner import ReplayDayRunner
 from backend.services.trade.simulation.replay.signal_generator import (
     ReplaySignalGenerator,
 )
+from backend.services.trade.simulation.services.ashare_matcher import MatchConfig
 from backend.services.trade.simulation.services.local_market_data import (
     get_local_market_data,
 )
@@ -38,6 +40,34 @@ from backend.shared.database_manager_v2 import get_session
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/v1/replay", tags=["Replay"])
+
+
+def _match_config_from_params(strategy_params: dict[str, Any]) -> MatchConfig:
+    """从 strategy_params 构造撮合配置（bug 8 fix）。
+
+    回放默认按开盘价撮合：信号是昨收后算出来的，次日开盘才可交易。
+    费率/滑点未指定时沿用 MatchConfig 的 A 股默认值。
+    """
+    defaults = MatchConfig(price_mode="open")
+    return MatchConfig(
+        price_mode=str(strategy_params.get("price_mode", defaults.price_mode)),
+        slippage_bps=float(
+            strategy_params.get("slippage_bps", defaults.slippage_bps)
+        ),
+        commission_rate=float(
+            strategy_params.get("commission_rate", defaults.commission_rate)
+        ),
+        commission_min=float(
+            strategy_params.get("commission_min", defaults.commission_min)
+        ),
+        stamp_duty_rate=float(
+            strategy_params.get("stamp_duty_rate", defaults.stamp_duty_rate)
+        ),
+        transfer_fee_rate=float(
+            strategy_params.get("transfer_fee_rate", defaults.transfer_fee_rate)
+        ),
+        lot_size=int(strategy_params.get("lot_size", defaults.lot_size)),
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -81,6 +111,7 @@ class SessionResponse(BaseModel):
     stop_loss_pct: float | None
     signal_progress: dict[str, Any]
     error_message: str | None
+    strategy_params: dict[str, Any] = {}
 
 
 class StepResponse(BaseModel):
@@ -116,6 +147,7 @@ def _session_to_response(s: ReplaySession) -> SessionResponse:
         stop_loss_pct=s.stop_loss_pct,
         signal_progress=s.signal_progress or {},
         error_message=s.error_message,
+        strategy_params=s.strategy_params or {},
     )
 
 
@@ -166,19 +198,44 @@ async def _run_signal_generation(
     """
     gen = ReplaySignalGenerator(model_id=model_id)
 
-    # Phase 1: CPU 密集 — 在线程池中执行
-    loop = asyncio.get_event_loop()
-    predict_result = await loop.run_in_executor(
-        None,
-        gen.predict_all,
-        session_id,
-        start_date,
-        end_date,
-    )
+    try:
+        # Phase 1: CPU 密集 — 在线程池中执行
+        loop = asyncio.get_event_loop()
+        predict_result = await loop.run_in_executor(
+            None,
+            gen.predict_all,
+            session_id,
+            start_date,
+            end_date,
+        )
 
-    # Phase 2: DB 写入 — 异步
-    async with get_session(read_only=False) as db:
-        persist_result = await gen.persist_all(db, session_id, predict_result)
+        # Phase 2: DB 写入 — 异步
+        async with get_session(read_only=False) as db:
+            persist_result = await gen.persist_all(db, session_id, predict_result)
+    except Exception as exc:
+        # 兜底：任何阶段抛异常都必须把会话置为 FAILED，否则永久卡在 generating
+        # （无超时、无重试端点，用户只能删会话重建）。
+        logger.exception("回放信号生成失败 session=%s model=%s", session_id, model_id)
+        try:
+            async with get_session(read_only=False) as db:
+                row = (
+                    (
+                        await db.execute(
+                            select(ReplaySession).where(
+                                ReplaySession.session_id == session_id
+                            )
+                        )
+                    )
+                    .scalars()
+                    .first()
+                )
+                if row is not None:
+                    row.status = ReplayStatus.FAILED
+                    row.error_message = f"信号生成失败: {exc}"[:500]
+                    await db.commit()
+        except Exception:
+            logger.exception("写入 FAILED 状态也失败 session=%s", session_id)
+        return
 
     # Phase 3: 更新会话状态
     async with get_session(read_only=False) as db:
@@ -223,6 +280,33 @@ async def create_session(
     """创建回放会话。信号在后台生成，前端轮询 GET /sessions/{id} 看进度。"""
     if req.start_date >= req.end_date:
         raise HTTPException(400, "start_date 必须 < end_date")
+
+    # model_id 前置校验。注意不能用 _resolve_model_dir —— 它对无效 id 会静默
+    # 回落到 model_qlib，用户以为在跑自选模型，实际跑的是默认模型。
+    if req.model_id:
+        import json as _json
+        import os as _os
+        from pathlib import Path as _Path
+
+        _base = _Path(_os.getenv("MODELS_PRODUCTION", "/app/models/production"))
+        _dir = _base / req.model_id
+        if not _dir.is_dir():
+            raise HTTPException(400, f"模型不存在: {req.model_id}")
+        _meta_path = _dir / "metadata.json"
+        if not _meta_path.is_file():
+            raise HTTPException(400, f"模型缺少 metadata.json: {req.model_id}")
+        # 校验模型文件真实可读 —— 断链 symlink 会让后台任务在预测阶段才炸
+        try:
+            _meta = _json.loads(_meta_path.read_text(encoding="utf-8"))
+            _mf = _dir / str(_meta.get("model_file") or "model.lgb")
+            if not _mf.exists():
+                raise HTTPException(
+                    400, f"模型文件不可读（可能是断链符号链接）: {_mf.name}"
+                )
+        except HTTPException:
+            raise
+        except Exception as exc:
+            raise HTTPException(400, f"模型元数据无法解析: {exc}") from None
 
     market_data = get_local_market_data()
     sessions = market_data._sessions()
@@ -382,6 +466,7 @@ async def step_session(
             stop_loss_pct=row.stop_loss_pct,
             approved_orders=(req.approved_orders if req else None),
             initial_cash=float(row.initial_cash),
+            match_config=_match_config_from_params(row.strategy_params or {}),
         )
     except Exception as exc:
         row.status = ReplayStatus.FAILED
@@ -435,3 +520,113 @@ async def delete_session(
     # CASCADE 删除 DB 数据
     await db.delete(row)
     await db.commit()
+
+
+# ---------------------------------------------------------------------------
+# 策略模板（供前端渲染「选策略」表单）
+# ---------------------------------------------------------------------------
+
+
+class StrategyTemplateParam(BaseModel):
+    name: str
+    description: str
+    default: Any
+    min: float | None = None
+    max: float | None = None
+
+
+class StrategyTemplateResponse(BaseModel):
+    id: str
+    name: str
+    description: str
+    category: str
+    difficulty: str
+    params: list[StrategyTemplateParam]
+    # 映射到 replay 可识别的 strategy_params（Qlib 口径 → replay 6 key）
+    replay_params: dict[str, Any]
+
+
+# Qlib 模板参数名 → replay strategy_params key
+_PARAM_ALIAS = {
+    "topk": "topk",
+    "max_weight": "max_position_pct",
+    "stop_loss": "stop_loss_pct",
+}
+
+
+def _to_replay_params(tpl: Any) -> dict[str, Any]:
+    """把模板默认参数翻译成 replay 的 strategy_params。
+
+    replay 的 RebalanceCalculator 只认 topk / weight_mode / custom_weights /
+    min_score / max_position_pct / lot_size，Qlib 模板里的 n_drop、
+    rebalance_days、signal 等在回放里没有对应语义，直接丢弃。
+    """
+    out: dict[str, Any] = {}
+    for p in tpl.params or []:
+        key = _PARAM_ALIAS.get(p.name)
+        if key and p.default is not None:
+            val = p.default
+            # Qlib 的 stop_loss 是负数（-0.08 = 跌 8% 止损），
+            # replay 的 stop_loss_pct 约束 ge=0 le=1，取绝对值
+            if key == "stop_loss_pct":
+                try:
+                    val = abs(float(val))
+                except (TypeError, ValueError):
+                    continue
+            out[key] = val
+    # 按模板 id 推断权重模式
+    tid = (tpl.id or "").lower()
+    if "score_weighted" in tid:
+        out["weight_mode"] = "score_weighted"
+    elif "volatility" in tid:
+        out["weight_mode"] = "score_weighted"
+    else:
+        out["weight_mode"] = "equal"
+    return out
+
+
+@router.get("/strategy-templates", response_model=list[StrategyTemplateResponse])
+async def list_strategy_templates(
+    auth: AuthContext = Depends(get_auth_context),
+):
+    """列出可用策略模板。复用 qlib_app 的模板加载器（单一数据源）。"""
+    try:
+        from backend.services.engine.qlib_app.services.strategy_templates import (
+            get_all_templates,
+        )
+    except ImportError as exc:
+        logger.warning("策略模板加载器不可用: %s", exc)
+        raise HTTPException(503, "策略模板服务不可用") from None
+
+    try:
+        templates = get_all_templates()
+    except Exception as exc:
+        logger.error("读取策略模板失败: %s", exc)
+        raise HTTPException(500, f"读取策略模板失败: {exc}") from None
+
+    out: list[StrategyTemplateResponse] = []
+    for tpl in templates:
+        # 回放只支持 A 股（markets 空=全市场适用）
+        if tpl.markets and "a_share" not in tpl.markets:
+            continue
+        out.append(
+            StrategyTemplateResponse(
+                id=tpl.id,
+                name=tpl.name,
+                description=tpl.description,
+                category=tpl.category,
+                difficulty=tpl.difficulty,
+                params=[
+                    StrategyTemplateParam(
+                        name=p.name,
+                        description=p.description,
+                        default=p.default,
+                        min=p.min,
+                        max=p.max,
+                    )
+                    for p in (tpl.params or [])
+                ],
+                replay_params=_to_replay_params(tpl),
+            )
+        )
+    return out
