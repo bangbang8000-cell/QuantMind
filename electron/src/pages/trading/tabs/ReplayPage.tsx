@@ -15,15 +15,20 @@ import {
     Clock, Play, Trash2, Plus, Loader2, AlertTriangle,
     SkipForward, CheckSquare, Square, Shield, ChevronDown, ChevronUp,
     FastForward, Pause, RotateCcw, BarChart3,
+    ChevronRight, ChevronLeft, Cpu, BookOpen, Settings2, Zap,
+    ShieldCheck, Info,
 } from 'lucide-react';
 import type {
     ReplaySession, StepResult, CreateSessionParams,
     ProposalItem, ProposalResponse, ConfirmedOrder,
+    StrategyTemplate, StrategyTemplateParam,
 } from '../../../services/replayService';
 import {
     listSessions, createSession, getSession,
     stepSession, deleteSession, proposeSession,
+    listStrategyTemplates,
 } from '../../../services/replayService';
+import { modelTrainingService, type SystemModelRecord } from '../../../services/modelTrainingService';
 import { useAutoAdvance, type AutoAdvanceSpeed, type DailyRecord } from '../../../hooks/useAutoAdvance';
 import ReplayReportPage from './ReplayReportPage';
 
@@ -48,16 +53,162 @@ function StatusBadge({ status }: { status: ReplaySession['status'] }) {
 }
 
 // ---------------------------------------------------------------------------
-// Create form
+// Create form — multi-step wizard
 // ---------------------------------------------------------------------------
 
+const WIZARD_STEPS = [
+    { key: 'model', label: '选择模型', icon: Cpu },
+    { key: 'strategy', label: '策略模板', icon: BookOpen },
+    { key: 'params', label: '参数配置', icon: Settings2 },
+    { key: 'confirm', label: '确认创建', icon: Zap },
+] as const;
+
+type WizardStep = typeof WIZARD_STEPS[number]['key'];
+
+/** 格式化 IC/ICIR 等指标 */
+function fmtMetric(val: number | undefined, digits = 4): string {
+    if (val === undefined || val === null || isNaN(val)) return '—';
+    return val.toFixed(digits);
+}
+
+function ModelMetricsBadge({ metrics, label }: { metrics: Record<string, number | undefined>; label: string }) {
+    const ic = metrics.mean_ic;
+    const icir = metrics.icir;
+    const sharpe = metrics.sharpe;
+    if (ic === undefined && icir === undefined && sharpe === undefined) return null;
+    return (
+        <div className="flex items-center gap-2 text-[10px] text-gray-400">
+            <span className="font-medium text-gray-500">{label}</span>
+            {ic !== undefined && <span>IC {fmtMetric(ic)}</span>}
+            {icir !== undefined && <span>ICIR {fmtMetric(icir)}</span>}
+            {sharpe !== undefined && <span>Sharpe {fmtMetric(sharpe, 2)}</span>}
+        </div>
+    );
+}
+
 function CreateSessionForm({ onCreate }: { onCreate: (s: ReplaySession) => void }) {
+    // Wizard state
+    const [step, setStep] = useState<WizardStep>('model');
+
+    // Step 1: Model selection
+    const [systemModels, setSystemModels] = useState<SystemModelRecord[]>([]);
+    const [userModels, setUserModels] = useState<{ items: Array<{ model_id: string; status: string; is_default: boolean; metadata_json: Record<string, unknown> }>; total: number } | null>(null);
+    const [selectedModelId, setSelectedModelId] = useState<string | null>(null);
+    const [modelsLoading, setModelsLoading] = useState(true);
+
+    // Step 2: Strategy template
+    const [templates, setTemplates] = useState<StrategyTemplate[]>([]);
+    const [selectedTemplateId, setSelectedTemplateId] = useState<string | null>(null);
+    const [templatesLoading, setTemplatesLoading] = useState(true);
+
+    // Step 3: Params
     const [startDate, setStartDate] = useState('2024-03-04');
     const [endDate, setEndDate] = useState('2024-03-15');
     const [initialCash, setInitialCash] = useState('1000000');
+    const [stopLossPct, setStopLossPct] = useState('');
+    const [paramOverrides, setParamOverrides] = useState<Record<string, unknown>>({});
+
+    // Step 4: Mode
     const [autoTrade, setAutoTrade] = useState(true);
+
+    // Submit
     const [loading, setLoading] = useState(false);
     const [error, setError] = useState<string | null>(null);
+
+    // Load models
+    useEffect(() => {
+        let cancelled = false;
+        (async () => {
+            try {
+                const [sys, usr] = await Promise.all([
+                    modelTrainingService.listSystemModels(),
+                    modelTrainingService.listUserModels(),
+                ]);
+                if (cancelled) return;
+                setSystemModels(sys);
+                setUserModels(usr);
+                // Auto-select default user model
+                const defaultModel = usr.items.find(m => m.is_default && m.status === 'active');
+                if (defaultModel) setSelectedModelId(defaultModel.model_id);
+                else if (sys.length > 0) setSelectedModelId(sys[0].model_id);
+            } catch {
+                // ignore — user can still proceed without model
+            } finally {
+                if (!cancelled) setModelsLoading(false);
+            }
+        })();
+        return () => { cancelled = true; };
+    }, []);
+
+    // Load templates
+    useEffect(() => {
+        let cancelled = false;
+        (async () => {
+            try {
+                const tpls = await listStrategyTemplates();
+                if (cancelled) return;
+                setTemplates(tpls);
+                if (tpls.length > 0) setSelectedTemplateId(tpls[0].id);
+            } catch {
+                // ignore
+            } finally {
+                if (!cancelled) setTemplatesLoading(false);
+            }
+        })();
+        return () => { cancelled = true; };
+    }, []);
+
+    // When template changes, reset param overrides
+    useEffect(() => {
+        setParamOverrides({});
+    }, [selectedTemplateId]);
+
+    // Derived: selected template
+    const selectedTemplate = templates.find(t => t.id === selectedTemplateId) ?? null;
+
+    // Derived: selected model
+    const selectedSystemModel = systemModels.find(m => m.model_id === selectedModelId) ?? null;
+    const selectedUserModel = userModels?.items.find(m => m.model_id === selectedModelId) ?? null;
+
+    // Build final strategy_params from template replay_params + overrides
+    const buildStrategyParams = (): Record<string, unknown> => {
+        const base = selectedTemplate ? { ...selectedTemplate.replay_params } : {};
+        return { ...base, ...paramOverrides };
+    };
+
+    // Build final stop_loss_pct
+    const buildStopLossPct = (): number | null => {
+        // Explicit input takes priority
+        if (stopLossPct.trim() !== '') return parseFloat(stopLossPct) / 100;
+        // Then template replay_params
+        if (selectedTemplate?.replay_params.stop_loss_pct != null) {
+            return Number(selectedTemplate.replay_params.stop_loss_pct);
+        }
+        return null;
+    };
+
+    const stepIndex = WIZARD_STEPS.findIndex(s => s.key === step);
+
+    const canGoNext = (): boolean => {
+        if (step === 'model') return true; // model is optional
+        if (step === 'strategy') return true; // template is optional
+        if (step === 'params') {
+            if (!startDate || !endDate) return false;
+            if (isNaN(parseFloat(initialCash)) || parseFloat(initialCash) <= 0) return false;
+            return true;
+        }
+        return true;
+    };
+
+    const goNext = () => {
+        const idx = stepIndex;
+        if (idx < WIZARD_STEPS.length - 1) setStep(WIZARD_STEPS[idx + 1].key);
+    };
+
+    const goPrev = () => {
+        const idx = stepIndex;
+        if (idx > 0) setStep(WIZARD_STEPS[idx - 1].key);
+    };
 
     const handleSubmit = async () => {
         setLoading(true);
@@ -65,10 +216,13 @@ function CreateSessionForm({ onCreate }: { onCreate: (s: ReplaySession) => void 
         try {
             const params: CreateSessionParams = {
                 name: `${startDate} ~ ${endDate}`,
+                model_id: selectedModelId ?? undefined,
+                strategy_params: buildStrategyParams(),
                 start_date: startDate,
                 end_date: endDate,
                 initial_cash: parseFloat(initialCash),
                 auto_trade: autoTrade,
+                stop_loss_pct: buildStopLossPct(),
             };
             const session = await createSession(params);
             onCreate(session);
@@ -80,57 +234,458 @@ function CreateSessionForm({ onCreate }: { onCreate: (s: ReplaySession) => void 
         }
     };
 
-    return (
+    // --- Render step indicator ---
+    const renderStepIndicator = () => (
+        <div className="flex items-center gap-1 mb-4">
+            {WIZARD_STEPS.map((s, i) => {
+                const Icon = s.icon;
+                const isActive = s.key === step;
+                const isDone = i < stepIndex;
+                return (
+                    <React.Fragment key={s.key}>
+                        {i > 0 && <ChevronRight size={14} className="text-gray-300" />}
+                        <button
+                            onClick={() => setStep(s.key)}
+                            className={`flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-medium transition-colors ${
+                                isActive
+                                    ? 'bg-blue-500 text-white'
+                                    : isDone
+                                        ? 'bg-blue-50 text-blue-600'
+                                        : 'bg-gray-100 text-gray-400'
+                            }`}
+                        >
+                            <Icon size={13} />
+                            {s.label}
+                        </button>
+                    </React.Fragment>
+                );
+            })}
+        </div>
+    );
+
+    // --- Step 1: Model selection ---
+    const renderModelStep = () => (
         <div className="space-y-3">
-            <div className="grid grid-cols-4 gap-3">
-                <div>
-                    <label className="block text-xs text-gray-500 mb-1">起始日</label>
-                    <input
-                        type="date"
-                        value={startDate}
-                        onChange={e => setStartDate(e.target.value)}
-                        className="w-full px-3 py-2 rounded-lg border border-gray-200 text-sm focus:outline-none focus:ring-2 focus:ring-blue-200"
-                    />
+            <p className="text-xs text-gray-500">选择用于生成交易信号的模型。不选则使用系统默认模型。</p>
+
+            {modelsLoading ? (
+                <div className="flex items-center gap-2 py-4 text-gray-400">
+                    <Loader2 size={16} className="animate-spin" />
+                    <span className="text-xs">加载模型列表…</span>
                 </div>
-                <div>
-                    <label className="block text-xs text-gray-500 mb-1">结束日</label>
-                    <input
-                        type="date"
-                        value={endDate}
-                        onChange={e => setEndDate(e.target.value)}
-                        className="w-full px-3 py-2 rounded-lg border border-gray-200 text-sm focus:outline-none focus:ring-2 focus:ring-blue-200"
-                    />
+            ) : (
+                <>
+                    {/* System models */}
+                    {systemModels.length > 0 && (
+                        <div className="space-y-1.5">
+                            <h5 className="text-[10px] font-semibold text-gray-400 uppercase tracking-wider">系统模型</h5>
+                            {systemModels.map(m => (
+                                <button
+                                    key={m.model_id}
+                                    onClick={() => setSelectedModelId(m.model_id)}
+                                    className={`w-full text-left px-3 py-2.5 rounded-lg border transition-colors ${
+                                        selectedModelId === m.model_id
+                                            ? 'border-blue-300 bg-blue-50'
+                                            : 'border-gray-100 hover:border-gray-200 hover:bg-gray-50'
+                                    }`}
+                                >
+                                    <div className="flex items-center justify-between">
+                                        <div>
+                                            <span className="text-sm font-medium text-gray-800">{m.display_name}</span>
+                                            <span className="ml-2 text-[10px] text-gray-400">{m.algorithm} · v{m.version}</span>
+                                        </div>
+                                        {selectedModelId === m.model_id && (
+                                            <CheckSquare size={14} className="text-blue-500" />
+                                        )}
+                                    </div>
+                                    <p className="text-[10px] text-gray-400 mt-0.5 line-clamp-1">{m.description}</p>
+                                    <div className="flex items-center gap-3 mt-1">
+                                        {m.performance_metrics.test && (
+                                            <ModelMetricsBadge metrics={m.performance_metrics.test} label="测试" />
+                                        )}
+                                        {m.performance_metrics.valid && (
+                                            <ModelMetricsBadge metrics={m.performance_metrics.valid} label="验证" />
+                                        )}
+                                    </div>
+                                </button>
+                            ))}
+                        </div>
+                    )}
+
+                    {/* User models */}
+                    {userModels && userModels.items.length > 0 && (
+                        <div className="space-y-1.5">
+                            <h5 className="text-[10px] font-semibold text-gray-400 uppercase tracking-wider">我的模型</h5>
+                            {userModels.items.filter(m => m.status === 'active').map(m => (
+                                <button
+                                    key={m.model_id}
+                                    onClick={() => setSelectedModelId(m.model_id)}
+                                    className={`w-full text-left px-3 py-2 rounded-lg border transition-colors ${
+                                        selectedModelId === m.model_id
+                                            ? 'border-blue-300 bg-blue-50'
+                                            : 'border-gray-100 hover:border-gray-200 hover:bg-gray-50'
+                                    }`}
+                                >
+                                    <div className="flex items-center justify-between">
+                                        <span className="text-sm font-medium text-gray-800">{m.model_id}</span>
+                                        <div className="flex items-center gap-1.5">
+                                            {m.is_default && (
+                                                <span className="px-1.5 py-0.5 rounded bg-green-50 text-green-600 text-[10px] font-medium">默认</span>
+                                            )}
+                                            {selectedModelId === m.model_id && <CheckSquare size={14} className="text-blue-500" />}
+                                        </div>
+                                    </div>
+                                </button>
+                            ))}
+                        </div>
+                    )}
+
+                    {systemModels.length === 0 && (!userModels || userModels.items.length === 0) && (
+                        <p className="text-xs text-gray-400 py-2">暂无可用模型，将使用系统默认模型。</p>
+                    )}
+
+                    {/* Clear selection */}
+                    {selectedModelId && (
+                        <button
+                            onClick={() => setSelectedModelId(null)}
+                            className="text-xs text-gray-400 hover:text-gray-600 underline"
+                        >
+                            清除选择（使用默认模型）
+                        </button>
+                    )}
+                </>
+            )}
+        </div>
+    );
+
+    // --- Step 2: Strategy template ---
+    const renderStrategyStep = () => (
+        <div className="space-y-3">
+            <p className="text-xs text-gray-500">选择策略模板，自动填充调仓参数和止损规则。不选则使用默认参数。</p>
+
+            {templatesLoading ? (
+                <div className="flex items-center gap-2 py-4 text-gray-400">
+                    <Loader2 size={16} className="animate-spin" />
+                    <span className="text-xs">加载策略模板…</span>
                 </div>
+            ) : templates.length === 0 ? (
+                <p className="text-xs text-gray-400 py-2">暂无策略模板，将使用默认参数。</p>
+            ) : (
+                <div className="space-y-1.5">
+                    {templates.map(t => (
+                        <button
+                            key={t.id}
+                            onClick={() => setSelectedTemplateId(t.id)}
+                            className={`w-full text-left px-3 py-2.5 rounded-lg border transition-colors ${
+                                selectedTemplateId === t.id
+                                    ? 'border-blue-300 bg-blue-50'
+                                    : 'border-gray-100 hover:border-gray-200 hover:bg-gray-50'
+                            }`}
+                        >
+                            <div className="flex items-center justify-between">
+                                <div className="flex items-center gap-2">
+                                    <span className="text-sm font-medium text-gray-800">{t.name}</span>
+                                    <span className="px-1.5 py-0.5 rounded bg-gray-100 text-gray-500 text-[10px]">{t.category}</span>
+                                    <span className={`px-1.5 py-0.5 rounded text-[10px] font-medium ${
+                                        t.difficulty === 'beginner' ? 'bg-green-50 text-green-600' :
+                                        t.difficulty === 'intermediate' ? 'bg-amber-50 text-amber-600' :
+                                        'bg-red-50 text-red-600'
+                                    }`}>
+                                        {t.difficulty === 'beginner' ? '入门' : t.difficulty === 'intermediate' ? '进阶' : '高级'}
+                                    </span>
+                                </div>
+                                {selectedTemplateId === t.id && <CheckSquare size={14} className="text-blue-500" />}
+                            </div>
+                            <p className="text-[10px] text-gray-400 mt-0.5 line-clamp-2">{t.description}</p>
+                            {/* Show key replay params preview */}
+                            {selectedTemplateId === t.id && (
+                                <div className="flex items-center gap-3 mt-1.5 text-[10px] text-gray-500">
+                                    {t.replay_params.topk != null && <span>TopK={String(t.replay_params.topk)}</span>}
+                                    {t.replay_params.weight_mode != null && <span>权重={String(t.replay_params.weight_mode)}</span>}
+                                    {t.replay_params.max_position_pct != null && <span>最大持仓={String(t.replay_params.max_position_pct)}</span>}
+                                    {t.replay_params.stop_loss_pct != null && <span>止损={(Number(t.replay_params.stop_loss_pct) * 100).toFixed(1)}%</span>}
+                                </div>
+                            )}
+                        </button>
+                    ))}
+
+                    {/* Clear selection */}
+                    {selectedTemplateId && (
+                        <button
+                            onClick={() => setSelectedTemplateId(null)}
+                            className="text-xs text-gray-400 hover:text-gray-600 underline"
+                        >
+                            清除选择（使用默认参数）
+                        </button>
+                    )}
+                </div>
+            )}
+        </div>
+    );
+
+    // --- Step 3: Params ---
+    const renderParamsStep = () => {
+        const templateParams = selectedTemplate?.params ?? [];
+        return (
+            <div className="space-y-4">
+                {/* Date range + cash */}
+                <div className="grid grid-cols-3 gap-3">
+                    <div>
+                        <label className="block text-xs text-gray-500 mb-1">起始日</label>
+                        <input
+                            type="date"
+                            value={startDate}
+                            onChange={e => setStartDate(e.target.value)}
+                            className="w-full px-3 py-2 rounded-lg border border-gray-200 text-sm focus:outline-none focus:ring-2 focus:ring-blue-200"
+                        />
+                    </div>
+                    <div>
+                        <label className="block text-xs text-gray-500 mb-1">结束日</label>
+                        <input
+                            type="date"
+                            value={endDate}
+                            onChange={e => setEndDate(e.target.value)}
+                            className="w-full px-3 py-2 rounded-lg border border-gray-200 text-sm focus:outline-none focus:ring-2 focus:ring-blue-200"
+                        />
+                    </div>
+                    <div>
+                        <label className="block text-xs text-gray-500 mb-1">初始资金</label>
+                        <input
+                            type="number"
+                            value={initialCash}
+                            onChange={e => setInitialCash(e.target.value)}
+                            className="w-full px-3 py-2 rounded-lg border border-gray-200 text-sm focus:outline-none focus:ring-2 focus:ring-blue-200"
+                        />
+                    </div>
+                </div>
+
+                {/* Stop loss */}
                 <div>
-                    <label className="block text-xs text-gray-500 mb-1">初始资金</label>
+                    <label className="block text-xs text-gray-500 mb-1">
+                        止损比例 (%)
+                        {selectedTemplate?.replay_params.stop_loss_pct != null && (
+                            <span className="ml-1 text-gray-400">
+                                （模板默认 {(Number(selectedTemplate.replay_params.stop_loss_pct) * 100).toFixed(1)}%）
+                            </span>
+                        )}
+                    </label>
                     <input
                         type="number"
-                        value={initialCash}
-                        onChange={e => setInitialCash(e.target.value)}
+                        value={stopLossPct}
+                        onChange={e => setStopLossPct(e.target.value)}
+                        placeholder={selectedTemplate?.replay_params.stop_loss_pct != null
+                            ? `${(Number(selectedTemplate.replay_params.stop_loss_pct) * 100).toFixed(1)}`
+                            : '如 8 表示 8%'}
+                        min={0}
+                        max={100}
+                        step={0.5}
                         className="w-full px-3 py-2 rounded-lg border border-gray-200 text-sm focus:outline-none focus:ring-2 focus:ring-blue-200"
                     />
                 </div>
-                <div>
-                    <label className="block text-xs text-gray-500 mb-1">模式</label>
-                    <select
-                        value={autoTrade ? 'auto' : 'manual'}
-                        onChange={e => setAutoTrade(e.target.value === 'auto')}
-                        className="w-full px-3 py-2 rounded-lg border border-gray-200 text-sm focus:outline-none focus:ring-2 focus:ring-blue-200"
+
+                {/* Template params overrides */}
+                {templateParams.length > 0 && (
+                    <div className="space-y-2">
+                        <h5 className="text-[10px] font-semibold text-gray-400 uppercase tracking-wider">策略参数</h5>
+                        {templateParams.map(p => (
+                            <TemplateParamInput
+                                key={p.name}
+                                param={p}
+                                value={paramOverrides[p.name] ?? p.default}
+                                onChange={v => {
+                                    const next: Record<string, unknown> = { ...paramOverrides, [p.name]: v };
+                                    setParamOverrides(next);
+                                }}
+                            />
+                        ))}
+                    </div>
+                )}
+            </div>
+        );
+    };
+
+    // --- Step 4: Confirm ---
+    const renderConfirmStep = () => {
+        const finalParams = buildStrategyParams();
+        const finalStopLoss = buildStopLossPct();
+        return (
+            <div className="space-y-3">
+                {/* Summary */}
+                <div className="rounded-lg bg-gray-50 border border-gray-100 p-3 space-y-2">
+                    <div className="grid grid-cols-2 gap-x-4 gap-y-1.5 text-xs">
+                        <div className="text-gray-400">模型</div>
+                        <div className="text-gray-800 font-medium">
+                            {selectedSystemModel?.display_name ?? selectedUserModel?.model_id ?? '系统默认'}
+                        </div>
+                        <div className="text-gray-400">策略模板</div>
+                        <div className="text-gray-800 font-medium">{selectedTemplate?.name ?? '默认参数'}</div>
+                        <div className="text-gray-400">日期区间</div>
+                        <div className="text-gray-800 font-medium">{startDate} ~ {endDate}</div>
+                        <div className="text-gray-400">初始资金</div>
+                        <div className="text-gray-800 font-medium">{parseFloat(initialCash).toLocaleString('zh-CN')}</div>
+                        <div className="text-gray-400">止损</div>
+                        <div className="text-gray-800 font-medium">
+                            {finalStopLoss != null ? `${(finalStopLoss * 100).toFixed(1)}%` : '无'}
+                        </div>
+                        <div className="text-gray-400">模式</div>
+                        <div className="text-gray-800 font-medium">{autoTrade ? '自动执行' : '手动确认'}</div>
+                    </div>
+
+                    {/* Strategy params summary */}
+                    {Object.keys(finalParams).length > 0 && (
+                        <div className="pt-1.5 border-t border-gray-200">
+                            <div className="text-[10px] text-gray-400 mb-1">策略参数</div>
+                            <div className="flex flex-wrap gap-1.5">
+                                {Object.entries(finalParams).map(([k, v]) => (
+                                    <span key={k} className="px-1.5 py-0.5 rounded bg-white border border-gray-100 text-[10px] text-gray-600">
+                                        {k}={String(v)}
+                                    </span>
+                                ))}
+                            </div>
+                        </div>
+                    )}
+                </div>
+
+                {/* Mode selection */}
+                <div className="grid grid-cols-2 gap-3">
+                    <button
+                        onClick={() => setAutoTrade(true)}
+                        className={`px-4 py-3 rounded-lg border text-left transition-colors ${
+                            autoTrade
+                                ? 'border-blue-300 bg-blue-50'
+                                : 'border-gray-100 hover:border-gray-200'
+                        }`}
                     >
-                        <option value="auto">自动执行</option>
-                        <option value="manual">手动确认</option>
-                    </select>
+                        <div className="flex items-center gap-2 mb-1">
+                            <Zap size={14} className={autoTrade ? 'text-blue-500' : 'text-gray-400'} />
+                            <span className="text-sm font-medium">自动执行</span>
+                        </div>
+                        <p className="text-[10px] text-gray-400">按策略信号自动买卖，支持自动推进</p>
+                    </button>
+                    <button
+                        onClick={() => setAutoTrade(false)}
+                        className={`px-4 py-3 rounded-lg border text-left transition-colors ${
+                            !autoTrade
+                                ? 'border-purple-300 bg-purple-50'
+                                : 'border-gray-100 hover:border-gray-200'
+                        }`}
+                    >
+                        <div className="flex items-center gap-2 mb-1">
+                            <ShieldCheck size={14} className={!autoTrade ? 'text-purple-500' : 'text-gray-400'} />
+                            <span className="text-sm font-medium">手动确认</span>
+                        </div>
+                        <p className="text-[10px] text-gray-400">逐日生成提案，勾选/改量后确认执行</p>
+                    </button>
                 </div>
             </div>
+        );
+    };
+
+    return (
+        <div className="space-y-3">
+            {renderStepIndicator()}
+
+            {/* Step content */}
+            <div className="min-h-[200px]">
+                {step === 'model' && renderModelStep()}
+                {step === 'strategy' && renderStrategyStep()}
+                {step === 'params' && renderParamsStep()}
+                {step === 'confirm' && renderConfirmStep()}
+            </div>
+
             {error && <p className="text-xs text-red-500">{error}</p>}
-            <button
-                onClick={handleSubmit}
-                disabled={loading}
-                className="inline-flex items-center gap-2 px-4 py-2 rounded-lg bg-blue-500 text-white text-sm font-medium hover:bg-blue-600 disabled:opacity-50 transition-colors"
-            >
-                {loading ? <Loader2 size={16} className="animate-spin" /> : <Plus size={16} />}
-                创建回放
-            </button>
+
+            {/* Navigation */}
+            <div className="flex items-center justify-between pt-2 border-t border-gray-100">
+                <button
+                    onClick={goPrev}
+                    disabled={stepIndex === 0}
+                    className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-gray-200 text-gray-600 text-xs font-medium hover:bg-gray-50 disabled:opacity-30 disabled:cursor-not-allowed transition-colors"
+                >
+                    <ChevronLeft size={14} />
+                    上一步
+                </button>
+                <div className="flex items-center gap-2">
+                    {stepIndex < WIZARD_STEPS.length - 1 ? (
+                        <button
+                            onClick={goNext}
+                            disabled={!canGoNext()}
+                            className="inline-flex items-center gap-1.5 px-4 py-1.5 rounded-lg bg-blue-500 text-white text-xs font-medium hover:bg-blue-600 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
+                        >
+                            下一步
+                            <ChevronRight size={14} />
+                        </button>
+                    ) : (
+                        <button
+                            onClick={handleSubmit}
+                            disabled={loading}
+                            className="inline-flex items-center gap-2 px-4 py-1.5 rounded-lg bg-green-500 text-white text-xs font-medium hover:bg-green-600 disabled:opacity-50 transition-colors"
+                        >
+                            {loading ? <Loader2 size={14} className="animate-spin" /> : <Play size={14} />}
+                            创建回放
+                        </button>
+                    )}
+                </div>
+            </div>
+        </div>
+    );
+}
+
+/** Template param input — renders number/text with min/max/default */
+function TemplateParamInput({
+    param,
+    value,
+    onChange,
+}: {
+    param: StrategyTemplateParam;
+    value: unknown;
+    onChange: (v: unknown) => void;
+}) {
+    const strVal = String(value ?? param.default ?? '');
+    const isNum = param.min !== null || param.max !== null || typeof param.default === 'number';
+
+    return (
+        <div className="flex items-center gap-3">
+            <div className="flex-1">
+                <div className="flex items-center gap-1.5">
+                    <label className="text-xs text-gray-600 font-medium">{param.name}</label>
+                    {param.description && (
+                        <span className="text-[10px] text-gray-400" title={param.description}>
+                            <Info size={11} className="inline" />
+                        </span>
+                    )}
+                </div>
+                {isNum ? (
+                    <input
+                        type="number"
+                        value={strVal}
+                        onChange={e => {
+                            const v = parseFloat(e.target.value);
+                            onChange(isNaN(v) ? e.target.value : v);
+                        }}
+                        min={param.min ?? undefined}
+                        max={param.max ?? undefined}
+                        step="any"
+                        className="w-full mt-0.5 px-2.5 py-1.5 rounded-lg border border-gray-200 text-sm focus:outline-none focus:ring-2 focus:ring-blue-200"
+                    />
+                ) : (
+                    <input
+                        type="text"
+                        value={strVal}
+                        onChange={e => onChange(e.target.value)}
+                        className="w-full mt-0.5 px-2.5 py-1.5 rounded-lg border border-gray-200 text-sm focus:outline-none focus:ring-2 focus:ring-blue-200"
+                    />
+                )}
+            </div>
+            {(param.min !== null || param.max !== null) && (
+                <span className="text-[10px] text-gray-400 mt-3">
+                    {param.min != null && param.max != null
+                        ? `[${param.min}, ${param.max}]`
+                        : param.min != null
+                            ? `≥ ${param.min}`
+                            : `≤ ${param.max}`}
+                </span>
+            )}
         </div>
     );
 }

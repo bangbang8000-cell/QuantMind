@@ -242,3 +242,32 @@ export async function getAttribution(sessionId: string): Promise<AttributionRowR
     const { data } = await axios.get(`${BASE}/sessions/${sessionId}/attribution`, { headers: getHeaders() });
     return data;
 }
+
+// ---------------------------------------------------------------------------
+// Strategy templates API
+// ---------------------------------------------------------------------------
+
+export interface StrategyTemplateParam {
+    name: string;
+    description: string;
+    default: unknown;
+    min: number | null;
+    max: number | null;
+}
+
+export interface StrategyTemplate {
+    id: string;
+    name: string;
+    description: string;
+    category: string;
+    difficulty: string;
+    params: StrategyTemplateParam[];
+    /** 映射到 replay 可识别的 strategy_params */
+    replay_params: Record<string, unknown>;
+}
+
+/** 获取可用策略模板 */
+export async function listStrategyTemplates(): Promise<StrategyTemplate[]> {
+    const { data } = await axios.get(`${BASE}/strategy-templates`, { headers: getHeaders() });
+    return data;
+}
