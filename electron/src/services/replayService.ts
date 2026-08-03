@@ -7,10 +7,11 @@
  */
 
 import axios from 'axios';
-import { SERVICE_URLS } from '../config/services';
+import { SERVICE_ENDPOINTS } from '../config/services';
 import { authService } from '../features/auth/services/authService';
 
-const BASE = `${SERVICE_URLS.TRADING}/replay`;
+// SERVICE_ENDPOINTS.API_GATEWAY 已含 /api/v1，后端路由前缀为 /api/v1/replay
+const BASE = `${SERVICE_ENDPOINTS.API_GATEWAY}/replay`;
 
 function getHeaders() {
     const token = authService.getAccessToken();
