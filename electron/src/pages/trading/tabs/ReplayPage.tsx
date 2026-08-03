@@ -28,7 +28,8 @@ import {
     stepSession, deleteSession, proposeSession,
     listStrategyTemplates,
 } from '../../../services/replayService';
-import { modelTrainingService, type SystemModelRecord } from '../../../services/modelTrainingService';
+import { modelTrainingService, type SystemModelRecord, type UserModelRecord } from '../../../services/modelTrainingService';
+import { modelDisplayName, getMeta, getMetrics, extractModelTypeShort } from '../../modelRegistryUtils';
 import { useAutoAdvance, type AutoAdvanceSpeed, type DailyRecord } from '../../../hooks/useAutoAdvance';
 import ReplayReportPage from './ReplayReportPage';
 
@@ -92,7 +93,7 @@ function CreateSessionForm({ onCreate }: { onCreate: (s: ReplaySession) => void 
 
     // Step 1: Model selection
     const [systemModels, setSystemModels] = useState<SystemModelRecord[]>([]);
-    const [userModels, setUserModels] = useState<{ items: Array<{ model_id: string; status: string; is_default: boolean; metadata_json: Record<string, unknown> }>; total: number } | null>(null);
+    const [userModels, setUserModels] = useState<UserModelRecord[]>([]);
     const [selectedModelId, setSelectedModelId] = useState<string | null>(null);
     const [modelsLoading, setModelsLoading] = useState(true);
 
@@ -122,14 +123,15 @@ function CreateSessionForm({ onCreate }: { onCreate: (s: ReplaySession) => void 
             try {
                 const [sys, usr] = await Promise.all([
                     modelTrainingService.listSystemModels(),
-                    modelTrainingService.listUserModels(),
+                    modelTrainingService.listUserModels(true), // include archived
                 ]);
                 if (cancelled) return;
                 setSystemModels(sys);
-                setUserModels(usr);
+                setUserModels(usr.items);
                 // Auto-select default user model
                 const defaultModel = usr.items.find(m => m.is_default && m.status === 'active');
                 if (defaultModel) setSelectedModelId(defaultModel.model_id);
+                else if (usr.items.length > 0) setSelectedModelId(usr.items[0].model_id);
                 else if (sys.length > 0) setSelectedModelId(sys[0].model_id);
             } catch {
                 // ignore — user can still proceed without model
@@ -168,7 +170,7 @@ function CreateSessionForm({ onCreate }: { onCreate: (s: ReplaySession) => void 
 
     // Derived: selected model
     const selectedSystemModel = systemModels.find(m => m.model_id === selectedModelId) ?? null;
-    const selectedUserModel = userModels?.items.find(m => m.model_id === selectedModelId) ?? null;
+    const selectedUserModel = userModels.find(m => m.model_id === selectedModelId) ?? null;
 
     // Build final strategy_params from template replay_params + overrides
     const buildStrategyParams = (): Record<string, unknown> => {
@@ -263,100 +265,120 @@ function CreateSessionForm({ onCreate }: { onCreate: (s: ReplaySession) => void 
         </div>
     );
 
-    // --- Step 1: Model selection ---
-    const renderModelStep = () => (
-        <div className="space-y-3">
-            <p className="text-xs text-gray-500">选择用于生成交易信号的模型。不选则使用系统默认模型。</p>
+    // --- Step 1: Model selection (dropdown) ---
+    const renderModelStep = () => {
+        // Build unified model list: user models first, then system models
+        const allModelOptions: Array<{
+            id: string;
+            label: string;
+            sublabel: string;
+            group: string;
+            metrics: Record<string, number | undefined> | null;
+            isDefault: boolean;
+            status: string;
+        }> = [];
 
-            {modelsLoading ? (
-                <div className="flex items-center gap-2 py-4 text-gray-400">
-                    <Loader2 size={16} className="animate-spin" />
-                    <span className="text-xs">加载模型列表…</span>
-                </div>
-            ) : (
-                <>
-                    {/* System models */}
-                    {systemModels.length > 0 && (
-                        <div className="space-y-1.5">
-                            <h5 className="text-[10px] font-semibold text-gray-400 uppercase tracking-wider">系统模型</h5>
-                            {systemModels.map(m => (
-                                <button
-                                    key={m.model_id}
-                                    onClick={() => setSelectedModelId(m.model_id)}
-                                    className={`w-full text-left px-3 py-2.5 rounded-lg border transition-colors ${
-                                        selectedModelId === m.model_id
-                                            ? 'border-blue-300 bg-blue-50'
-                                            : 'border-gray-100 hover:border-gray-200 hover:bg-gray-50'
-                                    }`}
-                                >
-                                    <div className="flex items-center justify-between">
-                                        <div>
-                                            <span className="text-sm font-medium text-gray-800">{m.display_name}</span>
-                                            <span className="ml-2 text-[10px] text-gray-400">{m.algorithm} · v{m.version}</span>
-                                        </div>
-                                        {selectedModelId === m.model_id && (
-                                            <CheckSquare size={14} className="text-blue-500" />
-                                        )}
-                                    </div>
-                                    <p className="text-[10px] text-gray-400 mt-0.5 line-clamp-1">{m.description}</p>
-                                    <div className="flex items-center gap-3 mt-1">
-                                        {m.performance_metrics.test && (
-                                            <ModelMetricsBadge metrics={m.performance_metrics.test} label="测试" />
-                                        )}
-                                        {m.performance_metrics.valid && (
-                                            <ModelMetricsBadge metrics={m.performance_metrics.valid} label="验证" />
-                                        )}
-                                    </div>
-                                </button>
-                            ))}
-                        </div>
-                    )}
+        // User models (all non-archived)
+        for (const m of userModels) {
+            if (m.status === 'archived') continue;
+            const meta = getMeta(m);
+            const metrics = getMetrics(m);
+            const name = modelDisplayName(m);
+            const algo = extractModelTypeShort(m);
+            const testMetrics = (metrics?.test ?? metrics?.performance_metrics?.test ?? null) as Record<string, number | undefined> | null;
+            allModelOptions.push({
+                id: m.model_id,
+                label: name,
+                sublabel: algo ? `${algo} · ${m.status}` : m.status,
+                group: '我的模型',
+                metrics: testMetrics,
+                isDefault: m.is_default,
+                status: m.status,
+            });
+        }
 
-                    {/* User models */}
-                    {userModels && userModels.items.length > 0 && (
-                        <div className="space-y-1.5">
-                            <h5 className="text-[10px] font-semibold text-gray-400 uppercase tracking-wider">我的模型</h5>
-                            {userModels.items.filter(m => m.status === 'active').map(m => (
-                                <button
-                                    key={m.model_id}
-                                    onClick={() => setSelectedModelId(m.model_id)}
-                                    className={`w-full text-left px-3 py-2 rounded-lg border transition-colors ${
-                                        selectedModelId === m.model_id
-                                            ? 'border-blue-300 bg-blue-50'
-                                            : 'border-gray-100 hover:border-gray-200 hover:bg-gray-50'
-                                    }`}
-                                >
-                                    <div className="flex items-center justify-between">
-                                        <span className="text-sm font-medium text-gray-800">{m.model_id}</span>
-                                        <div className="flex items-center gap-1.5">
-                                            {m.is_default && (
-                                                <span className="px-1.5 py-0.5 rounded bg-green-50 text-green-600 text-[10px] font-medium">默认</span>
-                                            )}
-                                            {selectedModelId === m.model_id && <CheckSquare size={14} className="text-blue-500" />}
-                                        </div>
-                                    </div>
-                                </button>
-                            ))}
-                        </div>
-                    )}
+        // System models
+        for (const m of systemModels) {
+            allModelOptions.push({
+                id: m.model_id,
+                label: m.display_name,
+                sublabel: `${m.algorithm} · v${m.version}`,
+                group: '系统模型',
+                metrics: m.performance_metrics?.test ?? null,
+                isDefault: false,
+                status: 'system',
+            });
+        }
 
-                    {systemModels.length === 0 && (!userModels || userModels.items.length === 0) && (
-                        <p className="text-xs text-gray-400 py-2">暂无可用模型，将使用系统默认模型。</p>
-                    )}
+        // Selected model info
+        const selectedOpt = allModelOptions.find(o => o.id === selectedModelId);
 
-                    {/* Clear selection */}
-                    {selectedModelId && (
-                        <button
-                            onClick={() => setSelectedModelId(null)}
-                            className="text-xs text-gray-400 hover:text-gray-600 underline"
+        return (
+            <div className="space-y-3">
+                <p className="text-xs text-gray-500">选择用于生成交易信号的模型。不选则使用系统默认模型。</p>
+
+                {modelsLoading ? (
+                    <div className="flex items-center gap-2 py-4 text-gray-400">
+                        <Loader2 size={16} className="animate-spin" />
+                        <span className="text-xs">加载模型列表…</span>
+                    </div>
+                ) : (
+                    <>
+                        <select
+                            value={selectedModelId ?? ''}
+                            onChange={e => setSelectedModelId(e.target.value || null)}
+                            className="w-full px-3 py-2.5 rounded-lg border border-gray-200 text-sm focus:outline-none focus:ring-2 focus:ring-blue-200 bg-white"
                         >
-                            清除选择（使用默认模型）
-                        </button>
-                    )}
-                </>
-            )}
-        </div>
-    );
+                            <option value="">— 使用默认模型 —</option>
+                            {/* Group: user models */}
+                            {userModels.filter(m => m.status !== 'archived').length > 0 && (
+                                <optgroup label="我的模型">
+                                    {userModels.filter(m => m.status !== 'archived').map(m => {
+                                        const name = modelDisplayName(m);
+                                        return (
+                                            <option key={m.model_id} value={m.model_id}>
+                                                {name}{m.is_default ? ' ★默认' : ''}{m.status !== 'active' ? ` [${m.status}]` : ''}
+                                            </option>
+                                        );
+                                    })}
+                                </optgroup>
+                            )}
+                            {/* Group: system models */}
+                            {systemModels.length > 0 && (
+                                <optgroup label="系统模型">
+                                    {systemModels.map(m => (
+                                        <option key={m.model_id} value={m.model_id}>
+                                            {m.display_name} ({m.algorithm} v{m.version})
+                                        </option>
+                                    ))}
+                                </optgroup>
+                            )}
+                        </select>
+
+                        {/* Selected model detail card */}
+                        {selectedOpt && (
+                            <div className="px-3 py-2.5 rounded-lg border border-blue-100 bg-blue-50/50 space-y-1">
+                                <div className="flex items-center gap-2">
+                                    <span className="text-sm font-medium text-gray-800">{selectedOpt.label}</span>
+                                    {selectedOpt.isDefault && (
+                                        <span className="px-1.5 py-0.5 rounded bg-green-50 text-green-600 text-[10px] font-medium">默认</span>
+                                    )}
+                                    <span className="text-[10px] text-gray-400">{selectedOpt.sublabel}</span>
+                                </div>
+                                {selectedOpt.metrics && (
+                                    <ModelMetricsBadge metrics={selectedOpt.metrics} label="测试集" />
+                                )}
+                            </div>
+                        )}
+
+                        {allModelOptions.length === 0 && (
+                            <p className="text-xs text-gray-400 py-2">暂无可用模型，将使用系统默认模型。</p>
+                        )}
+                    </>
+                )}
+            </div>
+        );
+    };
 
     // --- Step 2: Strategy template ---
     const renderStrategyStep = () => (
@@ -515,7 +537,7 @@ function CreateSessionForm({ onCreate }: { onCreate: (s: ReplaySession) => void 
                     <div className="grid grid-cols-2 gap-x-4 gap-y-1.5 text-xs">
                         <div className="text-gray-400">模型</div>
                         <div className="text-gray-800 font-medium">
-                            {selectedSystemModel?.display_name ?? selectedUserModel?.model_id ?? '系统默认'}
+                            {selectedSystemModel?.display_name ?? (selectedUserModel ? modelDisplayName(selectedUserModel) : null) ?? '系统默认'}
                         </div>
                         <div className="text-gray-400">策略模板</div>
                         <div className="text-gray-800 font-medium">{selectedTemplate?.name ?? '默认参数'}</div>
