@@ -28,6 +28,12 @@ from backend.services.trade.simulation.models.replay import (
     ReplayStatus,
 )
 from backend.services.trade.simulation.replay.account import ReplayAccountManager
+from backend.services.trade.simulation.replay.analytics import (
+    compute_attribution,
+    compute_core_metrics,
+    compute_nav_curve,
+    compute_rolling_metrics,
+)
 from backend.services.trade.simulation.replay.day_runner import ReplayDayRunner
 from backend.services.trade.simulation.replay.proposal import validate_confirmed
 from backend.services.trade.simulation.replay.signal_generator import (
@@ -684,6 +690,205 @@ async def delete_session(
     # CASCADE 删除 DB 数据
     await db.delete(row)
     await db.commit()
+
+
+# ---------------------------------------------------------------------------
+# 统计报告（R4）
+# ---------------------------------------------------------------------------
+
+
+class ReportResponse(BaseModel):
+    metrics: dict[str, Any]
+    nav_curve: list[dict[str, Any]]
+    rolling: dict[str, Any]
+
+
+class TradeRowResponse(BaseModel):
+    id: int
+    trade_date: str
+    symbol: str
+    side: str
+    origin: str
+    quantity: float
+    price: float
+    trade_value: float
+    total_fee: float
+    realized_pnl: float | None
+    avg_cost_before: float | None
+    holding_days: int | None
+    return_pct: float | None
+
+
+class AttributionRowResponse(BaseModel):
+    symbol: str
+    realized_pnl: float
+    buy_count: int
+    sell_count: int
+    win_count: int
+    loss_count: int
+    avg_holding_days: float
+    total_fee: float
+    contribution: float
+
+
+@router.get("/sessions/{session_id}/report", response_model=ReportResponse)
+async def get_report(
+    session_id: uuid.UUID,
+    auth: AuthContext = Depends(get_auth_context),
+    db: AsyncSession = Depends(get_db),
+):
+    """统计报告：核心指标 + 净值曲线 + 滚动指标。"""
+    row = await _load_owned_session(db, session_id, auth)
+
+    snapshots = await _load_snapshots(db, session_id)
+    trades = await _load_trades(db, session_id)
+
+    metrics = compute_core_metrics(snapshots, trades, float(row.initial_cash))
+    nav_curve = compute_nav_curve(snapshots, float(row.initial_cash))
+    rolling = compute_rolling_metrics(snapshots, float(row.initial_cash))
+
+    return ReportResponse(metrics=metrics, nav_curve=nav_curve, rolling=rolling)
+
+
+@router.get("/sessions/{session_id}/trades", response_model=list[TradeRowResponse])
+async def get_trades(
+    session_id: uuid.UUID,
+    page: int = 1,
+    size: int = 50,
+    sort: str = "trade_date",
+    side: str | None = None,
+    auth: AuthContext = Depends(get_auth_context),
+    db: AsyncSession = Depends(get_db),
+):
+    """逐笔流水（分页 + 排序 + 筛选）。"""
+    await _load_owned_session(db, session_id, auth)
+
+    trades = await _load_trades(db, session_id, side=side)
+
+    # Sort
+    reverse = sort.startswith("-")
+    sort_key = sort.lstrip("-")
+    valid_keys = {"trade_date", "symbol", "realized_pnl", "total_fee", "quantity"}
+    if sort_key not in valid_keys:
+        sort_key = "trade_date"
+    trades.sort(key=lambda t: str(t.get(sort_key, "")), reverse=reverse)
+
+    # Paginate
+    start = (page - 1) * size
+    page_trades = trades[start : start + size]
+
+    # Compute return_pct for sells
+    result: list[TradeRowResponse] = []
+    for t in page_trades:
+        ret_pct = None
+        rpnl = t.get("realized_pnl")
+        cost = t.get("avg_cost_before")
+        px = float(t.get("price", 0))
+        if rpnl is not None and cost and cost > 0 and px > 0:
+            ret_pct = round((px - cost) / cost, 6)
+        result.append(
+            TradeRowResponse(
+                id=int(t.get("id", 0)),
+                trade_date=str(t.get("trade_date", "")),
+                symbol=str(t.get("symbol", "")),
+                side=str(t.get("side", "")),
+                origin=str(t.get("origin", "signal")),
+                quantity=float(t.get("quantity", 0)),
+                price=round(float(t.get("price", 0)), 4),
+                trade_value=round(float(t.get("trade_value", 0)), 2),
+                total_fee=round(float(t.get("total_fee", 0)), 2),
+                realized_pnl=round(float(rpnl), 2) if rpnl is not None else None,
+                avg_cost_before=round(float(cost), 4) if cost is not None else None,
+                holding_days=int(t["holding_days"]) if t.get("holding_days") is not None else None,
+                return_pct=ret_pct,
+            )
+        )
+    return result
+
+
+@router.get(
+    "/sessions/{session_id}/attribution",
+    response_model=list[AttributionRowResponse],
+)
+async def get_attribution(
+    session_id: uuid.UUID,
+    auth: AuthContext = Depends(get_auth_context),
+    db: AsyncSession = Depends(get_db),
+):
+    """个股归因：按 symbol 聚合盈亏/胜负/持有天数/贡献度。"""
+    await _load_owned_session(db, session_id, auth)
+
+    trades = await _load_trades(db, session_id)
+    return [AttributionRowResponse(**a) for a in compute_attribution(trades)]
+
+
+# ---------------------------------------------------------------------------
+# Report data loaders
+# ---------------------------------------------------------------------------
+
+
+async def _load_snapshots(
+    db: AsyncSession, session_id: uuid.UUID
+) -> list[dict[str, Any]]:
+    """加载 equity snapshots 为 plain dict 列表。"""
+    from backend.services.trade.simulation.models.replay import ReplayEquitySnapshot
+
+    rows = (
+        (
+            await db.execute(
+                select(ReplayEquitySnapshot)
+                .where(ReplayEquitySnapshot.session_id == session_id)
+                .order_by(ReplayEquitySnapshot.trade_date)
+            )
+        )
+        .scalars()
+        .all()
+    )
+    return [
+        {
+            "trade_date": r.trade_date,
+            "cash": float(r.cash),
+            "market_value": float(r.market_value),
+            "total_asset": float(r.total_asset),
+            "day_pnl": float(r.day_pnl),
+            "cum_pnl": float(r.cum_pnl),
+            "realized_pnl_cum": float(r.realized_pnl_cum),
+            "unrealized_pnl": float(r.unrealized_pnl),
+            "position_count": int(r.position_count),
+        }
+        for r in rows
+    ]
+
+
+async def _load_trades(
+    db: AsyncSession,
+    session_id: uuid.UUID,
+    side: str | None = None,
+) -> list[dict[str, Any]]:
+    """加载 trades 为 plain dict 列表。"""
+    from backend.services.trade.simulation.models.replay import ReplayTrade
+
+    q = select(ReplayTrade).where(ReplayTrade.session_id == session_id)
+    if side:
+        q = q.where(ReplayTrade.side == side)  # type: ignore[assignment]
+    rows = (await db.execute(q.order_by(ReplayTrade.trade_date))).scalars().all()
+    return [
+        {
+            "id": r.id,
+            "trade_date": r.trade_date,
+            "symbol": r.symbol,
+            "side": r.side.value if hasattr(r.side, "value") else str(r.side),
+            "origin": r.origin.value if hasattr(r.origin, "value") else str(r.origin),
+            "quantity": float(r.quantity),
+            "price": float(r.price),
+            "trade_value": float(r.trade_value),
+            "total_fee": float(r.total_fee),
+            "realized_pnl": float(r.realized_pnl) if r.realized_pnl is not None else None,
+            "avg_cost_before": float(r.avg_cost_before) if r.avg_cost_before is not None else None,
+            "holding_days": int(r.holding_days) if r.holding_days is not None else None,
+        }
+        for r in rows
+    ]
 
 
 # ---------------------------------------------------------------------------
