@@ -1381,6 +1381,9 @@ CREATE TABLE IF NOT EXISTS replay_trades (
     transfer_fee    FLOAT NOT NULL DEFAULT 0,
     total_fee       FLOAT NOT NULL DEFAULT 0,
     price_source    VARCHAR(64),
+    avg_cost_before FLOAT,
+    realized_pnl    FLOAT,
+    holding_days    INTEGER,
     executed_at     TIMESTAMP NOT NULL DEFAULT NOW(),
     created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     updated_at      TIMESTAMPTZ NOT NULL DEFAULT NOW()
@@ -1397,6 +1400,8 @@ CREATE TABLE IF NOT EXISTS replay_equity_snapshots (
     total_asset     FLOAT NOT NULL DEFAULT 0,
     day_pnl         FLOAT NOT NULL DEFAULT 0,
     cum_pnl         FLOAT NOT NULL DEFAULT 0,
+    realized_pnl_cum FLOAT NOT NULL DEFAULT 0,
+    unrealized_pnl  FLOAT NOT NULL DEFAULT 0,
     position_count  INTEGER NOT NULL DEFAULT 0,
     positions       JSONB NOT NULL DEFAULT '{}'::jsonb,
     created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),

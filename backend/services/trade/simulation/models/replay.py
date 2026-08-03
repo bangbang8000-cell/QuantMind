@@ -207,6 +207,15 @@ class ReplayTrade(Base, TimestampMixin):
     transfer_fee: Mapped[float] = mapped_column(Float, nullable=False, default=0.0)
     total_fee: Mapped[float] = mapped_column(Float, nullable=False, default=0.0)
     price_source: Mapped[str | None] = mapped_column(String(64), nullable=True)
+
+    # ── 盈亏归因（R1）──
+    # 卖出撮合**前**的移动加权成本。必须在 apply_fill 之前抓取：
+    # Lua 在 volume<=0.0001 时会删掉整个持仓 dict，清仓后 cost 永久丢失。
+    avg_cost_before: Mapped[float | None] = mapped_column(Float, nullable=True)
+    # 已实现盈亏（扣费后）。买入为 None —— 买入不产生已实现盈亏。
+    realized_pnl: Mapped[float | None] = mapped_column(Float, nullable=True)
+    # 持有天数（自然日，首次买入日 → 卖出日）。买入为 None。
+    holding_days: Mapped[int | None] = mapped_column(Integer, nullable=True)
     # 墙钟时间仅供排障，盈亏归因一律用 trade_date
     executed_at: Mapped[datetime] = mapped_column(
         DateTime, nullable=False, default=datetime.utcnow
@@ -268,6 +277,11 @@ class ReplayEquitySnapshot(Base, TimestampMixin):
     total_asset: Mapped[float] = mapped_column(Float, nullable=False, default=0.0)
     day_pnl: Mapped[float] = mapped_column(Float, nullable=False, default=0.0)
     cum_pnl: Mapped[float] = mapped_column(Float, nullable=False, default=0.0)
+    # ── 盈亏拆分（R1）──
+    # 累计已实现盈亏（当日及之前所有卖出的 realized_pnl 之和）
+    realized_pnl_cum: Mapped[float] = mapped_column(Float, nullable=False, default=0.0)
+    # 当日浮动盈亏 = Σ (收盘价 - 移动加权成本) × 持仓量
+    unrealized_pnl: Mapped[float] = mapped_column(Float, nullable=False, default=0.0)
     position_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     positions: Mapped[dict] = mapped_column(JSONB, nullable=False, default=dict)
 

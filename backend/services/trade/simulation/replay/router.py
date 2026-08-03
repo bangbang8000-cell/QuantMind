@@ -298,17 +298,25 @@ async def list_sessions(
     return [_session_to_response(r) for r in rows]
 
 
-@router.get("/sessions/{session_id}", response_model=SessionResponse)
-async def get_session_detail(
+async def _load_owned_session(
+    db: AsyncSession,
     session_id: uuid.UUID,
-    auth: AuthContext = Depends(get_auth_context),
-    db: AsyncSession = Depends(get_db),
-):
-    """查看会话详情 + 信号生成进度。"""
+    auth: AuthContext,
+) -> ReplaySession:
+    """按 session_id 取会话，并校验 tenant/user 归属。
+
+    bug 9 fix: 原先 GET/{id}、step、DELETE 都只按 session_id 查，
+    任意用户可读写他人会话。
+    """
+    uid = int(auth.user_id) if str(auth.user_id).isdigit() else 0
     row = (
         (
             await db.execute(
-                select(ReplaySession).where(ReplaySession.session_id == session_id)
+                select(ReplaySession).where(
+                    ReplaySession.session_id == session_id,
+                    ReplaySession.tenant_id == auth.tenant_id,
+                    ReplaySession.user_id == uid,
+                )
             )
         )
         .scalars()
@@ -316,6 +324,17 @@ async def get_session_detail(
     )
     if not row:
         raise HTTPException(404, "会话不存在")
+    return row
+
+
+@router.get("/sessions/{session_id}", response_model=SessionResponse)
+async def get_session_detail(
+    session_id: uuid.UUID,
+    auth: AuthContext = Depends(get_auth_context),
+    db: AsyncSession = Depends(get_db),
+):
+    """查看会话详情 + 信号生成进度。"""
+    row = await _load_owned_session(db, session_id, auth)
     return _session_to_response(row)
 
 
@@ -327,17 +346,7 @@ async def step_session(
     db: AsyncSession = Depends(get_db),
 ):
     """单步推演：执行下一个交易日。stepping 状态返回 409 防连点。"""
-    row = (
-        (
-            await db.execute(
-                select(ReplaySession).where(ReplaySession.session_id == session_id)
-            )
-        )
-        .scalars()
-        .first()
-    )
-    if not row:
-        raise HTTPException(404, "会话不存在")
+    row = await _load_owned_session(db, session_id, auth)
 
     if row.status == ReplayStatus.STEPPING:
         raise HTTPException(409, "正在执行中，请勿重复点击")
@@ -372,12 +381,20 @@ async def step_session(
             strategy_params=row.strategy_params,
             stop_loss_pct=row.stop_loss_pct,
             approved_orders=(req.approved_orders if req else None),
+            initial_cash=float(row.initial_cash),
         )
     except Exception as exc:
         row.status = ReplayStatus.FAILED
         row.error_message = str(exc)[:500]
         await db.commit()
         raise HTTPException(500, f"推演失败: {exc}") from None
+
+    # bug 3 fix: run_day 内部报错时不推进游标，否则会静默跳过一天、曲线断档
+    if result.error:
+        row.status = ReplayStatus.FAILED
+        row.error_message = result.error[:500]
+        await db.commit()
+        raise HTTPException(500, f"推演失败: {result.error}")
 
     # 更新游标
     market_data = get_local_market_data()
@@ -409,17 +426,7 @@ async def delete_session(
     db: AsyncSession = Depends(get_db),
 ):
     """丢弃会话：CASCADE 删除所有关联数据 + 清除 Redis 账户。"""
-    row = (
-        (
-            await db.execute(
-                select(ReplaySession).where(ReplaySession.session_id == session_id)
-            )
-        )
-        .scalars()
-        .first()
-    )
-    if not row:
-        raise HTTPException(404, "会话不存在")
+    row = await _load_owned_session(db, session_id, auth)
 
     # 清除 Redis 账户
     accounts = ReplayAccountManager(session_id=session_id)

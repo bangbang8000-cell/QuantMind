@@ -72,7 +72,26 @@ class DayResult:
     stop_loss_fills: list[dict[str, Any]] = field(default_factory=list)
     account: dict[str, Any] = field(default_factory=dict)
     snapshot: dict[str, Any] = field(default_factory=dict)
+    # 当日已实现盈亏合计（所有卖出之和），用于写入 equity snapshot
+    realized_pnl_today: float = 0.0
     error: str | None = None
+
+
+def _compute_holding_days(first_buy_date: Any, sell_date: date) -> int | None:
+    """持有天数（自然日）。first_buy_date 为 ISO 字符串或 None。"""
+    if not first_buy_date:
+        return None
+    try:
+        if isinstance(first_buy_date, str):
+            fbd = date.fromisoformat(first_buy_date[:10])
+        elif isinstance(first_buy_date, date):
+            fbd = first_buy_date
+        else:
+            return None
+    except (ValueError, TypeError):
+        return None
+    delta = (sell_date - fbd).days
+    return delta if delta >= 0 else None
 
 
 def resolve_stop_fill_price(bar: DailyBar, stop_price: float) -> float:
@@ -113,6 +132,7 @@ class ReplayDayRunner:
         strategy_params: dict[str, Any] | None = None,
         stop_loss_pct: float | None = None,
         approved_orders: list[dict[str, Any]] | None = None,
+        initial_cash: float = 0.0,
     ) -> DayResult:
         result = DayResult(trade_date=trade_date)
 
@@ -171,7 +191,12 @@ class ReplayDayRunner:
         account_data = await accounts.get() or {}
         result.account = await self._mark_to_market(accounts, account_data, bars)
         result.snapshot = await self._write_snapshot(
-            db, session_id, trade_date, result.account
+            db,
+            session_id,
+            trade_date,
+            result.account,
+            initial_cash=initial_cash,
+            realized_pnl_today=result.realized_pnl_today,
         )
         return result
 
@@ -228,7 +253,7 @@ class ReplayDayRunner:
                 )
                 continue
 
-            await self._persist_fill(
+            realized = await self._persist_fill(
                 db,
                 session_id,
                 trade_date,
@@ -242,7 +267,12 @@ class ReplayDayRunner:
                 transfer_fee,
                 total_fee,
                 price_source="stop_loss",
+                avg_cost_before=cost,
+                holding_days=_compute_holding_days(
+                    pos.get("first_buy_date"), trade_date
+                ),
             )
+            result.realized_pnl_today += realized
             result.stop_loss_fills.append(
                 {
                     "symbol": symbol,
@@ -250,6 +280,8 @@ class ReplayDayRunner:
                     "price": fill_price,
                     "stop_price": round(stop_price, 4),
                     "total_fee": round(total_fee, 2),
+                    "realized_pnl": round(realized, 2),
+                    "avg_cost": round(cost, 4),
                     "gap_down": bar.open < stop_price,
                 }
             )
@@ -340,6 +372,9 @@ class ReplayDayRunner:
 
         side = order.side.lower()
         available_volume = None
+        # 卖出前抓取移动加权成本与首次买入日 —— apply_fill 之后 Lua 可能删掉持仓
+        avg_cost_before: float | None = None
+        holding_days: int | None = None
         if side == "sell":
             account_data = await accounts.get() or {}
             pos = (account_data.get("positions") or {}).get(order.symbol)
@@ -348,6 +383,9 @@ class ReplayDayRunner:
                 available_volume = (
                     float(pos.get("volume", 0)) if avail is None else float(avail)
                 )
+                cost = float(pos.get("cost") or 0.0)
+                avg_cost_before = cost if cost > 0 else None
+                holding_days = _compute_holding_days(pos.get("first_buy_date"), trade_date)
 
         mr = match_order(
             side=side,
@@ -395,7 +433,7 @@ class ReplayDayRunner:
             )
             return
 
-        await self._persist_fill(
+        realized = await self._persist_fill(
             db,
             session_id,
             trade_date,
@@ -409,7 +447,13 @@ class ReplayDayRunner:
             mr.transfer_fee,
             mr.total_fee,
             price_source=f"local_{self._cfg.price_mode}",
+            avg_cost_before=avg_cost_before,
+            holding_days=holding_days,
         )
+        result.realized_pnl_today += realized
+        # 买入后记录首次买入日，供后续卖出算持有天数
+        if side == "buy":
+            await self._stamp_first_buy_date(accounts, order.symbol, trade_date)
         result.filled.append(
             {
                 "symbol": order.symbol,
@@ -417,9 +461,32 @@ class ReplayDayRunner:
                 "quantity": mr.fill_quantity,
                 "price": mr.fill_price,
                 "total_fee": round(mr.total_fee, 2),
+                "realized_pnl": round(realized, 2) if side == "sell" else None,
+                "avg_cost": round(avg_cost_before, 4) if avg_cost_before else None,
+                "holding_days": holding_days,
                 "reason": order.reason,
             }
         )
+
+    async def _stamp_first_buy_date(
+        self,
+        accounts: ReplayAccountManager,
+        symbol: str,
+        trade_date: date,
+    ) -> None:
+        """买入后在持仓上打首次买入日戳（已有则不覆盖）。
+
+        Lua 只维护 volume/available_volume/cost/price/market_value，
+        first_buy_date 是回放侧扩展字段，用整体回写方式落到 Redis。
+        """
+        account_data = await accounts.get()
+        if not account_data:
+            return
+        pos = (account_data.get("positions") or {}).get(symbol)
+        if not pos or pos.get("first_buy_date"):
+            return
+        pos["first_buy_date"] = trade_date.isoformat()
+        accounts.write(account_data)
 
     async def _persist_fill(
         self,
@@ -436,7 +503,14 @@ class ReplayDayRunner:
         transfer_fee: float,
         total_fee: float,
         price_source: str,
-    ) -> None:
+        avg_cost_before: float | None = None,
+        holding_days: int | None = None,
+    ) -> float:
+        """落库委托 + 成交，返回本笔已实现盈亏（买入返回 0.0）。
+
+        avg_cost_before 必须由调用方在 apply_fill **之前**抓取 —— Lua 在
+        volume<=0.0001 时会删掉整个持仓 dict，清仓后 cost 永久丢失。
+        """
         order_row = ReplayOrder(
             session_id=session_id,
             trade_date=trade_date,
@@ -455,6 +529,12 @@ class ReplayDayRunner:
         )
         db.add(order_row)
         await db.flush()
+
+        # 已实现盈亏仅在卖出时产生：(卖价 - 移动加权成本) × 数量 - 全部费用
+        realized_pnl: float | None = None
+        if side == OrderSide.SELL and avg_cost_before is not None and avg_cost_before > 0:
+            realized_pnl = (price - avg_cost_before) * quantity - total_fee
+
         db.add(
             ReplayTrade(
                 session_id=session_id,
@@ -471,8 +551,12 @@ class ReplayDayRunner:
                 transfer_fee=transfer_fee,
                 total_fee=total_fee,
                 price_source=price_source,
+                avg_cost_before=avg_cost_before,
+                realized_pnl=realized_pnl,
+                holding_days=holding_days,
             )
         )
+        return realized_pnl or 0.0
 
     async def _persist_rejected(
         self,
@@ -533,6 +617,8 @@ class ReplayDayRunner:
         session_id: uuid.UUID,
         trade_date: date,
         account: dict[str, Any],
+        initial_cash: float = 0.0,
+        realized_pnl_today: float = 0.0,
     ) -> dict[str, Any]:
         prev = (
             (
@@ -548,8 +634,25 @@ class ReplayDayRunner:
         )
 
         total_asset = float(account.get("total_asset") or 0.0)
-        day_pnl = total_asset - float(prev.total_asset) if prev else 0.0
         positions = account.get("positions") or {}
+
+        if prev:
+            day_pnl = total_asset - float(prev.total_asset)
+        else:
+            # bug 1 fix: 首日以 initial_cash 为基准，正确计入买入手续费和当日涨跌
+            day_pnl = total_asset - initial_cash
+
+        # 已实现盈亏累计 = 上一日累计 + 当日已实现
+        realized_pnl_cum = (float(prev.realized_pnl_cum) + realized_pnl_today) if prev else realized_pnl_today
+
+        # 浮动盈亏 = Σ (收盘价 - 成本价) × 持仓量
+        unrealized_pnl = 0.0
+        for _sym, pos in positions.items():
+            cost = float(pos.get("cost") or 0.0)
+            vol = float(pos.get("volume") or 0.0)
+            price = float(pos.get("price") or 0.0)
+            if cost > 0 and vol > 0:
+                unrealized_pnl += (price - cost) * vol
 
         existing = (
             (
@@ -572,6 +675,8 @@ class ReplayDayRunner:
         row.total_asset = total_asset
         row.day_pnl = day_pnl
         row.cum_pnl = (float(prev.cum_pnl) + day_pnl) if prev else day_pnl
+        row.realized_pnl_cum = realized_pnl_cum
+        row.unrealized_pnl = unrealized_pnl
         row.position_count = len(positions)
         row.positions = positions
         if existing is None:
@@ -584,5 +689,7 @@ class ReplayDayRunner:
             "total_asset": row.total_asset,
             "day_pnl": row.day_pnl,
             "cum_pnl": row.cum_pnl,
+            "realized_pnl_cum": row.realized_pnl_cum,
+            "unrealized_pnl": row.unrealized_pnl,
             "position_count": row.position_count,
         }
