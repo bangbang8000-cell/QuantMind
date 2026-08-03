@@ -4,6 +4,7 @@ POST   /sessions                   创建回放会话（后台生成信号，轮
 GET    /sessions                   列出当前用户的会话
 GET    /sessions/{id}              查看会话详情 + 进度
 POST   /sessions/{id}/step         单步推演（执行下一个交易日）
+POST   /sessions/{id}/propose      生成当日提案（手动模式）
 DELETE /sessions/{id}              丢弃会话
 GET    /strategy-templates         可选策略模板（含参数定义，供前端渲染表单）
 """
@@ -28,6 +29,7 @@ from backend.services.trade.simulation.models.replay import (
 )
 from backend.services.trade.simulation.replay.account import ReplayAccountManager
 from backend.services.trade.simulation.replay.day_runner import ReplayDayRunner
+from backend.services.trade.simulation.replay.proposal import validate_confirmed
 from backend.services.trade.simulation.replay.signal_generator import (
     ReplaySignalGenerator,
 )
@@ -84,15 +86,54 @@ class CreateSessionRequest(BaseModel):
     initial_cash: float = Field(default=1_000_000.0, gt=0)
     start_date: date = Field(description="回放起始日（含）")
     end_date: date = Field(description="回放结束日（含）")
-    auto_trade: bool = Field(default=True, description="S1 仅支持自动交易")
+    auto_trade: bool = Field(
+        default=True,
+        description="true=自动执行策略提案；false=手动模式，需先 /propose 再带 confirmed 调 /step",
+    )
     stop_loss_pct: float | None = Field(default=None, ge=0, le=1)
 
 
+class ConfirmedOrder(BaseModel):
+    symbol: str
+    side: str = Field(description="BUY | SELL")
+    quantity: int = Field(gt=0)
+
+
 class StepRequest(BaseModel):
+    # 手动模式：用户勾选并（可选）调小数量后的确认清单。
+    # 只能是提案的子集且数量只能调小，止损笔无论是否勾选都强制执行。
+    confirmed: list[ConfirmedOrder] | None = Field(
+        default=None, description="手动模式确认清单"
+    )
+    skip: bool = Field(
+        default=False, description="跳过今日：不下单，只做收盘估值并推进游标"
+    )
     approved_orders: list[dict[str, Any]] | None = Field(
         default=None,
-        description="手动模式下的确认委托列表（S1 暂不使用）",
+        description="[deprecated] 旧字段，等价于 confirmed，保留以兼容既有调用",
     )
+
+
+class ProposalItem(BaseModel):
+    symbol: str
+    side: str
+    quantity: int
+    est_price: float
+    origin: str
+    cancellable: bool
+    reason: str = ""
+    avg_cost: float | None = None
+    est_pnl: float | None = None
+    est_amount: float | None = None
+    stop_price: float | None = None
+    gap_down: bool | None = None
+
+
+class ProposalResponse(BaseModel):
+    trade_date: str
+    signal_count: int
+    proposals: list[ProposalItem]
+    error: str | None = None
 
 
 class SessionResponse(BaseModel):
@@ -422,6 +463,78 @@ async def get_session_detail(
     return _session_to_response(row)
 
 
+@router.post("/sessions/{session_id}/propose", response_model=ProposalResponse)
+async def propose_day(
+    session_id: uuid.UUID,
+    auth: AuthContext = Depends(get_auth_context),
+    db: AsyncSession = Depends(get_db),
+):
+    """生成当日调仓提案（手动模式）。不撮合、不落库，只写 pending_orders。
+
+    幂等：已处于 awaiting_confirm 时直接返回已存提案，不重算 —— 避免用户
+    刷新页面后提案变化（信号虽固定，但账户可能已被其他操作改动）。
+    """
+    row = await _load_owned_session(db, session_id, auth)
+
+    if row.auto_trade:
+        raise HTTPException(400, "自动模式无需提案，请直接调用 /step")
+    if row.status == ReplayStatus.GENERATING:
+        raise HTTPException(409, "信号生成中，请等待")
+    if row.status == ReplayStatus.STEPPING:
+        raise HTTPException(409, "正在执行中，请稍候")
+    if row.status in (
+        ReplayStatus.FINISHED,
+        ReplayStatus.FAILED,
+        ReplayStatus.DISCARDED,
+    ):
+        raise HTTPException(400, f"会话已终止（{row.status.value}）")
+    if row.next_date is None:
+        row.status = ReplayStatus.FINISHED
+        await db.commit()
+        raise HTTPException(400, "已到达回放终点")
+
+    # 幂等返回
+    if row.status == ReplayStatus.AWAITING_CONFIRM and row.pending_orders:
+        cached = row.pending_orders
+        return ProposalResponse(
+            trade_date=cached.get("trade_date", row.next_date.isoformat()),
+            signal_count=int(cached.get("signal_count") or 0),
+            proposals=[ProposalItem(**p) for p in cached.get("proposals", [])],
+        )
+
+    accounts = ReplayAccountManager(session_id=session_id)
+    runner = ReplayDayRunner()
+    try:
+        out = await runner.propose_day(
+            db=db,
+            session_id=session_id,
+            trade_date=row.next_date,
+            accounts=accounts,
+            strategy_params=row.strategy_params,
+            stop_loss_pct=row.stop_loss_pct,
+        )
+    except Exception as exc:
+        logger.exception("生成提案失败 session=%s", session_id)
+        raise HTTPException(500, f"生成提案失败: {exc}") from None
+
+    if out.get("error"):
+        raise HTTPException(500, f"生成提案失败: {out['error']}")
+
+    row.pending_orders = {
+        "trade_date": out["trade_date"],
+        "signal_count": out["signal_count"],
+        "proposals": out["proposals"],
+    }
+    row.status = ReplayStatus.AWAITING_CONFIRM
+    await db.commit()
+
+    return ProposalResponse(
+        trade_date=out["trade_date"],
+        signal_count=out["signal_count"],
+        proposals=[ProposalItem(**p) for p in out["proposals"]],
+    )
+
+
 @router.post("/sessions/{session_id}/step", response_model=StepResponse)
 async def step_session(
     session_id: uuid.UUID,
@@ -429,7 +542,13 @@ async def step_session(
     auth: AuthContext = Depends(get_auth_context),
     db: AsyncSession = Depends(get_db),
 ):
-    """单步推演：执行下一个交易日。stepping 状态返回 409 防连点。"""
+    """单步推演：执行下一个交易日。stepping 状态返回 409 防连点。
+
+    三条路径：
+    - auto_trade=true          → 策略提案直接执行（忽略 confirmed）
+    - auto_trade=false + skip  → 不下单，只结算并推进游标
+    - auto_trade=false + confirmed → 服务端复校验后按清单执行
+    """
     row = await _load_owned_session(db, session_id, auth)
 
     if row.status == ReplayStatus.STEPPING:
@@ -448,26 +567,66 @@ async def step_session(
         await db.commit()
         raise HTTPException(400, "已到达回放终点")
 
-    # 标记 stepping
+    skip = bool(req.skip) if req else False
+    # confirmed 为主，approved_orders 是兼容旧字段
+    confirmed_in: list[dict[str, Any]] | None = None
+    if req is not None:
+        if req.confirmed is not None:
+            confirmed_in = [c.model_dump() for c in req.confirmed]
+        elif req.approved_orders is not None:
+            confirmed_in = req.approved_orders
+
+    manual = not row.auto_trade
+    validation_rejected: list[dict[str, Any]] = []
+    accepted: list[dict[str, Any]] = []
+
+    if manual and not skip:
+        if row.status != ReplayStatus.AWAITING_CONFIRM or not row.pending_orders:
+            raise HTTPException(400, "手动模式请先调用 /propose 生成提案")
+        if confirmed_in is None:
+            raise HTTPException(400, "手动模式需提供 confirmed 确认清单")
+        proposals = (row.pending_orders or {}).get("proposals") or []
+        account_data = await ReplayAccountManager(session_id=session_id).get() or {}
+        accepted, validation_rejected = validate_confirmed(
+            confirmed=confirmed_in,
+            proposals=proposals,
+            account_data=account_data,
+            lot_size=int((row.strategy_params or {}).get("lot_size", 100)),
+        )
+
+    prev_status = row.status
     row.status = ReplayStatus.STEPPING
     await db.commit()
 
     try:
         accounts = ReplayAccountManager(session_id=session_id)
         runner = ReplayDayRunner()
-        result = await runner.run_day(
-            db=db,
-            session_id=session_id,
-            trade_date=row.next_date,
-            tenant_id=row.tenant_id,
-            user_id=str(row.user_id),
-            accounts=accounts,
-            strategy_params=row.strategy_params,
-            stop_loss_pct=row.stop_loss_pct,
-            approved_orders=(req.approved_orders if req else None),
-            initial_cash=float(row.initial_cash),
-            match_config=_match_config_from_params(row.strategy_params or {}),
-        )
+        cfg = _match_config_from_params(row.strategy_params or {})
+        if manual:
+            result = await runner.execute_day(
+                db=db,
+                session_id=session_id,
+                trade_date=row.next_date,
+                accounts=accounts,
+                accepted=accepted,
+                initial_cash=float(row.initial_cash),
+                match_config=cfg,
+                skip=skip,
+            )
+        else:
+            result = await runner.run_day(
+                db=db,
+                session_id=session_id,
+                trade_date=row.next_date,
+                tenant_id=row.tenant_id,
+                user_id=str(row.user_id),
+                accounts=accounts,
+                strategy_params=row.strategy_params,
+                stop_loss_pct=row.stop_loss_pct,
+                approved_orders=None,
+                initial_cash=float(row.initial_cash),
+                match_config=cfg,
+            )
     except Exception as exc:
         row.status = ReplayStatus.FAILED
         row.error_message = str(exc)[:500]
@@ -476,10 +635,14 @@ async def step_session(
 
     # bug 3 fix: run_day 内部报错时不推进游标，否则会静默跳过一天、曲线断档
     if result.error:
-        row.status = ReplayStatus.FAILED
+        row.status = prev_status
         row.error_message = result.error[:500]
         await db.commit()
         raise HTTPException(500, f"推演失败: {result.error}")
+
+    # 校验阶段的拒绝要合并进返回，否则用户不知道自己哪笔被驳回
+    if validation_rejected:
+        result.rejected = validation_rejected + result.rejected
 
     # 更新游标
     market_data = get_local_market_data()
@@ -490,6 +653,7 @@ async def step_session(
         row.cursor_date, row.start_date, row.end_date, sessions
     )
     row.status = ReplayStatus.READY if row.next_date else ReplayStatus.FINISHED
+    row.pending_orders = None  # 已执行/跳过，清空提案
     await db.commit()
 
     return StepResponse(

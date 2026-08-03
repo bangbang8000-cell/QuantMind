@@ -37,6 +37,11 @@ from backend.services.trade.simulation.models.replay import (
     ReplayTrade,
 )
 from backend.services.trade.simulation.replay.account import ReplayAccountManager
+from backend.services.trade.simulation.replay.proposal import (
+    resolve_stop_fill_price,
+    scan_stop_loss,
+    simulate_fills,
+)
 from backend.services.trade.simulation.services.ashare_matcher import (
     MatchConfig,
     compute_fees,
@@ -94,20 +99,6 @@ def _compute_holding_days(first_buy_date: Any, sell_date: date) -> int | None:
     return delta if delta >= 0 else None
 
 
-def resolve_stop_fill_price(bar: DailyBar, stop_price: float) -> float:
-    """止损成交价。
-
-    触发条件用当日最低价，但**成交价不能好于当日实际能成交的价格**：
-    跳空开盘时 open 已经低于 stop，按 stop 成交等于卖在一个当天不存在的价位
-    （实测 2026-07-28 有 60 只跳空，最差 301512.SZ 前收 39.82 / 开 27.39），
-    会让回放净值系统性偏高。故取 min(stop, open)，再受跌停价钳制。
-    """
-    price = min(stop_price, bar.open) if bar.open > 0 else stop_price
-    if bar.limit_down > 0:
-        price = max(price, bar.limit_down)
-    return round(price, 4)
-
-
 class ReplayDayRunner:
     def __init__(
         self,
@@ -141,25 +132,13 @@ class ReplayDayRunner:
         # 覆盖 __init__ 中的默认值。不直接修改 self._cfg 以保持构造时的引用不变。
         cfg = match_config or self._cfg
 
-        account_data = await accounts.get()
-        if not account_data:
+        account_data, signals, bars = await self._prepare_day(
+            db, session_id, trade_date, accounts
+        )
+        if account_data is None:
             result.error = "回放账户不存在"
             return result
-
-        # 2. T+1 解锁：昨日买入的今日可卖
-        await accounts.unlock()
-        account_data = await accounts.get() or {}
-
-        held = list((account_data.get("positions") or {}).keys())
-        signals = await self._loader.load_signals_for_date(
-            db=db,
-            session_id=session_id,
-            trade_date=trade_date,
-        )
         result.signal_count = len(signals)
-
-        wanted = sorted(set(held) | {s.symbol for s in signals})
-        bars = self._market_data.load_date(trade_date, symbols=wanted) if wanted else {}
 
         # 3. 止损扫描
         if stop_loss_pct and stop_loss_pct > 0:
@@ -205,6 +184,264 @@ class ReplayDayRunner:
             realized_pnl_today=result.realized_pnl_today,
         )
         return result
+
+    async def execute_day(
+        self,
+        db: AsyncSession,
+        session_id: uuid.UUID,
+        trade_date: date,
+        accounts: ReplayAccountManager,
+        accepted: list[dict[str, Any]],
+        initial_cash: float = 0.0,
+        match_config: MatchConfig | None = None,
+        skip: bool = False,
+    ) -> DayResult:
+        """手动模式执行：按已校验的确认清单撮合。
+
+        skip=True 时不下任何单，只做收盘估值与快照（用于「跳过今日」）。
+        accepted 必须来自 validate_confirmed() —— 本方法不再做业务校验，
+        只保留撮合层的硬约束（涨跌停/停牌/可卖量由 match_order 兜底）。
+        """
+        result = DayResult(trade_date=trade_date)
+        cfg = match_config or self._cfg
+
+        account_data, signals, bars = await self._prepare_day(
+            db, session_id, trade_date, accounts
+        )
+        if account_data is None:
+            result.error = "回放账户不存在"
+            return result
+        result.signal_count = len(signals)
+
+        if not skip:
+            # 止损笔走 stop_loss origin 与专用成交价；其余走普通撮合
+            for item in accepted:
+                if item.get("origin") == "stop_loss":
+                    await self._execute_stop_loss_one(
+                        db, session_id, trade_date, accounts, bars, item, result, cfg
+                    )
+            for item in accepted:
+                if item.get("origin") == "stop_loss":
+                    continue
+                bar = bars.get(item["symbol"])
+                if bar is None:
+                    result.rejected.append(
+                        {
+                            "symbol": item["symbol"],
+                            "side": item["side"],
+                            "reason": "NO_MARKET_DATA",
+                        }
+                    )
+                    continue
+                order = Order(
+                    symbol=item["symbol"],
+                    side=item["side"],
+                    quantity=int(item["quantity"]),
+                    price=bar.open or bar.close,
+                    reason=item.get("reason") or "manual",
+                )
+                await self._execute(
+                    db,
+                    session_id,
+                    trade_date,
+                    accounts,
+                    bars,
+                    order,
+                    result,
+                    origin=OrderOrigin.MANUAL,
+                    cfg=cfg,
+                )
+
+        account_data = await accounts.get() or {}
+        result.account = await self._mark_to_market(accounts, account_data, bars)
+        result.snapshot = await self._write_snapshot(
+            db,
+            session_id,
+            trade_date,
+            result.account,
+            initial_cash=initial_cash,
+            realized_pnl_today=result.realized_pnl_today,
+        )
+        return result
+
+    async def _execute_stop_loss_one(
+        self,
+        db: AsyncSession,
+        session_id: uuid.UUID,
+        trade_date: date,
+        accounts: ReplayAccountManager,
+        bars: dict[str, DailyBar],
+        item: dict[str, Any],
+        result: DayResult,
+        cfg: MatchConfig,
+    ) -> None:
+        """执行单笔止损（手动模式下止损强制执行，复用 auto 路径的价格逻辑）。"""
+        symbol = item["symbol"]
+        bar = bars.get(symbol)
+        if bar is None or bar.suspended:
+            result.rejected.append(
+                {"symbol": symbol, "side": "SELL", "origin": "stop_loss",
+                 "reason": "NO_MARKET_DATA" if bar is None else "SUSPENDED"}
+            )
+            return
+        account_data = await accounts.get() or {}
+        pos = (account_data.get("positions") or {}).get(symbol)
+        if not pos:
+            return
+        cost = float(pos.get("cost") or 0.0)
+        stop_price = float(item.get("stop_price") or 0.0)
+        if cost <= 0 or stop_price <= 0:
+            return
+        avail = pos.get("available_volume")
+        cap = int(float(pos.get("volume", 0)) if avail is None else float(avail))
+        qty = min(int(item["quantity"]), cap)
+        if qty <= 0:
+            return
+        fill_price = resolve_stop_fill_price(bar, stop_price)
+        if fill_price <= 0:
+            return
+        commission, stamp_duty, transfer_fee, total_fee = compute_fees(
+            qty, fill_price, "sell", cfg
+        )
+        update = await accounts.apply_fill(
+            symbol=symbol,
+            delta_cash=qty * fill_price - total_fee,
+            delta_volume=-qty,
+            price=fill_price,
+        )
+        if not update.get("success"):
+            result.rejected.append(
+                {"symbol": symbol, "side": "SELL", "origin": "stop_loss",
+                 "reason": update.get("reason", "BALANCE_UPDATE_FAILED")}
+            )
+            return
+        realized = await self._persist_fill(
+            db, session_id, trade_date, symbol, OrderSide.SELL,
+            OrderOrigin.STOP_LOSS, qty, fill_price,
+            commission, stamp_duty, transfer_fee, total_fee,
+            price_source="stop_loss",
+            avg_cost_before=cost,
+            holding_days=_compute_holding_days(pos.get("first_buy_date"), trade_date),
+        )
+        result.realized_pnl_today += realized
+        result.stop_loss_fills.append(
+            {
+                "symbol": symbol,
+                "quantity": qty,
+                "price": fill_price,
+                "stop_price": round(stop_price, 4),
+                "total_fee": round(total_fee, 2),
+                "realized_pnl": round(realized, 2),
+                "avg_cost": round(cost, 4),
+                "gap_down": bar.open < stop_price,
+            }
+        )
+
+    # ------------------------------------------------------------------
+    # 手动模式：propose / execute 拆分
+    # ------------------------------------------------------------------
+
+    async def _prepare_day(
+        self,
+        db: AsyncSession,
+        session_id: uuid.UUID,
+        trade_date: date,
+        accounts: ReplayAccountManager,
+    ) -> tuple[dict[str, Any] | None, list, dict[str, DailyBar]]:
+        """当日准备：T+1 解锁 → 载信号 → 载行情。
+
+        run_day / propose_day / execute_day 共用，保证三条路径看到的
+        账户、信号、行情完全一致。
+        """
+        account_data = await accounts.get()
+        if not account_data:
+            return None, [], {}
+
+        await accounts.unlock()
+        account_data = await accounts.get() or {}
+
+        held = list((account_data.get("positions") or {}).keys())
+        signals = await self._loader.load_signals_for_date(
+            db=db,
+            session_id=session_id,
+            trade_date=trade_date,
+        )
+        wanted = sorted(set(held) | {s.symbol for s in signals})
+        bars = self._market_data.load_date(trade_date, symbols=wanted) if wanted else {}
+        return account_data, signals, bars
+
+    async def propose_day(
+        self,
+        db: AsyncSession,
+        session_id: uuid.UUID,
+        trade_date: date,
+        accounts: ReplayAccountManager,
+        strategy_params: dict[str, Any] | None = None,
+        stop_loss_pct: float | None = None,
+    ) -> dict[str, Any]:
+        """生成当日提案，不撮合不落库。
+
+        返回 {trade_date, signal_count, proposals, account}。
+        proposals 每项含 symbol/side/quantity/est_price/origin/cancellable/reason，
+        卖出附 avg_cost/est_pnl，买入附 est_amount。
+        """
+        account_data, signals, bars = await self._prepare_day(
+            db, session_id, trade_date, accounts
+        )
+        if account_data is None:
+            return {
+                "trade_date": trade_date.isoformat(),
+                "signal_count": 0,
+                "proposals": [],
+                "account": {},
+                "error": "回放账户不存在",
+            }
+
+        proposals: list[dict[str, Any]] = []
+
+        # 1. 止损提案（强制执行，不可取消）
+        if stop_loss_pct and stop_loss_pct > 0:
+            proposals.extend(scan_stop_loss(account_data, bars, stop_loss_pct))
+
+        # 2. 调仓提案 —— 基于「止损之后」的模拟账户，与 auto 模式对齐
+        sim_account = simulate_fills(account_data, proposals)
+        orders = self._build_orders(
+            signals=signals,
+            bars=bars,
+            account_data=sim_account,
+            strategy_params=strategy_params or {},
+            approved_orders=None,
+        )
+        held_now = sim_account.get("positions") or {}
+        for o in sorted(orders, key=lambda x: 0 if x.side == "SELL" else 1):
+            item: dict[str, Any] = {
+                "symbol": o.symbol,
+                "side": o.side,
+                "quantity": int(o.quantity),
+                "est_price": round(float(o.price), 4),
+                "origin": "signal",
+                "cancellable": True,
+                "reason": o.reason,
+            }
+            if o.side == "SELL":
+                pos = held_now.get(o.symbol) or {}
+                cost = float(pos.get("cost") or 0.0)
+                if cost > 0:
+                    item["avg_cost"] = round(cost, 4)
+                    item["est_pnl"] = round(
+                        (float(o.price) - cost) * int(o.quantity), 2
+                    )
+            else:
+                item["est_amount"] = round(float(o.price) * int(o.quantity), 2)
+            proposals.append(item)
+
+        return {
+            "trade_date": trade_date.isoformat(),
+            "signal_count": len(signals),
+            "proposals": proposals,
+            "account": account_data,
+            "error": None,
+        }
 
     # ------------------------------------------------------------------
 

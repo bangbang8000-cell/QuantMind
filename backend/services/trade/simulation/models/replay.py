@@ -56,6 +56,8 @@ class ReplayStatus(str, enum.Enum):
     CREATING = "creating"
     GENERATING = "generating"  # 批量预生成信号中
     READY = "ready"
+    # 手动模式：已生成当日提案，等用户勾选确认。提案存在 pending_orders。
+    AWAITING_CONFIRM = "awaiting_confirm"
     STEPPING = "stepping"  # 单步执行中，用于防连点
     FINISHED = "finished"
     FAILED = "failed"
