@@ -15,6 +15,7 @@ import asyncio
 import logging
 import uuid
 from datetime import date
+from pathlib import Path
 from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, status
@@ -228,6 +229,108 @@ def _count_sessions(start: date, end: date, sessions: list[int]) -> int:
 
 
 # ---------------------------------------------------------------------------
+# 模型目录解析（生产模型 + 用户训练模型）
+# ---------------------------------------------------------------------------
+
+
+async def _resolve_model_dir_for_user(
+    model_id: str,
+    tenant_id: str,
+    user_id: str,
+) -> Path:
+    """解析 model_id 对应的模型目录，并校验可用性。
+
+    回放的模型有两类存放位置：
+    - 系统/生产模型：MODELS_PRODUCTION/<model_id>（如 model_qlib、alpha158）
+    - 用户训练模型：qm_user_models.storage_path（USER_MODELS_ROOT/<tenant>/<user>/<id>）
+
+    先查生产目录，再查用户模型注册表。两者都找不到才报错 —— 原实现只查
+    生产目录，导致用户选自己训练的模型必然 400「模型不存在」。
+
+    抛 HTTPException(400) 而不是静默回落到默认模型：用户以为在跑自选模型、
+    实际跑的是 model_qlib，比直接报错更难排查。
+    """
+    import json as _json
+    import os as _os
+
+    # 1. 生产模型目录
+    prod_base = Path(_os.getenv("MODELS_PRODUCTION", "/app/models/production"))
+    candidate = prod_base / model_id
+    if candidate.is_dir():
+        return _validate_model_dir(candidate, model_id, _json)
+
+    # 2. 用户模型注册表（按 storage_path 定位，不猜路径拼法）
+    #
+    # user_id 在库里有两种形态：裸数字（"1001"）和 8 位补齐（"00000001"，
+    # 训练服务写入时用了 normalize_user_id）。JWT 的 sub 只有一种，
+    # 所以两种都试，否则用户看得到模型却选不了。
+    uid_variants: list[str] = []
+    raw_uid = str(user_id or "").strip()
+    if raw_uid:
+        uid_variants.append(raw_uid)
+        if raw_uid.isdigit():
+            padded = raw_uid.zfill(8)
+            if padded != raw_uid:
+                uid_variants.append(padded)
+            stripped = str(int(raw_uid))
+            if stripped not in uid_variants:
+                uid_variants.append(stripped)
+
+    record = None
+    for uid in uid_variants:
+        try:
+            from backend.shared.model_registry import model_registry_service
+
+            record = await model_registry_service.get_model(
+                tenant_id=tenant_id,
+                user_id=uid,
+                model_id=model_id,
+            )
+        except Exception as exc:
+            logger.warning(
+                "查询用户模型注册表失败 model=%s uid=%s: %s", model_id, uid, exc
+            )
+            record = None
+        if record:
+            break
+
+    if record:
+        storage_path = str(record.get("storage_path") or "").strip()
+        if storage_path:
+            user_dir = Path(storage_path)
+            if user_dir.is_dir():
+                return _validate_model_dir(user_dir, model_id, _json)
+            raise HTTPException(
+                400, f"模型目录不存在: {model_id}（storage_path={storage_path}）"
+            )
+
+    raise HTTPException(400, f"模型不存在: {model_id}")
+
+
+def _validate_model_dir(model_dir: Path, model_id: str, _json: Any) -> Path:
+    """校验模型目录里 metadata.json 和模型文件都真实可读。
+
+    断链 symlink / 缺失权重会让后台任务在推理阶段才炸，那时会话已是
+    generating，用户只能删了重建。所以在创建时就查。
+    """
+    meta_path = model_dir / "metadata.json"
+    if not meta_path.is_file():
+        raise HTTPException(400, f"模型缺少 metadata.json: {model_id}")
+    try:
+        meta = _json.loads(meta_path.read_text(encoding="utf-8"))
+        model_file = model_dir / str(meta.get("model_file") or "model.lgb")
+        if not model_file.exists():
+            raise HTTPException(
+                400, f"模型文件不可读（可能是断链符号链接）: {model_file.name}"
+            )
+    except HTTPException:
+        raise
+    except Exception as exc:
+        raise HTTPException(400, f"模型元数据无法解析: {exc}") from None
+    return model_dir
+
+
+# ---------------------------------------------------------------------------
 # Background signal generation
 # ---------------------------------------------------------------------------
 
@@ -237,13 +340,14 @@ async def _run_signal_generation(
     model_id: str | None,
     start_date: date,
     end_date: date,
+    model_dir: Path | None = None,
 ) -> None:
     """后台任务：预生成信号并更新会话状态。
 
     CPU 密集部分（parquet 读取 + 模型推理）在线程池中执行，
     DB 写入在主事件循环中异步执行。
     """
-    gen = ReplaySignalGenerator(model_id=model_id)
+    gen = ReplaySignalGenerator(model_id=model_id, model_dir=model_dir)
 
     try:
         # Phase 1: CPU 密集 — 在线程池中执行
@@ -328,32 +432,16 @@ async def create_session(
     if req.start_date >= req.end_date:
         raise HTTPException(400, "start_date 必须 < end_date")
 
-    # model_id 前置校验。注意不能用 _resolve_model_dir —— 它对无效 id 会静默
+    # model_id 前置校验 + 目录解析。支持生产模型和用户训练模型两类存放位置。
+    # 注意不能用 signal_generator._resolve_model_dir —— 它对无效 id 会静默
     # 回落到 model_qlib，用户以为在跑自选模型，实际跑的是默认模型。
+    resolved_model_dir: Path | None = None
     if req.model_id:
-        import json as _json
-        import os as _os
-        from pathlib import Path as _Path
-
-        _base = _Path(_os.getenv("MODELS_PRODUCTION", "/app/models/production"))
-        _dir = _base / req.model_id
-        if not _dir.is_dir():
-            raise HTTPException(400, f"模型不存在: {req.model_id}")
-        _meta_path = _dir / "metadata.json"
-        if not _meta_path.is_file():
-            raise HTTPException(400, f"模型缺少 metadata.json: {req.model_id}")
-        # 校验模型文件真实可读 —— 断链 symlink 会让后台任务在预测阶段才炸
-        try:
-            _meta = _json.loads(_meta_path.read_text(encoding="utf-8"))
-            _mf = _dir / str(_meta.get("model_file") or "model.lgb")
-            if not _mf.exists():
-                raise HTTPException(
-                    400, f"模型文件不可读（可能是断链符号链接）: {_mf.name}"
-                )
-        except HTTPException:
-            raise
-        except Exception as exc:
-            raise HTTPException(400, f"模型元数据无法解析: {exc}") from None
+        resolved_model_dir = await _resolve_model_dir_for_user(
+            model_id=req.model_id,
+            tenant_id=auth.tenant_id,
+            user_id=auth.user_id,
+        )
 
     market_data = get_local_market_data()
     sessions = market_data._sessions()
@@ -399,6 +487,7 @@ async def create_session(
             model_id=req.model_id,
             start_date=req.start_date,
             end_date=req.end_date,
+            model_dir=resolved_model_dir,
         )
     )
 

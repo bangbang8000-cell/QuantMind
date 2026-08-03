@@ -165,9 +165,13 @@ class ReplaySignalGenerator:
         self,
         model_id: str | None = None,
         market_data: LocalMarketData | None = None,
+        model_dir: Path | None = None,
     ):
         self._model_id = model_id
         self._market_data = market_data or get_local_market_data()
+        # 显式模型目录。用户模型不在 MODELS_PRODUCTION 下，由调用方
+        # （router）从 qm_user_models.storage_path 解析后传入。
+        self._model_dir = model_dir
 
     def predict_all(
         self,
@@ -183,7 +187,7 @@ class ReplaySignalGenerator:
             "errors": [...],
         }
         """
-        model_dir = _resolve_model_dir(self._model_id)
+        model_dir = self._model_dir or _resolve_model_dir(self._model_id)
         data_dir = _resolve_data_dir()
         meta = _load_metadata(model_dir)
         model = _load_model(model_dir, meta)
