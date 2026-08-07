@@ -4,7 +4,7 @@
 
 ## 说明
 - 统一运行镜像为 `quantmind-ml-runtime:latest`。
-- `train.py` 会在用户提交特征的基础上自动补齐 6 个基础特征：`mom_ret_1d`、`mom_ret_5d`、`mom_ret_20d`、`liq_volume`、`liq_amount`、`liq_turnover_os`。
+- `train.py` 会在用户提交特征的基础上自动补齐 6 个基础特征：`mom_ret_1d`、`mom_ret_5d`、`mom_ret_20d`、`liq_volume`、`liq_amount`、`fun_turnover_1`。
 - `metadata.json` 现在会同时记录三层口径：
   - `requested_feature_count/requested_features`：前端提交的特征
   - `auto_appended_feature_count/auto_appended_features`：训练脚本自动补齐的基础特征

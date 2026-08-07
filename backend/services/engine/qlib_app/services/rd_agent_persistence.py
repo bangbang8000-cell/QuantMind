@@ -34,12 +34,45 @@ class RDAgentFactorPersistence:
         );
         ALTER TABLE rd_agent_factors ADD COLUMN IF NOT EXISTS user_id TEXT;
         ALTER TABLE rd_agent_factors ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ NOT NULL DEFAULT now();
+        ALTER TABLE rd_agent_factors ADD COLUMN IF NOT EXISTS market TEXT;
+        ALTER TABLE rd_agent_factors ADD COLUMN IF NOT EXISTS universe TEXT;
+        ALTER TABLE rd_agent_factors ADD COLUMN IF NOT EXISTS rank_ic DOUBLE PRECISION;
+        ALTER TABLE rd_agent_factors ADD COLUMN IF NOT EXISTS factor_formulation TEXT;
+        ALTER TABLE rd_agent_factors ADD COLUMN IF NOT EXISTS data_source TEXT;
+        ALTER TABLE rd_agent_factors ADD COLUMN IF NOT EXISTS date_range TEXT;
         CREATE INDEX IF NOT EXISTS idx_rd_agent_factors_user_id ON rd_agent_factors(user_id);
+        CREATE INDEX IF NOT EXISTS idx_rd_agent_factors_market ON rd_agent_factors(market);
+        CREATE INDEX IF NOT EXISTS idx_rd_agent_factors_universe ON rd_agent_factors(universe);
         """
         async with get_session() as session:
             for s in [x.strip() for x in stmt.split(";") if x.strip()]:
                 await session.execute(text(s))
         logger.info("rd_agent_factors table ensured")
+
+        # 迁移 metadata_json 中的字段到专列
+        await self.migrate_metadata_to_columns()
+
+    async def migrate_metadata_to_columns(self) -> None:
+        """将 metadata_json 中的 market/formulation 等字段提取到专列。幂等执行。"""
+        try:
+            async with get_session() as session:
+                await session.execute(text("""
+                    UPDATE rd_agent_factors
+                    SET market = metadata_json::jsonb ->> 'market'
+                    WHERE market IS NULL
+                      AND metadata_json IS NOT NULL
+                      AND metadata_json::jsonb ->> 'market' IS NOT NULL
+                """))
+                await session.execute(text("""
+                    UPDATE rd_agent_factors
+                    SET factor_formulation = metadata_json::jsonb ->> 'factor_formulation'
+                    WHERE factor_formulation IS NULL
+                      AND metadata_json IS NOT NULL
+                      AND metadata_json::jsonb ->> 'factor_formulation' IS NOT NULL
+                """))
+            logger.info("rd_agent_factors metadata migration completed")
+        except Exception as exc:
+            logger.warning("rd_agent_factors metadata migration failed (non-fatal): %s", exc)
 
     async def save_factor(
         self,
@@ -48,13 +81,22 @@ class RDAgentFactorPersistence:
         factor_code: str,
         user_id: str | None = None,
         metadata: dict[str, Any] | None = None,
+        market: str | None = None,
+        universe: str | None = None,
+        factor_formulation: str | None = None,
+        data_source: str | None = None,
     ) -> None:
         """保存 RD-Agent 生成的因子"""
+        meta_json = json.dumps(metadata or {}, ensure_ascii=False)
         async with get_session() as session:
             await session.execute(
                 text("""
-                    INSERT INTO rd_agent_factors (factor_id, factor_name, factor_code, status, user_id, metadata_json)
-                    VALUES (:factor_id, :factor_name, :factor_code, 'pending', :user_id, :metadata_json)
+                    INSERT INTO rd_agent_factors
+                        (factor_id, factor_name, factor_code, status, user_id, metadata_json,
+                         market, universe, factor_formulation, data_source)
+                    VALUES
+                        (:factor_id, :factor_name, :factor_code, 'pending', :user_id, :metadata_json,
+                         :market, :universe, :factor_formulation, :data_source)
                     ON CONFLICT (factor_id) DO UPDATE SET
                         factor_name = EXCLUDED.factor_name,
                         factor_code = EXCLUDED.factor_code,
@@ -65,7 +107,11 @@ class RDAgentFactorPersistence:
                     "factor_name": factor_name,
                     "factor_code": factor_code,
                     "user_id": user_id,
-                    "metadata_json": json.dumps(metadata or {}, ensure_ascii=False),
+                    "metadata_json": meta_json,
+                    "market": market,
+                    "universe": universe,
+                    "factor_formulation": factor_formulation,
+                    "data_source": data_source,
                 },
             )
 
@@ -73,9 +119,11 @@ class RDAgentFactorPersistence:
         self,
         user_id: str | None = None,
         status: str | None = None,
+        market: str | None = None,
+        universe: str | None = None,
         limit: int = 50,
     ) -> list[dict[str, Any]]:
-        """列出因子（支持按状态、用户过滤）"""
+        """列出因子（支持按状态、用户、市场、宇宙过滤）"""
         conditions = []
         params: dict[str, Any] = {"limit": limit}
         if user_id:
@@ -84,13 +132,20 @@ class RDAgentFactorPersistence:
         if status:
             conditions.append("status = :status")
             params["status"] = status
+        if market:
+            conditions.append("market = :market")
+            params["market"] = market
+        if universe:
+            conditions.append("universe = :universe")
+            params["universe"] = universe
 
         where = " AND ".join(conditions) if conditions else "1=1"
         async with get_session(read_only=True) as session:
             rows = await session.execute(
                 text(f"""
                     SELECT factor_id, factor_name, factor_code, status, ic_value, sharpe_ratio,
-                           annual_return, max_drawdown, user_id, metadata_json, created_at, updated_at
+                           annual_return, max_drawdown, rank_ic, user_id, market, universe,
+                           factor_formulation, data_source, date_range, metadata_json, created_at, updated_at
                     FROM rd_agent_factors
                     WHERE {where}
                     ORDER BY created_at DESC
@@ -121,7 +176,8 @@ class RDAgentFactorPersistence:
             row = await session.execute(
                 text("""
                     SELECT factor_id, factor_name, factor_code, status, ic_value, sharpe_ratio,
-                           annual_return, max_drawdown, user_id, metadata_json, created_at, updated_at
+                           annual_return, max_drawdown, rank_ic, user_id, market, universe,
+                           factor_formulation, data_source, date_range, metadata_json, created_at, updated_at
                     FROM rd_agent_factors
                     WHERE factor_id = :factor_id
                     """),
@@ -151,6 +207,9 @@ class RDAgentFactorPersistence:
         sharpe_ratio: float | None = None,
         annual_return: float | None = None,
         max_drawdown: float | None = None,
+        rank_ic: float | None = None,
+        universe: str | None = None,
+        date_range: str | None = None,
         metadata: dict[str, Any] | None = None,
     ) -> None:
         """更新因子的回测指标，metadata 与已有值合并而非覆盖"""
@@ -165,6 +224,12 @@ class RDAgentFactorPersistence:
             fields["annual_return"] = annual_return
         if max_drawdown is not None:
             fields["max_drawdown"] = max_drawdown
+        if rank_ic is not None:
+            fields["rank_ic"] = rank_ic
+        if universe is not None:
+            fields["universe"] = universe
+        if date_range is not None:
+            fields["date_range"] = date_range
         if metadata is not None:
             # Merge with existing metadata to preserve task_id, market, etc.
             async with get_session(read_only=True) as session:

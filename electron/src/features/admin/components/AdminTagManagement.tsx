@@ -282,7 +282,7 @@ export const AdminTagManagement: React.FC = () => {
           showTotal: (t) => `共 ${t} 条`,
           onChange: (p, ps) => { setPage(p); setPageSize(ps); },
         }}
-        scroll={{ y: 'calc(100vh - 340px)' }}
+        scroll={{ y: 'calc(var(--app-h) - 340px)' }}
       />
 
       <Modal

@@ -4,7 +4,7 @@ import { motion } from 'framer-motion';
 export const DashboardSkeleton: React.FC = () => {
     return (
         // background 用 inline style 确保渐变生效（Tailwind bg-[] 生成 background-color，无法承载 linear-gradient CSS 变量）
-        <div className="w-full h-full relative overflow-hidden" style={{ background: 'var(--bg-gradient)' }}>
+        <div className="w-full h-full relative overflow-hidden flex flex-col" style={{ background: 'var(--bg-gradient)' }}>
             {/* 顶部标题栏 Skeleton */}
             <div className="h-20 w-full px-6 flex items-center justify-between border-b border-[var(--border-primary)]/10 bg-[var(--nav-bg)] backdrop-blur-md">
                 <div className="h-8 w-48 bg-gray-200/20 rounded animate-pulse" />
@@ -16,9 +16,8 @@ export const DashboardSkeleton: React.FC = () => {
 
             {/* 主要内容区域 Skeleton */}
             <div
-                className="grid gap-4 p-4 overflow-hidden"
+                className="grid gap-4 p-4 overflow-hidden flex-1 min-h-0"
                 style={{
-                    height: 'calc(100% - 164px)',
                     gridTemplateColumns: 'repeat(3, minmax(0, 1fr))',
                     gridAutoRows: '400px'
                 }}

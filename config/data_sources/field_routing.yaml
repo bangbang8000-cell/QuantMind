@@ -20,211 +20,121 @@ markets:
   A:
     daily_kline:
       tier: T1
-      primary: baostock
-      fallbacks: [efinance, qstock, akshare, investment_data, tdx_api, mootdx, openbb, yahoo_finance, eltdx, simonlin_a_stock, quantdb, freestockdb]
+      primary: quantdb_local
+      fallbacks: []
       consensus: true
       cleanup: true
     adj_factor:
       tier: T1
-      primary: baostock
-      fallbacks: [efinance, akshare, yahoo_finance, eltdx, investment_data, freestockdb]
+      primary: quantdb_local
+      fallbacks: []
       consensus: true
       cleanup: true
     minute_kline:
       tier: T2
-      primary: tdx_api
-      fallbacks: [mootdx, efinance, qstock, eltdx, freestockdb]
+      primary: quantdb_local
+      fallbacks: []
       consensus: false
       cleanup: true
-    realtime_quote:
-      tier: T3
-      primary: qstock
-      fallbacks: [efinance, eltdx, injoyai_tdx, openbb, easyquotation, tdx_api]
-      consensus: false
-      cleanup: true
-    tick:
-      tier: T4
-      primary: tdx_api
-      fallbacks: [mootdx, eltdx, quantdb]
-      consensus: false
-      cleanup: false
-    auction:
-      tier: T2
-      primary: tdx_api
-      fallbacks: [eltdx]
-      consensus: false
-      cleanup: true
-    money_flow:
-      tier: T5
-      primary: efinance
-      fallbacks: [qstock, akshare]
+    index_kline:
+      tier: T1
+      primary: quantdb_local
+      fallbacks: []
       consensus: false
       cleanup: true
     financial_report:
       tier: T1
-      primary: baostock
-      fallbacks: [akshare, investment_data, openbb, eltdx, simonlin_a_stock, quantdb]
-      consensus: true
-      cleanup: true
-    f10:
-      tier: T1
-      primary: akshare
-      fallbacks: [efinance, simonlin_a_stock, openbb, eltdx, baostock]
+      primary: quantdb_local
+      fallbacks: []
       consensus: false
-      cleanup: false
-    dragon_tiger:
+      cleanup: true
+    valuation:
       tier: T1
-      primary: efinance
-      fallbacks: [akshare]
+      primary: quantdb_local
+      fallbacks: []
+      consensus: false
+      cleanup: true
+    dividend:
+      tier: T1
+      primary: quantdb_local
+      fallbacks: []
       consensus: false
       cleanup: true
     margin_trading:
       tier: T1
-      primary: baostock
-      fallbacks: [akshare]
-      consensus: false
-      cleanup: true
-    block_trade:
-      tier: T1
-      primary: efinance
-      fallbacks: [akshare]
-      consensus: false
-      cleanup: true
-    shareholder_count:
-      tier: T1
-      primary: akshare
-      fallbacks: [efinance]
-      consensus: false
-      cleanup: false
-    dividend:
-      tier: T1
-      primary: baostock
-      fallbacks: [akshare, efinance, eltdx, investment_data]
-      consensus: true
-      cleanup: true
-    share_unlock:
-      tier: T1
-      primary: efinance
-      fallbacks: [akshare]
-      consensus: false
-      cleanup: true
-    share_change:
-      tier: T1
-      primary: akshare
-      fallbacks: [efinance, baostock]
-      consensus: false
-      cleanup: true
-    research_report:
-      tier: T1
-      primary: akshare
-      fallbacks: [efinance]
-      consensus: false
-      cleanup: false
-    announcement:
-      tier: T1
-      primary: akshare
-      fallbacks: [efinance]
-      consensus: false
-      cleanup: false
-    news:
-      tier: T1
-      primary: qstock
-      fallbacks: [akshare, openbb]
-      consensus: false
-      cleanup: false
-    sector:
-      tier: T1
-      primary: freestockdb
-      fallbacks: [akshare, efinance, qstock, openbb, eltdx, baostock]
-      consensus: false
-      cleanup: false
-    growth:
-      tier: T1
-      primary: baostock
-      fallbacks: [akshare]
-      consensus: false
-      cleanup: false
-    operation:
-      tier: T1
-      primary: baostock
-      fallbacks: [akshare]
-      consensus: false
-      cleanup: false
-    dupont:
-      tier: T1
-      primary: baostock
+      primary: quantdb_local
       fallbacks: []
       consensus: false
-      cleanup: false
-    forecast:
-      tier: T1
-      primary: baostock
-      fallbacks: [akshare]
-      consensus: false
-      cleanup: false
-    performance_express:
-      tier: T1
-      primary: baostock
-      fallbacks: [akshare]
-      consensus: false
-      cleanup: false
-    futures_kline:
-      tier: T1
-      primary: akshare
-      fallbacks: [tdx_api, mootdx]
-      consensus: false
       cleanup: true
-    options_chain:
+    sector:
       tier: T1
-      primary: akshare
-      fallbacks: [efinance]
-      consensus: false
-      cleanup: true
-    hot_signal:
-      tier: T3
-      primary: qstock
-      fallbacks: [efinance]
-      consensus: false
-      cleanup: false
-    institutional_holdings:
-      tier: T1
-      primary: akshare
-      fallbacks: [efinance]
-      consensus: false
-      cleanup: false
-    stock_screening:
-      tier: T1
-      primary: akshare
-      fallbacks: [efinance]
-      consensus: false
-      cleanup: false
-    sec_filing:
-      tier: T1
-      primary: akshare
+      primary: quantdb_local
       fallbacks: []
       consensus: false
       cleanup: false
     stock_list:
       tier: T1
-      primary: quantdb
-      fallbacks: [akshare, baostock]
+      primary: quantdb_local
+      fallbacks: []
       consensus: false
       cleanup: false
     calendar:
       tier: T1
-      primary: quantdb
-      fallbacks: [akshare]
+      primary: quantdb_local
+      fallbacks: []
       consensus: false
       cleanup: false
-    valuation:
+    technical_indicators:
       tier: T1
-      primary: quantdb
-      fallbacks: [akshare, yahoo_finance]
+      primary: quantdb_local
+      fallbacks: []
       consensus: false
       cleanup: true
-    ai_factors:
+    market_sentiment:
       tier: T1
-      primary: quantdb
+      primary: quantdb_local
+      fallbacks: []
+      consensus: false
+      cleanup: false
+    ai_factors:
+      # l1_factors / l2_factors / features_daily
+      tier: T1
+      primary: quantdb_local
+      fallbacks: []
+      consensus: false
+      cleanup: false
+    shareholder_count:
+      # 3_financial_data/holder_num
+      tier: T1
+      primary: quantdb_local
+      fallbacks: []
+      consensus: false
+      cleanup: false
+    share_change:
+      # 3_financial_data/capital
+      tier: T1
+      primary: quantdb_local
+      fallbacks: []
+      consensus: false
+      cleanup: false
+    dupont:
+      # 3_financial_data/pershare_index (du_*)
+      tier: T1
+      primary: quantdb_local
+      fallbacks: []
+      consensus: false
+      cleanup: false
+    growth:
+      # 3_financial_data/pershare_index (inc_*)
+      tier: T1
+      primary: quantdb_local
+      fallbacks: []
+      consensus: false
+      cleanup: false
+    operation:
+      # 3_financial_data/pershare_index (turnover/gear)
+      tier: T1
+      primary: quantdb_local
       fallbacks: []
       consensus: false
       cleanup: false

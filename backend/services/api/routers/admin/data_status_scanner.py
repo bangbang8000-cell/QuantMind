@@ -23,8 +23,10 @@ from .model_management_utils import _scan_feature_snapshots_status
 
 
 # 市场 → Qlib 子目录
+# A 股：QuantDB 派生缓存（single source of truth），HK/US：legacy qlib_data
+_QDB_DATA_DIR = Path(os.getenv("QM_QUANTDB_DATA_DIR", str(Path(os.getcwd()) / "data" / "quantdb")))
 _MARKET_QLIB_DIRS: dict[str, Path] = {
-    "a_share": Path(os.getcwd()) / "db" / "qlib_data",
+    "a_share": _QDB_DATA_DIR / ".qlib_cache" / "cn_data",
     "crypto": Path(os.getcwd()) / "db" / "qlib_data" / "crypto_data",
     "hong_kong": Path(os.getcwd()) / "db" / "qlib_data" / "hk_data",
     "us_stock": Path(os.getcwd()) / "db" / "qlib_data" / "us_data",

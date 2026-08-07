@@ -26,7 +26,7 @@ logging.basicConfig(
 logger = logging.getLogger("rd_agent_run")
 
 
-async def persist_factors(factors: list[dict], task_id: str, user_id: str, market: str) -> int:
+async def persist_factors(factors: list[dict], task_id: str, user_id: str, market: str, universe: str = "csi300") -> int:
     """持久化因子到数据库"""
     if not factors:
         return 0
@@ -64,9 +64,12 @@ async def persist_factors(factors: list[dict], task_id: str, user_id: str, marke
                 factor_code=f.get("code", ""),
                 user_id=user_id,
                 metadata=metadata,
+                market=market,
+                universe=universe,
+                factor_formulation=f.get("formulation", ""),
             )
             count += 1
-            logger.info("Persisted factor: %s (market=%s, id=%s)", f["name"], market, factor_id)
+            logger.info("Persisted factor: %s (market=%s, universe=%s, id=%s)", f["name"], market, universe, factor_id)
         except Exception as e:
             logger.warning("Failed to persist factor %s: %s", f["name"], e)
 
@@ -225,6 +228,7 @@ def main():
     parser.add_argument("--task-id", required=True)
     parser.add_argument("--user-id", required=True)
     parser.add_argument("--market", default="a_share", help="Market: a_share, crypto, hong_kong, us_stock")
+    parser.add_argument("--universe", default="csi300", help="Stock universe: csi300, csi500, csi1000, sse50, gem, star, csi800, all_a")
     parser.add_argument("--loop-n", type=int, default=3)
     parser.add_argument("--log-dir", default="")
     parser.add_argument("--direction", default="")
@@ -239,6 +243,7 @@ def main():
     logger.info("  Task ID: %s", args.task_id)
     logger.info("  User ID: %s", args.user_id)
     logger.info("  Market:  %s", args.market)
+    logger.info("  Universe: %s", args.universe)
     logger.info("  Loops:   %d", args.loop_n)
     logger.info("  Log dir: %s", log_dir)
     logger.info("  Direction: %s", args.direction or "(default)")
@@ -261,6 +266,10 @@ def main():
         elapsed = time.time() - t0
 
         factors = result.get("factors", [])
+        error = result.get("error")
+        if error:
+            logger.error("Factor mining failed: %s", error)
+            sys.exit(1)
         logger.info("Factor mining completed in %.1fs, found %d factors", elapsed, len(factors))
 
         for i, f in enumerate(factors, 1):
@@ -268,7 +277,7 @@ def main():
                          f.get("formulation", "")[:80] or "N/A")
 
         # Persist
-        count = asyncio.run(persist_factors(factors, args.task_id, args.user_id, args.market))
+        count = asyncio.run(persist_factors(factors, args.task_id, args.user_id, args.market, args.universe))
         logger.info("Persisted %d factors to database", count)
 
         # Compute IC metrics for persisted factors

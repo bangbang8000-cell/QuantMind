@@ -58,10 +58,13 @@ class SimpleSignal(Signal):
             return None
 
         raw = Path(universe)
+        from backend.shared.qlib_paths import resolve_qlib_provider_uri
+        qlib_dir = resolve_qlib_provider_uri()
         candidates = [
             raw,
             Path.cwd() / universe,
             self._project_root() / universe,
+            Path(qlib_dir) / universe,
             self._project_root() / "db" / "qlib_data" / universe,
             Path("/data/qlib_data") / universe,
         ]

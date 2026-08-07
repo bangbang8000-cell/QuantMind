@@ -871,7 +871,7 @@ export const AdminDataPlatform: React.FC = () => {
                         <Input
                             value={syncField}
                             onChange={(e) => setSyncField(e.target.value)}
-                            placeholder="daily_kline / minute_kline / realtime_quote ..."
+                            placeholder="daily_kline / minute_kline / valuation ..."
                             className="mt-1"
                         />
                     </div>
@@ -921,9 +921,10 @@ export const AdminDataPlatform: React.FC = () => {
                                 options={[
                                     { label: 'daily_kline 日 K 线', value: 'daily_kline' },
                                     { label: 'minute_kline 分钟 K 线', value: 'minute_kline' },
-                                    { label: 'realtime_quote 实时行情', value: 'realtime_quote' },
                                     { label: 'adj_factor 复权因子', value: 'adj_factor' },
                                     { label: 'financial_report 财报', value: 'financial_report' },
+                                    { label: 'valuation 估值', value: 'valuation' },
+                                    { label: 'technical_indicators 技术指标', value: 'technical_indicators' },
                                 ]}
                             />
                         </Col>

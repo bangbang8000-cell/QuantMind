@@ -22,12 +22,9 @@ try:
 except Exception:
     PROJECT_ROOT = Path(os.getcwd())
 
-_default_rel_path = os.path.join("db", "qlib_data")
-# 如果环境变量未设置，尝试基于项目根目录解析默认路径
-if "QLIB_PROVIDER_URI" not in os.environ and (PROJECT_ROOT / _default_rel_path).exists():
-    DEFAULT_PROVIDER_URI = str(PROJECT_ROOT / _default_rel_path)
-else:
-    DEFAULT_PROVIDER_URI = os.getenv("QLIB_PROVIDER_URI", str(_default_rel_path))
+# A 股回测优先使用 QuantDB 派生缓存，通过 qlib_paths 统一解析
+from backend.shared.qlib_paths import resolve_qlib_provider_uri
+DEFAULT_PROVIDER_URI = resolve_qlib_provider_uri()
 
 
 class QlibNotAvailable(Exception):

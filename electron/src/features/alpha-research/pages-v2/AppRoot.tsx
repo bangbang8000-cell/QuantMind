@@ -29,31 +29,25 @@ const AppContent: React.FC = () => {
   return (
     <>
       <ParticleBackground />
-      {/*
-        Use display:none to hide non-current pages instead of conditional unmounting.
-        This ensures that components are not unmounted when switching pages, so WebSocket/task state is not lost.
-      */}
-      <div style={{ display: currentPage === 'home' ? 'block' : 'none' }}>
-        <HomePage onNavigate={setCurrentPage} />
-      </div>
-      <div style={{ display: currentPage === 'mining_dashboard' ? 'block' : 'none' }}>
-        <MiningDashboardPage onNavigate={setCurrentPage} />
-      </div>
-      <div style={{ display: currentPage === 'library' ? 'block' : 'none' }}>
+      {/* Conditional rendering: only mount the active page, unmount others when switching.
+          TaskProvider persists mining/backtest state across page switches. */}
+      {currentPage === 'home' && <HomePage onNavigate={setCurrentPage} />}
+      {currentPage === 'mining_dashboard' && <MiningDashboardPage onNavigate={setCurrentPage} />}
+      {currentPage === 'library' && (
         <Layout currentPage={currentPage} onNavigate={setCurrentPage}>
           <FactorLibraryPage />
         </Layout>
-      </div>
-      <div style={{ display: currentPage === 'backtest' ? 'block' : 'none' }}>
+      )}
+      {currentPage === 'backtest' && (
         <Layout currentPage={currentPage} onNavigate={setCurrentPage}>
           <BacktestPage />
         </Layout>
-      </div>
-      <div style={{ display: currentPage === 'settings' ? 'block' : 'none' }}>
+      )}
+      {currentPage === 'settings' && (
         <Layout currentPage={currentPage} onNavigate={setCurrentPage}>
           <SettingsPage />
         </Layout>
-      </div>
+      )}
     </>
   );
 };

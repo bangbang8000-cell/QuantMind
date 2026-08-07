@@ -34,6 +34,13 @@ export interface UserModelRecord {
   activated_at?: string | null;
 }
 
+export interface CreateEnsembleParams {
+  source_model_ids: string[];
+  display_name?: string;
+  weight_strategy?: 'equal' | 'icir' | 'manual';
+  manual_weights?: Record<string, number>;
+}
+
 export interface ModelShapSummaryItem {
   rank: number;
   feature: string;
@@ -88,6 +95,21 @@ export interface InferenceRunRecord {
   request_json?: Record<string, unknown>;
   result_json?: Record<string, unknown>;
   score_distribution?: ScoreDistribution;
+  board_top1?: BoardTop1Stat[];
+  board_top1_avg?: number | null;
+  industry_top1?: IndustryTop1Stat[];
+  industry_top1_count?: number;
+  industry_avg_top1?: number | null;
+  strong_industry_count?: number;
+  market_signal?: MarketSignalInfo;
+  score_buckets?: ScoreBucketStat[];
+  gold_zone_count?: number;
+  fake_signal_count?: number;
+  fake_signal_symbols?: string[];
+  trend_stats?: TrendStats;
+  market_ma_filter?: MarketMAFilter;
+  negative_analysis?: NegativeAnalysis;
+  is_wide_scale?: boolean;
 }
 
 export interface ScoreDistributionBucket {
@@ -150,6 +172,59 @@ export interface InferenceRankingItem {
   name: string;
   score: number;
   signal: 'buy' | 'sell' | 'hold';
+  board?: string;
+  industry?: string;
+  trend?: string;
+  prev_score?: number | null;
+  prev2_score?: number | null;
+  next_score?: number | null;
+  market_cap_yi?: number | null;
+  market_cap_tier?: string;
+  negative_tag?: string;
+}
+
+export interface NegativeCandidate {
+  symbol: string;
+  name: string;
+  score: number;
+  tier: string;
+  industry: string;
+}
+
+export interface StockScoreHistoryItem {
+  trade_date: string;
+  data_trade_date?: string;
+  fusion_score: number | null;
+  signal_side: string | null;
+  score_rank: number | null;
+  run_id: string;
+  created_at: string | null;
+  signal_model_id?: string;
+}
+
+export interface StockScoreHistoryResponse {
+  symbol: string;
+  normalized_symbol: string;
+  name: string;
+  industry: string;
+  board?: string;
+  total: number;
+  items: StockScoreHistoryItem[];
+  models?: Array<{ model_id: string }>;
+}
+
+export interface NegativeAnalysis {
+  negative_count: number;
+  negative_pct: number;
+  neg_buckets: Record<string, number>;
+  neg_by_tier: Record<string, number>;
+  short_candidates_count: number;
+  short_candidates: NegativeCandidate[];
+  mistake_candidates_count: number;
+  mistake_candidates: NegativeCandidate[];
+  extreme_neg_count: number;
+  short_industries: Array<{ industry: string; count: number; avg_score: number }>;
+  resistant_industries: Array<{ industry: string; count: number; avg_score: number }>;
 }
 
 export interface InferenceRankingResult {
@@ -161,6 +236,53 @@ export interface InferenceRankingResult {
   rankings: InferenceRankingItem[];
 }
 
+export interface BoardTop1Stat {
+  board: string;
+  top1_score: number;
+  top1_symbol: string;
+  top1_name: string;
+}
+
+export interface IndustryTop1Stat {
+  industry: string;
+  top1_score: number;
+  top1_symbol: string;
+  top1_name: string;
+}
+
+export interface MarketSignalInfo {
+  avg_top1: number | null;
+  strong_industry_count: number;
+  entry_signal: 'strong' | 'weak' | 'empty';
+  entry_threshold: number;
+  empty_threshold: number;
+  strong_threshold: number;
+  label: string;
+  score_scale?: 'normal' | 'wide';
+}
+
+export interface ScoreBucketStat {
+  key: string;
+  label: string;
+  action: string;
+  color: string;
+  count: number;
+  symbols: string[];
+}
+
+export interface TrendStats {
+  [trend: string]: number;
+}
+
+export interface MarketMAFilter {
+  symbol: string;
+  dates: string[];
+  close: number | null;
+  mavg: Record<string, number | null>;
+  below_ma20: boolean;
+  ref_date: string;
+}
+
 export interface AutoInferenceSettings {
   enabled: boolean;
   schedule_desc: string;
@@ -168,6 +290,14 @@ export interface AutoInferenceSettings {
   last_run?: InferenceRunRecord;
   next_run?: string;
   updated_at?: string;
+}
+
+/** 回测交易成本覆盖参数。留空则回退模型 metadata.context，再回退 A股标准费率。 */
+export interface TradingCostParams {
+  commission_rate?: number;
+  stamp_duty?: number;
+  transfer_fee?: number;
+  slippage?: number;
 }
 
 export interface LatestInferenceRunInfo {
@@ -198,6 +328,128 @@ export interface TradingDayCheckResult {
   is_trading_day: boolean;
   tenant_id?: string;
   user_id?: string;
+}
+
+// ─── 批量推理相关类型 ────────────────────────────────────────────────────────
+
+export interface BatchInferenceRequest {
+  model_id: string;
+  mode?: 'lookback' | 'range';
+  anchor_date?: string;
+  start_date?: string;
+  end_date?: string;
+  window_days?: number;
+  top_k?: number;
+  side?: 'long' | 'short' | 'both';
+  reuse_existing?: boolean;
+  concurrency?: number;
+}
+
+export interface BatchInferenceRecord {
+  batch_id: string;
+  model_id: string;
+  anchor_date: string;
+  window_days: number;
+  horizon_days: number;
+  status: 'pending' | 'running' | 'completed' | 'partial' | 'failed';
+  progress_done: number;
+  progress_total: number;
+  current_trade_date?: string;
+  member_runs?: Array<{
+    trade_date: string;
+    run_id: string;
+    status: string;
+    reused: boolean;
+    signals_count: number;
+  }>;
+  params?: {
+    window_meta?: {
+      mode?: 'lookback' | 'range';
+      start_date?: string;
+      end_date?: string;
+      anchor_date?: string;
+      requested_start_date?: string;
+      requested_end_date?: string;
+      requested_anchor_date?: string;
+      trade_dates?: string[];
+      warnings?: string[];
+    };
+    concurrency?: number;
+  };
+  error_message?: string;
+  created_at: string;
+  updated_at?: string;
+}
+
+export interface BatchAggregateSymbol {
+  symbol: string;
+  stock_name: string;
+  appear_days: number;
+  coverage: number;
+  mean_pct: number;
+  weighted_pct: number;
+  std_pct: number;
+  mean_rank: number;
+  best_rank: number;
+  trend_rho: number | null;
+  topk_hits: number;
+  band_hits: number;
+  bottomk_hits: number;
+  band_hits_short: number;
+  is_monotonic_up: boolean;
+  is_monotonic_down: boolean;
+  up_streak: number;
+  down_streak: number;
+  conviction_long: number;
+  conviction_short: number;
+  membership: string;
+  buy_days: number;
+  sell_days: number;
+}
+
+export interface BatchAggregateMoverMetric {
+  metric: string;
+  description: string;
+  warning: string | null;
+  up: Array<Record<string, unknown>>;
+  down: Array<Record<string, unknown>>;
+}
+
+export interface BatchAggregateDaily {
+  trade_date: string;
+  missing: boolean;
+  count: number;
+  score_mean?: number | null;
+  score_std?: number | null;
+  buy_count?: number | null;
+  sell_count?: number | null;
+  topk_turnover?: number | null;
+  consensus_overlap?: number | null;
+  [key: string]: unknown;
+}
+
+export interface BatchAggregateResult {
+  batch_id: string;
+  model_id: string;
+  anchor_date: string;
+  cached: boolean;
+  meta: {
+    window_days: number;
+    horizon_days: number;
+    effective_independent_bets: number;
+    overlap_ratio: number;
+    signal_autocorr: number | null;
+    symbol_count: number;
+    dates: string[];
+    anchor_adjusted?: boolean;
+    span_calendar_days?: number;
+    warnings: string[];
+    [key: string]: unknown;
+  };
+  per_symbol: BatchAggregateSymbol[];
+  groups: Record<string, BatchAggregateSymbol[]>;
+  movers: Record<string, BatchAggregateMoverMetric>;
+  daily: BatchAggregateDaily[];
 }
 
 // ─── 系统内置模型（来自 models/production 目录）─────────────────────────────
@@ -326,6 +578,11 @@ class ModelTrainingService {
 
   async getUserModel(modelId: string): Promise<UserModelRecord> {
     const resp = await this.client.get<UserModelRecord>(`/models/${modelId}`);
+    return resp.data;
+  }
+
+  async createEnsemble(params: CreateEnsembleParams): Promise<UserModelRecord> {
+    const resp = await this.client.post<UserModelRecord>('/models/ensemble/create', params);
     return resp.data;
   }
 
@@ -458,6 +715,21 @@ class ModelTrainingService {
       request_json: raw?.request_json && typeof raw.request_json === 'object' ? raw.request_json : undefined,
       result_json: raw?.result_json && typeof raw.result_json === 'object' ? raw.result_json : undefined,
       score_distribution: raw?.score_distribution && typeof raw.score_distribution === 'object' ? raw.score_distribution as ScoreDistribution : undefined,
+      board_top1: Array.isArray(raw?.board_top1) ? raw.board_top1 as BoardTop1Stat[] : undefined,
+      board_top1_avg: raw?.board_top1_avg !== undefined && raw.board_top1_avg !== null ? Number(raw.board_top1_avg) : undefined,
+      industry_top1: Array.isArray(raw?.industry_top1) ? raw.industry_top1 as IndustryTop1Stat[] : undefined,
+      industry_top1_count: raw?.industry_top1_count !== undefined ? Number(raw.industry_top1_count) : undefined,
+      industry_avg_top1: raw?.industry_avg_top1 !== undefined && raw.industry_avg_top1 !== null ? Number(raw.industry_avg_top1) : undefined,
+      strong_industry_count: raw?.strong_industry_count !== undefined ? Number(raw.strong_industry_count) : undefined,
+      market_signal: raw?.market_signal && typeof raw.market_signal === 'object' ? raw.market_signal as MarketSignalInfo : undefined,
+      score_buckets: Array.isArray(raw?.score_buckets) ? raw.score_buckets as ScoreBucketStat[] : undefined,
+      gold_zone_count: raw?.gold_zone_count !== undefined ? Number(raw.gold_zone_count) : undefined,
+      fake_signal_count: raw?.fake_signal_count !== undefined ? Number(raw.fake_signal_count) : undefined,
+      fake_signal_symbols: Array.isArray(raw?.fake_signal_symbols) ? raw.fake_signal_symbols as string[] : undefined,
+      trend_stats: raw?.trend_stats && typeof raw.trend_stats === 'object' ? raw.trend_stats as TrendStats : undefined,
+      market_ma_filter: raw?.market_ma_filter && typeof raw.market_ma_filter === 'object' ? raw.market_ma_filter as MarketMAFilter : undefined,
+      negative_analysis: raw?.negative_analysis && typeof raw.negative_analysis === 'object' ? raw.negative_analysis as NegativeAnalysis : undefined,
+      is_wide_scale: raw?.is_wide_scale !== undefined ? Boolean(raw.is_wide_scale) : undefined,
     };
   }
 
@@ -521,6 +793,15 @@ class ModelTrainingService {
         quality: string | null;
         created_at: string | null;
         stock_name?: string | null;
+        board?: string | null;
+        industry?: string | null;
+        trend?: string | null;
+        prev_score?: number | null;
+        prev2_score?: number | null;
+        next_score?: number | null;
+        market_cap_yi?: number | null;
+        market_cap_tier?: string | null;
+        negative_tag?: string | null;
       }>;
     }>(`/models/inference/runs/${runId}`);
 
@@ -538,8 +819,25 @@ class ModelTrainingService {
         name: item.stock_name || item.symbol,
         score: Number(item.fusion_score ?? 0),
         signal: (item.signal_side || '').toUpperCase() === 'BUY' ? 'buy' : (item.signal_side || '').toUpperCase() === 'SELL' ? 'sell' : 'hold',
+        board: item.board || undefined,
+        industry: item.industry || undefined,
+        trend: item.trend || undefined,
+        prev_score: item.prev_score !== null && item.prev_score !== undefined ? Number(item.prev_score) : null,
+        prev2_score: item.prev2_score !== null && item.prev2_score !== undefined ? Number(item.prev2_score) : null,
+        next_score: item.next_score !== null && item.next_score !== undefined ? Number(item.next_score) : null,
+        market_cap_yi: item.market_cap_yi !== null && item.market_cap_yi !== undefined ? Number(item.market_cap_yi) : null,
+        market_cap_tier: item.market_cap_tier || undefined,
+        negative_tag: item.negative_tag || undefined,
       })),
     };
+  }
+
+  async getStockInferenceHistory(symbol: string, days = 180, modelId?: string): Promise<StockScoreHistoryResponse> {
+    const resp = await this.client.get<StockScoreHistoryResponse>(
+      `/models/inference/stock/${encodeURIComponent(symbol)}/history`,
+      { params: { days, ...(modelId ? { model_id: modelId } : {}) } },
+    );
+    return resp.data;
   }
 
   async deleteInferenceRun(runId: string): Promise<boolean> {
@@ -611,6 +909,8 @@ class ModelTrainingService {
     end_date: string;
     horizon?: number;
     sample_interval?: number;
+    cost?: TradingCostParams;
+    exclude_limit_moves?: boolean;
   }): Promise<any> {
     const resp = await this.client.post('/admin/models/backtest', params, { timeout: 300000 });
     return resp.data;
@@ -650,8 +950,72 @@ class ModelTrainingService {
     end_date: string;
     horizons?: number[];
     sample_interval?: number;
+    cost?: TradingCostParams;
+    exclude_limit_moves?: boolean;
   }): Promise<any> {
     const resp = await this.client.post('/admin/models/backtest/multi-horizon', params, { timeout: 600000 });
+    return resp.data;
+  }
+
+  // ── 批量多日推理 ──
+
+  async runInferenceBacktest(params: {
+    model_id: string;
+    start_date: string;
+    end_date: string;
+    signal_mode: 'realtime' | 'stored';
+    strategy: Record<string, unknown>;
+  }): Promise<Record<string, any>> {
+    const resp = await this.client.post('/admin/models/inference-backtest', params, { timeout: 600000 });
+    return resp.data;
+  }
+
+  async submitBatchInference(params: BatchInferenceRequest): Promise<BatchInferenceRecord> {
+    const resp = await this.client.post<BatchInferenceRecord>('/models/inference/batch', params);
+    return resp.data;
+  }
+
+  async getBatchInference(batchId: string): Promise<BatchInferenceRecord> {
+    const resp = await this.client.get<BatchInferenceRecord>(`/models/inference/batch/${batchId}`);
+    return resp.data;
+  }
+
+  async listBatchInferences(modelId?: string, status?: string, page = 1, pageSize = 20): Promise<{
+    items: BatchInferenceRecord[];
+    total: number;
+  }> {
+    const resp = await this.client.get('/models/inference/batches', {
+      params: {
+        model_id: modelId,
+        status,
+        page,
+        page_size: pageSize,
+      },
+    });
+    return resp.data;
+  }
+
+  async deleteBatchInference(batchId: string): Promise<{ deleted: boolean }> {
+    const resp = await this.client.delete(`/models/inference/batch/${batchId}`);
+    return resp.data;
+  }
+
+  async getBatchAggregate(
+    batchId: string,
+    params?: {
+      top_k?: number;
+      decay?: number;
+      lam?: number;
+      mu?: number;
+      min_coverage?: number;
+      consensus_band?: number;
+      side?: 'long' | 'short' | 'both';
+    },
+  ): Promise<BatchAggregateResult> {
+    const resp = await this.client.get<BatchAggregateResult>(
+      `/models/inference/batch/${batchId}/aggregate`,
+      { params },
+    );
     return resp.data;
   }
 }

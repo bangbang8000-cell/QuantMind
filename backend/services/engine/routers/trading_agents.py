@@ -58,11 +58,16 @@ def _build_config(req: AnalyzeRequest) -> dict:
     config["deep_think_llm"] = req.deep_think_llm
     config["quick_think_llm"] = req.quick_think_llm
     config["data_vendors"] = {
-        "core_stock_apis": "a_stock",
-        "technical_indicators": "a_stock",
-        "fundamental_data": "a_stock",
+        # quantmind_local reads local QuantDB parquet; a_stock is the network fallback
+        # used whenever the local store has no data for the symbol/date.
+        "core_stock_apis": "quantmind_local,a_stock",
+        "technical_indicators": "quantmind_local,a_stock",
+        "fundamental_data": "quantmind_local,a_stock",
         "news_data": "a_stock",
         "signal_data": "a_stock",
+    }
+    config["tool_vendors"] = {
+        "get_industry_comparison": "quantmind_local,a_stock",
     }
     config["max_debate_rounds"] = 1
     config["max_risk_discuss_rounds"] = 1

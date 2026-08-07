@@ -23,6 +23,7 @@ import {
 } from '@ant-design/icons';
 import dayjs from 'dayjs';
 import { adminService } from '../services/adminService';
+import { dataPlatformService } from '../services/dataPlatformService';
 import { AdminQuantDBPanel } from './AdminQuantDBPanel';
 import {
     AdminFeatureSnapshotsOlderSample,
@@ -394,7 +395,7 @@ export const AdminDataManagement: React.FC = () => {
     };
 
     return (
-        <div className="pb-24 animate-in fade-in slide-in-from-bottom-4 duration-700">
+        <div className="pb-6 animate-in fade-in slide-in-from-bottom-4 duration-700">
             <Tabs
                 defaultActiveKey="overview"
                 items={[
@@ -910,11 +911,10 @@ export const AdminDataManagement: React.FC = () => {
                                     <Title level={5} className="!text-slate-800 !font-black !mb-3 uppercase tracking-tight text-sm">日常同步任务包含：</Title>
                                     <ul className="space-y-2 m-0 p-0 list-none">
                                         {[
-                                            '增量拉取远程 PG 行情数据',
-                                            '更新本地 Parquet 核心资产',
-                                            '校准指标 (MA/换手率/收益率)',
-                                            '增量更新 Qlib 二进制引擎数据',
-                                            '计算 51 维模型特征（动量/波动率/流动性/资金流/风格因子）'
+                                            'QuantDB SDK 增量同步 parquet (data/quantdb/)',
+                                            '从 parquet 批量填充 PG stock_daily_latest',
+                                            '增量更新 Qlib 二进制缓存 (.qlib_cache/cn_data)',
+                                            '估值/技术指标随 features_daily 一并写入'
                                         ].map((text, i) => (
                                             <li key={i} className="flex items-start text-xs text-slate-500 font-medium">
                                                 <CheckCircleFilled className="text-emerald-500 mt-0.5 mr-2" />
@@ -959,13 +959,38 @@ export const AdminDataManagement: React.FC = () => {
                                         <Button
                                             type="primary"
                                             block
+                                            className="h-12 rounded-2xl bg-blue-600 hover:bg-blue-700 border-none font-black text-sm shadow-lg shadow-blue-100 transition-all flex items-center justify-center"
+                                            loading={dailySyncLoading}
+                                            onClick={() => {
+                                                // 先检查更新再同步
+                                                dataPlatformService.checkQuantDBDiff().then(result => {
+                                                    const behind = result.datasets.filter(d => d.status === 'updates_available');
+                                                    const notSynced = result.datasets.filter(d => d.status === 'not_synced');
+                                                    if (behind.length === 0 && notSynced.length === 0) {
+                                                        message.success('所有数据集均为最新，无需同步');
+                                                    } else {
+                                                        message.info(`${behind.length} 个数据集有更新，${notSynced.length} 个未同步，开始增量同步...`);
+                                                        handleDailySync(true);
+                                                    }
+                                                }).catch(() => {
+                                                    // diff 查询失败则直接同步
+                                                    handleDailySync(true);
+                                                });
+                                            }}
+                                            icon={<CloudSyncOutlined />}
+                                            disabled={!!syncTaskId}
+                                        >
+                                            智能同步（先检查更新）
+                                        </Button>
+                                        <Button
+                                            block
                                             className="h-12 rounded-2xl bg-indigo-600 hover:bg-indigo-700 border-none font-black text-sm shadow-lg shadow-indigo-100 transition-all flex items-center justify-center"
                                             loading={dailySyncLoading}
                                             onClick={() => handleDailySync(true)}
                                             icon={<SyncOutlined />}
                                             disabled={!!syncTaskId}
                                         >
-                                            增量同步（多源聚合）
+                                            直接增量同步（QuantDB）
                                         </Button>
                                         <Button
                                             block
@@ -1163,7 +1188,7 @@ export const AdminDataManagement: React.FC = () => {
                                     <InfoCircleOutlined className="text-amber-500 mt-0.5 mr-2" />
                                     <Text className="text-[11px] text-amber-700 font-medium leading-relaxed">
                                         {selectedMarket === 'a_share'
-                                            ? '增量同步：investment_data → baostock → akshare → eltdx 多源聚合，自动校准技术指标并更新 Qlib。Celery Beat 已配置每日 18:00 自动执行。'
+                                            ? '增量同步：QuantDB SDK → parquet → PG → Qlib 缓存（A 股唯一数据源）。Celery Beat 已配置每日 18:00 自动执行。'
                                             : selectedMarket === 'crypto'
                                                 ? '加密货币数据从 Binance 公开 API 下载 5 分钟 K 线，转换为 Qlib bin 格式。数据量较大，首次同步需要 20-30 分钟。'
                                                 : selectedMarket === 'hong_kong'

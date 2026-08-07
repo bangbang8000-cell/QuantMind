@@ -11,11 +11,13 @@ import React, { useState, useEffect, useCallback } from 'react';
 import {
   Card, Select, DatePicker, Button, Space, Spin, message,
   Row, Col, Statistic, Table, Typography, Divider, Empty, Popconfirm,
+  InputNumber, Switch, Tooltip, Alert, Tag,
 } from 'antd';
 import {
   BarChart3, TrendingUp, Activity, Target, Zap, Trash2, RotateCcw,
 } from 'lucide-react';
 import dayjs from 'dayjs';
+import { clsx } from 'clsx';
 import ReactECharts from 'echarts-for-react';
 import { modelTrainingService } from '../../services/modelTrainingService';
 
@@ -36,17 +38,47 @@ interface BacktestResult {
   status: string;
   model_id: string;
   horizon: number;
+  label_definition?: string;
+  warnings?: string[];
   metrics: {
     ic_mean: number;
     ic_std: number;
     ic_ir: number;
     hit_rate: number;
+    ic_positive_rate?: number;
     n_dates: number;
     avg_top_decile: number;
     avg_bottom_decile: number;
-    long_short_return: number;
     monotonicity: number;
     decile_rank_ic: number;
+    n_deciles?: number;
+    t_stat?: number | null;
+    overlap_factor?: number;
+    sample_interval?: number;
+    benchmark_type?: string;
+    // 主指标：纯多头（A股可实现）
+    long_return_gross?: number;
+    long_return_net?: number;
+    long_excess_net?: number;
+    sharpe_long?: number;
+    sharpe_long_excess?: number;
+    max_drawdown_long?: number;
+    cumulative_long_net?: number[];
+    // 成本
+    cost_per_period?: number;
+    cost_drag_annual?: number;
+    turnover_mean?: number;
+    cost_model?: Record<string, number>;
+    // 参考指标：多空（需融券，理论值）
+    long_short_return: number;
+    long_short_is_theoretical?: boolean;
+    sharpe_ls?: number;
+    max_drawdown_ls?: number;
+    cumulative_ic?: number[];
+    cumulative_ls?: number[];
+    monthly_ic?: Record<string, number>;
+    up_capture?: number;
+    down_capture?: number;
   };
   avg_decile_returns: Record<number, number>;
   per_day: Array<{
@@ -54,11 +86,22 @@ interface BacktestResult {
     ic: number;
     n_stocks: number;
     decile_returns: Record<number, number>;
+    top_return?: number;
+    bottom_return?: number;
     top_10pct_return: number;
     bottom_10pct_return: number;
+    top_win_rate?: number;
   }>;
   errors: Array<{ date: string; error: string }>;
 }
+
+/** A股标准费率，与后端 trading_cost.py 默认值保持一致 */
+const DEFAULT_COST = {
+  commission_rate: 0.00025,
+  stamp_duty: 0.001,
+  transfer_fee: 0.00001,
+  slippage: 0.001,
+};
 
 interface ModelEvaluationModuleProps {
   initialModelId?: string;
@@ -82,6 +125,8 @@ export const ModelEvaluationModule: React.FC<ModelEvaluationModuleProps> = ({ in
   const [activeRunId, setActiveRunId] = useState<string>('');
   const [multiHorizonResult, setMultiHorizonResult] = useState<any>(null);
   const [multiHorizonLoading, setMultiHorizonLoading] = useState(false);
+  const [cost, setCost] = useState({ ...DEFAULT_COST });
+  const [excludeLimitMoves, setExcludeLimitMoves] = useState(true);
 
   useEffect(() => {
     loadModels();
@@ -96,6 +141,16 @@ export const ModelEvaluationModule: React.FC<ModelEvaluationModuleProps> = ({ in
       setResult(null);
     }
   }, [selectedModelId]);
+
+  // 成本参数默认值从模型 metadata.context 回填（后端同样做三级回退，此处仅为可见性）
+  useEffect(() => {
+    const ctx = (models.find(m => m.model_id === selectedModelId) as any)?.context;
+    setCost({
+      ...DEFAULT_COST,
+      ...(Number.isFinite(ctx?.commission_rate) ? { commission_rate: ctx.commission_rate } : {}),
+      ...(Number.isFinite(ctx?.slippage) ? { slippage: ctx.slippage } : {}),
+    });
+  }, [selectedModelId, models]);
 
   const loadModels = async () => {
     setModelsLoading(true);
@@ -163,6 +218,8 @@ export const ModelEvaluationModule: React.FC<ModelEvaluationModuleProps> = ({ in
         end_date: dateRange[1].format('YYYY-MM-DD'),
         horizon,
         sample_interval: sampleInterval,
+        cost,
+        exclude_limit_moves: excludeLimitMoves,
       });
       if (resp.status === 'success') {
         setResult(resp);
@@ -194,6 +251,8 @@ export const ModelEvaluationModule: React.FC<ModelEvaluationModuleProps> = ({ in
         end_date: dateRange[1].format('YYYY-MM-DD'),
         horizons: [1, 5, 10, 20],
         sample_interval: sampleInterval,
+        cost,
+        exclude_limit_moves: excludeLimitMoves,
       });
       if (resp.status === 'success') {
         setMultiHorizonResult(resp);
@@ -340,34 +399,40 @@ export const ModelEvaluationModule: React.FC<ModelEvaluationModuleProps> = ({ in
     },
   ];
 
+  // A股习惯：涨红跌绿。正值为红（rose），负值为绿（emerald）
+  const pnlColor = (v: number) => (v >= 0 ? 'text-rose-600' : 'text-emerald-600');
+  const pct = (v: number | undefined | null, digits = 2) =>
+    v == null ? '—' : `${v >= 0 ? '+' : ''}${(v * 100).toFixed(digits)}%`;
+
   const metricCards = result?.metrics ? [
+    {
+      // 主决策指标：扣除交易成本后的多头超额（A股可实现）
+      label: '多头超额(净)',
+      value: pct(result.metrics.long_excess_net),
+      icon: TrendingUp,
+      color: pnlColor(result.metrics.long_excess_net ?? 0),
+      desc: `Top${result.metrics.n_deciles ?? 10}分位 − 等权基准 − 交易成本，每期持有 T+${result.horizon}`,
+    },
+    {
+      label: '多头Sharpe',
+      value: result.metrics.sharpe_long?.toFixed(2) ?? '—',
+      icon: Zap,
+      color: pnlColor(result.metrics.sharpe_long ?? 0),
+      desc: '多头净收益年化Sharpe，已按重叠持有期做Newey-West校正',
+    },
     {
       label: 'IC 均值',
       value: result.metrics.ic_mean.toFixed(4),
       icon: Activity,
-      color: result.metrics.ic_mean > 0.03 ? 'text-green-600' : result.metrics.ic_mean > 0 ? 'text-yellow-600' : 'text-red-600',
-      desc: `预测与实际收益的秩相关（随机基准: ${result.metrics.random_ic_mean?.toFixed(4) || '0'}）`,
+      color: pnlColor(result.metrics.ic_mean),
+      desc: `预测分与真实 T+${result.horizon} 前瞻收益的秩相关（典型有效区间 0.02~0.06）`,
     },
     {
-      label: 'IC_IR',
-      value: result.metrics.ic_ir.toFixed(2),
-      icon: Zap,
-      color: result.metrics.ic_ir > 0.5 ? 'text-green-600' : result.metrics.ic_ir > 0 ? 'text-yellow-600' : 'text-red-600',
-      desc: 'IC均值/IC标准差，衡量稳定性（>0.5为佳）',
-    },
-    {
-      label: '命中率',
+      label: '方向命中率',
       value: `${(result.metrics.hit_rate * 100).toFixed(1)}%`,
       icon: Target,
-      color: result.metrics.hit_rate > 0.55 ? 'text-green-600' : result.metrics.hit_rate > 0.5 ? 'text-yellow-600' : 'text-red-600',
-      desc: 'IC > 0 的日期占比（随机为50%）',
-    },
-    {
-      label: '多空收益',
-      value: `${(result.metrics.long_short_return * 100).toFixed(2)}%`,
-      icon: TrendingUp,
-      color: result.metrics.long_short_return > 0 ? 'text-green-600' : 'text-red-600',
-      desc: 'Top十分位 - Bottom十分位平均收益',
+      color: result.metrics.hit_rate >= 0.5 ? 'text-rose-600' : 'text-emerald-600',
+      desc: 'Top组合中前瞻收益为正的个股占比（随机为50%）',
     },
   ] : [];
 
@@ -587,7 +652,60 @@ export const ModelEvaluationModule: React.FC<ModelEvaluationModuleProps> = ({ in
             多周期对比
           </Button>
         </div>
+
+        <Divider className="my-4" />
+
+        {/* 交易成本参数：留空则回退模型 metadata.context，再回退 A股标准费率 */}
+        <div className="flex flex-wrap gap-4 items-end">
+          <Text className="text-xs font-semibold text-gray-600 mb-1">交易成本</Text>
+          {([
+            ['commission_rate', '佣金(单边)'],
+            ['stamp_duty', '印花税(卖出)'],
+            ['transfer_fee', '过户费(沪市)'],
+            ['slippage', '滑点(单边)'],
+          ] as const).map(([key, label]) => (
+            <div key={key}>
+              <Text className="text-xs text-gray-500 mb-1 block">{label}</Text>
+              <InputNumber
+                style={{ width: 130 }}
+                min={0}
+                max={0.05}
+                step={0.0001}
+                value={cost[key]}
+                onChange={v => setCost({ ...cost, [key]: Number(v ?? 0) })}
+                formatter={v => `${(Number(v ?? 0) * 100).toFixed(4)}%`}
+                parser={v => Number(String(v).replace('%', '')) / 100}
+              />
+            </div>
+          ))}
+          <div>
+            <Text className="text-xs text-gray-500 mb-1 block">往返成本</Text>
+            <Text className="text-sm font-bold text-rose-600 font-mono block h-8 leading-8">
+              {((cost.commission_rate * 2 + cost.slippage * 2 + cost.stamp_duty) * 100).toFixed(3)}%
+            </Text>
+          </div>
+          <Tooltip title="信号日涨停的股票次日一字板买不进，计入组合会高估收益">
+            <div>
+              <Text className="text-xs text-gray-500 mb-1 block">剔除涨跌停</Text>
+              <Switch checked={excludeLimitMoves} onChange={setExcludeLimitMoves} />
+            </div>
+          </Tooltip>
+        </div>
       </Card>
+
+      {/* 样本内 / 标签警示 */}
+      {result?.warnings && result.warnings.length > 0 && (
+        <Alert
+          type="warning"
+          showIcon
+          message="回测结果需谨慎解读"
+          description={
+            <ul className="list-disc pl-5 space-y-1 text-xs">
+              {result.warnings.map((w, i) => <li key={i}>{w}</li>)}
+            </ul>
+          }
+        />
+      )}
 
       {/* 加载中 */}
       {(loading || multiHorizonLoading) && (
@@ -601,7 +719,12 @@ export const ModelEvaluationModule: React.FC<ModelEvaluationModuleProps> = ({ in
       {/* 多周期对比回测结果 */}
       {multiHorizonResult && multiHorizonResult.status === 'success' && (
         <Card title="多周期对比回测结果" className="shadow-sm"
-          extra={<Text className="text-xs text-gray-400">最佳周期: {multiHorizonResult.best_horizon}</Text>}
+          extra={
+            <Text className="text-xs text-gray-400">
+              最佳周期: {multiHorizonResult.best_horizon}
+              {multiHorizonResult.best_horizon_criterion ? `（按${multiHorizonResult.best_horizon_criterion}）` : ''}
+            </Text>
+          }
         >
           <Table
             dataSource={Object.entries(multiHorizonResult.horizons).map(([key, val]: [string, any]) => ({
@@ -614,9 +737,23 @@ export const ModelEvaluationModule: React.FC<ModelEvaluationModuleProps> = ({ in
             columns={[
               { title: '预测周期', dataIndex: 'horizon', key: 'horizon', width: 100 },
               {
+                title: '多头超额(净)', key: 'excess', width: 120,
+                render: (_: any, r: any) => r.long_excess_net != null ? (
+                  <span className={clsx('font-semibold font-mono', pnlColor(r.long_excess_net))}>
+                    {pct(r.long_excess_net)}
+                  </span>
+                ) : r.error || '-',
+              },
+              {
+                title: '多头Sharpe', key: 'sharpeLong', width: 100,
+                render: (_: any, r: any) => r.sharpe_long != null ? (
+                  <span className={clsx('font-mono', pnlColor(r.sharpe_long))}>{r.sharpe_long.toFixed(2)}</span>
+                ) : '-',
+              },
+              {
                 title: 'IC均值', key: 'ic', width: 100,
                 render: (_: any, r: any) => r.ic_mean != null ? (
-                  <span style={{ color: r.ic_mean > 0 ? '#ef4444' : '#22c55e', fontWeight: 600 }}>
+                  <span className={clsx('font-semibold font-mono', pnlColor(r.ic_mean))}>
                     {r.ic_mean.toFixed(4)}
                   </span>
                 ) : r.error || '-',
@@ -626,14 +763,27 @@ export const ModelEvaluationModule: React.FC<ModelEvaluationModuleProps> = ({ in
                 render: (_: any, r: any) => r.ic_ir?.toFixed(2) ?? '-',
               },
               {
-                title: '命中率', key: 'hit', width: 80,
+                title: 't值', key: 'tstat', width: 80,
+                render: (_: any, r: any) => r.t_stat != null ? (
+                  <span className={clsx('font-mono', Math.abs(r.t_stat) >= 2 ? 'font-bold' : 'text-gray-400')}>
+                    {r.t_stat.toFixed(2)}
+                  </span>
+                ) : '-',
+              },
+              {
+                title: '方向命中率', key: 'hit', width: 100,
                 render: (_: any, r: any) => r.hit_rate != null ? `${(r.hit_rate * 100).toFixed(0)}%` : '-',
               },
               {
-                title: '多空收益', key: 'ls', width: 100,
+                title: (
+                  <Tooltip title="A股做空需融券，券源仅约1000-1600只、成本8-10%/年，此为理论值，不可直接复制">
+                    <span>多空收益 ⓘ</span>
+                  </Tooltip>
+                ),
+                key: 'ls', width: 110,
                 render: (_: any, r: any) => r.long_short_return != null ? (
-                  <span style={{ color: r.long_short_return > 0 ? '#ef4444' : '#22c55e' }}>
-                    {(r.long_short_return * 100).toFixed(2)}%
+                  <span className={clsx('font-mono opacity-60', pnlColor(r.long_short_return))}>
+                    {pct(r.long_short_return)}
                   </span>
                 ) : '-',
               },
@@ -681,43 +831,126 @@ export const ModelEvaluationModule: React.FC<ModelEvaluationModuleProps> = ({ in
           <Card className="shadow-sm" size="small">
             <div className="flex flex-wrap gap-6">
               <Statistic title="IC 标准差" value={result.metrics.ic_std.toFixed(4)} />
+              <Statistic title="IC_IR" value={result.metrics.ic_ir.toFixed(2)} />
+              <Statistic title="IC 为正天数占比" value={`${((result.metrics.ic_positive_rate ?? 0) * 100).toFixed(0)}%`} />
               <Statistic title="十分位单调性" value={`${(result.metrics.monotonicity * 100).toFixed(0)}%`} />
               <Statistic title="Decile Rank IC" value={result.metrics.decile_rank_ic.toFixed(4)} />
-              <Statistic title="T统计量" value={result.metrics.t_stat?.toFixed(2) ?? '-'} />
-              <Statistic title="IC vs 随机" value={result.metrics.ic_vs_random?.toFixed(4) ?? '-'} />
+              <Tooltip title="IC序列的t统计量，已按重叠持有期做Newey-West自相关校正。|t| ≥ 2 才算统计显著。">
+                <Statistic
+                  title="t 值 (NW校正) ⓘ"
+                  value={result.metrics.t_stat != null ? result.metrics.t_stat.toFixed(2) : '—'}
+                  valueStyle={{
+                    color: Math.abs(result.metrics.t_stat ?? 0) >= 2 ? '#e11d48' : '#94a3b8',
+                  }}
+                />
+              </Tooltip>
               <Statistic title="回测天数" value={result.metrics.n_dates} />
               <Statistic title="失败天数" value={result.errors.length} />
-              <Statistic title="平均Top十分位" value={`${(result.metrics.avg_top_decile * 100).toFixed(2)}%`} />
-              <Statistic title="平均Bottom十分位" value={`${(result.metrics.avg_bottom_decile * 100).toFixed(2)}%`} />
+              <Statistic
+                title={`平均Top${result.metrics.n_deciles ?? 10}分位`}
+                value={pct(result.metrics.avg_top_decile)}
+                valueStyle={{ color: (result.metrics.avg_top_decile ?? 0) >= 0 ? '#e11d48' : '#059669' }}
+              />
+              <Statistic
+                title="平均Bottom分位"
+                value={pct(result.metrics.avg_bottom_decile)}
+                valueStyle={{ color: (result.metrics.avg_bottom_decile ?? 0) >= 0 ? '#e11d48' : '#059669' }}
+              />
             </div>
           </Card>
 
-          {/* 增强指标 */}
-          <Card className="shadow-sm" size="small" title="增强评估指标">
+          {/* 交易成本 */}
+          <Card className="shadow-sm" size="small" title="交易成本影响（A股实盘摩擦）">
             <div className="flex flex-wrap gap-6">
               <Statistic
-                title="年化Sharpe"
-                value={result.metrics.sharpe_ls?.toFixed(2) ?? '-'}
-                valueStyle={{ color: (result.metrics.sharpe_ls ?? 0) > 1 ? '#16a34a' : (result.metrics.sharpe_ls ?? 0) > 0 ? '#ca8a04' : '#dc2626' }}
+                title="单边换手率"
+                value={result.metrics.turnover_mean != null ? `${(result.metrics.turnover_mean * 100).toFixed(0)}%` : '—'}
               />
               <Statistic
-                title="最大回撤"
-                value={result.metrics.max_drawdown_ls != null ? `${(result.metrics.max_drawdown_ls * 100).toFixed(2)}%` : '-'}
-                valueStyle={{ color: (result.metrics.max_drawdown_ls ?? 0) < 0.2 ? '#16a34a' : '#dc2626' }}
+                title="往返成本率"
+                value={result.metrics.cost_model?.round_trip_cost != null
+                  ? `${(result.metrics.cost_model.round_trip_cost * 100).toFixed(3)}%` : '—'}
               />
               <Statistic
-                title="换手率"
-                value={result.metrics.turnover_mean != null ? `${(result.metrics.turnover_mean * 100).toFixed(0)}%` : '-'}
+                title="每期成本拖累"
+                value={pct(result.metrics.cost_per_period, 3)}
+                valueStyle={{ color: '#059669' }}
+              />
+              <Tooltip title="年化成本拖累 = 单边换手 × 往返成本 × (252 / 采样间隔)">
+                <Statistic
+                  title="年化成本拖累 ⓘ"
+                  value={pct(result.metrics.cost_drag_annual)}
+                  valueStyle={{ color: '#059669' }}
+                />
+              </Tooltip>
+              <Statistic
+                title="多头毛收益"
+                value={pct(result.metrics.long_return_gross)}
+                valueStyle={{ color: (result.metrics.long_return_gross ?? 0) >= 0 ? '#e11d48' : '#059669' }}
+              />
+              <Statistic
+                title="多头净收益"
+                value={pct(result.metrics.long_return_net)}
+                valueStyle={{ color: (result.metrics.long_return_net ?? 0) >= 0 ? '#e11d48' : '#059669' }}
+              />
+              <Statistic
+                title="多头最大回撤"
+                value={pct(result.metrics.max_drawdown_long)}
+                valueStyle={{ color: (result.metrics.max_drawdown_long ?? 0) < 0.2 ? '#e11d48' : '#059669' }}
+              />
+            </div>
+          </Card>
+
+          {/* 参考指标 */}
+          <Card
+            className="shadow-sm"
+            size="small"
+            title={
+              <div className="flex items-center gap-2">
+                <span>参考指标</span>
+                <Tag color="orange" className="text-[10px] m-0">理论值</Tag>
+              </div>
+            }
+            extra={
+              <Text className="text-xs text-gray-400">
+                基准：{result.metrics.benchmark_type === 'equal_weight_universe' ? '等权全市场（非指数）' : result.metrics.benchmark_type || '—'}
+                {result.metrics.overlap_factor != null && result.metrics.overlap_factor > 1
+                  ? ` · 持有期重叠 ${result.metrics.overlap_factor.toFixed(1)}x` : ''}
+              </Text>
+            }
+          >
+            <Alert
+              type="info"
+              showIcon
+              className="mb-4"
+              message="以下多空指标为理论值，A股实盘不可直接复制"
+              description="做空A股需融券，券源仅约 1000-1600 只且受限，融券成本约 8-10%/年。请以上方「多头超额(净)」作为决策依据。"
+            />
+            <div className="flex flex-wrap gap-6">
+              <Statistic
+                title="多空收益(毛)"
+                value={pct(result.metrics.long_short_return)}
+                valueStyle={{ color: (result.metrics.long_short_return ?? 0) >= 0 ? '#e11d48' : '#059669', opacity: 0.7 }}
+              />
+              <Statistic
+                title="多空Sharpe"
+                value={result.metrics.sharpe_ls?.toFixed(2) ?? '—'}
+                valueStyle={{ opacity: 0.7 }}
+              />
+              <Statistic
+                title="多空最大回撤"
+                value={pct(result.metrics.max_drawdown_ls)}
+                valueStyle={{ opacity: 0.7 }}
               />
               <Statistic
                 title="上涨捕捉"
-                value={result.metrics.up_capture?.toFixed(4) ?? '-'}
-                valueStyle={{ color: (result.metrics.up_capture ?? 0) > 0 ? '#ef4444' : '#22c55e' }}
+                value={result.metrics.up_capture?.toFixed(4) ?? '—'}
+                valueStyle={{ color: (result.metrics.up_capture ?? 0) >= 0 ? '#e11d48' : '#059669' }}
               />
               <Statistic
                 title="下跌捕捉"
-                value={result.metrics.down_capture?.toFixed(4) ?? '-'}
-                valueStyle={{ color: (result.metrics.down_capture ?? 0) > 0 ? '#ef4444' : '#22c55e' }}
+                value={result.metrics.down_capture?.toFixed(4) ?? '—'}
+                valueStyle={{ color: (result.metrics.down_capture ?? 0) >= 0 ? '#e11d48' : '#059669' }}
               />
             </div>
           </Card>

@@ -11,6 +11,8 @@ from collections import OrderedDict
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
+import numpy as np
+
 logger = logging.getLogger(__name__)
 
 # 默认最大缓存模型数
@@ -31,6 +33,42 @@ class EnsembleBooster:
 
     def feature_name(self):
         return self.boosters[0].feature_name()
+
+
+class StackingEnsemble:
+    """Stacking 集成推理：多基模型预测 → 元学习器融合"""
+
+    def __init__(self, base_models: dict[str, Any], meta_model: Any, model_types: list[str],
+                 fill_values: dict[str, dict], features: list[str]):
+        self.base_models = base_models
+        self.meta_model = meta_model
+        self.model_types = model_types
+        self.fill_values = fill_values
+        self.features = features
+
+    def predict(self, X: np.ndarray, **kwargs) -> np.ndarray:
+        """对特征矩阵执行 Stacking 推理：各基模型预测 → 拼接 → 元学习器输出"""
+        base_preds = []
+        for mt in self.model_types:
+            model = self.base_models[mt]
+            fv = self.fill_values.get(mt, {})
+            if mt == "lightgbm":
+                pred = model.predict(X, **kwargs)
+            elif mt == "xgboost":
+                import xgboost as xgb
+                pred = model.predict(xgb.DMatrix(X))
+            elif mt == "catboost":
+                from catboost import Pool
+                pred = model.predict(Pool(X))[0].flatten()
+            else:
+                pred = model.predict(X).flatten()
+            base_preds.append(pred)
+
+        meta_X = np.column_stack(base_preds)
+        return self.meta_model.predict(meta_X)
+
+    def feature_name(self):
+        return self.features
 
 
 class ModelLoader:
@@ -77,6 +115,10 @@ class ModelLoader:
                 model = self._load_onnx(resolved_model_dir, metadata)
             else:
                 raise ValueError(f"Unsupported framework: {framework}")
+
+            # Stacking 集成：加载基模型 + 元学习器
+            if metadata.get("is_ensemble") and metadata.get("ensemble_method") == "stacking":
+                model = self._load_stacking(resolved_model_dir, metadata, model)
 
             with self._lock:
                 self._evict_lru()
@@ -247,6 +289,62 @@ class ModelLoader:
 
         model_file = model_dir / metadata.get("model_file", "model.onnx")
         return ort.InferenceSession(str(model_file))
+
+    def _load_stacking(self, model_dir: Path, metadata: dict[str, Any], primary_model: Any) -> StackingEnsemble:
+        """加载 Stacking 集成：基模型 + Ridge 元学习器"""
+        model_types = metadata.get("model_types", [])
+        saved_models = metadata.get("saved_models", {})
+        fill_values = metadata.get("fill_values", {})
+        features = metadata.get("feature_columns") or metadata.get("features", [])
+
+        # 加载各基模型
+        base_models: dict[str, Any] = {}
+        for mt in model_types:
+            model_file = saved_models.get(mt, "")
+            if not model_file:
+                continue
+            model_path = model_dir / model_file
+            if not model_path.exists():
+                logger.warning("Stacking base model file missing: %s", model_path)
+                continue
+            if mt == "lightgbm":
+                import lightgbm as lgb
+                base_models[mt] = lgb.Booster(model_file=str(model_path))
+            elif mt == "xgboost":
+                import xgboost as xgb
+                booster = xgb.Booster()
+                booster.load_model(str(model_path))
+                base_models[mt] = booster
+            elif mt == "catboost":
+                from catboost import CatBoost
+                cb = CatBoost()
+                cb.load_model(str(model_path), format="cbm")
+                base_models[mt] = cb
+
+        # 加载元学习器
+        meta_model_path = model_dir / metadata.get("meta_model_file", "meta_model.pkl")
+        if not meta_model_path.exists():
+            raise FileNotFoundError(f"Stacking meta_model not found: {meta_model_path}")
+        with open(meta_model_path, "rb") as f:
+            meta_data = pickle.load(f)
+        meta_model = meta_data["model"] if isinstance(meta_data, dict) else meta_data
+
+        # 基模型填充值 — 优先使用 per-model fill_values，回退到全局 fill_values
+        base_fv = metadata.get("base_model_fill_values", {})
+        global_fv = metadata.get("fill_values", {})
+        base_fill_values: dict[str, dict] = {}
+        for mt in model_types:
+            per_model_fv = base_fv.get(mt, {}) if isinstance(base_fv, dict) else {}
+            base_fill_values[mt] = per_model_fv if per_model_fv else (global_fv if isinstance(global_fv, dict) else {})
+
+        logger.info("Loaded Stacking ensemble: %d base models + Ridge meta-learner", len(base_models))
+        return StackingEnsemble(
+            base_models=base_models,
+            meta_model=meta_model,
+            model_types=model_types,
+            fill_values=base_fill_values,
+            features=features,
+        )
 
     def _get_metadata(self, model_dir: Path) -> dict[str, Any]:
         """获取元数据，不存在则返回空字典"""

@@ -106,12 +106,12 @@ def load_metadata(model_dir: Path) -> dict:
 
 # Qlib DL 模型类映射
 _QLIB_DL_MAP: dict[str, tuple[str, str]] = {
-    "GRU":         ("qlib.contrib.model.pytorch_gru_ts",         "GRU"),
-    "LSTM":        ("qlib.contrib.model.pytorch_lstm_ts",        "LSTM"),
-    "ALSTM":       ("qlib.contrib.model.pytorch_alstm_ts",       "ALSTM"),
-    "Transformer": ("qlib.contrib.model.pytorch_transformer_ts", "Transformer"),
-    "TCN":         ("qlib.contrib.model.pytorch_tcn_ts",         "TCN"),
-    "TabNet":      ("qlib.contrib.model.pytorch_tabnet",         "TabNet"),
+    "GRU":              ("qlib.contrib.model.pytorch_gru_ts",         "GRU"),
+    "LSTM":             ("qlib.contrib.model.pytorch_lstm_ts",        "LSTM"),
+    "ALSTM":            ("qlib.contrib.model.pytorch_alstm_ts",       "ALSTM"),
+    "TransformerModel": ("qlib.contrib.model.pytorch_transformer_ts", "TransformerModel"),
+    "TCN":              ("qlib.contrib.model.pytorch_tcn_ts",         "TCN"),
+    "TabnetModel":      ("qlib.contrib.model.pytorch_tabnet",         "TabnetModel"),
 }
 
 
@@ -134,13 +134,16 @@ def _load_pytorch_model(model_path: Path, meta: dict):
         model_obj = ModelCls(**model_params)
 
         state_dict = torch.load(str(model_path), map_location="cpu", weights_only=True)
-        inner_model = getattr(model_obj, "model", None)
-        if inner_model is None:
-            for attr in ("gru_model", "lstm_model", "alstm_model",
-                         "transformer_model", "tcn_model", "tabnet_model"):
-                inner_model = getattr(model_obj, attr, None)
-                if inner_model is not None:
-                    break
+        # 查找内部 PyTorch 模型：不同 Qlib 模型类用不同属性名
+        # GRU→GRU_model, LSTM→LSTM_model, ALSTM→ALSTM_model, TCN→TCN_model,
+        # TransformerModel→model, TabnetModel→tabnet_model
+        inner_model = None
+        for attr in ("model", "GRU_model", "gru_model", "LSTM_model", "lstm_model",
+                     "ALSTM_model", "alstm_model", "TCN_model", "tcn_model",
+                     "tabnet_model", "transformer_model"):
+            inner_model = getattr(model_obj, attr, None)
+            if inner_model is not None:
+                break
         if inner_model is not None and state_dict is not None:
             inner_model.load_state_dict(state_dict)
             inner_model.eval()
@@ -317,6 +320,17 @@ def preprocess(df: pd.DataFrame, meta: dict) -> tuple[pd.DataFrame, list[str]]:
     feature_cols = meta.get("feature_columns") or meta.get("features", [])
     fill_values  = meta.get("fill_values", {})
 
+    # features_daily.return_Nd 是未来 N 日收益，不能映射为 mom_ret_Nd（过去收益），
+    # 否则线上推理会把未来信息喂给模型
+    _leaky = [
+        c for c in ("return_1d", "return_3d", "return_5d",
+                    "return_10d", "return_20d", "return_60d")
+        if c in df.columns
+    ]
+    if _leaky:
+        df = df.drop(columns=_leaky, errors="ignore")
+        logger.warning("Dropped forward-looking return columns: %s", _leaky)
+
     # 缺失列补 0
     missing = [c for c in feature_cols if c not in df.columns]
     if missing:
@@ -402,13 +416,13 @@ def main():
         inner_model = model
         if model_type == "torch_qlib":
             # Qlib DL 模型: 找到内部 PyTorch 模型
-            inner_model = getattr(model, "model", None)
-            if inner_model is None:
-                for attr in ("gru_model", "lstm_model", "alstm_model",
-                             "transformer_model", "tcn_model", "tabnet_model"):
-                    inner_model = getattr(model, attr, None)
-                    if inner_model is not None:
-                        break
+            inner_model = None
+            for attr in ("model", "GRU_model", "gru_model", "LSTM_model", "lstm_model",
+                         "ALSTM_model", "alstm_model", "TCN_model", "tcn_model",
+                         "tabnet_model", "transformer_model"):
+                inner_model = getattr(model, attr, None)
+                if inner_model is not None:
+                    break
             if inner_model is None:
                 logger.error("Qlib DL 模型内部 PyTorch 模型未找到")
                 sys.exit(1)
@@ -426,6 +440,12 @@ def main():
         scores = model.predict(X_values, num_iteration=best_iter)
 
     logger.info("推理完成，生成 %d 条信号", len(scores))
+
+    # 方向纠正：如果训练时检测到 IC < 0（模型反向），翻转分数使正分=看涨
+    score_direction = meta.get("score_direction", "")
+    if score_direction == "reversed":
+        scores = -scores
+        logger.info("检测到反向模型 (score_direction=reversed)，已翻转分数")
 
     # 6. 输出 JSON
     signals = [

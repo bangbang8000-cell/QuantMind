@@ -397,8 +397,8 @@ export const EnhancedQuickBacktest: React.FC = () => {
                 {showTailTradeTooltip && (
                   <div className="absolute top-full right-0 mt-2 px-2.5 py-1.5 bg-gray-900 text-white text-[11px] rounded-lg whitespace-nowrap z-50 shadow-lg">
                     {tailTradeEnabled
-                      ? '尾盘交易：当日预测+收盘成交'
-                      : '次日生效：T+1预测+开盘成交'}
+                      ? '尾盘交易：T日信号+T+1收盘成交'
+                      : '标准口径：T日信号+T+1开盘成交'}
                     <div className="absolute bottom-full right-3 border-4 border-transparent border-b-gray-900" />
                   </div>
                 )}

@@ -83,7 +83,6 @@ class RDAgentService {
   // -------------------- 因子 --------------------
 
   async listFactors(params: {
-    user_id?: string;
     status?: FactorStatus;
     limit?: number;
     market?: string;

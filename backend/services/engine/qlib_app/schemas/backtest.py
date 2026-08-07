@@ -132,6 +132,20 @@ class QlibBacktestRequest(BaseModel):
         ge=0,
         le=5,
     )
+
+    @model_validator(mode="after")
+    def _validate_no_lookahead(self) -> "QlibBacktestRequest":
+        """禁止 signal_lag_days=0 + deal_price=close 组合：模型在 T 日收盘前
+        使用 T 日收盘价做决策并以 T 日收盘价成交，构成前视偏差。
+        """
+        if self.signal_lag_days == 0 and self.deal_price == "close":
+            raise ValueError(
+                "signal_lag_days=0 与 deal_price=close 组合构成前视偏差："
+                "模型在 T 日收盘前使用 T 日收盘价预测并以 T 日收盘价成交。"
+                "请使用 signal_lag_days=1 + deal_price=open (标准口径) 或 "
+                "signal_lag_days=1 + deal_price=close (尾盘模式)。"
+            )
+        return self
     allow_feature_signal_fallback: bool = Field(
         False,
         description="是否允许预测信号缺失时回退到行情特征信号；默认禁止静默回退到 $close",
@@ -207,6 +221,11 @@ class QlibBacktestResult(BaseModel):
     information_ratio: float | None = None
     benchmark_return: float | None = None
     benchmark_symbol: str | None = None
+
+    # 回测口径元数据
+    long_short_is_theoretical: bool = True
+    signal_lag_days: int | None = None
+    deal_price: str | None = None
 
     total_trades: int | None = None
     win_rate: float | None = None

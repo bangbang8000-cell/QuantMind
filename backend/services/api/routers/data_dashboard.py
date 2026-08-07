@@ -164,32 +164,36 @@ async def get_realtime(
     symbol: str = Query(..., description="股票代码"),
     current_user: dict = Depends(get_current_user),
 ):
+    """A 股实时行情已下线，改返回 stock_list 元信息。"""
+    if market.upper() != "A":
+        raise HTTPException(status_code=404, detail="非 A 股市场暂不支持")
+
     agg = _get_aggregator()
     try:
         import asyncio
         result = await asyncio.to_thread(
             agg.fetch,
-            market=market.upper(),
-            field="realtime_quote",
+            market="A",
+            field="stock_list",
             symbol=symbol.upper(),
         )
     except Exception as exc:
-        logger.warning("realtime fetch failed: %s", exc)
-        raise HTTPException(status_code=503, detail=f"实时行情获取失败: {exc}")
+        logger.warning("stock_list fetch failed: %s", exc)
+        raise HTTPException(status_code=503, detail=f"股票信息获取失败: {exc}")
 
     df = result.data
     if df.empty:
-        raise HTTPException(status_code=404, detail="无实时数据")
+        raise HTTPException(status_code=404, detail="无数据")
 
     row = df.iloc[0].to_dict()
-    # 清理 NaN
     quote = {k: (None if _is_nan(v) else v) for k, v in row.items()}
     return {
         "success": True,
-        "market": market.upper(),
+        "market": "A",
         "symbol": symbol.upper(),
         "source_used": result.source_used,
         "quote": quote,
+        "note": "A 股实时行情已下线，仅返回基础元信息",
     }
 
 
@@ -249,17 +253,18 @@ async def get_meta(
     symbol: str = Query(..., description="股票代码"),
     current_user: dict = Depends(get_current_user),
 ):
+    """股票基本信息 — A 股从 QuantDB stock_list 获取。"""
     agg = _get_aggregator()
     try:
         import asyncio
         result = await asyncio.to_thread(
             agg.fetch,
             market=market.upper(),
-            field="f10",
+            field="stock_list",
             symbol=symbol.upper(),
         )
     except Exception as exc:
-        logger.warning("meta/f10 fetch failed: %s", exc)
+        logger.warning("meta/stock_list fetch failed: %s", exc)
         raise HTTPException(status_code=503, detail=f"基本信息获取失败: {exc}")
 
     df = result.data

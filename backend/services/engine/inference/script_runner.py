@@ -47,6 +47,12 @@ from backend.services.engine.services.event_stream import EngineSignalStreamPubl
 
 logger = logging.getLogger(__name__)
 
+# 并发推理时，多个 worker 会同时执行 _persist_and_publish 写 engine_signal_scores
+# （DELETE 历史 + DELETE 当日 + INSERT 大量行）。并发写同一张表会触发 PostgreSQL
+# 锁竞争，导致 worker 卡死。用模块级锁把写库串行化：推理子进程仍并发执行，
+# 只有最终写库串行，既保留加速又避免锁冲突。
+_INFER_PERSIST_LOCK = __import__("threading").Lock()
+
 _PARQUET_TEMPLATE_MARKERS = (
     "QuantMind Parquet 数据源推理脚本 (inference.py 模板)",
     "QuantMind Parquet 数据源推理脚本\n=================================\n由训练流水线自动生成",
@@ -58,7 +64,7 @@ _DEFAULT_FEATURE_DIM = int(os.getenv("INFERENCE_DEFAULT_FEATURE_DIM", "48"))
 _MIN_READY_SYMBOLS = int(os.getenv("INFERENCE_MIN_READY_SYMBOLS", "3000"))
 _MIN_READY_RATIO = float(os.getenv("INFERENCE_MIN_READY_RATIO", "0.9"))
 _MIN_READY_FLOOR = int(os.getenv("INFERENCE_MIN_READY_FLOOR", "100"))
-_PREDICTION_RETENTION_DAYS = int(os.getenv("INFERENCE_PREDICTION_RETENTION_DAYS", "30"))
+_PREDICTION_RETENTION_DAYS = int(os.getenv("INFERENCE_PREDICTION_RETENTION_DAYS", "730"))
 
 # Redis 标记键：记录当日推理已完成
 _COMPLETED_REDIS_KEY_PREFIX = "qm:inference:completed"
@@ -128,12 +134,12 @@ class InferenceScriptRunner:
             )
         )
         self.primary_data_dir = self._normalize_provider_uri(
-            str(primary_data_dir or os.getenv("QLIB_PRIMARY_DATA_PATH", "db/qlib_data"))
+            str(primary_data_dir or os.getenv("QLIB_PRIMARY_DATA_PATH", ""))
         )
         self.fallback_data_dir = self._normalize_provider_uri(
             str(
                 fallback_data_dir
-                or os.getenv("QLIB_FALLBACK_DATA_PATH", "db/qlib_data")
+                or os.getenv("QLIB_FALLBACK_DATA_PATH", "")
             ),
             prefer_alpha158=True,
         )
@@ -165,7 +171,8 @@ class InferenceScriptRunner:
         """
         raw = str(provider_uri or "").strip()
         if not raw:
-            raw = "db/qlib_data"
+            from backend.shared.qlib_paths import resolve_qlib_provider_uri
+            raw = resolve_qlib_provider_uri()
 
         candidates: list[Path] = []
         p = Path(raw)
@@ -1316,305 +1323,22 @@ class InferenceScriptRunner:
 
         db = SessionLocal()
         try:
-            prediction_day = date.fromisoformat(prediction_trade_date)
-            retention_floor = (
-                prediction_day - timedelta(days=max(1, _PREDICTION_RETENTION_DAYS))
-            ).isoformat()
-
-            # ── Step 0.1: 清理超出保留期的历史数据（默认 30 天）────────────
-            db.execute(
-                text("""
-                    DELETE FROM engine_signal_scores
-                    WHERE tenant_id = :tenant_id
-                      AND user_id = :user_id
-                      AND model_version = 'inference_script'
-                      AND feature_version = :feature_version
-                      AND trade_date < :retention_floor
-                """),
-                {
-                    "tenant_id": tenant_id,
-                    "user_id": user_id,
-                    "feature_version": feature_version,
-                    "retention_floor": retention_floor,
-                },
-            )
-            db.execute(
-                text("""
-                    DELETE FROM engine_feature_runs
-                    WHERE tenant_id = :tenant_id
-                      AND user_id = :user_id
-                      AND source = 'inference_script'
-                      AND feature_version = :feature_version
-                      AND trade_date < :retention_floor
-                """),
-                {
-                    "tenant_id": tenant_id,
-                    "user_id": user_id,
-                    "feature_version": feature_version,
-                    "retention_floor": retention_floor,
-                },
-            )
-
-            # ── Step 0.2: 删除当日旧推理结果（覆盖策略）───────────────────
-            db.execute(
-                text("""
-                    DELETE FROM engine_signal_scores
-                    WHERE trade_date    = :trade_date
-                      AND tenant_id    = :tenant_id
-                      AND user_id      = :user_id
-                      AND model_version = 'inference_script'
-                      AND feature_version = :feature_version
-                """),
-                {
-                    "trade_date": prediction_trade_date,
-                    "tenant_id": tenant_id,
-                    "user_id": user_id,
-                    "feature_version": feature_version,
-                },
-            )
-            # 同步清除旧 feature_runs 记录（保留最新 run_id）
-            db.execute(
-                text("""
-                    DELETE FROM engine_feature_runs
-                    WHERE trade_date = :trade_date
-                      AND tenant_id  = :tenant_id
-                      AND user_id    = :user_id
-                      AND source     = 'inference_script'
-                      AND feature_version = :feature_version
-                """),
-                {
-                    "trade_date": prediction_trade_date,
-                    "tenant_id": tenant_id,
-                    "user_id": user_id,
-                    "feature_version": feature_version,
-                },
-            )
-            logger.info(
-                f"[InferenceScriptRunner] 已清除 {prediction_trade_date} 旧推理数据(模型桶={feature_version}), run_id={run_id}"
-            )
-
-            # ── Step 1: 写入本次 feature run 记录 ────────────────────────
-            db.execute(
-                text("""
-                    INSERT INTO engine_feature_runs (
-                        run_id, tenant_id, user_id, trade_date, model_name, model_version,
-                        feature_version, feature_dim, status, expected_symbols, ready_symbols,
-                        source, created_at, updated_at
-                    ) VALUES (
-                        :run_id, :tenant_id, :user_id, :trade_date,
-                        :model_name, 'inference_script',
-                        :feature_version, :feature_dim, 'signal_ready',
-                        :n, :n, 'inference_script', NOW(), NOW()
-                    )
-                    ON CONFLICT (run_id) DO UPDATE SET
-                        model_name = EXCLUDED.model_name,
-                        feature_version = EXCLUDED.feature_version,
-                        status = 'signal_ready', updated_at = NOW()
-                """),
-                {
-                    "run_id": run_id,
-                    "tenant_id": tenant_id,
-                    "user_id": user_id,
-                    "trade_date": prediction_trade_date,
-                    "n": len(signals),
-                    "model_name": model_name,
-                    "feature_version": feature_version,
-                    "feature_dim": feature_dim,
-                },
-            )
-
-            # ── Step 2: 批量写入信号评分（含 signal_side 和 expected_price）──────────
-            import redis as redis_lib
-
-            redis_host = os.getenv("REMOTE_QUOTE_REDIS_HOST", "redis")
-            redis_port = int(os.getenv("REMOTE_QUOTE_REDIS_PORT", "6379"))
-            redis_password = os.getenv(
-                "REMOTE_QUOTE_REDIS_PASSWORD", ""
-            ) or None
-            try:
-                quote_redis = redis_lib.Redis(
-                    host=redis_host,
-                    port=redis_port,
-                    password=redis_password,
-                    decode_responses=True,
-                    socket_timeout=2,
+            with _INFER_PERSIST_LOCK:
+                self._persist_locked(
+                    db=db,
+                    run_id=run_id,
+                    prediction_trade_date=prediction_trade_date,
+                    tenant_id=tenant_id,
+                    user_id=user_id,
+                    signals=signals,
+                    symbols=symbols,
+                    scores=scores,
+                    feature_dim=feature_dim,
+                    model_name=model_name,
+                    feature_version=feature_version,
+                    inference_date=inference_date,
+                    signal_sides=self._resolve_signal_sides(scores),
                 )
-                quote_redis.ping()
-                logger.info(
-                    f"[InferenceScriptRunner] 已连接行情 Redis: {redis_host}:{redis_port}"
-                )
-            except Exception as redis_err:
-                logger.warning(
-                    f"[InferenceScriptRunner] 无法连接行情 Redis: {redis_err}, 价格将缺失"
-                )
-                quote_redis = None
-
-            score_sql = text("""
-                INSERT INTO engine_signal_scores (
-                    run_id, tenant_id, user_id, trade_date, symbol,
-                    model_version, feature_version,
-                    light_score, tft_score, fusion_score, risk_weight, regime,
-                    signal_side, expected_price, created_at
-                ) VALUES (
-                    :run_id, :tenant_id, :user_id, :trade_date, :symbol,
-                    'inference_script', :feature_version,
-                    NULL, NULL, :score, 1.0, 'normal',
-                    :signal_side, :expected_price, NOW()
-                )
-                ON CONFLICT (tenant_id, user_id, trade_date, symbol, model_version, feature_version, run_id)
-                DO UPDATE SET
-                    fusion_score = EXCLUDED.fusion_score,
-                    signal_side = EXCLUDED.signal_side,
-                    expected_price = EXCLUDED.expected_price
-            """)
-            # 百分位排名信号逻辑
-            signal_sides = self._resolve_signal_sides(scores)
-            for idx, (sym, score) in enumerate(zip(symbols, scores, strict=True)):
-                expected_price = None
-                signal_side = signal_sides[idx]
-                if quote_redis:
-                    try:
-                        raw_sym = (
-                            sym.replace("SH", "").replace("SZ", "").replace("BJ", "")
-                        )
-                        if sym.startswith("SH"):
-                            redis_key = f"stock:{raw_sym}.SH"
-                        elif sym.startswith("SZ"):
-                            redis_key = f"stock:{raw_sym}.SZ"
-                        elif sym.startswith("BJ") or sym.startswith("920"):
-                            redis_key = f"stock:{raw_sym}.BJ"
-                        else:
-                            redis_key = f"stock:{sym}"
-                        now_price = quote_redis.hget(redis_key, "Now")
-                        if now_price:
-                            expected_price = float(now_price)
-                    except Exception as e:
-                        logger.debug(
-                            f"[InferenceScriptRunner] 获取 {sym} 价格失败: {e}"
-                        )
-                db.execute(
-                    score_sql,
-                    {
-                        "run_id": run_id,
-                        "tenant_id": tenant_id,
-                        "user_id": user_id,
-                        "trade_date": prediction_trade_date,
-                        "symbol": sym,
-                        "feature_version": feature_version,
-                        "score": score,
-                        "signal_side": signal_side,
-                        "expected_price": expected_price,
-                    },
-                )
-            if quote_redis:
-                try:
-                    quote_redis.close()
-                except Exception:
-                    pass
-            # ── Step 3: 写入投研平台候选池快照 ────────────────────────────────
-            # 同步写入 qm_research_candidate_snapshot，使推理结果立即在投研平台可见
-            # 先删除同 run_id 的旧数据（覆盖策略）
-            db.execute(
-                text("""
-                    DELETE FROM qm_research_candidate_snapshot
-                    WHERE run_id = :run_id
-                      AND tenant_id = :tenant_id
-                      AND user_id = :user_id
-                """),
-                {
-                    "run_id": run_id,
-                    "tenant_id": tenant_id,
-                    "user_id": user_id,
-                },
-            )
-
-            # 计算分数排名（分数越高排名越靠前）
-            scored_signals = sorted(
-                [(sym, score) for sym, score in zip(symbols, scores, strict=True)],
-                key=lambda x: x[1],
-                reverse=True,
-            )
-            rank_map = {sym: idx + 1 for idx, (sym, score) in enumerate(scored_signals)}
-
-            candidate_sql = text("""
-                INSERT INTO qm_research_candidate_snapshot (
-                    tenant_id, user_id, run_id, model_id,
-                    data_trade_date, prediction_trade_date,
-                    symbol, fusion_score, score_rank,
-                    signal_side, expected_price, universe_tag,
-                    confidence_level, created_at, updated_at
-                ) VALUES (
-                    :tenant_id, :user_id, :run_id, :model_id,
-                    :data_trade_date, :prediction_trade_date,
-                    :symbol, :fusion_score, :score_rank,
-                    :signal_side, :expected_price, :universe_tag,
-                    :confidence_level, NOW(), NOW()
-                )
-                ON CONFLICT (tenant_id, user_id, run_id, symbol)
-                DO UPDATE SET
-                    model_id = EXCLUDED.model_id,
-                    data_trade_date = EXCLUDED.data_trade_date,
-                    prediction_trade_date = EXCLUDED.prediction_trade_date,
-                    fusion_score = EXCLUDED.fusion_score,
-                    score_rank = EXCLUDED.score_rank,
-                    signal_side = EXCLUDED.signal_side,
-                    expected_price = EXCLUDED.expected_price,
-                    universe_tag = EXCLUDED.universe_tag,
-                    confidence_level = EXCLUDED.confidence_level,
-                    updated_at = NOW()
-            """)
-            for idx, (sym, score) in enumerate(zip(symbols, scores, strict=True)):
-                signal_side = signal_sides[idx]
-                if signal_side == "BUY":
-                    confidence_level = "high"
-                elif signal_side == "SELL":
-                    confidence_level = "watch"
-                else:
-                    confidence_level = "medium"
-                # 获取 expected_price（从之前 Redis 查询的结果）
-                expected_price_val = None
-                if quote_redis:
-                    try:
-                        raw_sym = sym.replace("SH", "").replace("SZ", "").replace("BJ", "")
-                        if sym.startswith("SH"):
-                            redis_key = f"stock:{raw_sym}.SH"
-                        elif sym.startswith("SZ"):
-                            redis_key = f"stock:{raw_sym}.SZ"
-                        elif sym.startswith("BJ") or sym.startswith("920"):
-                            redis_key = f"stock:{raw_sym}.BJ"
-                        else:
-                            redis_key = f"stock:{sym}"
-                        now_price = quote_redis.hget(redis_key, "Now")
-                        if now_price:
-                            expected_price_val = float(now_price)
-                    except Exception:
-                        pass
-                db.execute(
-                    candidate_sql,
-                    {
-                        "tenant_id": tenant_id,
-                        "user_id": user_id,
-                        "run_id": run_id,
-                        "model_id": model_name,
-                        "data_trade_date": inference_date,  # 推理日期（数据截止日期）
-                        "prediction_trade_date": prediction_trade_date,
-                        "symbol": sym,
-                        "fusion_score": score,
-                        "score_rank": rank_map.get(sym, 999999),
-                        "signal_side": signal_side,
-                        "expected_price": expected_price_val,
-                        "universe_tag": "默认候选池",
-                        "confidence_level": confidence_level,
-                    },
-                )
-            logger.info(
-                f"[InferenceScriptRunner] 写入 {len(signals)} 条投研候选池快照, run_id={run_id}"
-            )
-
-            db.commit()
-            logger.info(
-                f"[InferenceScriptRunner] 写入 {len(signals)} 条信号, run_id={run_id}"
-            )
         except Exception as exc:
             logger.error(f"[InferenceScriptRunner] 写库失败: {exc}")
             db.rollback()
@@ -1659,3 +1383,323 @@ class InferenceScriptRunner:
             logger.warning(
                 f"[InferenceScriptRunner] 信号发布失败（不影响 DB 结果）: {exc}"
             )
+
+    def _persist_locked(
+        self,
+        *,
+        db,
+        run_id: str,
+        prediction_trade_date: str,
+        tenant_id: str,
+        user_id: str,
+        signals: list[dict],
+        symbols: list[str],
+        scores: list[float],
+        feature_dim: int,
+        model_name: str,
+        feature_version: str,
+        inference_date: str,
+        signal_sides: list[str],
+    ) -> None:
+        """写库逻辑（在 _INFER_PERSIST_LOCK 保护下执行）。
+
+        并发推理时多个 worker 会同时写 engine_signal_scores / engine_feature_runs /
+        qm_research_candidate_snapshot。PostgreSQL 对并发 DELETE+INSERT 大量行会
+        发生锁竞争甚至卡死，因此把整个写库串行化。推理子进程仍并发执行，仅写库串行。
+        """
+        prediction_day = date.fromisoformat(prediction_trade_date)
+        retention_floor = (
+            prediction_day - timedelta(days=max(1, _PREDICTION_RETENTION_DAYS))
+        ).isoformat()
+
+        # ── Step 0.1: 清理超出保留期的历史数据（默认 30 天）────────────
+        db.execute(
+            text("""
+                DELETE FROM engine_signal_scores
+                WHERE tenant_id = :tenant_id
+                  AND user_id = :user_id
+                  AND model_version = 'inference_script'
+                  AND feature_version = :feature_version
+                  AND trade_date < :retention_floor
+            """),
+            {
+                "tenant_id": tenant_id,
+                "user_id": user_id,
+                "feature_version": feature_version,
+                "retention_floor": retention_floor,
+            },
+        )
+        db.execute(
+            text("""
+                DELETE FROM engine_feature_runs
+                WHERE tenant_id = :tenant_id
+                  AND user_id = :user_id
+                  AND source = 'inference_script'
+                  AND feature_version = :feature_version
+                  AND trade_date < :retention_floor
+            """),
+            {
+                "tenant_id": tenant_id,
+                "user_id": user_id,
+                "feature_version": feature_version,
+                "retention_floor": retention_floor,
+            },
+        )
+
+        # ── Step 0.2: 删除当日旧推理结果（覆盖策略）───────────────────
+        db.execute(
+            text("""
+                DELETE FROM engine_signal_scores
+                WHERE trade_date    = :trade_date
+                  AND tenant_id    = :tenant_id
+                  AND user_id      = :user_id
+                  AND model_version = 'inference_script'
+                  AND feature_version = :feature_version
+            """),
+            {
+                "trade_date": prediction_trade_date,
+                "tenant_id": tenant_id,
+                "user_id": user_id,
+                "feature_version": feature_version,
+            },
+        )
+        # 同步清除旧 feature_runs 记录（保留最新 run_id）
+        db.execute(
+            text("""
+                DELETE FROM engine_feature_runs
+                WHERE trade_date = :trade_date
+                  AND tenant_id  = :tenant_id
+                  AND user_id    = :user_id
+                  AND source     = 'inference_script'
+                  AND feature_version = :feature_version
+            """),
+            {
+                "trade_date": prediction_trade_date,
+                "tenant_id": tenant_id,
+                "user_id": user_id,
+                "feature_version": feature_version,
+            },
+        )
+        logger.info(
+            f"[InferenceScriptRunner] 已清除 {prediction_trade_date} 旧推理数据(模型桶={feature_version}), run_id={run_id}"
+        )
+
+        # ── Step 1: 写入本次 feature run 记录 ────────────────────────
+        db.execute(
+            text("""
+                INSERT INTO engine_feature_runs (
+                    run_id, tenant_id, user_id, trade_date, model_name, model_version,
+                    feature_version, feature_dim, status, expected_symbols, ready_symbols,
+                    source, created_at, updated_at
+                ) VALUES (
+                    :run_id, :tenant_id, :user_id, :trade_date,
+                    :model_name, 'inference_script',
+                    :feature_version, :feature_dim, 'signal_ready',
+                    :n, :n, 'inference_script', NOW(), NOW()
+                )
+                ON CONFLICT (run_id) DO UPDATE SET
+                    model_name = EXCLUDED.model_name,
+                    feature_version = EXCLUDED.feature_version,
+                    status = 'signal_ready', updated_at = NOW()
+            """),
+            {
+                "run_id": run_id,
+                "tenant_id": tenant_id,
+                "user_id": user_id,
+                "trade_date": prediction_trade_date,
+                "n": len(signals),
+                "model_name": model_name,
+                "feature_version": feature_version,
+                "feature_dim": feature_dim,
+            },
+        )
+
+        # ── Step 2: 批量写入信号评分（含 signal_side 和 expected_price）──────────
+        import redis as redis_lib
+
+        redis_host = os.getenv("REMOTE_QUOTE_REDIS_HOST", "redis")
+        redis_port = int(os.getenv("REMOTE_QUOTE_REDIS_PORT", "6379"))
+        redis_password = os.getenv(
+            "REMOTE_QUOTE_REDIS_PASSWORD", ""
+        ) or None
+        try:
+            quote_redis = redis_lib.Redis(
+                host=redis_host,
+                port=redis_port,
+                password=redis_password,
+                decode_responses=True,
+                socket_timeout=2,
+            )
+            quote_redis.ping()
+            logger.info(
+                f"[InferenceScriptRunner] 已连接行情 Redis: {redis_host}:{redis_port}"
+            )
+        except Exception as redis_err:
+            logger.warning(
+                f"[InferenceScriptRunner] 无法连接行情 Redis: {redis_err}, 价格将缺失"
+            )
+            quote_redis = None
+
+        score_sql = text("""
+            INSERT INTO engine_signal_scores (
+                run_id, tenant_id, user_id, trade_date, symbol,
+                model_version, feature_version,
+                light_score, tft_score, fusion_score, risk_weight, regime,
+                signal_side, expected_price, created_at
+            ) VALUES (
+                :run_id, :tenant_id, :user_id, :trade_date, :symbol,
+                'inference_script', :feature_version,
+                NULL, NULL, :score, 1.0, 'normal',
+                :signal_side, :expected_price, NOW()
+            )
+            ON CONFLICT (tenant_id, user_id, trade_date, symbol, model_version, feature_version, run_id)
+            DO UPDATE SET
+                fusion_score = EXCLUDED.fusion_score,
+                signal_side = EXCLUDED.signal_side,
+                expected_price = EXCLUDED.expected_price
+        """)
+        for idx, (sym, score) in enumerate(zip(symbols, scores, strict=True)):
+            expected_price = None
+            signal_side = signal_sides[idx]
+            if quote_redis:
+                try:
+                    raw_sym = (
+                        sym.replace("SH", "").replace("SZ", "").replace("BJ", "")
+                    )
+                    if sym.startswith("SH"):
+                        redis_key = f"stock:{raw_sym}.SH"
+                    elif sym.startswith("SZ"):
+                        redis_key = f"stock:{raw_sym}.SZ"
+                    elif sym.startswith("BJ") or sym.startswith("920"):
+                        redis_key = f"stock:{raw_sym}.BJ"
+                    else:
+                        redis_key = f"stock:{sym}"
+                    now_price = quote_redis.hget(redis_key, "Now")
+                    if now_price:
+                        expected_price = float(now_price)
+                except Exception as e:
+                    logger.debug(
+                        f"[InferenceScriptRunner] 获取 {sym} 价格失败: {e}"
+                    )
+            db.execute(
+                score_sql,
+                {
+                    "run_id": run_id,
+                    "tenant_id": tenant_id,
+                    "user_id": user_id,
+                    "trade_date": prediction_trade_date,
+                    "symbol": sym,
+                    "feature_version": feature_version,
+                    "score": score,
+                    "signal_side": signal_side,
+                    "expected_price": expected_price,
+                },
+            )
+        if quote_redis:
+            try:
+                quote_redis.close()
+            except Exception:
+                pass
+
+        # ── Step 3: 写入投研平台候选池快照 ────────────────────────────────
+        db.execute(
+            text("""
+                DELETE FROM qm_research_candidate_snapshot
+                WHERE run_id = :run_id
+                  AND tenant_id = :tenant_id
+                  AND user_id = :user_id
+            """),
+            {
+                "run_id": run_id,
+                "tenant_id": tenant_id,
+                "user_id": user_id,
+            },
+        )
+
+        # 计算分数排名（分数越高排名越靠前）
+        scored_signals = sorted(
+            [(sym, score) for sym, score in zip(symbols, scores, strict=True)],
+            key=lambda x: x[1],
+            reverse=True,
+        )
+        rank_map = {sym: idx + 1 for idx, (sym, score) in enumerate(scored_signals)}
+
+        candidate_sql = text("""
+            INSERT INTO qm_research_candidate_snapshot (
+                tenant_id, user_id, run_id, model_id,
+                data_trade_date, prediction_trade_date,
+                symbol, fusion_score, score_rank,
+                signal_side, expected_price, universe_tag,
+                confidence_level, created_at, updated_at
+            ) VALUES (
+                :tenant_id, :user_id, :run_id, :model_id,
+                :data_trade_date, :prediction_trade_date,
+                :symbol, :fusion_score, :score_rank,
+                :signal_side, :expected_price, :universe_tag,
+                :confidence_level, NOW(), NOW()
+            )
+            ON CONFLICT (tenant_id, user_id, run_id, symbol)
+            DO UPDATE SET
+                model_id = EXCLUDED.model_id,
+                data_trade_date = EXCLUDED.data_trade_date,
+                prediction_trade_date = EXCLUDED.prediction_trade_date,
+                fusion_score = EXCLUDED.fusion_score,
+                score_rank = EXCLUDED.score_rank,
+                signal_side = EXCLUDED.signal_side,
+                expected_price = EXCLUDED.expected_price,
+                universe_tag = EXCLUDED.universe_tag,
+                confidence_level = EXCLUDED.confidence_level,
+                updated_at = NOW()
+        """)
+        for idx, (sym, score) in enumerate(zip(symbols, scores, strict=True)):
+            signal_side = signal_sides[idx]
+            if signal_side == "BUY":
+                confidence_level = "high"
+            elif signal_side == "SELL":
+                confidence_level = "watch"
+            else:
+                confidence_level = "medium"
+            # 获取 expected_price（从之前 Redis 查询的结果）
+            expected_price_val = None
+            if quote_redis:
+                try:
+                    raw_sym = sym.replace("SH", "").replace("SZ", "").replace("BJ", "")
+                    if sym.startswith("SH"):
+                        redis_key = f"stock:{raw_sym}.SH"
+                    elif sym.startswith("SZ"):
+                        redis_key = f"stock:{raw_sym}.SZ"
+                    elif sym.startswith("BJ") or sym.startswith("920"):
+                        redis_key = f"stock:{raw_sym}.BJ"
+                    else:
+                        redis_key = f"stock:{sym}"
+                    now_price = quote_redis.hget(redis_key, "Now")
+                    if now_price:
+                        expected_price_val = float(now_price)
+                except Exception:
+                    pass
+            db.execute(
+                candidate_sql,
+                {
+                    "tenant_id": tenant_id,
+                    "user_id": user_id,
+                    "run_id": run_id,
+                    "model_id": model_name,
+                    "data_trade_date": inference_date,  # 推理日期（数据截止日期）
+                    "prediction_trade_date": prediction_trade_date,
+                    "symbol": sym,
+                    "fusion_score": score,
+                    "score_rank": rank_map.get(sym, 999999),
+                    "signal_side": signal_side,
+                    "expected_price": expected_price_val,
+                    "universe_tag": "默认候选池",
+                    "confidence_level": confidence_level,
+                },
+            )
+        logger.info(
+            f"[InferenceScriptRunner] 写入 {len(signals)} 条投研候选池快照, run_id={run_id}"
+        )
+
+        db.commit()
+        logger.info(
+            f"[InferenceScriptRunner] 写入 {len(signals)} 条信号, run_id={run_id}"
+        )

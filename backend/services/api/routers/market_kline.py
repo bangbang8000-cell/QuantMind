@@ -48,6 +48,46 @@ def _parse_date(s: Optional[str]) -> Optional[date]:
         raise HTTPException(status_code=400, detail=f"invalid date: {s}")
 
 
+async def _try_quantdb_parquet(symbol: str, start: Optional[date], end: Optional[date], days: int):
+    """A 股最快路径：从 QuantDB 本地 parquet 读取（DuckDB）。"""
+    try:
+        from backend.services.engine.data_platform.quantdb_hub import QuantDBDataHub
+    except Exception:
+        return None
+
+    hub = QuantDBDataHub()
+    if not hub.available:
+        return None
+
+    try:
+        import asyncio
+        if not start or not end:
+            end = end or date.today()
+            start = start or (end - timedelta(days=days * 2))
+
+        def _read():
+            df = hub.fetch_daily_kline(symbol, start, end)
+            if df is None or df.empty:
+                return None
+            items = []
+            for _, r in df.iterrows():
+                items.append({
+                    "date": str(r.get("trade_date", ""))[:10],
+                    "open": _safe_float(r.get("open")),
+                    "high": _safe_float(r.get("high")),
+                    "low": _safe_float(r.get("low")),
+                    "close": _safe_float(r.get("close")),
+                    "volume": _safe_float(r.get("volume")),
+                    "amount": _safe_float(r.get("amount"), default=None),
+                })
+            return items
+
+        return await asyncio.to_thread(_read)
+    except Exception as exc:
+        logger.warning("quantdb_parquet fast-path failed: %s", exc)
+        return None
+
+
 async def _try_stock_daily_latest(symbol: str, start: Optional[date], end: Optional[date], days: int):
     """A 股快路径：从 stock_daily_latest 直接拉。"""
     try:
@@ -208,7 +248,7 @@ async def get_kline(
     period: str = Query("daily", description="daily 仅支持 daily"),
     start: Optional[str] = Query(None, description="YYYY-MM-DD"),
     end: Optional[str] = Query(None, description="YYYY-MM-DD"),
-    days: int = Query(120, ge=5, le=2000),
+    days: int = Query(120, ge=5, le=4000),
     current_user: dict = Depends(get_current_user),
 ):
     if period != "daily":
@@ -222,7 +262,23 @@ async def get_kline(
         ed = ed or date.today()
         sd = sd or (ed - timedelta(days=days * 2))
 
-    # A 股优先走 latest 表
+    # A 股优先走 QuantDB 本地 parquet（最快路径，无 DB 依赖）
+    if m == "A":
+        try:
+            items = await _try_quantdb_parquet(sym, sd, ed, days)
+            if items:
+                return {
+                    "success": True,
+                    "data": {
+                        "market": m, "symbol": sym, "period": period,
+                        "source_used": "quantdb_parquet",
+                        "items": items, "fallbacks_tried": [], "cleaning_report": {},
+                    },
+                }
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("quantdb_parquet fast-path failed: %s", exc)
+
+    # A 股其次走 latest 表
     if m == "A":
         try:
             items = await _try_stock_daily_latest(sym, sd, ed, days)
@@ -274,7 +330,7 @@ async def get_kline(
 async def get_kline_by_path(
     symbol: str,
     market: str = Query("A"),
-    days: int = Query(120, ge=5, le=2000),
+    days: int = Query(120, ge=5, le=4000),
     current_user: dict = Depends(get_current_user),
 ):
     """路径参数风格，方便前端写 /api/v1/market/kline/600519.SH?market=A&days=120"""

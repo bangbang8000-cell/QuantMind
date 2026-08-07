@@ -132,10 +132,10 @@ const PRESETS: { name: string; tip: string; items: Omit<FlatCondition, 'id'>[] }
   },
   {
     name: '融资加仓',
-    tip: '融资净买入>0, 融资余额>5亿',
+    tip: '融资净买入>0, 融资余额>1亿',
     items: [
       { factor: 'finance_net', operator: '>', value: 0 },
-      { factor: 'finance_balance', operator: '>', value: 5 },
+      { factor: 'finance_balance', operator: '>', value: 1 },
     ],
   },
   {
@@ -186,10 +186,10 @@ const PRESETS: { name: string; tip: string; items: Omit<FlatCondition, 'id'>[] }
   // === 行业因子 ===
   {
     name: '行业强势',
-    tip: '行业强度高+资金流入',
+    tip: '行业强度>0+MFI资金流>50',
     items: [
-      { factor: 'ind_strength_20', operator: '>', value: 0.7 },
-      { factor: 'main_flow', operator: '>', value: 0 },
+      { factor: 'ind_strength_20', operator: '>', value: 0 },
+      { factor: 'liq_mfi_14', operator: '>', value: 50 },
     ],
   },
   {
@@ -212,19 +212,19 @@ const PRESETS: { name: string; tip: string; items: Omit<FlatCondition, 'id'>[] }
   },
   {
     name: '低波质量',
-    tip: 'Beta<1+特质波动低+高ROE',
+    tip: 'Beta<1+特质波动<0.15+高ROE',
     items: [
       { factor: 'style_beta_20', operator: '<', value: 1 },
-      { factor: 'style_idio_vol_20', operator: '<', value: 0.02 },
+      { factor: 'style_idio_vol_20', operator: '<', value: 0.15 },
       { factor: 'roe', operator: '>', value: 10 },
     ],
   },
   // === 市场情绪 ===
   {
     name: '流动性筛选',
-    tip: '流动性好+买入压力>卖出压力',
+    tip: '流动性>0.02+买入>卖出压力',
     items: [
-      { factor: 'liquidity_score', operator: '>', value: 0.5 },
+      { factor: 'liquidity_score', operator: '>', value: 0.02 },
       { factor: 'buy_pressure', operator: '>', value: 0.5 },
       { factor: 'sell_pressure', operator: '<', value: 0.3 },
     ],

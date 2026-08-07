@@ -2592,7 +2592,7 @@ const AIIDEPage: React.FC = () => {
                             </button>
                         </div>
                     </div>
-                    <div className="flex-1 p-4 pb-24 font-mono text-xs overflow-auto text-gray-600 custom-scrollbar bg-gray-50/30">
+                    <div className="flex-1 p-4 font-mono text-xs overflow-auto text-gray-600 custom-scrollbar bg-gray-50/30">
                         {logTab === 'result' ? (
                             <div className="space-y-1">
                                 {renderResultSummaryCard()}

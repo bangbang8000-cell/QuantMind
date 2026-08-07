@@ -62,13 +62,19 @@ npm run dashboard:build  # Production build
   - `rd_loop_wrapper.py` - Wraps RD-Agent's FactorRDLoop for QuantMind
   - `data_pipeline/` - Market-specific data download and format conversion
 - **Data Platform**: `backend/services/engine/data_platform/` - Multi-market data aggregation (A/HK/US), adapters for different data sources
+  - **QuantDB Data Hub**: `quantdb_hub.py` - Single entry point for all A-share parquet reads (DuckDB + pd.read_parquet)
+  - **QuantDB Local Adapter**: `adapters/quantdb_local_adapter.py` - Primary A-share data source (local parquet)
+  - **QuantDB Remote Adapter**: `adapters/quantdb_adapter.py` - Remote SDK for real-time queries (fallback)
+  - **Qlib Data Builder**: `qlib_data_builder.py` - Generates Qlib binary cache from QuantDB parquet (derived artifact)
+  - **Field Routing**: `config/data_sources/field_routing.yaml` - quantdb_local primary, old adapters as fallback
 - **TradingAgents**: `backend/services/engine/trading_agents/` - Multi-agent A-share research framework (7 AI analysts, debate, risk assessment)
   - `runner.py` - Background thread runner for TradingAgentsGraph pipeline
   - `progress.py` - Thread-safe progress tracker (12 stages)
   - `routers/trading_agents.py` - REST API (analyze, progress, report, history, download)
 - **Data Pipeline**: `backend/scripts/` - Unified daily data sync
-  - `daily_data_sync.py` - Main sync: investment_data → baostock → akshare → eltdx → PG → Qlib bin → indicators → parquet
-  - `sync_investment_data.py` - GitHub releases qlib_bin download and extraction
+  - `quantdb_daily_sync.py` - Primary daily sync: sync_dataset() → parquet → PG fill → Qlib cache
+  - `daily_data_sync.py` - Full sync: QuantDB parquet → baostock → akshare → eltdx → PG → Qlib cache → indicators → parquet
+  - `sync_investment_data.py` - GitHub releases qlib_bin download and extraction (legacy fallback)
   - `update_feature_parquet.py` - 151-dim feature computation (momentum/volatility/liquidity/fund flow/style)
 - **News/RSS**: Huntly + RSSHub for financial news aggregation, proxied through API service
 
@@ -77,7 +83,7 @@ npm run dashboard:build  # Production build
 - **Internal Format**: Prefix-based (e.g., `SH600036`) for database storage
 - **API Format**: Suffix-based (e.g., `600036.SH`) for kline API and Qlib
 - **Normalization Utilities**:
-  - **Backend**: `backend/shared/stock_utils.py` -> `StockCodeUtil.to_prefix(code)`
+  - **Backend**: `backend/shared/stock_utils.py` -> `StockCodeUtil.to_suffix(code)` (canonical format: `600036.SH`)
   - **Frontend**: `electron/src/utils/portfolioUtils.ts` -> `normalizeStockCode(code)`
   - **Dashboard**: `electron/src/features/dashboard/pages/DashboardPage.tsx` -> `normalizeSymbol(raw)` converts `SZ300258` → `300258.SZ`
 - **Market Auto-Identification**:
@@ -94,6 +100,7 @@ Required `.env` keys (defaults in `docker-compose.yml`):
 - `REDIS_HOST`, `REDIS_PORT`
 - `SECRET_KEY`, `JWT_SECRET_KEY`
 - `STORAGE_MODE=local` for OSS edition
+- `QM_QUANTDB_DATA_DIR` - QuantDB local parquet data directory (default: `data/quantdb/`)
 
 ## Code Style
 
@@ -133,8 +140,12 @@ docker cp dist-react/. quantmind-web:/usr/share/nginx/html/
 - `backend/services/engine/trading_agents/progress.py` - TradingAgents progress tracker (12 stages)
 - `scripts/alpha_agent/run_rd_agent.py` - RD-Agent multi-market runner script (subprocess entry point)
 - `backend/services/engine/data_platform/` - Multi-market data platform
-- `backend/scripts/daily_data_sync.py` - Unified daily data sync (PG + Qlib + indicators + parquet)
-- `backend/scripts/sync_investment_data.py` - GitHub investment_data download and extraction
+- `backend/services/engine/data_platform/quantdb_hub.py` - QuantDB data hub (single entry for A-share parquet reads)
+- `backend/services/engine/qlib_data_builder.py` - Qlib binary cache builder from QuantDB parquet
+- `backend/services/engine/data_platform/adapters/quantdb_local_adapter.py` - Primary A-share data adapter (local parquet)
+- `backend/scripts/quantdb_daily_sync.py` - Primary daily sync (sync_dataset → parquet → PG → Qlib cache)
+- `backend/scripts/daily_data_sync.py` - Full sync (QuantDB parquet → fallbacks → PG → Qlib cache → indicators)
+- `backend/scripts/sync_investment_data.py` - GitHub investment_data download and extraction (legacy)
 - `backend/scripts/update_feature_parquet.py` - 151-dim feature parquet computation
 - `backend/services/api/routers/admin/data_platform.py` - Admin data platform endpoints (sync, parquet, health)
 - `backend/services/api/routers/news.py` - News proxy router

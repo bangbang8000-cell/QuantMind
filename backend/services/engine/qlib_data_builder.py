@@ -175,7 +175,39 @@ class QlibDataBuilder:
                 f.write(f"{sym}\t{start_date}\t{end_date}\n")
 
         logger.info("Qlib instruments: %d symbols -> %s", len(qlib_symbols), inst_file)
+
+        # 另外为各股票池生成成分文件，供 D.instruments(market="csi300") 使用。
+        # 缺失时 Qlib 会直接抛 ValueError，导致因子回测无法运行。
+        self._build_universe_instruments(inst_dir, start_date, end_date, set(qlib_symbols))
         return len(qlib_symbols)
+
+    def _build_universe_instruments(
+        self, inst_dir: Path, start_date: str, end_date: str, known: set[str]
+    ) -> None:
+        """为 csi300/csi500/... 生成 Qlib instruments 文件。"""
+        universes = getattr(self._hub, "UNIVERSE_MAP", {}) or {}
+        for universe in universes:
+            try:
+                df = self._hub.fetch_universe_stocks(universe)
+                if df is None or df.empty or "symbol" not in df.columns:
+                    logger.warning("股票池 %s 无成分数据，跳过", universe)
+                    continue
+                syms = set()
+                for sym in df["symbol"].dropna().unique():
+                    qs = self._to_qlib_symbol(str(sym))
+                    # 只保留有行情数据的标的，否则 Qlib 读 features 时会报缺文件
+                    if qs and qs in known:
+                        syms.add(qs)
+                if not syms:
+                    logger.warning("股票池 %s 成分与行情数据无交集，跳过", universe)
+                    continue
+                out = inst_dir / f"{universe}.txt"
+                with open(out, "w") as f:
+                    for s in sorted(syms):
+                        f.write(f"{s}\t{start_date}\t{end_date}\n")
+                logger.info("Qlib universe %s: %d symbols -> %s", universe, len(syms), out)
+            except Exception as e:
+                logger.warning("生成股票池 %s 成分文件失败: %s", universe, e)
 
     def build_features(
         self,
@@ -660,7 +692,10 @@ def ensure_qlib_cache(quantdb_dir: str | Path, qlib_dir: str | Path | None = Non
         logger.info("Qlib 缓存不存在，开始构建...")
         builder.build_all(incremental=False)
     else:
-        # 增量更新
+        # 增量更新：先重建日历（trading_calendar 可能已更新），
+        # 再增量更新 instruments 和 features
+        builder.build_calendar()
+        builder.build_instruments()
         builder.build_features(incremental=True)
 
     return str(qlib_dir)

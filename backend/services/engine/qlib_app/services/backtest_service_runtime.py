@@ -627,6 +627,9 @@ class QlibBacktestServiceRuntimeMixin(QlibBacktestServiceQueryMixin):
                     max_drawdown=v_res.max_drawdown,
                     total_return=v_res.total_return,
                     win_rate=v_res.win_rate,
+                    long_short_is_theoretical=request.strategy_params.short_topk > 0,
+                    signal_lag_days=request.signal_lag_days,
+                    deal_price=request.deal_price,
                     execution_time=execution_time,
                 )
             else:
@@ -726,6 +729,9 @@ class QlibBacktestServiceRuntimeMixin(QlibBacktestServiceQueryMixin):
                 sharpe_ratio=0.0,
                 max_drawdown=0.0,
                 alpha=0.0,
+                long_short_is_theoretical=request.strategy_params.short_topk > 0,
+                signal_lag_days=request.signal_lag_days,
+                deal_price=request.deal_price,
                 error_message=f"{str(e)}",
                 full_error=error_detail,
                 execution_time=execution_time,

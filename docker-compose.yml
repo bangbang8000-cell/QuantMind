@@ -54,6 +54,13 @@ services:
       context: .
       dockerfile: docker/Dockerfile.oss
     platform: linux/amd64
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
     container_name: quantmind
     depends_on:
       db:
@@ -133,7 +140,6 @@ services:
       - PORTFOLIO_SERVICE_URL=http://127.0.0.1:8002
       - USER_SERVICE_URL=http://127.0.0.1:8002
       - REAL_TRADING_SERVICE_URL=http://127.0.0.1:8002
-      - DSA_SERVICE_URL=http://quantmind-dsa:8005
 
       # 调试配置
       - DEBUG=false
@@ -192,6 +198,8 @@ services:
 
       # QuantDB SDK（付费高质量数据源：K线/Tick/财报/估值/315维AI因子）
       - QUANTDB_API_KEY=${QUANTDB_API_KEY:-}
+      # QuantDB 本地数据中枢（A 股优先数据源）
+      - QM_QUANTDB_DATA_DIR=/data/quantdb
 
       # AlphaAgent 因子编码专家系统提示词
       - ALPHA_AGENT_SYSTEM_PROMPT=${ALPHA_AGENT_SYSTEM_PROMPT:-}
@@ -246,7 +254,7 @@ services:
       - qwenpaw-shared:/qwenpaw-shared
     # 启动时自动安装 TradingAgents（editable install，依赖保留在容器内）
     command: >
-      sh -c "pip install --no-deps -e /app/TradingAgents-astock --quiet 2>/dev/null;
+      sh -c "pip install -e /app/TradingAgents-astock --quiet 2>/dev/null; pip install 'starlette<1.0.0' --quiet 2>/dev/null;
              python backend/main_oss.py"
     # deploy:
     #   resources:
@@ -324,6 +332,15 @@ services:
       - AI_IDE_LLM_BASE_URL=${AI_IDE_LLM_BASE_URL:-https://token-plan-cn.xiaomimimo.com/v1}
       - AI_IDE_LLM_MODEL=${AI_IDE_LLM_MODEL:-mimo-v2.5-pro}
       - AI_IDE_LLM_API_KEY=${AI_IDE_LLM_API_KEY:-mock-api-key-not-configured}
+
+      # QuantDB SDK（数据同步 + 特征快照生成）
+      - QUANTDB_API_KEY=${QUANTDB_API_KEY:-}
+      - QM_QUANTDB_DATA_DIR=/data/quantdb
+      # QuantDB 同步状态库（避免容器内空库导致全量重下）
+      - QUANTDB_STATE_DIR=/data/quantdb/.sync_state
+
+      # 数据同步定时任务
+      - DAILY_SYNC_ENABLED=true
     volumes:
       # 运行时数据
       - ./data:/data
@@ -384,11 +401,21 @@ services:
       - NEWS_ENRICH_ENABLED=true
       - NEWS_ENRICH_INTERVAL_SEC=60
       - NEWS_MATCHER_RELOAD_SEC=600
+
+      # QuantDB SDK（数据同步调度需要）
+      - QUANTDB_API_KEY=${QUANTDB_API_KEY:-}
+      - QM_QUANTDB_DATA_DIR=/data/quantdb
+      - QUANTDB_STATE_DIR=/data/quantdb/.sync_state
+
+      # 数据同步定时任务
+      - DAILY_SYNC_ENABLED=true
     volumes:
       - ./backend:/app/backend
       - ./config:/app/config
       - ./scripts:/app/scripts
       - ./logs:/app/logs
+      - ./data:/data
+      - ./db:/app/db
     command: celery -A backend.services.engine.qlib_app.celery_config:celery_app beat --loglevel=info --schedule=/tmp/celerybeat-schedule
     restart: unless-stopped
     networks:
@@ -430,36 +457,6 @@ services:
       test: ["CMD-SHELL", "curl -f http://localhost:8004/health || exit 1"]
       interval: 30s
       timeout: 5s
-      retries: 3
-      start_period: 20s
-    restart: unless-stopped
-    networks:
-      - quantmind-net
-
-  # 5b. Daily Stock Analysis (A股/港股/美股智能分析)
-  dsa:
-    build:
-      context: .
-      dockerfile: docker/Dockerfile.dsa
-    container_name: quantmind-dsa
-    ports:
-      - "${DSA_PORT:-8005}:8005"
-    environment:
-      - TZ=Asia/Shanghai
-      - API_PORT=8005
-      - CORS_ORIGINS=http://localhost:3000,http://localhost:8000
-      - CORS_ALLOW_ALL=true
-      - ADMIN_AUTH_ENABLED=false
-      - LLM_API_KEY=${LLM_API_KEY:-}
-      - LLM_API_BASE=${LLM_API_BASE:-}
-      - DATABASE_PATH=/app/data/stock_analysis.db
-    volumes:
-      - dsa-data:/app/data
-      - dsa-logs:/app/logs
-    healthcheck:
-      test: ["CMD-SHELL", "curl -f http://localhost:8005/api/health || exit 1"]
-      interval: 30s
-      timeout: 10s
       retries: 3
       start_period: 20s
     restart: unless-stopped
@@ -597,6 +594,7 @@ services:
       - QUANTMIND_ENGINE_URL=http://quantmind:8001
       - QUANTMIND_USER_ID=qwenpaw
       - QWENPAW_SHARED_FILES_DIR=/qwenpaw-shared
+      - QWENPAW_CORS_ORIGINS=http://192.168.31.68:3080,http://localhost:3080,http://127.0.0.1:3080,http://192.168.31.68:8089,http://localhost:8089
       # 远程数据源（用于数据同步脚本）
       - SOURCE_DATABASE_URL=${SOURCE_DATABASE_URL:-postgresql://user:pass@localhost:5432/quantmind}
       - SYNC_MAX_DAYS=30
@@ -637,5 +635,3 @@ volumes:
   qwenpaw-secrets:
   qwenpaw-backups:
   qwenpaw-shared:
-  dsa-data:
-  dsa-logs:

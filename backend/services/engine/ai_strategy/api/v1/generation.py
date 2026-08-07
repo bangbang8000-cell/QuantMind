@@ -19,12 +19,14 @@ try:
 except ImportError:
     from shared.database_pool import get_db
 
-# Market-specific Qlib configuration
+# Market-specific Qlib configuration — provider_uri 通过 qlib_paths 统一解析
+from backend.shared.qlib_paths import resolve_qlib_provider_uri
+
 MARKET_QLIB_CONFIG = {
-    "CN": {"provider_uri": "/app/db/qlib_data", "region": "cn", "benchmark": "SH000300", "label": "A股"},
-    "HK": {"provider_uri": "/app/db/qlib_data/hk_data", "region": "cn", "benchmark": "HSI", "label": "港股"},
-    "US": {"provider_uri": "/app/db/qlib_data/us_data", "region": "us", "benchmark": "SPX", "label": "美股"},
-    "CRYPTO": {"provider_uri": "/app/db/qlib_data/crypto_data", "region": "cn", "benchmark": "BTC", "label": "加密货币"},
+    "CN": {"provider_uri": resolve_qlib_provider_uri("CN"), "region": "cn", "benchmark": "SH000300", "label": "A股"},
+    "HK": {"provider_uri": resolve_qlib_provider_uri("HK"), "region": "cn", "benchmark": "HSI", "label": "港股"},
+    "US": {"provider_uri": resolve_qlib_provider_uri("US"), "region": "us", "benchmark": "SPX", "label": "美股"},
+    "CRYPTO": {"provider_uri": resolve_qlib_provider_uri("CRYPTO"), "region": "cn", "benchmark": "BTC", "label": "加密货币"},
 }
 
 from backend.shared.redis_sentinel_client import get_redis_sentinel_client

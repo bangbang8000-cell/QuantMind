@@ -13,6 +13,8 @@ import json
 import logging
 import os
 import re
+import subprocess
+import sys
 import uuid
 from pathlib import Path
 from typing import Any, Optional
@@ -68,19 +70,32 @@ def _extract_qlib_expression(factor_code: str, metadata: dict) -> Optional[str]:
     if formulation and _is_qlib_expression(formulation):
         return formulation.strip()
 
-    # 2. 从 ExpressionFactor 子类提取
+    # 2. 从 ExpressionFactor 子类提取 (sandbox via subprocess)
     if "get_expression" in factor_code and "ExpressionFactor" in factor_code:
         try:
-            ns: dict = {}
-            exec(compile(factor_code, "<factor>", "exec"), ns)
-            for obj in ns.values():
-                if isinstance(obj, type) and hasattr(obj, "get_expression"):
-                    inst = obj()
-                    expr = inst.get_expression()
+            import tempfile
+            with tempfile.NamedTemporaryFile(mode="w", suffix=".py", delete=False, prefix="factor_expr_") as tmp:
+                tmp.write(factor_code)
+                tmp_path = tmp.name
+            try:
+                result = subprocess.run(
+                    [sys.executable, "-c",
+                     f"import json; exec(open({repr(tmp_path)}).read()); "
+                     f"ns={{k:v for k,v in locals().items() if isinstance(v,type) and hasattr(v,'get_expression')}};"
+                     f"expr=list(ns.values())[0]().get_expression() if ns else ''; "
+                     f"print(json.dumps({{'expr':expr}}))"],
+                    capture_output=True, text=True, timeout=15,
+                )
+                if result.returncode == 0 and result.stdout.strip():
+                    import json as _json
+                    out = _json.loads(result.stdout.strip().splitlines()[-1])
+                    expr = out.get("expr", "")
                     if expr and _is_qlib_expression(expr):
                         return expr.strip()
+            finally:
+                os.unlink(tmp_path)
         except Exception as e:
-            logger.debug("Failed to instantiate ExpressionFactor: %s", e)
+            logger.debug("Failed to extract ExpressionFactor via subprocess: %s", e)
 
     # 3. 尝试从 return "..." 模式提取
     m = re.search(r'return\s+["\'](.+?)["\']', factor_code)
@@ -129,7 +144,7 @@ def _ensure_qlib_init():
         logger.info("Qlib initialized with provider_uri=%s", QLIB_PROVIDER_URI)
     except Exception as e:
         logger.error("Failed to init Qlib: %s", e)
-        raise RuntimeError(f"Qlib 初始化失败: {e}")
+        raise RuntimeError(f"Qlib 初始化失败: {e}") from e
 
 
 def compute_factor_via_qlib(expression: str, feature_name: str) -> pd.DataFrame:
@@ -373,12 +388,12 @@ async def promote_factors(req: PromoteRequest):
                 "sharpe_ratio": factor.get("sharpe_ratio"),
             })
 
-        except Exception as e:
+        except Exception:
             logger.exception("Failed to promote factor %s", factor_name)
             errors.append({
                 "factor_id": factor_id,
                 "factor_name": factor_name,
-                "error": str(e)[:500],
+                "error": "因子推广失败，请检查因子代码",
             })
 
     # 可选：自动触发训练
@@ -478,9 +493,9 @@ async def promote_factors_by_expression(req: PromoteExpressionRequest):
                 "expression": expression,
                 "non_null_values": non_null,
             })
-        except Exception as e:
+        except Exception:
             logger.exception("Failed to promote factor %s", factor_name)
-            errors.append({"factor_name": factor_name, "error": str(e)[:500]})
+            errors.append({"factor_name": factor_name, "error": "因子推广失败"})
 
     return PromoteResponse(
         success=len(promoted) > 0,

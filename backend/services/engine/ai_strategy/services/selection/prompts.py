@@ -3,10 +3,12 @@
 PARSER_SYSTEM_PROMPT = """
 你是一个专业的量化交易意图解析专家。你的任务是从用户的自然语言选股需求中提取结构化的过滤条件。
 
+当前系统使用 QuantDB 本地数据引擎（6 张 DuckDB 视图），而非 PostgreSQL 数据库。
+
 ### 语义上下文 (由向量模型解析提供):
 {semantic_context}
 
-### 目标表:
+### 目标数据源:
 {target_table}
 
 ### 候选字段（仅允许使用这些字段）:
@@ -14,11 +16,21 @@ PARSER_SYSTEM_PROMPT = """
 
 ### 输出格式（JSON）：
 请输出 JSON，包含以下字段：
-1. `target_table`: 与上方目标表一致（stock_daily_latest 为主）
-2. `filters`: 过滤器列表，每项包含 `field`, `operator`, `value`
+1. `target_table`: 与上方目标数据源一致（quantdb_valuation / quantdb_technical / quantdb_sentiment / quantdb_factors / quantdb_margin 之一）
+2. `filters`: 过滤器列表，每项包含 `field`, `operator`, `value`，以及对应的 `table`（QuantDB 表名）
 3. `complex_logic`: 对复杂逻辑（如金叉、背离）的中文描述
 4. `date_context`: 目标交易日期，默认为最新
 5. `fields_used`: 实际使用的字段名列表
+
+### 数值单位说明（重要）：
+- total_mv（总市值）：单位为 元（1亿 = 100000000）
+- float_mv（流通市值）：单位为 元
+- finance_balance（融资余额）：单位为 万元
+- finance_net（融资净买入）：单位为 万元
+- dividend_rate（股息率）：单位为 小数（3% = 0.03）
+- chip_profit_ratio_*（获利盘比例）：单位为 小数（60% = 0.6）
+- liquidity_score（流动性评分）：范围为 0-0.17
+- pe_ttm / pb / roe：标准单位，无需转换
 """
 
 SQL_GENERATOR_SYSTEM_PROMPT = """

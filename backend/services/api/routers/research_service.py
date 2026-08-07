@@ -101,11 +101,21 @@ async def _load_sdl_day_map(session, trade_date: date, market: str | None = None
         if is_cn
         else f"COALESCE({name_col}, '')"
     )
+    # stocks 表补充行业：stock_daily_latest.industry 全为空，stocks.industry 有完整数据
+    stocks_industry = (
+        f"""COALESCE(NULLIF(sdl.industry, ''), (
+                SELECT st.industry FROM stocks st
+                WHERE {_norm_symbol_sql("st.symbol")} = {_norm_symbol_sql("sdl.symbol")}
+                LIMIT 1
+            ), '')"""
+        if is_cn
+        else "COALESCE(sdl.industry, '')"
+    )
     sql = f"""
         SELECT
             symbol,
             {stocks_name} AS stock_name,
-            COALESCE(industry, '') AS industry,
+            {stocks_industry} AS industry,
             COALESCE(close, 0) AS close_price,
             COALESCE(pe_ttm, 0) AS pe,
             COALESCE(pb, 0) AS pb,
@@ -118,7 +128,7 @@ async def _load_sdl_day_map(session, trade_date: date, market: str | None = None
             COALESCE(listed_days, 0) AS listed_days,
             COALESCE(is_st, 0) <> 0 AS is_st,
             COALESCE(idx_hs300, 0) <> 0 AS is_hs300,
-            0 <> 0 AS is_csi500,
+            COALESCE(idx_zz500, 0) <> 0 AS is_csi500,
             COALESCE(idx_zz1000, 0) <> 0 AS is_csi1000,
             COALESCE(pct_change, 0) AS latest_change_pct,
             return_1d,
@@ -167,7 +177,7 @@ async def _load_sdl_day_map(session, trade_date: date, market: str | None = None
             COALESCE(
               to_jsonb(array_remove(ARRAY[
                 CASE WHEN COALESCE(idx_hs300, 0) <> 0 THEN '沪深300' END,
-                CASE WHEN 0 <> 0 THEN '中证500' END,
+                CASE WHEN COALESCE(idx_zz500, 0) <> 0 THEN '中证500' END,
                 CASE WHEN COALESCE(idx_zz1000, 0) <> 0 THEN '中证1000' END,
                 CASE WHEN COALESCE(idx_chinext, 0) <> 0 THEN '创业板指数' END,
                 CASE WHEN COALESCE(idx_margin, 0) <> 0 THEN '两融标的' END,
@@ -247,7 +257,7 @@ def _norm_symbol_sql(symbol_expr: str) -> str:
 
 _SDL_SELECT_BY_RUN_DATE = """
     COALESCE(sdl_run.stock_name, st.name, '') AS stock_name,
-    COALESCE(sdl_run.industry, '') AS industry,
+    COALESCE(NULLIF(sdl_run.industry, ''), st.industry, '') AS industry,
     COALESCE(sdl_run.close, 0) AS close_price,
     COALESCE(sdl_run.pe_ttm, 0) AS pe,
     COALESCE(sdl_run.pb, 0) AS pb,
@@ -260,7 +270,7 @@ _SDL_SELECT_BY_RUN_DATE = """
     COALESCE(sdl_run.listed_days, 0) AS listed_days,
     COALESCE(sdl_run.is_st, 0) <> 0 AS is_st,
     COALESCE(sdl_run.idx_hs300, 0) <> 0 AS is_hs300,
-    0 <> 0 AS is_csi500,
+    COALESCE(sdl_run.idx_zz500, 0) <> 0 AS is_csi500,
     COALESCE(sdl_run.idx_zz1000, 0) <> 0 AS is_csi1000,
     COALESCE(sdl_run.pct_change, 0) AS latest_change_pct,
     CASE
@@ -318,7 +328,7 @@ _SDL_SELECT_BY_RUN_DATE = """
     COALESCE(
       to_jsonb(array_remove(ARRAY[
         CASE WHEN COALESCE(sdl_run.idx_hs300, 0) <> 0 THEN '沪深300' END,
-        CASE WHEN 0 <> 0 THEN '中证500' END,
+        CASE WHEN COALESCE(sdl_run.idx_zz500, 0) <> 0 THEN '中证500' END,
         CASE WHEN COALESCE(sdl_run.idx_zz1000, 0) <> 0 THEN '中证1000' END,
         CASE WHEN COALESCE(sdl_run.idx_chinext, 0) <> 0 THEN '创业板指数' END,
         CASE WHEN COALESCE(sdl_run.idx_margin, 0) <> 0 THEN '两融标的' END,

@@ -23,6 +23,8 @@ MODEL_TIMEOUT_SECONDS = int(os.getenv("MODEL_TIMEOUT_SECONDS", "30"))
 # History Buffer Configuration
 HISTORY_WINDOW_SIZE = int(os.getenv("HISTORY_WINDOW_SIZE", "30"))
 
-# Qlib Configuration
-QLIB_PROVIDER_URI = os.getenv("QLIB_PROVIDER_URI", str(PROJECT_ROOT / "db" / "qlib_data"))
+# Qlib Configuration — 通过 qlib_paths 统一解析，优先 QuantDB 缓存路径
+from backend.shared.qlib_paths import resolve_qlib_provider_uri
+
+QLIB_PROVIDER_URI = resolve_qlib_provider_uri()
 QLIB_REGION = os.getenv("QLIB_REGION", "cn")

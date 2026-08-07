@@ -6,11 +6,16 @@
 import asyncio
 import logging
 import os
+import sys
 from typing import Optional
 
 from fastapi import APIRouter, HTTPException, Query, Request
 
 from backend.services.engine.alpha_agent.launcher import get_launcher
+from backend.services.engine.auth_context import (
+    assert_identity_not_spoofed,
+    get_authenticated_identity,
+)
 from backend.services.engine.qlib_app.services.rd_agent_persistence import (
     RDAgentFactorPersistence,
 )
@@ -21,6 +26,34 @@ router = APIRouter(prefix="/api/v1/alpha-agent", tags=["AlphaAgent"])
 persistence = RDAgentFactorPersistence()
 
 _running_backtests: set[str] = set()
+
+
+async def _require_owned_task(task_id: str, request: Request) -> dict:
+    """返回任务状态，若不属于当前认证用户则 404（不泄露任务是否存在）。"""
+    auth_user_id, _ = get_authenticated_identity(request)
+    launcher = get_launcher()
+    status = await launcher.get_task_status(task_id)
+    if not status or status.get("user_id") != auth_user_id:
+        raise HTTPException(status_code=404, detail=f"Task {task_id} not found")
+    return status
+
+
+async def _require_owned_factor(
+    factor_id: str, request: Request, *, for_write: bool = False
+) -> dict:
+    """返回因子，若不属于当前认证用户则 404。
+
+    历史因子的 user_id 可能为空（该列加入前写入），此类记录允许只读访问，
+    但禁止写操作（回测/解释会回填 metrics），避免跨用户篡改。
+    """
+    auth_user_id, _ = get_authenticated_identity(request)
+    factor = await persistence.get_factor(factor_id)
+    if not factor:
+        raise HTTPException(status_code=404, detail=f"Factor {factor_id} not found")
+    owner = factor.get("user_id")
+    if owner != auth_user_id and (owner or for_write):
+        raise HTTPException(status_code=404, detail=f"Factor {factor_id} not found")
+    return factor
 
 
 @router.get("/markets")
@@ -41,22 +74,39 @@ async def list_markets():
 
 @router.post("/evolve")
 async def start_evolution(
-    user_id: str = Query(..., description="用户 ID"),
+    request: Request,
+    user_id: Optional[str] = Query(None, description="已废弃：身份取自 JWT，仅用于防伪校验"),
     market: str = Query("a_share", description="市场: a_share, crypto, hong_kong, us_stock"),
+    universe: str = Query("csi300", description="股票池: csi300, csi500, csi1000, sse50, gem, star, csi800, all_a"),
     loop_n: int = Query(3, ge=1, le=20, description="演化轮数"),
     direction: str = Query("", description="因子挖掘方向/假设"),
     data_source: str = Query("", description="数据源: qlib_bin, parquet, pg (留空使用默认)"),
 ):
     """启动因子演化任务"""
+    auth_user_id, auth_tenant_id = get_authenticated_identity(request)
+    assert_identity_not_spoofed(
+        auth_user_id=auth_user_id,
+        auth_tenant_id=auth_tenant_id,
+        provided_user_id=user_id,
+    )
+
     # Validate market
     try:
         from backend.services.engine.rd_agent.market_adapters import get_adapter, list_markets
         adapter = get_adapter(market)
-    except ValueError:
+    except ValueError as e:
         available = [m["market_id"] for m in list_markets()]
         raise HTTPException(
             status_code=400,
             detail=f"Unknown market: {market}. Available: {available}",
+        ) from e
+
+    # Validate universe
+    valid_universes = ["csi300", "csi500", "csi1000", "sse50", "gem", "star", "csi800", "all_a"]
+    if universe not in valid_universes:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Unknown universe: {universe}. Available: {valid_universes}",
         )
 
     api_key = (
@@ -66,14 +116,15 @@ async def start_evolution(
     )
     if not api_key or "mock-api-key" in api_key:
         raise HTTPException(
-            status_code=500,
+            status_code=412,
             detail="API Key 未配置。请先在个人中心配置 API Key 后再使用因子挖掘功能。",
         )
 
     launcher = get_launcher()
     task_id = await launcher.start_evolution(
-        user_id,
+        auth_user_id,
         market=market,
+        universe=universe,
         loop_n=loop_n,
         direction=direction or None,
         data_source=data_source or None,
@@ -83,6 +134,7 @@ async def start_evolution(
         "data": {
             "task_id": task_id,
             "market": market,
+            "universe": universe,
             "market_name": adapter.market_name,
             "status": "pending",
             "message": f"{adapter.market_name} 因子挖掘任务已启动",
@@ -91,18 +143,16 @@ async def start_evolution(
 
 
 @router.get("/tasks/{task_id}")
-async def get_task_status(task_id: str):
+async def get_task_status(task_id: str, request: Request):
     """查询演化任务状态"""
-    launcher = get_launcher()
-    status = await launcher.get_task_status(task_id)
-    if not status:
-        raise HTTPException(status_code=404, detail=f"Task {task_id} not found")
+    status = await _require_owned_task(task_id, request)
     return {"code": 200, "data": status}
 
 
 @router.post("/tasks/{task_id}/cancel")
-async def cancel_task(task_id: str):
+async def cancel_task(task_id: str, request: Request):
     """取消演化任务"""
+    await _require_owned_task(task_id, request)
     launcher = get_launcher()
     ok = await launcher.cancel_task(task_id)
     if not ok:
@@ -113,35 +163,46 @@ async def cancel_task(task_id: str):
 @router.get("/tasks/{task_id}/log")
 async def get_task_log(
     task_id: str,
-    tail: int = Query(500, ge=1, le=5000, description="返回最后N行"),
-    offset: int = Query(0, ge=0, description="从第N行开始返回"),
+    request: Request,
+    tail: int = Query(500, ge=1, le=5000, description="返回行数"),
+    offset: int = Query(0, ge=0, description="从第N行开始返回（0-based）"),
 ):
-    """获取任务的详细子进程日志（实时监控用）"""
+    """获取任务的详细子进程日志（分页读取）"""
+    await _require_owned_task(task_id, request)
     launcher = get_launcher()
-    log_content = await launcher.get_task_log(task_id, tail=tail + offset)
+    log_content = await launcher.get_task_log(task_id, tail=0)
     if log_content is None:
         raise HTTPException(status_code=404, detail=f"Task {task_id} log not found")
-    lines = log_content.splitlines()
-    if offset > 0:
-        lines = lines[offset:]
+    all_lines = log_content.splitlines()
+    total = len(all_lines)
+    # offset-based slicing: return lines[offset:offset+tail]
+    end = min(offset + tail, total)
+    lines = all_lines[offset:end]
     return {
         "code": 200,
         "data": {
             "task_id": task_id,
             "lines": lines,
-            "total": len(lines),
+            "total": total,
         },
     }
 
 
 @router.get("/tasks")
 async def list_tasks(
-    user_id: Optional[str] = Query(None, description="按用户过滤"),
+    request: Request,
+    user_id: Optional[str] = Query(None, description="已废弃：身份取自 JWT，仅用于防伪校验"),
     market: Optional[str] = Query(None, description="按市场过滤"),
 ):
-    """列出所有演化任务"""
+    """列出当前用户的演化任务"""
+    auth_user_id, auth_tenant_id = get_authenticated_identity(request)
+    assert_identity_not_spoofed(
+        auth_user_id=auth_user_id,
+        auth_tenant_id=auth_tenant_id,
+        provided_user_id=user_id,
+    )
     launcher = get_launcher()
-    tasks = await launcher.list_tasks(user_id=user_id)
+    tasks = await launcher.list_tasks(user_id=auth_user_id)
     if market:
         tasks = [t for t in tasks if t.get("market") == market]
     return {"code": 200, "data": {"tasks": tasks, "total": len(tasks)}}
@@ -149,33 +210,37 @@ async def list_tasks(
 
 @router.get("/factors")
 async def list_factors(
-    user_id: Optional[str] = Query(None, description="按用户过滤"),
+    request: Request,
+    user_id: Optional[str] = Query(None, description="已废弃：身份取自 JWT，仅用于防伪校验"),
     market: Optional[str] = Query(None, description="按市场过滤"),
+    universe: Optional[str] = Query(None, description="按股票池过滤"),
     status: Optional[str] = Query(None, description="按状态过滤: pending/backtesting/completed/failed"),
     limit: int = Query(50, ge=1, le=200),
 ):
-    """列出所有已生成的因子"""
-    factors = await persistence.list_factors(user_id=user_id, status=status, limit=limit)
-    if market:
-        factors = [f for f in factors if f.get("metadata", {}).get("market") == market]
+    """列出当前用户已生成的因子"""
+    auth_user_id, auth_tenant_id = get_authenticated_identity(request)
+    assert_identity_not_spoofed(
+        auth_user_id=auth_user_id,
+        auth_tenant_id=auth_tenant_id,
+        provided_user_id=user_id,
+    )
+    factors = await persistence.list_factors(
+        user_id=auth_user_id, status=status, market=market, universe=universe, limit=limit,
+    )
     return {"code": 200, "data": {"factors": factors, "total": len(factors)}}
 
 
 @router.get("/factors/{factor_id}")
-async def get_factor(factor_id: str):
+async def get_factor(factor_id: str, request: Request):
     """获取单个因子详情"""
-    factor = await persistence.get_factor(factor_id)
-    if not factor:
-        raise HTTPException(status_code=404, detail=f"Factor {factor_id} not found")
+    factor = await _require_owned_factor(factor_id, request)
     return {"code": 200, "data": factor}
 
 
 @router.post("/factors/{factor_id}/explain")
-async def explain_factor(factor_id: str):
+async def explain_factor(factor_id: str, request: Request):
     """用 LLM 中文解释因子含义"""
-    factor = await persistence.get_factor(factor_id)
-    if not factor:
-        raise HTTPException(status_code=404, detail=f"Factor {factor_id} not found")
+    factor = await _require_owned_factor(factor_id, request, for_write=True)
 
     # Check if explanation already exists
     metadata = factor.get("metadata") or {}
@@ -202,7 +267,7 @@ async def explain_factor(factor_id: str):
     model = os.getenv("CHAT_MODEL", "deepseek-v3")
 
     if not api_key:
-        raise HTTPException(status_code=500, detail="API Key 未配置")
+        raise HTTPException(status_code=412, detail="API Key 未配置")
 
     prompt = f"""请用中文简洁地解释以下量化因子。输出格式：
 1. **含义**：一句话概括
@@ -229,9 +294,12 @@ async def explain_factor(factor_id: str):
             )
             resp.raise_for_status()
             explanation = resp.json()["choices"][0]["message"]["content"]
+    except httpx.HTTPStatusError as e:
+        logger.error("LLM explain failed: status=%s", e.response.status_code)
+        raise HTTPException(status_code=502, detail="LLM 服务返回错误，请稍后重试") from e
     except Exception as e:
         logger.error("LLM explain failed: %s", e)
-        raise HTTPException(status_code=500, detail=f"LLM 解释失败: {str(e)[:200]}")
+        raise HTTPException(status_code=500, detail="LLM 解释失败，请稍后重试") from e
 
     # Store explanation in metadata
     metadata["explanation"] = explanation
@@ -243,13 +311,13 @@ async def explain_factor(factor_id: str):
 @router.post("/factors/{factor_id}/backtest")
 async def backtest_factor(
     factor_id: str,
+    request: Request,
     start_date: Optional[str] = None,
     end_date: Optional[str] = None,
+    universe: Optional[str] = Query("csi300", description="回测股票池: csi300, csi500, csi1000, sse50, gem, star, csi800, all_a"),
 ):
     """对因子发起轻量验证"""
-    factor = await persistence.get_factor(factor_id)
-    if not factor:
-        raise HTTPException(status_code=404, detail=f"Factor {factor_id} not found")
+    factor = await _require_owned_factor(factor_id, request, for_write=True)
 
     if not factor.get("factor_code"):
         raise HTTPException(status_code=400, detail="因子代码为空，无法回测")
@@ -268,7 +336,7 @@ async def backtest_factor(
     _running_backtests.add(factor_id)
 
     asyncio.create_task(
-        _run_lightweight_backtest(factor_id, factor.get("factor_code") or "", start_date, end_date)
+        _run_lightweight_backtest(factor_id, factor.get("factor_code") or "", start_date, end_date, universe)
     )
 
     return {
@@ -287,15 +355,8 @@ async def export_factor_to_ide(
     request: Request,
 ):
     """将因子代码导出到 AI-IDE 工作空间"""
-    # 从请求中获取用户 ID
-    user = getattr(request.state, "user", None)
-    user_id = str(user.get("user_id") or user.get("sub") or "") if user else ""
-    if not user_id:
-        raise HTTPException(status_code=401, detail="Authentication required")
-
-    factor = await persistence.get_factor(factor_id)
-    if not factor:
-        raise HTTPException(status_code=404, detail=f"Factor {factor_id} not found")
+    factor = await _require_owned_factor(factor_id, request)
+    user_id, _ = get_authenticated_identity(request)
 
     factor_code = factor.get("factor_code") or ""
     if not factor_code.strip():
@@ -306,16 +367,16 @@ async def export_factor_to_ide(
 
     # 生成带头部注释的完整 Python 文件
     header_lines = [
-        f'"""',
+        '"""',
         f'Factor: {factor_name}',
-        f'Source: RD-Agent Alpha Research',
+        'Source: RD-Agent Alpha Research',
         f'IC: {factor.get("ic_value", "N/A")}',
         f'RankIC: {meta.get("rank_ic", "N/A")}',
         f'Sharpe: {factor.get("sharpe_ratio", "N/A")}',
         f'Market: {meta.get("market", "a_share")}',
         f'Description: {meta.get("description", "")[:200]}',
-        f'"""',
-        f'',
+        '"""',
+        '',
     ]
     full_code = "\n".join(header_lines) + factor_code
 
@@ -348,18 +409,24 @@ async def export_factor_to_ide(
 
 @router.get("/stats")
 async def get_stats(
+    request: Request,
     market: Optional[str] = Query(None, description="按市场过滤统计"),
 ):
-    """因子统计信息"""
-    from backend.shared.database_manager_v2 import get_session
+    """当前用户的因子统计信息"""
     from sqlalchemy import text
 
-    where_clause = ""
+    from backend.shared.database_manager_v2 import get_session
+
+    auth_user_id, _ = get_authenticated_identity(request)
+
+    conditions = ["user_id = :user_id"]
+    params: dict = {"user_id": auth_user_id}
     if market:
-        where_clause = "WHERE metadata->>'market' = :market"
+        conditions.append("market = :market")
+        params["market"] = market
+    where_clause = "WHERE " + " AND ".join(conditions)
 
     async with get_session(read_only=True) as session:
-        params = {"market": market} if market else {}
         rows = await session.execute(text(f"""
             SELECT
                 COUNT(*) AS total,
@@ -386,24 +453,100 @@ async def get_stats(
     return {"code": 200, "data": data}
 
 
+@router.get("/data-summary")
+async def get_data_summary():
+    """返回 QuantDB 数据可用性摘要（日期范围、股票池、数据集）"""
+    try:
+        from backend.services.engine.data_platform.quantdb_hub import QuantDBDataHub
+        hub = QuantDBDataHub.get_instance()
+        summary = hub.get_data_summary()
+        return {"code": 200, "data": summary}
+    except Exception as e:
+        logger.warning("Failed to get data summary: %s", e)
+        return {"code": 200, "data": {"available": False, "error": str(e)[:200]}}
+
+
+@router.get("/factor-categories")
+async def get_factor_categories():
+    """返回 L1 因子类别（从 feature catalog 加载）"""
+    try:
+        from backend.services.engine.data_platform.quantdb_hub import QuantDBDataHub
+        hub = QuantDBDataHub.get_instance()
+        categories = hub.fetch_l1_factor_categories()
+        return {"code": 200, "data": categories}
+    except Exception as e:
+        logger.warning("Failed to get factor categories: %s", e)
+        return {"code": 200, "data": {"categories": []}}
+
+
+@router.get("/universes")
+async def get_universes():
+    """返回可用股票池及股票数"""
+    try:
+        from backend.services.engine.data_platform.quantdb_hub import QuantDBDataHub
+        hub = QuantDBDataHub.get_instance()
+        summary = hub.get_data_summary()
+        universes = summary.get("universes", {})
+        return {"code": 200, "data": {"universes": universes}}
+    except Exception as e:
+        logger.warning("Failed to get universes: %s", e)
+        return {"code": 200, "data": {"universes": {}}}
+
+
 async def _run_lightweight_backtest(
     factor_id: str,
     factor_code: str,
     start_date: Optional[str],
     end_date: Optional[str],
+    universe: Optional[str] = "csi300",
 ) -> None:
-    """轻量回测"""
+    """轻量回测（支持多股票池）"""
     try:
         import numpy as np
         import pandas as pd
+        import tempfile
+        import subprocess
         from qlib.data import D
 
+        # Sandbox: run factor code in subprocess instead of exec()
+        with tempfile.NamedTemporaryFile(mode="w", suffix=".py", delete=False, prefix=f"factor_{factor_id}_") as tmp:
+            tmp.write(factor_code)
+            tmp_path = tmp.name
+
+        try:
+            result = subprocess.run(
+                [sys.executable, "-c", f"""
+import importlib, sys, json
+exec(open({repr(tmp_path)}).read())
+ns = dict(locals())
+factor_cls = None
+for v in ns.values():
+    if isinstance(v, type) and hasattr(v, '__call__') and v.__module__ == 'builtins':
+        if getattr(v, 'name', None) or v.__name__.lower().endswith('factor'):
+            factor_cls = v
+            break
+if factor_cls:
+    print(json.dumps({{"found": True, "name": factor_cls.__name__}}))
+else:
+    print(json.dumps({{"found": False}}))
+"""],
+                capture_output=True, text=True, timeout=30,
+            )
+            import json as _json
+            check = _json.loads(result.stdout.strip().splitlines()[-1]) if result.stdout.strip() else {"found": False}
+            if not check.get("found"):
+                raise RuntimeError("因子代码中未找到可调用的 Factor 类")
+        finally:
+            os.unlink(tmp_path)
+
+        # NOTE: 下面的 exec 在 engine 进程内运行，上面的 subprocess 只做语法/结构预检，
+        # 并非安全沙箱。因子代码由 LLM 生成，仅因写入前经本服务校验才视为可信。
         ns: dict = {}
         exec(compile(factor_code, f"<alpha-factor-{factor_id}>", "exec"), ns)
 
         factor_cls = None
         for v in ns.values():
-            if isinstance(v, type) and hasattr(v, "__call__") and v.__module__ == "builtins":
+            if isinstance(v, type) and callable(v) and v.__module__ == "builtins":
                 if getattr(v, "name", None) or v.__name__.lower().endswith("factor"):
                     factor_cls = v
                     break
@@ -412,7 +555,31 @@ async def _run_lightweight_backtest(
 
         end = end_date or "2024-12-31"
         start = start_date or "2024-01-01"
-        instruments = D.instruments(market="csi300")
+
+        # Universes with a native Qlib instruments file can be passed straight through;
+        # the rest (sse50, gem, star, all_a) are resolved from QuantDB index weights.
+        QLIB_NATIVE_MARKETS = ("csi300", "csi500", "csi1000", "csi800")
+        if universe in QLIB_NATIVE_MARKETS:
+            instruments = D.instruments(market=universe)
+        else:
+            from backend.shared.stock_utils import StockCodeUtil
+
+            try:
+                from backend.services.engine.data_platform.quantdb_hub import QuantDBDataHub
+                hub = QuantDBDataHub.get_instance()
+                universe_df = hub.fetch_universe_stocks(universe or "csi300")
+                if universe_df.empty:
+                    raise RuntimeError(f"QuantDB returned no constituents for {universe}")
+                # Qlib instrument files use prefix format (SZ000001), not suffix (000001.SZ)
+                instruments = sorted(
+                    {StockCodeUtil.to_prefix(s) for s in universe_df["symbol"].tolist()[:500]}
+                )
+            except Exception as e:
+                logger.warning(
+                    "QuantDB universe %s unavailable, falling back to csi300: %s", universe, e
+                )
+                instruments = D.instruments(market="csi300")
+
         fields = ["$open", "$high", "$low", "$close", "$volume", "$factor"]
         df = D.features(instruments, fields, start_time=start, end_time=end, freq="day")
         if df.empty:
@@ -421,7 +588,9 @@ async def _run_lightweight_backtest(
         factor_inst = factor_cls()
         sample_codes = df.index.get_level_values(0).unique()[:50]
         ic_list: list[float] = []
+        rank_ic_list: list[float] = []
         ret_list: list[float] = []
+        equity_curve: list[float] = [1.0]
 
         for code in sample_codes:
             sub = df.xs(code, level=0).copy()
@@ -436,23 +605,48 @@ async def _run_lightweight_backtest(
             paired = pd.concat([fv_col, fwd_ret], axis=1).dropna()
             if len(paired) < 10:
                 continue
+            # Pearson IC
             ic = paired.iloc[:, 0].corr(paired.iloc[:, 1])
             if np.isfinite(ic):
                 ic_list.append(float(ic))
+            # Spearman Rank IC
+            try:
+                from scipy.stats import spearmanr
+                rank_ic, _ = spearmanr(paired.iloc[:, 0], paired.iloc[:, 1])
+                if np.isfinite(rank_ic):
+                    rank_ic_list.append(float(rank_ic))
+            except Exception:
+                pass
+            # Long portfolio return (top 30%)
             cutoff = fv_col.quantile(0.7)
             longs = fwd_ret[fv_col >= cutoff].dropna()
             if len(longs) > 0:
                 ret_list.append(float(longs.mean()))
+                equity_curve.append(equity_curve[-1] * (1 + longs.mean()))
 
         if not ic_list:
             raise RuntimeError("所有股票都无法计算 IC，因子可能与数据列不匹配")
 
         ic_mean = float(np.mean(ic_list))
+        rank_ic_mean = float(np.mean(rank_ic_list)) if rank_ic_list else None
         sharpe = (
             float(np.mean(ret_list) / (np.std(ret_list) + 1e-8) * np.sqrt(252))
             if ret_list else None
         )
         annual_return = float(np.mean(ret_list) * 252) if ret_list else None
+
+        # Max drawdown from equity curve
+        max_drawdown = None
+        if len(equity_curve) > 1:
+            peak = equity_curve[0]
+            max_dd = 0.0
+            for val in equity_curve[1:]:
+                if val > peak:
+                    peak = val
+                dd = (peak - val) / peak if peak > 0 else 0
+                if dd > max_dd:
+                    max_dd = dd
+            max_drawdown = float(max_dd)
 
         await persistence.update_factor_metrics(
             factor_id,
@@ -460,10 +654,18 @@ async def _run_lightweight_backtest(
             ic_value=ic_mean,
             sharpe_ratio=sharpe,
             annual_return=annual_return,
+            max_drawdown=max_drawdown,
+            rank_ic=rank_ic_mean,
+            universe=universe,
+            date_range=f"{start}~{end}",
         )
         logger.info(
-            "[alpha-backtest] %s done ic=%.4f sharpe=%s",
-            factor_id, ic_mean, f"{sharpe:.3f}" if sharpe is not None else "N/A",
+            "[alpha-backtest] %s done ic=%.4f rank_ic=%s sharpe=%s max_dd=%s universe=%s",
+            factor_id, ic_mean,
+            f"{rank_ic_mean:.4f}" if rank_ic_mean is not None else "N/A",
+            f"{sharpe:.3f}" if sharpe is not None else "N/A",
+            f"{max_drawdown:.3f}" if max_drawdown is not None else "N/A",
+            universe,
         )
 
     except Exception as exc:

@@ -1,0 +1,517 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<title>OpenClaw AI助手深度介绍</title>
+<style>
+*{margin:0;padding:0;box-sizing:border-box}
+html,body{width:100%;height:100%;overflow:hidden;background:#080c14}
+.slides{width:100vw;height:100vh;position:relative}
+.slide{width:100vw;height:100vh;position:absolute;top:0;left:0;display:none;font-family:"PingFang SC","Microsoft YaHei","Helvetica Neue",Arial,sans-serif;overflow:hidden}
+.slide.active{display:flex;flex-direction:column}
+.bg{background:#080c14}
+
+/* 通用布局 */
+.topbar{padding:32px 64px 0;display:flex;align-items:center;gap:20px;flex-shrink:0}
+.topbar-accent{width:5px;height:36px;background:linear-gradient(180deg,#00d4ff,#6366f1);border-radius:3px;flex-shrink:0}
+.topbar h1{font-size:28px;font-weight:700;color:#f1f5f9;letter-spacing:-0.5px}
+.topbar .sub{font-size:11px;color:#475569;letter-spacing:3px;text-transform:uppercase;margin-left:auto;font-family:monospace}
+.content{flex:1;padding:28px 64px 24px;display:flex;flex-direction:column;gap:20px;min-height:0;overflow-y:auto}
+.content::-webkit-scrollbar{width:3px}
+.content::-webkit-scrollbar-thumb{background:rgba(148,163,184,0.15);border-radius:2px}
+
+/* 通用卡片 */
+.c{border-radius:16px;padding:24px 28px;border:1px solid rgba(255,255,255,0.06);background:rgba(255,255,255,0.025)}
+.c-title{font-size:16px;font-weight:700;margin-bottom:14px;letter-spacing:-0.3px}
+.c-title.c-blue{color:#00d4ff}
+.c-title.c-violet{color:#a78bfa}
+.c-title.c-green{color:#34d399}
+.c-title.c-amber{color:#fbbf24}
+.c-title.c-rose{color:#fb7185}
+
+/* 标签 */
+.t{display:inline-flex;align-items:center;padding:4px 12px;border-radius:6px;font-size:12px;font-weight:700;border:1px solid}
+.t-blue{color:#00d4ff;border-color:rgba(0,212,255,0.25);background:rgba(0,212,255,0.06)}
+.t-violet{color:#a78bfa;border-color:rgba(167,139,250,0.25);background:rgba(167,139,250,0.06)}
+.t-green{color:#34d399;border-color:rgba(52,211,153,0.25);background:rgba(52,211,153,0.06)}
+.t-amber{color:#fbbf24;border-color:rgba(251,191,36,0.25);background:rgba(251,191,36,0.06)}
+.t-rose{color:#fb7185;border-color:rgba(251,113,133,0.25);background:rgba(251,113,133,0.06)}
+
+/* 表格 */
+table{width:100%;border-collapse:collapse}
+th,td{padding:12px 16px;text-align:left}
+th{font-size:11px;font-weight:700;color:#64748b;text-transform:uppercase;letter-spacing:1.5px;border-bottom:1px solid rgba(255,255,255,0.05);background:rgba(0,0,0,0.15)}
+td{font-size:14px;color:#94a3b8;border-bottom:1px solid rgba(255,255,255,0.03);vertical-align:top;line-height:1.6}
+td strong{color:#e2e8f0;font-weight:600}
+td em{color:#64748b;font-size:12px}
+
+/* 列表 */
+ul{list-style:none;display:flex;flex-direction:column;gap:10px}
+ul li{font-size:14px;color:#94a3b8;padding-left:18px;position:relative;line-height:1.7}
+ul li::before{content:"";position:absolute;left:0;top:9px;width  :5px;height:5px;border-radius:50%;background:currentColor;opacity:0.4}
+ul li strong{color:#e2e8f0}
+
+/* 两列 */
+.row2{display:grid;grid-template-columns:1fr 1fr;gap:20px}
+
+/* 引用 */
+.quote{border-left:3px solid var(--c,#00d4ff);padding:14px 20px;background:rgba(0,212,255,0.03);border-radius:0 10px 10px 0;font-size:14px;color:#64748b;line-height:1.8}
+.quote strong{color:#e2e8f0}
+
+/* 代码 */
+.code{background:rgba(0,0,0,0.4);border:1px solid rgba(255,255,255,0.05);border-radius:10px;padding:14px 20px;font-family:ui-monospace,monospace;font-size:13px;color:#94a3b8;line-height:1.9;overflow-x:auto}
+
+/* 架构图 */
+.arch{display:flex;flex-direction:column;gap:0;flex:1}
+.arch-row{display:flex;align-items:center;gap:16px}
+.arch-label{width:100px;font-size:11px;color:#334155;letter-spacing:2px;text-align:right;flex-shrink:0;font-family:monospace}
+.arch-box{flex:1;border-radius:12px;padding:14px 24px;font-size:15px;font-weight:600;display:flex;align-items:center;border:1px solid}
+.arch-sub{display:flex;gap:12px;flex:1}
+.arch-node{flex:1;border-radius:12px;padding:14px 18px;border:1px solid rgba(255,255,255,0.05);background:rgba(255,255,255,0.02);font-size:13px}
+.arch-node .n{font-size:15px;font-weight:700;margin-bottom:4px}
+.arch-node .d{font-size:12px;color:#475569;margin-top:4px}
+.arrow{padding-left:102px;font-size:13px;color:#1e293b;letter-spacing:2px}
+
+/* 通用描述文字 */
+.desc{font-size:14px;color:#64748b;line-height:1.8}
+.desc strong{color:#94a3b8}
+
+/* 分隔 */
+.divider{height:1px;background:rgba(255,255,255,0.04)}
+
+/* 底部信息 */
+.bottom{position:absolute;bottom:24px;left:64px;right:64px;display:flex;justify-content:space-between;align-items:center}
+.bottom-text{font-size:12px;color:#334155}
+.pagenum{font-size:12px;color:#334155;font-family:monospace}
+
+/* 导航 */
+.nav{position:fixed;bottom:20px;right:20px;display:flex;gap:6px;z-index:999}
+.nav button{width:36px;height:36px;border-radius:8px;border:1px solid rgba(255,255,255,0.08);background:rgba(255,255,255,0.04);color:#64748b;font-size:15px;cursor:pointer;backdrop-filter:blur(12px);transition:all 0.2s}
+.nav button:hover{background:rgba(255,255,255,0.1);color:#e2e8f0}
+.progress{position:fixed;top:0;left:0;height:2px;background:linear-gradient(90deg,#00d4ff,#6366f1);transition:width 0.4s;z-index:999}
+
+@keyframes fadeUp{from{opacity:0;transform:translateY(12px)}to{opacity:1;transform:translateY(0)}}
+.slide.active{animation:fadeUp 0.5s ease both}
+</style>
+</head>
+<body>
+<div class="progress" id="progress"></div>
+<div class="slides">
+
+<!-- ══ SLIDE 1: 封面 ══ -->
+<div class="slide bg active" id="s1">
+  <div style="flex:1;display:flex;flex-direction:column;align-items:center;justify-content:center;text-align:center;padding:0 100px">
+    <div style="font-size:96px;margin-bottom:32px;filter:drop-shadow(0 0 60px rgba(0,212,255,0.3))">🚀</div>
+    <div style="font-size:80px;font-weight:800;color:#f1f5f9;letter-spacing:-3px;line-height:1;margin-bottom:20px;text-shadow:0 0 120px rgba(0,212,255,0.2)">OpenClaw</div>
+    <div style="font-size:32px;color:#00d4ff;font-weight:600;margin-bottom:28px;letter-spacing:-0.5px">AI 助手平台的架构与实践</div>
+    <div style="font-size:16px;color:#475569;margin-bottom:48px;line-height:2.2;letter-spacing:0.5px">
+      多 Agent 协同 · Task Flow 任务流 · Karpathy 知识库<br>
+      企业级安全加固 · v3.22 → v4.2 完整版本演进
+    </div>
+    <div style="display:flex;gap:12px;flex-wrap:wrap;justify-content:center;margin-bottom:40px">
+      <span class="t t-blue">v4.2</span>
+      <span class="t t-violet">Task Flow</span>
+      <span class="t t-green">知识库</span>
+      <span class="t t-amber">安全加固</span>
+      <span class="t t-rose">Breaking Changes</span>
+    </div>
+    <div style="font-size:13px;color:#1e293b;letter-spacing:1px">基于 Transformer · BERT · MoE 技术脉络</div>
+  </div>
+  <div class="bottom"><div class="bottom-text">docs.openclaw.ai · discord.gg/openclaw · clawhub.ai</div><div class="pagenum">01 / 08</div></div>
+</div>
+
+<!-- ══ SLIDE 2: 什么是 OpenClaw ══ -->
+<div class="slide bg" id="s2">
+  <div class="topbar"><div class="topbar-accent"></div><h1>什么是 OpenClaw？</h1><span class="sub">What is OpenClaw</span></div>
+  <div class="content">
+    <div class="quote" style="--c:#00d4ff">
+      OpenClaw 是一个<strong>生产级的多 Agent AI 协作平台</strong>。一个实例支持多个 AI Agent 协同工作，每个 Agent 拥有独立的人设、技能与工作区。通过灵活的工具链集成和持久化知识库，实现<strong>跨渠道、跨任务、跨会话</strong>的智能协作。
+    </div>
+    <div class="row2">
+      <div class="c">
+        <div class="c-title c-blue">🤖 多 Agent 系统</div>
+        <div class="desc">多个 AI Agent 各司其职、协同作战，通过 binding 配置区分不同 Agent 的能力边界与专业领域。</div>
+      </div>
+      <div class="c">
+        <div class="c-title c-violet">⚡ 智能任务流</div>
+        <div class="desc">SQLite 持久化的任务账本，48 小时超长待机，统一调度 ACP 任务、Cron 定时任务与子 Agent。</div>
+      </div>
+      <div class="c">
+        <div class="c-title c-green">🧠 持久知识库</div>
+        <div class="desc">Karpathy 模式的四阶段循环：Ingest → Compile → Query → Lint，知识编译一次，持续复利。</div>
+      </div>
+      <div class="c">
+        <div class="c-title c-rose">🔒 企业级安全</div>
+        <div class="desc">危险代码静态扫描、环境变量严格过滤、节点权限分离，保障系统安全可靠。</div>
+      </div>
+    </div>
+    <div class="divider"></div>
+    <div style="display:flex;gap:12px;flex-wrap:wrap">
+      <span class="t t-blue">飞书</span>
+      <span class="t t-violet">Telegram</span>
+      <span class="t t-green">Discord</span>
+      <span class="t t-amber">Android</span>
+      <span class="t t-rose">macOS</span>
+    </div>
+  </div>
+  <div class="bottom"><div class="bottom-text">docs.openclaw.ai · clawhub.ai · openclawmp.cc</div><div class="pagenum">02 / 08</div></div>
+</div>
+
+<!-- ══ SLIDE 3: 系统架构 ══ -->
+<div class="slide bg" id="s3">
+  <div class="topbar"><div class="topbar-accent" style="background:linear-gradient(180deg,#a78bfa,#6366f1)"></div><h1>系统架构</h1><span class="sub">Architecture</span></div>
+  <div class="content">
+    <div class="arch">
+      <div class="arch-row">
+        <div class="arch-label">GATEWAY</div>
+        <div class="arch-box" style="background:rgba(0,40,100,0.4);border-color:rgba(0,212,255,0.2);color:#00d4ff">🌐 Gateway — WebSocket / HTTP · 任务调度 · 认证中心 · SSRF防护</div>
+      </div>
+      <div class="arrow">▼</div>
+      <div class="arch-row">
+        <div class="arch-label">TASK FLOW</div>
+        <div class="arch-box" style="background:rgba(60,0,120,0.4);border-color:rgba(167,139,250,0.2);color:#a78bfa">⚙ Task Flow — SQLite 持久化 · /tasks 命令 · ACP Prompts · 修订版追踪</div>
+      </div>
+      <div class="arrow">▼</div>
+      <div class="arch-row">
+        <div class="arch-label">AGENTS</div>
+        <div class="arch-sub">
+          <div class="arch-node" style="border-color:rgba(0,212,255,0.15)">
+            <div class="n" style="color:#00d4ff">🚀 马斯克</div>
+            <div class="d">AI · LLM · 技术研究</div>
+          </div>
+          <div class="arch-node" style="border-color:rgba(167,139,250,0.15)">
+            <div class="n" style="color:#a78bfa">📊 巴菲特</div>
+            <div class="d">金融 · 股票 · AKShare</div>
+          </div>
+          <div class="arch-node" style="border-color:rgba(52,211,153,0.15)">
+            <div class="n" style="color:#34d399">✍️ 希文</div>
+            <div class="d">政务 · 公文 · 党务</div>
+          </div>
+        </div>
+      </div>
+      <div class="arrow">▼</div>
+      <div class="arch-row">
+        <div class="arch-label">SKILLS</div>
+        <div class="arch-box" style="background:rgba(15,20,35,0.6);border-color:rgba(71,85,105,0.2);color:#475569">📦 Skills · Plugins · Triggers · Experiences · Channel Bindings</div>
+      </div>
+      <div class="arrow">▼</div>
+      <div class="arch-row">
+        <div class="arch-label">TOOLS</div>
+        <div class="arch-sub">
+          <div class="arch-node"><div class="n" style="color:#00d4ff">📄 飞书</div><div class="d">文档 · 云盘 · Wiki · 多维表格</div></div>
+          <div class="arch-node"><div class="n" style="color:#a78bfa">🌐 网页</div><div class="d">Tavily 搜索 · Firecrawl 抓取</div></div>
+          <div class="arch-node"><div class="n" style="color:#34d399">📊 数据</div><div class="d">Excel · Word · PDF · 图片</div></div>
+          <div class="arch-node"><div class="n" style="color:#fbbf24">⏰ 定时</div><div class="d">Cron · 心跳 · 自进化</div></div>
+        </div>
+      </div>
+    </div>
+  </div>
+  <div class="bottom"><div class="bottom-text">v3.22+: 48h 超长待机 · v4.2: Task Flow 重构 + 安全加固</div><div class="pagenum">03 / 08</div></div>
+</div>
+
+<!-- ══ SLIDE 4: Task Flow ══ -->
+<div class="slide bg" id="s4">
+  <div class="topbar"><div class="topbar-accent"></div><h1>Task Flow 任务流</h1><span class="sub">SQLite · /tasks · ACP · Sticky Cancel</span></div>
+  <div class="content">
+    <div class="row2">
+      <div>
+        <div class="c" style="margin-bottom:20px">
+          <div class="c-title c-blue">⚡ 核心特性</div>
+          <ul>
+            <li><strong>SQLite 持久化</strong> — 任务状态持久存储，断电不丢</li>
+            <li><strong>修订版追踪</strong> — Managed vs Mirrored 双模式</li>
+            <li><strong>/tasks 命令</strong> — 聊天窗口实时查看所有后台任务</li>
+            <li><strong>Sticky Cancel Intent</strong> — 取消时等子任务完成再停止</li>
+            <li><strong>阻塞可见</strong> — 任务被阻塞时父级会话直接显示原因</li>
+            <li><strong>api.runtime.taskFlow</strong> — 插件可直接创建和管理任务流</li>
+          </ul>
+        </div>
+        <div class="c">
+          <div class="c-title c-green">🧠 与 Karpathy 知识库的关系</div>
+          <div class="quote" style="--c:#34d399">
+            <strong>Task Flow</strong> 管理<strong>主动任务</strong>的执行，<br>
+            <strong>Karpathy 知识库</strong>管理<strong>被动知识</strong>的积累。<br><br>
+            两者共同构成 OpenClaw 的<strong>时间维度</strong>与<strong>空间维度</strong>——任务解决当下问题，知识编译持续复利。
+          </div>
+        </div>
+      </div>
+      <div>
+        <div class="c" style="margin-bottom:20px">
+          <div class="c-title c-violet">🔄 三类任务统一调度</div>
+          <table>
+            <thead><tr><th>类型</th><th>说明</th><th>超时</th></tr></thead>
+            <tbody>
+              <tr><td><span class="t t-blue">ACP</span></td><td>主动调用 /task 触发</td><td>默认48h</td></tr>
+              <tr><td><span class="t t-violet">Cron</span></td><td>定时任务 · 信号采集 · 每日复盘</td><td>独立配置</td></tr>
+              <tr><td><span class="t t-green">Subagent</span></td><td>子智能体 · spawn 隔离会话</td><td>继承+扩展</td></tr>
+            </tbody>
+          </table>
+        </div>
+        <div class="c">
+          <div class="c-title c-amber">⚠️ 升级注意</div>
+          <div class="code"># 运行迁移检查
+openclaw doctor --fix
+
+# xAI搜索: tools.web.x_search.*
+#   → plugins.entries.xai.config.xSearch.*
+
+# Firecrawl: tools.web.fetch.firecrawl.*
+#   → plugins.entries.firecrawl.config.webFetch.*</div>
+        </div>
+      </div>
+    </div>
+  </div>
+  <div class="bottom"><div class="bottom-text">openclaw doctor --fix · 回退方案：v2026.3.13</div><div class="pagenum">04 / 08</div></div>
+</div>
+
+<!-- ══ SLIDE 5: 安全加固 ══ -->
+<div class="slide bg" id="s5">
+  <div class="topbar"><div class="topbar-accent" style="background:linear-gradient(180deg,#fb7185,#f43f5e)"></div><h1>安全加固（v4.2）</h1><span class="sub">Enterprise Security</span></div>
+  <div class="content">
+    <div class="row2">
+      <div>
+        <div class="c" style="margin-bottom:20px;border-color:rgba(251,113,133,0.1)">
+          <div class="c-title c-rose">🚨 插件危险代码扫描</div>
+          <div class="quote" style="--c:#fb7185;margin-bottom:14px">
+            <strong>背景：</strong>Cisco AI 安全研究团队发现第三方 OpenClaw 技能存在数据外泄和提示注入风险。
+          </div>
+          <ul>
+            <li>内置<strong>静态分析</strong>，检测到严重问题时安装直接失败</li>
+            <li>绕过需显式 <span style="background:rgba(251,113,133,0.1);color:#fb7185;padding:1px 5px;border-radius:4px;font-size:12px">--dangerously-force-unsafe-install</span></li>
+            <li>发布到 ClawHub 的技能<strong>必须通过</strong>危险代码扫描</li>
+          </ul>
+        </div>
+        <div class="c">
+          <div class="c-title c-amber">🔐 节点配对权限分离</div>
+          <ul>
+            <li><strong style="color:#fb7185">旧逻辑：</strong>配对成功 → 自动获得节点命令权限</li>
+            <li><strong style="color:#34d399">新逻辑：</strong>配对成功 + <strong>明确批准</strong> → 才能执行节点命令</li>
+            <li>防止配对流程被滥用来提权攻击</li>
+          </ul>
+        </div>
+      </div>
+      <div>
+        <div class="c" style="margin-bottom:20px;border-color:rgba(251,191,36,0.1)">
+          <div class="c-title c-amber">🛡️ Shell 环境变量严格过滤</div>
+          <div class="code"># 以下环境变量禁止从请求作用域传入:
+PYPI_INDEX / pip_proxy       # 包拉取重定向
+DOCKER_HOST / CONTAINERD_HOST  # 容器劫持
+TLS_CERT_PATH / SSL_CERT_DIR  # 证书伪造
+GCC_PATH / CLANG_PATH        # 编译器注入
+MAVEN_OPTS / GRADLE_OPTS      # JVM依赖劫持</div>
+        </div>
+        <div class="c">
+          <div class="c-title c-green">🔒 其他加固项</div>
+          <ul>
+            <li><strong>传输层 TLS 集中化</strong> — HTTP/WebSocket/流式统一认证</li>
+            <li><strong>SSRF 防护</strong> — 停止从图像 URL 推断私网访问</li>
+            <li><strong>Dotenv 覆盖保护</strong> — workspace .env 不能覆盖 <span style="background:rgba(52,211,153,0.1);color:#34d399;padding:1px 5px;border-radius:4px;font-size:12px">OPENCLAW_PINNED_*</span></li>
+            <li><strong>Webhook 安全比较</strong> — Feishu/Telegram 等统一用 <span style="background:rgba(52,211,153,0.1);color:#34d399;padding:1px 5px;border-radius:4px;font-size:12px">safeEqualSecret</span></li>
+          </ul>
+        </div>
+      </div>
+    </div>
+  </div>
+  <div class="bottom"><div class="bottom-text">Cisco AI 安全研究 · SSRF 防护 · 传输层 TLS 集中化</div><div class="pagenum">05 / 08</div></div>
+</div>
+
+<!-- ══ SLIDE 6: 版本时间线 ══ -->
+<div class="slide bg" id="s6">
+  <div class="topbar"><div class="topbar-accent" style="background:linear-gradient(180deg,#a78bfa,#6366f1)"></div><h1>版本演进</h1><span class="sub">v3.22 · v4.1 · v4.2</span></div>
+  <div class="content">
+    <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:20px">
+      <div class="c" style="border-color:rgba(0,212,255,0.1)">
+        <div style="display:flex;align-items:center;gap:12px;margin-bottom:16px">
+          <span class="t t-blue">v3.22</span>
+          <span style="font-size:13px;color:#00d4ff;font-weight:600">2026.3</span>
+        </div>
+        <div style="font-size:22px;font-weight:700;color:#f1f5f9;margin-bottom:14px">超时革命</div>
+        <ul>
+          <li>默认 Agent 超时 <strong>10min → 48h</strong></li>
+          <li>/btw 旁支指令</li>
+          <li>Per-Agent 独立推理</li>
+          <li>语音 Webhook 加固（64KB/5秒）</li>
+        </ul>
+      </div>
+      <div class="c" style="border-color:rgba(167,139,250,0.1)">
+        <div style="display:flex;align-items:center;gap:12px;margin-bottom:16px">
+          <span class="t t-violet">v4.1</span>
+          <span style="font-size:13px;color:#a78bfa;font-weight:600">2026.4.1</span>
+        </div>
+        <div style="font-size:22px;font-weight:700;color:#f1f5f9;margin-bottom:14px">安全元年</div>
+        <ul>
+          <li>插件危险代码扫描</li>
+          <li>节点配对权限分离</li>
+          <li>Shell 环境变量过滤</li>
+          <li>xAI/Firecrawl 路径重构</li>
+        </ul>
+      </div>
+      <div class="c" style="border-color:rgba(52,211,153,0.1)">
+        <div style="display:flex;align-items:center;gap:12px;margin-bottom:16px">
+          <span class="t t-green">v4.2</span>
+          <span style="font-size:13px;color:#34d399;font-weight:600">2026.4.2</span>
+        </div>
+        <div style="font-size:22px;font-weight:700;color:#f1f5f9;margin-bottom:14px">任务流重构</div>
+        <ul>
+          <li>Task Flow SQLite 统一账本</li>
+          <li>/tasks 命令 · 阻塞可见</li>
+          <li>Sticky Cancel Intent</li>
+          <li>Before_agent_reply 钩子</li>
+        </ul>
+      </div>
+    </div>
+    <div class="row2" style="margin-top:4px">
+      <div class="c">
+        <div style="display:flex;gap:10px;flex-wrap:wrap">
+          <span class="t t-amber">Android 语音触发</span>
+          <span class="t t-violet">macOS Voice Wake</span>
+          <span class="t t-blue">WhatsApp emoji</span>
+          <span class="t t-green">Feishu Drive 评论流</span>
+        </div>
+      </div>
+      <div class="c">
+        <div style="font-size:14px;color:#475569">
+          ⚠️ 回退方案：如遇严重问题，v4.2 之前最后一个稳定版为 <strong style="color:#fb7185">v2026.3.13</strong>
+        </div>
+      </div>
+    </div>
+  </div>
+  <div class="bottom"><div class="bottom-text">openclaw doctor --fix</div><div class="pagenum">06 / 08</div></div>
+</div>
+
+<!-- ══ SLIDE 7: 工具链 ══ -->
+<div class="slide bg" id="s7">
+  <div class="topbar"><div class="topbar-accent" style="background:linear-gradient(180deg,#34d399,#10b981)"></div><h1>知识库工具链</h1><span class="sub">Ingest · Compile · Query · Lint</span></div>
+  <div class="content">
+    <div class="row2">
+      <div>
+        <div class="c" style="margin-bottom:20px">
+          <div class="c-title c-blue">📄 pdf-ingest.py</div>
+          <div class="desc" style="margin-bottom:12px">PDF 论文提取，支持 arxiv 直接 URL，自动缓存</div>
+          <div class="code">python scripts/pdf-ingest.py \
+  --url "https://arxiv.org/pdf/2401.04088.pdf" \
+  --topic ai-llm --slug mixtral</div>
+        </div>
+        <div class="c" style="margin-bottom:20px">
+          <div class="c-title c-violet">📑 md-to-pdf.py</div>
+          <div class="desc" style="margin-bottom:12px">Markdown → 精美 PDF，Light / Dark / Sepia 三主题</div>
+          <div class="code">python scripts/md-to-pdf.py \
+  --input wiki/concepts/MoE.md \
+  --theme sepia</div>
+        </div>
+        <div class="c">
+          <div class="c-title c-green">🧠 Karpathy 知识库工作流</div>
+          <ul>
+            <li><strong>Ingest</strong> — 论文/文章 → raw/articles/</li>
+            <li><strong>Compile</strong> — 整理 → wiki/concepts/*.md</li>
+            <li><strong>Query</strong> — 问答结果 → outputs/</li>
+            <li><strong>Lint</strong> — 健康检查 → reports/</li>
+          </ul>
+        </div>
+      </div>
+      <div>
+        <div class="c" style="margin-bottom:20px">
+          <div class="c-title c-amber">🤖 PPT 生成</div>
+          <div class="desc" style="margin-bottom:12px">百度千帆 AI PPT（100+模板）+ python-pptx 手工设计</div>
+          <div class="code"># AI 生成（百度千帆）
+python scripts/generate_ppt.py --query "OpenClaw介绍"
+
+# 手工设计（完整控制）
+python scripts/gen_openclaw_ppt.py</div>
+        </div>
+        <div class="c" style="margin-bottom:20px">
+          <div class="c-title c-rose">🔍 lint-wiki.py</div>
+          <div class="desc" style="margin-bottom:10px">知识库健康检查：死链接 + 孤立文章追踪</div>
+          <div class="code">python scripts/lint-wiki.py
+# ✅ 0 dead links
+# ✅ 0 missing sources</div>
+        </div>
+        <div class="c">
+          <div class="c-title c-blue">📊 当前知识库状态</div>
+          <table>
+            <tbody>
+              <tr><td style="width:100px">ai-llm</td><td>3 篇文章 · Transformer · BERT · MoE</td></tr>
+              <tr><td>openclaw-dev</td><td>1 篇文章 · v4.2 Release Notes</td></tr>
+              <tr><td>健康状态</td><td><span class="t t-green">零孤立 · 零死链接</span></td></tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+  </div>
+  <div class="bottom"><div class="bottom-text">Generated by 马斯克知识库 AI · OpenClaw v4.2</div><div class="pagenum">07 / 08</div></div>
+</div>
+
+<!-- ══ SLIDE 8: 可编辑说明 ══ -->
+<div class="slide bg" id="s8">
+  <div class="topbar"><div class="topbar-accent" style="background:linear-gradient(180deg,#fbbf24,#f59e0b)"></div><h1>📝 源文件可自由编辑</h1><span class="sub">Edit This File</span></div>
+  <div class="content">
+    <div class="row2" style="margin-bottom:20px">
+      <div class="c">
+        <div class="c-title c-blue">📝 Markdown 源文件</div>
+        <div class="desc" style="margin-bottom:14px">推荐在此文件中编辑内容，格式清晰直观。</div>
+        <div class="code" style="font-size:12px">https://github.com/LSY1105/OPENBB-CN/
+blob/master/docs/OpenClaw深度介绍.md</div>
+        <div style="font-size:13px;color:#475569;margin-top:12px">点击 GitHub 上的 <strong style="color:#94a3b8">Edit</strong> 按钮即可直接修改。</div>
+      </div>
+      <div class="c">
+        <div class="c-title c-violet">🔄 修改流程</div>
+        <ul>
+          <li>在 GitHub 上编辑 Markdown 文件</li>
+          <li>点击 Commit changes 保存</li>
+          <li>发消息告诉我改了什么</li>
+          <li>我自动重新渲染 HTML 演示</li>
+        </ul>
+      </div>
+    </div>
+    <div class="c">
+      <div class="c-title c-green">✏️ 你想展示什么内容      <div class="desc">直接告诉我你想展示的内容，我会把它整合进演示文稿中：</div>
+      <ul style="margin-top:10px">
+        <li>你的使用场景和具体案例</li>
+        <li>OpenClaw 在你业务中的实际应用</li>
+        <li>团队使用心得和最佳实践</li>
+        <li>未来规划和新功能期待</li>
+      </ul>
+    </div>
+  </div>
+  <div class="bottom"><div class="bottom-text">docs.openclaw.ai · discord.gg/openclaw · clawhub.ai</div><div class="pagenum">08 / 08</div></div>
+</div>
+
+</div>
+
+<div class="nav">
+  <button onclick="prevSlide()">◀</button>
+  <button onclick="nextSlide()">▶</button>
+</div>
+
+<script>
+(function(){
+  var slides=document.querySelectorAll('.slide');
+  var current=0,total=slides.length;
+  function show(idx){
+    if(idx<0)idx=0;
+    if(idx>=total)idx=total-1;
+    slides[current].classList.remove('active');
+    current=idx;
+    slides[current].classList.add('active');
+    document.getElementById('progress').style.width=((current+1)/total*100)+'%';
+  }
+  window.nextSlide=function(){show(current+1);};
+  window.prevSlide=function(){show(current-1);};
+  document.addEventListener('keydown',function(e){
+    if(e.key==='ArrowRight'||e.key==='ArrowDown'||e.key===' ')nextSlide();
+    if(e.key==='ArrowLeft'||e.key==='ArrowUp')prevSlide();
+    if(e.key==='Home')show(0);
+    if(e.key==='End')show(total-1);
+  });
+  var sx=0;
+  document.addEventListener('touchstart',function(e){sx=e.touches[0].clientX;});
+  document.addEventListener('touchend',function(e){
+    var dx=e.changedTouches[0].clientX-sx;
+    if(Math.abs(dx)>50)dx>0?prevSlide():nextSlide();
+  });
+  show(0);
+})();
+</script>
+</body>
+</html>

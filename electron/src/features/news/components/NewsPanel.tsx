@@ -544,7 +544,7 @@ export const NewsPanel: React.FC = () => {
         minHeight: 0,
         background: '#ffffff',
         overflow: 'hidden',
-        paddingBottom: 84,
+        paddingBottom: 12,
         boxSizing: 'border-box',
       }}
     >

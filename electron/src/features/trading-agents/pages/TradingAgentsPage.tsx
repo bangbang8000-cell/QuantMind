@@ -140,7 +140,7 @@ const TradingAgentsPage: React.FC = () => {
 
   return (
     <div style={{
-      minHeight: '100vh',
+      minHeight: '100%',
       background: 'linear-gradient(135deg, #f1f5f9 0%, #e2e8f0 100%)',
       color: '#1e293b',
       fontFamily: "'Inter', -apple-system, sans-serif",

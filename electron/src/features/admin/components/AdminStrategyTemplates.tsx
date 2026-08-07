@@ -398,7 +398,7 @@ export const AdminStrategyTemplates: React.FC = () => {
                 width={860}
                 centered
                 destroyOnHidden
-                styles={{ body: { maxHeight: 'calc(100vh - 200px)', overflowY: 'auto', paddingBottom: 80 } }}
+                styles={{ body: { maxHeight: 'calc(var(--app-h) - 200px)', overflowY: 'auto', paddingBottom: 80 } }}
             >
                 <Form form={form} layout="vertical" size="small" className="mt-2">
                     {/* 基本信息 */}

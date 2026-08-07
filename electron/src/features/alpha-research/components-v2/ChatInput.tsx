@@ -1,7 +1,8 @@
 import React, { useState, useRef, useEffect } from 'react';
 import { Send, Square, Compass } from 'lucide-react';
-import { TaskConfig } from '../types-v2';
+import { TaskConfig, UniverseId, UniverseInfo } from '../types-v2';
 import { alphaAgentService, MarketInfo } from '../services/alphaAgentService';
+import { getUniverses } from '../services-v2/api';
 
 const MARKET_LABELS: Record<string, string> = {
   a_share: 'A股',
@@ -20,6 +21,8 @@ export const ChatInput: React.FC<ChatInputProps> = ({ onSubmit, onStop, isRunnin
   const [input, setInput] = useState('');
   const [useCustomMiningDirection, setUseCustomMiningDirection] = useState(false);
   const [miningMarket, setMiningMarket] = useState<string>('a_share');
+  const [universe, setUniverse] = useState<UniverseId>('csi300');
+  const [universes, setUniverses] = useState<UniverseInfo[]>([]);
   const [dataSource, setDataSource] = useState<string>('qlib_bin');
   const [markets, setMarkets] = useState<MarketInfo[]>([]);
   const [config] = useState<Partial<TaskConfig>>({ librarySuffix: '' });
@@ -27,6 +30,9 @@ export const ChatInput: React.FC<ChatInputProps> = ({ onSubmit, onStop, isRunnin
 
   useEffect(() => {
     alphaAgentService.listMarkets().then(setMarkets).catch(() => {});
+    getUniverses()
+      .then((res) => setUniverses(res.data?.universes ?? []))
+      .catch(() => {});
   }, []);
 
   const handleSubmit = () => {
@@ -36,6 +42,7 @@ export const ChatInput: React.FC<ChatInputProps> = ({ onSubmit, onStop, isRunnin
       userInput: input.trim(),
       useCustomMiningDirection,
       miningMarket: miningMarket as TaskConfig['miningMarket'],
+      universe,
       dataSource: dataSource as TaskConfig['dataSource'],
       ...config,
       librarySuffix: suffix,
@@ -100,6 +107,35 @@ export const ChatInput: React.FC<ChatInputProps> = ({ onSubmit, onStop, isRunnin
                 </div>
 
                 <div className="h-4 w-px bg-border mx-1" />
+
+                {/* Universe selector — A-share only (QuantDB index constituents) */}
+                {miningMarket === 'a_share' && (
+                  <>
+                    <div className="flex items-center gap-1">
+                      <span className="text-xs text-muted-foreground mr-1">股票池</span>
+                      <select
+                        value={universe}
+                        onChange={(e) => setUniverse(e.target.value as UniverseId)}
+                        disabled={isRunning}
+                        className="rounded-md bg-secondary/60 px-2 py-1 text-xs font-medium text-foreground focus:outline-none focus:ring-1 focus:ring-primary/30 disabled:opacity-50"
+                        title="选择因子挖掘的股票池"
+                      >
+                        {universes.length > 0
+                          ? universes.map((u) => (
+                              <option key={u.id} value={u.id}>
+                                {u.name}
+                                {u.stockCount > 0 ? ` (${u.stockCount})` : ''}
+                              </option>
+                            ))
+                          : (
+                            <option value="csi300">沪深300</option>
+                          )}
+                      </select>
+                    </div>
+
+                    <div className="h-4 w-px bg-border mx-1" />
+                  </>
+                )}
 
                 {/* Data source selector */}
                 <div className="flex items-center gap-1">

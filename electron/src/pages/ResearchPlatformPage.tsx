@@ -471,6 +471,8 @@ interface FilterFieldConfig {
   label: string;
   step?: number;
   suffix?: string;
+  /** 引用 QUICK_TAGS 中的分组 key，为该字段渲染快捷标签 */
+  quickTagGroup?: string;
 }
 
 interface FilterSectionConfig {
@@ -492,10 +494,10 @@ const FILTER_SECTIONS: FilterSectionConfig[] = [
     key: 'market',
     label: '行情与流动性',
     fields: [
-      { key: 'amountRange', label: '成交额 (亿)', suffix: '亿' },
-      { key: 'turnoverRange', label: '换手率 (%)', suffix: '%', step: 0.1 },
-      { key: 'totalMvRange', label: '总市值 (亿)', suffix: '亿' },
-      { key: 'floatMvRange', label: '流通市值 (亿)', suffix: '亿' },
+      { key: 'amountRange', label: '成交额 (亿)', suffix: '亿', quickTagGroup: 'amount' },
+      { key: 'turnoverRange', label: '换手率 (%)', suffix: '%', step: 0.1, quickTagGroup: 'turnover' },
+      { key: 'totalMvRange', label: '总市值 (亿)', suffix: '亿', quickTagGroup: 'totalMv' },
+      { key: 'floatMvRange', label: '流通市值 (亿)', suffix: '亿', quickTagGroup: 'floatMv' },
       { key: 'volRatio5Range', label: '5日量比 (≥)', step: 0.5 },
       { key: 'volRatio20Range', label: '20日量比 (≥)', step: 0.5 },
     ],
@@ -509,10 +511,10 @@ const FILTER_SECTIONS: FilterSectionConfig[] = [
       { key: 'return5dRange', label: '5日收益 (%)', suffix: '%', step: 0.1 },
       // 10/20/60 日收益无可用数据源：technical_indicators.return_* 自 2018 年起全为 NaN，
       // l1_factors.mom_ret_10d/20d/60d 约 35% 的值失真（|涨幅|>100%），不足以支撑筛选。
-      // 中长期强弱改由本节末尾的“120日动量”表达。
+      // 中长期强弱改由本节末尾的”120日动量”表达。
       { key: 'maGap5Range', label: '5日乖离率 (%)', suffix: '%', step: 0.1 },
       { key: 'maGap20Range', label: '20日乖离率 (%)', suffix: '%', step: 0.1 },
-      { key: 'rsiRange', label: 'RSI (6日)', step: 1 },
+      { key: 'rsiRange', label: 'RSI (6日)', step: 1, quickTagGroup: 'rsi' },
       { key: 'kdjKRange', label: 'KDJ-K', step: 1 },
       { key: 'macdHistRange', label: 'MACD 柱', step: 0.01 },
       { key: 'breakout20dRange', label: '120日动量', step: 0.01 },
@@ -584,8 +586,8 @@ const FILTER_SECTIONS: FilterSectionConfig[] = [
     key: 'fundamental',
     label: '基本面',
     fields: [
-      { key: 'peRange', label: 'PE (TTM)', step: 1 },
-      { key: 'roeRange', label: 'ROE (%)', suffix: '%', step: 0.1 },
+      { key: 'peRange', label: 'PE (TTM)', step: 1, quickTagGroup: 'pe' },
+      { key: 'roeRange', label: 'ROE (%)', suffix: '%', step: 0.1, quickTagGroup: 'roe' },
       { key: 'profitGrowthRange', label: '利润增速 (%)', suffix: '%', step: 0.1 },
       { key: 'pbRange', label: 'PB', step: 0.1 },
       { key: 'psTtmRange', label: 'PS (TTM)', step: 0.1 },
@@ -796,8 +798,63 @@ const ResearchMetricCard: React.FC<{
 );
 
 /**
+ * 快捷标签配置：点击后直接设置对应筛选字段的区间值。
+ * 每个标签定义 label、对应的 filterKey 和区间 [min, max]。
+ */
+interface QuickTagConfig {
+  label: string;
+  filterKey: keyof ResearchFiltersState;
+  range: [number, number];
+}
+
+const QUICK_TAGS: Record<string, QuickTagConfig[]> = {
+  totalMv: [
+    { label: '小市值', filterKey: 'totalMvRange', range: [0, 50] },
+    { label: '中市值', filterKey: 'totalMvRange', range: [50, 300] },
+    { label: '大市值', filterKey: 'totalMvRange', range: [300, 1000000] },
+    { label: '巨型蓝筹', filterKey: 'totalMvRange', range: [2000, 1000000] },
+  ],
+  floatMv: [
+    { label: '小盘', filterKey: 'floatMvRange', range: [0, 50] },
+    { label: '中盘', filterKey: 'floatMvRange', range: [50, 200] },
+    { label: '大盘', filterKey: 'floatMvRange', range: [200, 1000000] },
+  ],
+  amount: [
+    { label: '低成交', filterKey: 'amountRange', range: [0, 3] },
+    { label: '中成交', filterKey: 'amountRange', range: [3, 10] },
+    { label: '高成交', filterKey: 'amountRange', range: [10, 100000] },
+  ],
+  turnover: [
+    { label: '低换手', filterKey: 'turnoverRange', range: [0, 3] },
+    { label: '中换手', filterKey: 'turnoverRange', range: [3, 8] },
+    { label: '高换手', filterKey: 'turnoverRange', range: [8, 100] },
+  ],
+  pe: [
+    { label: '低估值', filterKey: 'peRange', range: [0, 15] },
+    { label: '合理估值', filterKey: 'peRange', range: [15, 30] },
+    { label: '高估值', filterKey: 'peRange', range: [30, 100000] },
+  ],
+  roe: [
+    { label: '高ROE', filterKey: 'roeRange', range: [15, 1000] },
+    { label: '中ROE', filterKey: 'roeRange', range: [5, 15] },
+  ],
+  rsi: [
+    { label: '超卖', filterKey: 'rsiRange', range: [0, 30] },
+    { label: '中性', filterKey: 'rsiRange', range: [30, 70] },
+    { label: '超买', filterKey: 'rsiRange', range: [70, 100] },
+  ],
+};
+
+/** 判断某个快捷标签是否处于激活状态（当前值与标签 range 完全一致） */
+const isQuickTagActive = (tag: QuickTagConfig, currentValue: [number, number] | number): boolean => {
+  if (!Array.isArray(currentValue)) return false;
+  return currentValue[0] === tag.range[0] && currentValue[1] === tag.range[1];
+};
+
+/**
  * 范围输入组件 - 用于投研筛选器手动输入
  * 传入数组时渲染双端区间，传入数字时渲染单值阈值。
+ * 支持通过 quickTags 属性在输入框上方显示快捷标签。
  */
 const RangeInput: React.FC<{
   label?: string;
@@ -807,11 +864,34 @@ const RangeInput: React.FC<{
   prefix?: string;
   suffix?: string;
   step?: number;
-}> = ({ label, value, onChange, placeholder, prefix, suffix, step = 1 }) => {
+  quickTags?: QuickTagConfig[];
+  onQuickTagClick?: (tag: QuickTagConfig) => void;
+}> = ({ label, value, onChange, placeholder, prefix, suffix, step = 1, quickTags, onQuickTagClick }) => {
   const isRange = Array.isArray(value);
   return (
     <div className="space-y-0.5">
       {label && <div className="truncate text-[10px] font-black uppercase tracking-tight text-slate-500">{label}</div>}
+      {quickTags && quickTags.length > 0 && onQuickTagClick && (
+        <div className="flex flex-wrap gap-1 pb-0.5">
+          {quickTags.map((tag) => {
+            const active = isQuickTagActive(tag, value);
+            return (
+              <button
+                key={tag.label}
+                type="button"
+                onClick={() => onQuickTagClick(tag)}
+                className={`rounded-md border px-1.5 py-px text-[9px] font-bold transition-all duration-200 ${
+                  active
+                    ? 'border-blue-500 bg-blue-500 text-white shadow-sm'
+                    : 'border-slate-200 bg-slate-50 text-slate-500 hover:border-blue-300 hover:bg-blue-50 hover:text-blue-600'
+                }`}
+              >
+                {tag.label}
+              </button>
+            );
+          })}
+        </div>
+      )}
       <div className="flex items-center gap-1">
         <InputNumber
           className="research-next-input-number flex-1"
@@ -2273,6 +2353,8 @@ export const ResearchPlatformPage: React.FC = () => {
                 onChange={(value) => setFilterField(field.key, value)}
                 suffix={field.suffix}
                 step={field.step ?? 1}
+                quickTags={field.quickTagGroup ? QUICK_TAGS[field.quickTagGroup] : undefined}
+                onQuickTagClick={(tag) => setFilterField(tag.filterKey, [...tag.range])}
               />
             ))}
           </div>
@@ -2285,6 +2367,8 @@ export const ResearchPlatformPage: React.FC = () => {
               onChange={(value) => setFilterField(field.key, value)}
               suffix={field.suffix}
               step={field.step ?? 1}
+              quickTags={field.quickTagGroup ? QUICK_TAGS[field.quickTagGroup] : undefined}
+              onQuickTagClick={(tag) => setFilterField(tag.filterKey, [...tag.range])}
             />
           ))
         )}
@@ -2358,7 +2442,7 @@ export const ResearchPlatformPage: React.FC = () => {
             <div className={`${PAGE_LAYOUT.contentOuterClass}`}>
               <div className="grid gap-4 xl:grid-cols-[340px_minmax(0,1fr)] 2xl:grid-cols-[360px_minmax(0,1fr)]">
                 {/* ---------------- 左侧筛选侧栏 ---------------- */}
-                <div className="sticky top-4 z-30 flex h-[calc(100vh-120px)] flex-col gap-4">
+                <div className="sticky top-4 z-30 flex h-[calc(var(--app-h)-120px)] flex-col gap-4">
                   <div className="flex-shrink-0 rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
                     <div className="mb-3 flex items-center gap-2 text-[9px] font-black uppercase tracking-[0.2em] text-slate-500">
                       <LibraryBig className="h-3.5 w-3.5" />
@@ -2450,7 +2534,7 @@ export const ResearchPlatformPage: React.FC = () => {
                   </div>
 
                   <div className="relative flex min-h-0 flex-1 flex-col overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm">
-                    <div className="custom-scrollbar flex-1 overflow-y-auto p-4 pb-28">
+                    <div className="custom-scrollbar flex-1 overflow-y-auto p-4">
                       <div className="mb-3 flex items-center gap-2 text-[9px] font-black uppercase tracking-[0.2em] text-slate-500">
                         <Filter className="h-3.5 w-3.5" />
                         量化研究条件
@@ -2503,7 +2587,7 @@ export const ResearchPlatformPage: React.FC = () => {
 
                 {/* ---------------- 右侧主内容 ---------------- */}
                 <motion.div
-                  className="flex min-w-0 flex-1 flex-col gap-4 pb-20"
+                  className="flex min-w-0 flex-1 flex-col gap-4 pb-4"
                   initial="hidden"
                   animate="visible"
                   variants={{

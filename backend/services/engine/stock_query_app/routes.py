@@ -95,13 +95,15 @@ async def search_stocks(
 @router.get("/stocks/all")
 async def get_all_stocks(
     market: str = Query("A", description="市场代码: A/CN, HK, US, CRYPTO"),
+    exchange: str = Query("", description="交易所筛选: SH, SZ, BJ (仅A股有效)"),
     enrich: bool = Query(False, description="是否包含 PE/PB/市值等字段"),
     limit: int = Query(10000, ge=1, le=50000, description="返回数量限制"),
 ):
-    """获取指定市场的全部股票列表"""
+    """获取指定市场的全部股票列表，A股支持按交易所筛选"""
     market_key = market.upper()
     table = _MARKET_SDL_TABLE.get(market_key, "stock_daily_latest")
-    logger.info("Fetching all stocks", extra={"market": market_key, "table": table, "enrich": enrich})
+    exchange_key = exchange.upper().strip()
+    logger.info("Fetching all stocks", extra={"market": market_key, "exchange": exchange_key, "table": table, "enrich": enrich})
 
     try:
         from backend.shared.database_pool import get_db
@@ -110,7 +112,16 @@ async def get_all_stocks(
         is_cn = market_key in ("A", "CN")
         name_col = "stock_name" if is_cn else "name"
 
+        # Build exchange filter for A-share (symbol prefix: SH, SZ, BJ)
+        exchange_where = ""
+        exchange_params: dict = {"limit": limit}
+        is_cn = market_key in ("A", "CN")
+        if is_cn and exchange_key in ("SH", "SZ", "BJ"):
+            exchange_where = f"WHERE symbol LIKE :exchange_prefix"
+            exchange_params["exchange_prefix"] = f"{exchange_key}%"
+
         if enrich:
+            name_col = "stock_name" if is_cn else "name"
             sql = f"""
                 SELECT symbol,
                        COALESCE({name_col}, '') AS name,
@@ -124,19 +135,22 @@ async def get_all_stocks(
                        COALESCE(pct_change, 0) AS "pctChange",
                        COALESCE(is_st, 0) <> 0 AS "isSt"
                 FROM {table}
+                {exchange_where}
                 ORDER BY symbol
                 LIMIT :limit
             """
         else:
+            name_col = "stock_name" if is_cn else "name"
             sql = f"""
                 SELECT symbol, COALESCE({name_col}, '') AS name
                 FROM {table}
+                {exchange_where}
                 ORDER BY symbol
                 LIMIT :limit
             """
 
         with get_db() as db:
-            rows = db.execute(text(sql), {"limit": limit}).fetchall()
+            rows = db.execute(text(sql), exchange_params).fetchall()
 
         items = []
         for row in rows:
@@ -159,6 +173,7 @@ async def get_all_stocks(
             "items": items,
             "total": len(items),
             "market": market_key,
+            "exchange": exchange_key or None,
             "table": table,
         }
     except Exception as e:

@@ -361,7 +361,7 @@ export const StockPoolTable: React.FC = () => {
             size: 'small',
             showTotal: (total) => `共 ${total} 只`
           }}
-          scroll={{ y: 'calc(100vh - 480px)' }}
+          scroll={{ y: 'calc(var(--app-h) - 480px)' }}
           className="elegant-stock-table"
         />
       </div>

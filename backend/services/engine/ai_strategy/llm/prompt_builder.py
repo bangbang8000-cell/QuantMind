@@ -34,8 +34,8 @@ def build_strategy_prompt(body: "GenerateRequest", dsl: str) -> str:
             必须输出：累计收益、年化收益、最大回撤、夏普比率、交易次数。
             默认参数：initial_capital=1000000, commission=0.0003, slippage=0.0005。
             数据读取必须遵循：
-            - 使用 qlib.init(provider_uri="/app/db/qlib_data", region="cn") + D.features(...)；
-            - 不要生成 /app/db/qlib_data/AAPL.csv 这类路径；
+            - 使用 qlib.init(provider_uri=resolve_qlib_provider_uri(), region="cn") + D.features(...)；
+            - 不要生成硬编码的 qlib_data 路径，应通过 qlib_paths 解析；
             - 默认标的使用 A 股代码（如 SH600000/SZ000001）。
             回测计算必须遵循：
             - 使用 .loc 赋值，禁止链式赋值；

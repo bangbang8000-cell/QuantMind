@@ -394,7 +394,7 @@ export const AdminFeatureCatalog: React.FC = () => {
             </Button>
           }
           className="h-fit"
-          styles={{ body: { padding: 0, maxHeight: 'calc(100vh - 260px)', overflowY: 'auto' } }}
+          styles={{ body: { padding: 0, maxHeight: 'calc(var(--app-h) - 260px)', overflowY: 'auto' } }}
         >
           {catalog.categories.map(cat => (
             <div
@@ -447,7 +447,7 @@ export const AdminFeatureCatalog: React.FC = () => {
               rowKey="key"
               size="small"
               pagination={false}
-              scroll={{ y: 'calc(100vh - 340px)' }}
+              scroll={{ y: 'calc(var(--app-h) - 340px)' }}
             />
           ) : (
             <Empty description="请从左侧选择一个分类" />

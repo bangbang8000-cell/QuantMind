@@ -147,7 +147,7 @@ const DashboardPage: React.FC = () => {
     );
 
     return (
-        <div style={{ padding: '16px 24px', background: '#f8fafc', minHeight: '100vh' }}>
+        <div style={{ padding: '16px 24px', background: '#f8fafc', minHeight: '100%' }}>
             {/* Header */}
             <div style={{ marginBottom: 16 }}>
                 <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 }}>

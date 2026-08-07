@@ -1,8 +1,10 @@
-import React from 'react';
+import React, { useEffect, useState } from 'react';
 import { ChatInput } from '../components-v2/ChatInput';
 import { Layout } from '../components-v2/layout/Layout';
 import type { PageId } from '../components-v2/layout/Layout';
 import { useTaskContext } from '../context-v2/TaskContext';
+import { getDataSummary } from '../services-v2/api';
+import type { DataSummary } from '../types-v2';
 
 // -------------------------------------------------------------------
 // Component
@@ -19,6 +21,23 @@ export const HomePage: React.FC<HomePageProps> = ({ onNavigate }) => {
     startMining,
     stopMining,
   } = useTaskContext();
+
+  const [dataSummary, setDataSummary] = useState<DataSummary | null>(null);
+
+  useEffect(() => {
+    getDataSummary()
+      .then((res) => setDataSummary(res.data ?? null))
+      .catch(() => {});
+  }, []);
+
+  const universeCount = dataSummary?.universes
+    ? Object.keys(dataSummary.universes).length
+    : 0;
+  const dateRangeText = dataSummary?.dateRange?.start && dataSummary?.dateRange?.end
+    ? `${dataSummary.dateRange.start} ~ ${dataSummary.dateRange.end}`
+    : null;
+  const l1Columns = dataSummary?.datasets?.l1_factors?.columns ?? 0;
+  const l1Categories = dataSummary?.datasets?.l1_factors?.categoryCount ?? 0;
 
   return (
     <Layout
@@ -81,15 +100,30 @@ export const HomePage: React.FC<HomePageProps> = ({ onNavigate }) => {
 
               <div className="flex items-start gap-2">
                 <span className="text-primary mt-0.5">&#9679;</span>
-                <span><strong className="text-foreground">默认市场：</strong>CSI 300（沪深300）市场股票数据</span>
+                <span>
+                  <strong className="text-foreground">股票池：</strong>
+                  {universeCount > 0
+                    ? `${universeCount} 个可选股票池（沪深300 / 中证500 / 中证1000 / 上证50 / 创业板 / 科创板 / 中证800 / 全部A股）`
+                    : 'CSI 300（沪深300）市场股票数据'}
+                </span>
               </div>
               <div className="flex items-start gap-2">
                 <span className="text-primary mt-0.5">&#9679;</span>
-                <span><strong className="text-foreground">挖掘时间段：</strong>训练集 2016-2020，验证集 2021（初步回测在验证集上进行）</span>
+                <span>
+                  <strong className="text-foreground">因子集：</strong>
+                  {l1Columns > 0
+                    ? `QuantDB L1 因子集，${l1Columns} 列 / ${l1Categories} 大类`
+                    : 'Alpha158(20) 基础因子集'}
+                </span>
               </div>
               <div className="flex items-start gap-2">
                 <span className="text-primary mt-0.5">&#9679;</span>
-                <span><strong className="text-foreground">独立回测：</strong>测试集 2022-01-01 ~ 2025-12-26（评估样本外表现）</span>
+                <span>
+                  <strong className="text-foreground">数据范围：</strong>
+                  {dateRangeText
+                    ? `${dateRangeText}${dataSummary?.dateRange?.tradingDays ? `（${dataSummary.dateRange.tradingDays} 个交易日）` : ''}`
+                    : '训练集 2016-2020，验证集 2021（初步回测在验证集上进行）'}
+                </span>
               </div>
               <div className="flex items-start gap-2">
                 <span className="text-primary mt-0.5">&#9679;</span>

@@ -74,7 +74,12 @@ class QlibBacktestService(QlibBacktestServiceRuntimeMixin):
         region: str = "cn",
     ):
         if provider_uri is None:
-            provider_uri = os.getenv("QLIB_DATA_PATH", "db/qlib_data")
+            env_val = os.getenv("QLIB_DATA_PATH", "").strip()
+            if env_val:
+                provider_uri = env_val
+            else:
+                from backend.shared.qlib_paths import resolve_qlib_provider_uri
+                provider_uri = resolve_qlib_provider_uri()
 
         if not provider_uri.startswith("~") and not os.path.isabs(provider_uri):
             try:

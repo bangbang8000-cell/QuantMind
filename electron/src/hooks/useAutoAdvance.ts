@@ -60,7 +60,7 @@ export interface UseAutoAdvanceResult {
 }
 
 export function useAutoAdvance(opts: UseAutoAdvanceOptions = {}): UseAutoAdvanceResult {
-    const { onDay, onDone, onError, speed: initialSpeed = 'medium' } = opts;
+    const { speed: initialSpeed = 'medium' } = opts;
 
     const [state, setState] = useState<AutoAdvanceState>('idle');
     const [speed, setSpeed] = useState<AutoAdvanceSpeed>(initialSpeed);
@@ -68,25 +68,36 @@ export function useAutoAdvance(opts: UseAutoAdvanceOptions = {}): UseAutoAdvance
     const [progress, setProgress] = useState({ done: 0, total: 0 });
     const [errorMessage, setErrorMessage] = useState<string | null>(null);
 
+    // Refs for values that must be read inside the loop without causing re-subscription
     const sessionIdRef = useRef<string | null>(null);
     const abortRef = useRef(false);
     const pausedRef = useRef(false);
-    const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+    const runningRef = useRef(false); // gate: only one tick chain at a time
     const recordsRef = useRef<DailyRecord[]>([]);
     const progressRef = useRef({ done: 0, total: 0 });
+    const speedRef = useRef<AutoAdvanceSpeed>(initialSpeed);
+    const onDayRef = useRef(opts.onDay);
+    const onDoneRef = useRef(opts.onDone);
+    const onErrorRef = useRef(opts.onError);
 
-    const clearTimer = () => {
-        if (timerRef.current) {
-            clearTimeout(timerRef.current);
-            timerRef.current = null;
-        }
-    };
+    // Keep callback refs in sync (stable identity, no re-subscription)
+    onDayRef.current = opts.onDay;
+    onDoneRef.current = opts.onDone;
+    onErrorRef.current = opts.onError;
+    speedRef.current = speed;
+
+    const stopInternal = useCallback((finalState: AutoAdvanceState) => {
+        abortRef.current = true;
+        runningRef.current = false;
+        setState(finalState);
+    }, []);
 
     const start = useCallback((session: ReplaySession) => {
-        if (state === 'running') return;
+        if (runningRef.current) return;
         sessionIdRef.current = session.session_id;
         abortRef.current = false;
         pausedRef.current = false;
+        runningRef.current = true;
         const initialProgress = {
             done: session.sessions_done,
             total: session.sessions_total,
@@ -97,14 +108,13 @@ export function useAutoAdvance(opts: UseAutoAdvanceOptions = {}): UseAutoAdvance
         setProgress(initialProgress);
         setErrorMessage(null);
         setState('running');
-    }, [state]);
+    }, []);
 
     const pause = useCallback(() => {
-        if (state !== 'running') return;
+        if (!runningRef.current) return;
         pausedRef.current = true;
         setState('paused');
-        clearTimer();
-    }, [state]);
+    }, []);
 
     const resume = useCallback(() => {
         if (state !== 'paused') return;
@@ -113,21 +123,22 @@ export function useAutoAdvance(opts: UseAutoAdvanceOptions = {}): UseAutoAdvance
     }, [state]);
 
     const stop = useCallback(() => {
-        abortRef.current = true;
-        clearTimer();
-        setState('idle');
-    }, []);
+        stopInternal('idle');
+    }, [stopInternal]);
 
-    // 自动推进主循环
+    // Auto-advance loop: runs as long as runningRef is true.
+    // Only re-subscribes when state changes to 'running' — not on callback/speed changes.
     useEffect(() => {
         if (state !== 'running') return;
+        if (!runningRef.current) return;
+
         const sessionId = sessionIdRef.current;
         if (!sessionId) return;
 
         let cancelled = false;
 
         const tick = async () => {
-            if (cancelled || abortRef.current) return;
+            if (cancelled || abortRef.current || !runningRef.current) return;
             if (pausedRef.current) return;
 
             try {
@@ -136,8 +147,9 @@ export function useAutoAdvance(opts: UseAutoAdvanceOptions = {}): UseAutoAdvance
 
                 if (result.error) {
                     setErrorMessage(result.error);
+                    runningRef.current = false;
                     setState('error');
-                    onError?.(new Error(result.error));
+                    onErrorRef.current?.(new Error(result.error));
                     return;
                 }
 
@@ -148,45 +160,54 @@ export function useAutoAdvance(opts: UseAutoAdvanceOptions = {}): UseAutoAdvance
                     cum_pnl: result.snapshot.cum_pnl,
                     rejected: result.rejected.length,
                 };
-                setRecords([...recordsRef.current, record]);
-                recordsRef.current = [...recordsRef.current, record];
-                setProgress({
-                    done: progressRef.current.done + 1,
-                    total: progressRef.current.total,
-                });
-                progressRef.current = {
+                const newRecords = [...recordsRef.current, record];
+                recordsRef.current = newRecords;
+                const newProgress = {
                     done: progressRef.current.done + 1,
                     total: progressRef.current.total,
                 };
-                onDay?.(record);
+                progressRef.current = newProgress;
+                setRecords(newRecords);
+                setProgress(newProgress);
+                onDayRef.current?.(record);
 
-                // Refresh session for cursor / next_date
+                // Check if done via session refresh
                 try {
                     const updated = await getSession(sessionId);
                     if (cancelled || abortRef.current) return;
                     if (updated.next_date === null) {
+                        runningRef.current = false;
                         setState('done');
-                        onDone?.([...recordsRef.current, record]);
+                        onDoneRef.current?.(newRecords);
                         return;
                     }
                 } catch (err: unknown) {
                     if (cancelled || abortRef.current) return;
                     const msg = err instanceof Error ? err.message : '刷新会话失败';
                     setErrorMessage(msg);
+                    runningRef.current = false;
                     setState('error');
-                    onError?.(err instanceof Error ? err : new Error(msg));
+                    onErrorRef.current?.(err instanceof Error ? err : new Error(msg));
                     return;
                 }
 
-                if (abortRef.current) return;
-                const delay = SPEED_MS[speed];
-                timerRef.current = setTimeout(tick, delay);
+                if (cancelled || abortRef.current || !runningRef.current) return;
+
+                // Schedule next tick using current speed from ref (not stale closure)
+                const delay = SPEED_MS[speedRef.current];
+                if (delay <= 0) {
+                    // Instant: use microtask to avoid stack overflow and allow abort checks
+                    Promise.resolve().then(tick);
+                } else {
+                    setTimeout(tick, delay);
+                }
             } catch (err: unknown) {
                 if (cancelled || abortRef.current) return;
                 const msg = err instanceof Error ? err.message : '推演失败';
                 setErrorMessage(msg);
+                runningRef.current = false;
                 setState('error');
-                onError?.(err instanceof Error ? err : new Error(msg));
+                onErrorRef.current?.(err instanceof Error ? err : new Error(msg));
             }
         };
 
@@ -194,15 +215,14 @@ export function useAutoAdvance(opts: UseAutoAdvanceOptions = {}): UseAutoAdvance
 
         return () => {
             cancelled = true;
-            clearTimer();
         };
-    }, [state, speed, onDay, onDone, onError]);
+    }, [state]); // ONLY re-subscribe on state change — callbacks/speed use refs
 
     // Cleanup on unmount
     useEffect(() => {
         return () => {
             abortRef.current = true;
-            clearTimer();
+            runningRef.current = false;
         };
     }, []);
 

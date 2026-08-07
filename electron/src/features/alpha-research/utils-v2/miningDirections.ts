@@ -52,13 +52,14 @@ interface StoredMiningDirectionConfig {
 }
 
 /** Get a default mining direction from saved config (one of the selected list, or a random one) */
-export function getDefaultMiningDirection(): string {
+export function getDefaultMiningDirection(
+  list: MiningDirectionItem[] = REFERENCE_MINING_DIRECTIONS,
+): string {
   try {
     const raw = localStorage.getItem('quantaalpha_config');
     if (!raw) return '';
     const config = JSON.parse(raw) as StoredMiningDirectionConfig;
     const indices = config?.selectedMiningDirectionIndices ?? [];
-    const list = REFERENCE_MINING_DIRECTIONS;
     if (!list.length || !indices.length) return '';
     const validIndices = indices.filter((i) => i >= 0 && i < list.length);
     if (!validIndices.length) return '';
@@ -97,4 +98,28 @@ export function importFeatureCatalogDirections(catalog: FeatureCatalog): MiningD
       meaning: f.description,
     })),
   }));
+}
+
+/**
+ * Load mining directions from the QuantDB L1 factor categories API.
+ * Falls back to REFERENCE_MINING_DIRECTIONS when the backend is unreachable
+ * or returns no categories, so the settings UI always has options.
+ */
+export async function fetchMiningDirections(): Promise<MiningDirectionItem[]> {
+  try {
+    const { getFactorCategories } = await import('../services-v2/api');
+    const res = await getFactorCategories();
+    const categories = res.data?.categories ?? [];
+    if (!categories.length) return REFERENCE_MINING_DIRECTIONS;
+    return categories.map((cat) => ({
+      label: `${cat.name}类因子 (${cat.featureCount})`,
+      factors: cat.sampleFeatures.slice(0, 3).map((key) => ({
+        shortName: key,
+        expression: key,
+        meaning: `${cat.name}类特征`,
+      })),
+    }));
+  } catch {
+    return REFERENCE_MINING_DIRECTIONS;
+  }
 }

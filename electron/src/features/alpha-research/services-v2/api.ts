@@ -12,17 +12,31 @@
 import { apiClient } from '../../../services/aiStrategyClients';
 import type {
   ApiResponse,
+  DataSummary,
   Factor,
+  FactorCategory,
   Task,
   TaskStatus,
   ExecutionPhase,
   RealtimeMetrics,
+  UniverseId,
+  UniverseInfo,
   WsMessage,
 } from '../types-v2';
 
 // ========================== Defaults ==========================
 
-const DEFAULT_USER = 'alpha_researcher';
+/** Display names for stock universes — kept in sync with backend UNIVERSE_NAMES */
+export const UNIVERSE_LABELS: Record<UniverseId, string> = {
+  csi300: '沪深300',
+  csi500: '中证500',
+  csi1000: '中证1000',
+  sse50: '上证50',
+  gem: '创业板指',
+  star: '科创50',
+  csi800: '中证800',
+  all_a: '全部A股',
+};
 
 function makeOk<T>(data: T): ApiResponse<T> {
   return { success: true, data };
@@ -140,9 +154,10 @@ function normalizeAgentFactor(raw: any): Factor {
     factorDescription: meta.description ?? raw?.category ?? '',
     quality: classifyQuality(ic),
     market: meta.market ?? raw?.market ?? undefined,
+    universe: raw?.universe ?? meta.universe ?? undefined,
     ic: ic ?? 0,
     icir: meta.icir ?? 0,
-    rankIc: meta.rank_ic ?? 0,
+    rankIc: raw?.rank_ic ?? meta.rank_ic ?? 0,
     rankIcir: 0,
     sharpeRatio: raw?.sharpe_ratio ?? 0,
     annualReturn: raw?.annual_return ?? 0,
@@ -158,6 +173,7 @@ function normalizeAgentFactor(raw: any): Factor {
 export interface MiningStartParams {
   direction: string;
   market?: string;
+  universe?: string;
   dataSource?: string;
   numDirections?: number;
   maxRounds?: number;
@@ -173,11 +189,11 @@ export async function startMining(
 ): Promise<ApiResponse<{ taskId: string; task: Task }>> {
   const loopN = params.maxRounds ?? params.maxLoops ?? 3;
   const qs = new URLSearchParams({
-    user_id: DEFAULT_USER,
     loop_n: String(loopN),
     direction: params.direction || '',
   });
   if (params.market) qs.set('market', params.market);
+  if (params.universe) qs.set('universe', params.universe);
   if (params.dataSource) qs.set('data_source', params.dataSource);
   const res = await apiClient.post(`/alpha-agent/evolve?${qs.toString()}`);
   const data = res.data?.data ?? {};
@@ -188,6 +204,7 @@ export async function startMining(
       userInput: params.direction,
       numDirections: params.numDirections,
       maxRounds: loopN,
+      universe: params.universe,
       librarySuffix: params.librarySuffix,
       qualityGateEnabled: params.qualityGateEnabled,
       parallelExecution: params.parallelEnabled,
@@ -240,6 +257,7 @@ export interface FactorListParams {
   offset?: number;
   library?: string;
   market?: string;
+  universe?: string;
 }
 
 export interface FactorListResponse {
@@ -261,6 +279,7 @@ export async function getFactors(
   const clamped = Math.min(Math.max(requested, 1), 200);
   qs.set('limit', String(clamped));
   if (params.market) qs.set('market', params.market);
+  if (params.universe) qs.set('universe', params.universe);
   const res = await apiClient.get(`/alpha-agent/factors?${qs.toString()}`);
   let factors: Factor[] = (res.data?.data?.factors ?? []).map(normalizeAgentFactor);
 
@@ -314,73 +333,131 @@ export async function exportFactorToIde(
 export async function listFactorLibraries(): Promise<
   ApiResponse<{ libraries: string[] }>
 > {
-  return makeOk({ libraries: ['default'] });
+  try {
+    const res = await apiClient.get(`/alpha-agent/factors`);
+    const rawFactors: any[] = res.data?.data?.factors ?? [];
+    // Extract unique factor IDs as library identifiers
+    const libraries: string[] = rawFactors
+      .map((f: any) => f.id ?? f.factor_id ?? '')
+      .filter((id: string) => id.length > 0);
+    return makeOk({ libraries });
+  } catch {
+    return makeOk({ libraries: [] });
+  }
 }
 
-// ========================== Factor Cache API (no-op in QuantMind) ==========================
+// ========================== QuantDB Data API ==========================
 
-export interface CacheStatusResponse {
-  total: number;
-  h5_cached: number;
-  md5_cached: number;
-  need_compute: number;
-  factors: Array<{
-    factor_id: string;
-    factor_name: string;
-    status: 'h5_cached' | 'md5_cached' | 'need_compute';
-  }>;
+/** QuantDB data availability summary (date range, universes, datasets) */
+export async function getDataSummary(): Promise<ApiResponse<DataSummary>> {
+  try {
+    const res = await apiClient.get(`/alpha-agent/data-summary`);
+    const raw = res.data?.data ?? {};
+    return makeOk({
+      available: raw.available !== false,
+      dateRange: raw.date_range
+        ? {
+            start: raw.date_range.start ?? '',
+            end: raw.date_range.end ?? '',
+            tradingDays: raw.date_range.trading_days ?? 0,
+          }
+        : undefined,
+      universes: raw.universes ?? undefined,
+      stockCount: raw.stock_count ?? undefined,
+      datasets: raw.datasets
+        ? Object.fromEntries(
+            Object.entries(raw.datasets).map(([name, info]: [string, any]) => [
+              name,
+              {
+                columns: info?.columns ?? 0,
+                categories: Array.isArray(info?.categories) ? info.categories : undefined,
+                categoryCount: info?.category_count ?? info?.categoryCount ?? undefined,
+              },
+            ]),
+          )
+        : undefined,
+      error: raw.error,
+    });
+  } catch (error: unknown) {
+    const message = error instanceof Error ? error.message : '数据摘要获取失败';
+    return makeOk({ available: false, error: message });
+  }
 }
 
-export interface WarmCacheResponse {
-  total: number;
-  synced: number;
-  skipped: number;
-  failed: number;
+/** L1 factor categories from QuantDB feature catalog */
+export async function getFactorCategories(): Promise<
+  ApiResponse<{ categories: FactorCategory[] }>
+> {
+  try {
+    const res = await apiClient.get(`/alpha-agent/factor-categories`);
+    const raw = res.data?.data?.categories ?? [];
+    const categories: FactorCategory[] = raw.map((c: any) => ({
+      id: c.id ?? '',
+      name: c.name ?? '',
+      featureCount: c.feature_count ?? 0,
+      sampleFeatures: c.sample_features ?? [],
+    }));
+    return makeOk({ categories });
+  } catch {
+    return makeOk({ categories: [] });
+  }
 }
 
-export async function getCacheStatus(
-  _library?: string,
-): Promise<ApiResponse<CacheStatusResponse>> {
-  return makeOk({
-    total: 0,
-    h5_cached: 0,
-    md5_cached: 0,
-    need_compute: 0,
-    factors: [],
-  });
-}
-
-export async function warmCache(
-  _library?: string,
-): Promise<ApiResponse<WarmCacheResponse>> {
-  return makeOk({ total: 0, synced: 0, skipped: 0, failed: 0 });
+/** Available stock universes with constituent counts */
+export async function getUniverses(): Promise<
+  ApiResponse<{ universes: UniverseInfo[] }>
+> {
+  try {
+    const res = await apiClient.get(`/alpha-agent/universes`);
+    const raw = res.data?.data?.universes ?? {};
+    const universes: UniverseInfo[] = Object.entries(raw).map(
+      ([id, info]: [string, any]) => ({
+        id: id as UniverseId,
+        name: info?.name ?? UNIVERSE_LABELS[id as UniverseId] ?? id,
+        indexSymbol: info?.indexSymbol ?? info?.index_symbol ?? null,
+        stockCount: info?.count ?? 0,
+      }),
+    );
+    return makeOk({ universes });
+  } catch {
+    // Fall back to the static label list so the selector still works offline
+    const universes: UniverseInfo[] = (
+      Object.keys(UNIVERSE_LABELS) as UniverseId[]
+    ).map((id) => ({
+      id,
+      name: UNIVERSE_LABELS[id],
+      indexSymbol: null,
+      stockCount: 0,
+    }));
+    return makeOk({ universes });
+  }
 }
 
 // ========================== Backtest API ==========================
 
 export interface BacktestStartParams {
-  factorJson: string;
+  factorId: string;
   factorSource?: string;
   configPath?: string;
+  universe?: string;
 }
 
 export async function startBacktest(
   params: BacktestStartParams,
 ): Promise<ApiResponse<{ taskId: string; task: Task }>> {
-  let factorId = '';
-  try {
-    const parsed = JSON.parse(params.factorJson);
-    factorId = parsed?.factorId ?? parsed?.factor_id ?? '';
-  } catch {
-    /* ignore */
-  }
+  const factorId = params.factorId;
   if (!factorId) {
     return {
       success: false,
       error: '回测需要 factorId — 请在因子库中选择一个已生成的因子。',
     } as ApiResponse<any>;
   }
-  const res = await apiClient.post(`/alpha-agent/factors/${factorId}/backtest`);
+  const qs = new URLSearchParams();
+  if (params.universe) qs.set('universe', params.universe);
+  const query = qs.toString();
+  const res = await apiClient.post(
+    `/alpha-agent/factors/${factorId}/backtest${query ? `?${query}` : ''}`,
+  );
   const data = res.data?.data ?? {};
   const taskId = data.factor_id ?? factorId;
   return makeOk({
@@ -399,12 +476,25 @@ export async function getBacktestStatus(
   try {
     const res = await apiClient.get(`/alpha-agent/factors/${taskId}`);
     const raw = res.data?.data ?? {};
-    const status = raw.status === 'completed' ? 'completed' : 'running';
+    // Map backend status correctly: 'failed' should map to 'failed', not 'running'
+    const rawStatus: string = raw.status ?? '';
+    const status: string =
+      rawStatus === 'completed' ? 'completed' :
+      rawStatus === 'failed' || rawStatus === 'cancelled' ? 'failed' :
+      'running';
+    // Extract metrics from factor detail response
+    const metrics: Record<string, any> = {};
+    if (raw.ic_value != null) metrics.ic = raw.ic_value;
+    if (raw.sharpe_ratio != null) metrics.sharpeRatio = raw.sharpe_ratio;
+    if (raw.annual_return != null) metrics.annualReturn = raw.annual_return;
+    if (raw.max_drawdown != null) metrics.maxDrawdown = raw.max_drawdown;
+    if (raw.rank_ic != null) metrics.rankIc = raw.rank_ic;
     return makeOk({
       task: normalizeAgentTask({
         task_id: taskId,
         status,
         progress: status === 'completed' ? 'Backtest done' : 'Running',
+        metrics: Object.keys(metrics).length > 0 ? metrics : undefined,
       }),
     });
   } catch {
@@ -414,35 +504,6 @@ export async function getBacktestStatus(
 
 export async function cancelBacktest(_taskId: string): Promise<ApiResponse> {
   return makeOk({});
-}
-
-// ========================== System Config (stub) ==========================
-
-export async function getSystemConfig(): Promise<
-  ApiResponse<{
-    env: Record<string, string>;
-    experimentYaml: string;
-    factorLibraries: string[];
-  }>
-> {
-  return makeOk({
-    env: {
-      ALPHA_AGENT_BACKEND: 'QuantMind /api/v1/alpha-agent',
-      NOTE: '系统配置在 QuantMind 个人中心和 .env 中管理。',
-    },
-    experimentYaml:
-      '# AlphaAgent 实验配置由后端 launcher.py 管理\n# 如需调整，请修改 backend/services/engine/alpha_agent/ 下的 yaml 配置。\n',
-    factorLibraries: ['default'],
-  });
-}
-
-export async function updateSystemConfig(
-  _update: Record<string, string>,
-): Promise<ApiResponse> {
-  return {
-    success: false,
-    error: '系统配置请在 QuantMind 个人中心和 .env 中修改。',
-  };
 }
 
 // ========================== Health Check ==========================
@@ -479,6 +540,8 @@ export function connectMiningWs(
       fakeWs.readyState = 3;
       onClose?.();
     },
+    /** Exposed so callers can clear the recursive setTimeout on unmount */
+    _pollingTimeoutId: null as ReturnType<typeof setTimeout> | null,
   };
 
   let lastPhase = '';
@@ -633,9 +696,11 @@ export function connectMiningWs(
     } catch {
       /* transient — keep polling */
     }
-    if (!stopped) setTimeout(poll, 2000);
+    if (!stopped) {
+      fakeWs._pollingTimeoutId = setTimeout(poll, 2000);
+    }
   };
 
-  setTimeout(poll, 100);
+  fakeWs._pollingTimeoutId = setTimeout(poll, 100);
   return fakeWs as WebSocket;
 }

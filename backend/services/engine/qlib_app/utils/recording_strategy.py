@@ -58,6 +58,49 @@ _OUR_KWARGS = {
 }
 
 
+def strip_unsupported_kwargs(cls, kwargs: dict, *, strategy_name: str = "") -> dict:
+    """剔除 qlib 策略基类签名不接受的 kwargs，原地修改并返回同一 dict。
+
+    前端/AI 生成的策略配置常携带平台侧参数（如 momentum_period），而 qlib 的
+    BaseStrategy 使用严格签名，收到未知关键字会直接抛 TypeError 使回测失败。
+
+    注意：qlib 各层策略基类几乎都声明了 **kwargs 并逐层下传，最终收敛到
+    BaseStrategy 这一唯一严格签名，因此不能因为「某基类有 **kwargs」就放行。
+    这里按 MRO 收集所有具名参数的并集作为合法集合。
+    """
+    import inspect
+
+    accepted: set[str] = set()
+    for base in inspect.getmro(cls):
+        init = base.__dict__.get("__init__")
+        if init is None:
+            continue
+        try:
+            sig = inspect.signature(init)
+        except (TypeError, ValueError):
+            continue
+        for name, param in sig.parameters.items():
+            if name == "self":
+                continue
+            if param.kind in (
+                inspect.Parameter.VAR_KEYWORD,
+                inspect.Parameter.VAR_POSITIONAL,
+            ):
+                continue
+            accepted.add(name)
+
+    unknown = [k for k in kwargs if k not in accepted]
+    for key in unknown:
+        kwargs.pop(key, None)
+    if unknown:
+        logger.warning(
+            "%s: 忽略 qlib 不支持的策略参数 %s（该参数未被策略实现消费）",
+            strategy_name or cls.__name__,
+            sorted(unknown),
+        )
+    return kwargs
+
+
 def _normalize_display_quantity(symbol: str, quantity: float) -> int:
     """A 股展示数量纠偏，避免复权因子日间漂移造成非整手抖动。"""
     qty_int = int(round(float(quantity)))
@@ -544,6 +587,7 @@ class RedisRecordingStrategy(
         # 2. 统一清除所有「本项目自定义 / 前端传入」的 kwargs，
         #    这些字段 Qlib BaseStrategy 不接受。
         clean_kwargs = {k: v for k, v in kwargs.items() if k not in _OUR_KWARGS}
+        strip_unsupported_kwargs(type(self), clean_kwargs, strategy_name="RedisRecordingStrategy")
 
         # 3. 调用 super().__init__
         super().__init__(*args, **clean_kwargs)
@@ -623,6 +667,7 @@ class SimpleWeightStrategy(WeightStrategyBase):
         self.topk = int(topk) if topk is not None else None
         self.min_score = float(min_score) if min_score is not None else 0.0
         self.max_weight = float(max_weight) if max_weight is not None else 1.0
+        strip_unsupported_kwargs(type(self), kwargs, strategy_name="SimpleWeightStrategy")
         super().__init__(*args, **kwargs)
 
     def _build_capped_weights(self, scores: pd.Series, max_weight: float) -> pd.Series:
@@ -708,6 +753,7 @@ class RedisWeightStrategy(DynamicRiskMixin, SimpleWeightStrategy, RedisLoggerMix
             {"rebalance_days": self.rebalance_days, "backtest_id": getattr(self, "backtest_id", None)},
         ).info("init", "RedisWeightStrategy initialized")
         clean_kwargs = {k: v for k, v in kwargs.items() if k not in _OUR_KWARGS}
+        strip_unsupported_kwargs(type(self), clean_kwargs, strategy_name="RedisWeightStrategy")
         super().__init__(*args, **clean_kwargs)
 
     def reset(self, *args, **kwargs):

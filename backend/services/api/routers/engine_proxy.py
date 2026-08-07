@@ -22,6 +22,9 @@ ENGINE_BASE_URL = os.getenv("ENGINE_SERVICE_URL", "http://127.0.0.1:8001").rstri
 ENGINE_PROXY_TIMEOUT_SECONDS = float(os.getenv("ENGINE_PROXY_TIMEOUT_SECONDS", "120"))
 ENGINE_PROXY_LLM_TIMEOUT_SECONDS = float(os.getenv("ENGINE_PROXY_LLM_TIMEOUT_SECONDS", "600"))
 
+# 客户端绝不允许自带身份/内部调用 Header — 否则可冒充任意用户
+_UNTRUSTED_CLIENT_HEADERS = {"x-user-id", "x-tenant-id", "x-internal-call"}
+
 # 注意：这里不设 prefix，在 main.py 挂载
 router = APIRouter()
 
@@ -46,7 +49,10 @@ async def _proxy(request: Request, user: dict | None = None) -> Response:
         url = f"{url}?{request.url.query}"
 
     headers = {
-        k: v for k, v in request.headers.items() if k.lower() not in {"host", "content-length", "transfer-encoding"}
+        k: v
+        for k, v in request.headers.items()
+        if k.lower() not in {"host", "content-length", "transfer-encoding"}
+        and k.lower() not in _UNTRUSTED_CLIENT_HEADERS
     }
     headers["X-Internal-Call"] = get_internal_call_secret()
 

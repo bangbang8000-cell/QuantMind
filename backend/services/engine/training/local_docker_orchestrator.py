@@ -47,6 +47,7 @@ _DOCKER_NETWORK = os.getenv("TRAINING_DOCKER_NETWORK", "quantmind-network")
 #   ./backend:/app/backend  → 宿主机 <compose_dir>/backend  ←→ 容器 /app/backend
 
 _LOCAL_DATA_MOUNT_DIR = "/tmp/feature_snapshots"
+_QUANTDB_DATA_MOUNT_DIR = "/tmp/quantdb_data"
 
 # ── 训练资源保护：训练期间临时停止其它容器，把内存腾给训练任务 ───────────────────
 # 通过 TRAINING_PAUSE_OTHERS=false 可关闭该行为
@@ -81,6 +82,27 @@ elif Path("/data/feature_snapshots").exists():
     _LOCAL_DATA_PATH = str(_HOST_PROJECT_PATH / "data" / "feature_snapshots")
 else:
     _LOCAL_DATA_PATH = str(_HOST_PROJECT_PATH / "db" / "feature_snapshots")
+
+# QuantDB 数据目录：train.py 需要读取 instrument_detail.parquet（行业编码）等全量数据
+# 注意 QM_QUANTDB_DATA_DIR 是【容器内】路径（如 /data/quantdb，来自 ./data:/data 挂载），
+# 而 Docker volume 的 source 必须是【宿主机】绝对路径，不能直接使用该值。
+# 这里把容器内路径换算回宿主机路径，语义与 _LOCAL_DATA_PATH 保持一致。
+_qdb_dir = os.getenv("QM_QUANTDB_DATA_DIR", "").strip() or "/data/quantdb"
+_qdb_path = Path(_qdb_dir)
+if _qdb_path.is_relative_to("/data"):
+    # /data/quantdb → <host_project>/data/quantdb
+    _QUANTDB_DATA_HOST_PATH = str(
+        _HOST_PROJECT_PATH / "data" / _qdb_path.relative_to("/data")
+    )
+elif _qdb_path.is_relative_to("/app"):
+    # /app/data/quantdb → <host_project>/data/quantdb
+    _QUANTDB_DATA_HOST_PATH = str(
+        _HOST_PROJECT_PATH / _qdb_path.relative_to("/app")
+    )
+elif _qdb_path.is_absolute():
+    _QUANTDB_DATA_HOST_PATH = str(_qdb_path)
+else:
+    _QUANTDB_DATA_HOST_PATH = str(_HOST_PROJECT_PATH / _qdb_path)
 
 # 训练脚本：./docker/training/train.py 挂载到容器内 /app/docker/training/
 _TRAINING_SCRIPT_HOST_PATH = str(_HOST_PROJECT_PATH / "docker" / "training" / "train.py")
@@ -226,7 +248,11 @@ class LocalDockerOrchestrator:
     def _filter_features_by_parquet(
         run_id: str, requested_features: list[str]
     ) -> tuple[list[str], list[str]]:
-        """检查请求的特征是否存在于 parquet 中，返回 (valid, missing)。"""
+        """检查请求的特征是否存在于 parquet 中，返回 (valid, missing)。
+
+        不做 return_Nd → mom_ret_Nd 别名回退：features_daily.return_Nd 是未来
+        N 日收益，用作特征会泄漏标签。mom_ret_Nd 必须由 l1_factors 提供。
+        """
         try:
             import pyarrow.parquet as pq
             from pathlib import Path
@@ -328,11 +354,18 @@ class LocalDockerOrchestrator:
             },
             "model": {
                 "type": payload.get("model_type", "lightgbm"),
+                "types": payload.get("model_types"),
+                "ensemble": payload.get("ensemble", "none"),
                 "num_boost_round": payload.get("num_boost_round", 1000),
                 "early_stopping_rounds": payload.get("early_stopping_rounds", 100),
                 "val_ratio": payload.get("val_ratio", 0.15),
                 "params": payload.get("lgb_params", {}),
-                "xgb_params": payload.get("xgb_params", {}),
+                "xgb_params": {
+                    k: v
+                    for k, v in payload.get("xgb_params", {}).items()
+                    # LightGBM max_depth=-1 convention is invalid for XGBoost; drop it
+                    if not (k == "max_depth" and isinstance(v, (int, float)) and v < 0)
+                },
                 "catboost_params": payload.get("catboost_params", {}),
                 "dl_params": payload.get("dl_params", {}),
             },
@@ -350,6 +383,7 @@ class LocalDockerOrchestrator:
                 "slippage": context.get("slippage", 0.0005),
                 "deal_price": context.get("deal_price", "close"),
                 "market": context.get("market", "CN"),
+                "industry_as_feature": context.get("industry_as_feature", False),
             },
             "explain": payload.get("explain", DEFAULT_EXPLAIN_CFG),
             "output": {
@@ -493,6 +527,27 @@ class LocalDockerOrchestrator:
             str(host_output_dir): {"bind": "/workspace", "mode": "rw"},
             str(_LOCAL_DATA_PATH): {"bind": _LOCAL_DATA_MOUNT_DIR, "mode": "ro"},
         }
+        # 挂载 QuantDB 全量数据（6大类：kline/base_sector/financial/bond_etf/technical_derived/ml_datasets）
+        # 存在性检查必须针对【容器内】可见的 _qdb_dir，而非宿主机路径
+        # （API 容器内 os.path.exists 无法感知宿主机路径，与 _LOCAL_DATA_PATH 同理）
+        if Path(_qdb_dir).exists():
+            volumes[_QUANTDB_DATA_HOST_PATH] = {
+                "bind": _QUANTDB_DATA_MOUNT_DIR,
+                "mode": "ro",
+            }
+            logger.info(
+                "[%s] QuantDB data mounted: %s (host) -> %s",
+                run_id,
+                _QUANTDB_DATA_HOST_PATH,
+                _QUANTDB_DATA_MOUNT_DIR,
+            )
+        else:
+            logger.warning(
+                "[%s] QuantDB data dir not visible at %s; skipping mount "
+                "(industry code ind_code_l1 will be unavailable)",
+                run_id,
+                _qdb_dir,
+            )
         logger.info(
             "[%s] Training workspace mounted: %s (host) -> /workspace (container writes to %s)",
             run_id,
@@ -550,18 +605,19 @@ class LocalDockerOrchestrator:
             container = await asyncio.to_thread(
                 self.docker.containers.run,
                 _TRAINING_IMAGE,
-                command="python /app/train.py --config /workspace/config.yaml",
+                command=["python", "/app/train.py", "--config", "/workspace/config.yaml"],
                 environment={
                     "INTERNAL_CALL_SECRET": self.internal_secret,
                     "USE_LOCAL_DATA": "true",
                     "TRAINING_LOCAL_DATA_DIR": _LOCAL_DATA_MOUNT_DIR,
                     "TRAINING_CACHE_DIR": "/tmp",
+                    "QLIB_PROVIDER_URI": os.getenv("QLIB_PROVIDER_URI", ""),
+                    "QUANTDB_DATA_DIR": _QUANTDB_DATA_MOUNT_DIR,
                 },
                 volumes=volumes,
                 network=_DOCKER_NETWORK,
                 detach=True,
                 name=f"qm-train-{run_id}",
-                # 训练容器不设 CPU/内存限制：宿主资源完全开放给训练任务
                 device_requests=device_requests,
             )
         except Exception as e:

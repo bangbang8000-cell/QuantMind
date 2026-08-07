@@ -13,9 +13,13 @@ import logging
 import os
 import pickle
 import re
+import shutil
 import time
+from datetime import date
 from pathlib import Path
 from typing import Any
+
+import pandas as pd
 
 from .market_adapters import get_adapter, list_markets
 from .market_adapters.base import MarketAdapter
@@ -75,39 +79,66 @@ class RDLoopWrapper:
         env.setdefault("MULTI_PROC_N", os.getenv("MULTI_PROC_N", "4"))
         return env
 
-    def _patch_prompts_for_chinese(self):
-        """注入中文指令到 RD-Agent 提示词模板，使因子描述使用中文"""
-        try:
-            from jinja2 import Template
-            from rdagent.scenarios.qlib.experiment import prompts as qlib_prompts
-            from rdagent.components.coder.factor_coder import prompts as coder_prompts
+    # 需要注入中文/研究方向指令的 prompt key（RD-Agent prompts.yaml 中的顶层键）
+    _INJECT_TARGET_KEYS = ("qlib_factor_background", "qlib_quant_background")
 
-            # 1. 因子背景提示 — 要求中文描述
-            zh_suffix = (
-                "\n\n====== 语言要求 / Language Requirement ======\n"
-                "所有因子的 description 字段必须使用中文撰写。"
-                "hypothesis 和 reason 也请用中文。\n"
-                "All factor descriptions MUST be written in Chinese (中文). "
-                "Hypothesis and reason should also be in Chinese.\n"
+    def _build_prompt_suffix(self) -> str:
+        """构造追加到因子背景 prompt 末尾的中文与研究方向指令。"""
+        suffix = (
+            "\n\n====== 语言要求 / Language Requirement ======\n"
+            "所有因子的 description 字段必须使用中文撰写。"
+            "hypothesis 和 reason 也请用中文。\n"
+            "All factor descriptions MUST be written in Chinese (中文). "
+            "Hypothesis and reason should also be in Chinese.\n"
+        )
+        direction = getattr(self, "_direction", "")
+        if direction:
+            suffix += (
+                "\n\n====== 研究方向 / Research Direction ======\n"
+                f"用户的研究方向/假设: {direction}\n"
+                f"User's research direction/hypothesis: {direction}\n"
+                "请围绕此方向进行因子探索。Focus factor exploration on this theme.\n"
             )
-            if hasattr(qlib_prompts, 'qlib_factor_background'):
-                original = qlib_prompts.qlib_factor_background
-                if '中文' not in original:
-                    qlib_prompts.qlib_factor_background = original + zh_suffix
-                    logger.info("Patched qlib_factor_background with Chinese instruction")
+        return suffix
 
-            # 2. 因子输出格式 — 要求中文 description
-            if hasattr(qlib_prompts, 'factor_hypothesis_output_format'):
-                original = qlib_prompts.factor_hypothesis_output_format
-                if '中文' not in original:
-                    qlib_prompts.factor_hypothesis_output_format = original.replace(
-                        '"reason": "The reason',
-                        '"reason": "用中文撰写。The reason'
-                    )
-                    logger.info("Patched factor_hypothesis_output_format with Chinese instruction")
+    def _patch_prompts_for_chinese(self):
+        """注入中文与研究方向指令到 RD-Agent 提示词。
 
+        RD-Agent 的 prompt 存于各包内的 prompts.yaml，经 `utils.agent.tpl.load_content`
+        每次按需读取（无缓存），因此在该函数返回值上追加指令是唯一可靠的注入点 ——
+        早期实现 import `...experiment.prompts` 模块，但该模块并不存在，注入从未生效。
+        """
+        try:
+            from rdagent.utils.agent import tpl as _tpl
+
+            if getattr(_tpl, "_qm_patched", False):
+                _tpl._qm_suffix = self._build_prompt_suffix()
+                return
+
+            suffix_holder = self._build_prompt_suffix()
+            _tpl._qm_suffix = suffix_holder
+            original_load = _tpl.load_content
+            target_keys = self._INJECT_TARGET_KEYS
+
+            def patched_load(uri: str, *args, **kwargs):
+                content = original_load(uri, *args, **kwargs)
+                if not isinstance(content, str):
+                    return content
+                if not any(uri.endswith(f":{k}") for k in target_keys):
+                    return content
+                if "语言要求" in content:
+                    return content
+                return content + getattr(_tpl, "_qm_suffix", "")
+
+            _tpl.load_content = patched_load
+            _tpl._qm_patched = True
+            logger.info(
+                "[%s] Patched RD-Agent prompt loader (Chinese + direction=%s)",
+                self.market,
+                bool(getattr(self, "_direction", "")),
+            )
         except Exception as e:
-            logger.warning("Failed to patch prompts for Chinese: %s", e)
+            logger.error("Failed to patch prompts for Chinese: %s", e)
 
     def _create_loop(self):
         """创建 FactorRDLoop 实例"""
@@ -143,6 +174,7 @@ class RDLoopWrapper:
         """
         self._running = True
         self._cancelled = False
+        self._direction = direction
 
         try:
             # 配置环境变量
@@ -158,6 +190,12 @@ class RDLoopWrapper:
 
             # 创建 RDLoop
             self._loop = self._create_loop()
+
+            # 注入 base_features_path（L1/L2 因子集供 LLM 参考）
+            base_features_path = getattr(self, "_base_features_path", None)
+            if base_features_path:
+                self._loop._init_base_features(base_features_path)
+                logger.info("[%s] Loaded base features from %s", self.market, base_features_path)
             step_count = len(self._loop.steps)
             total_steps = loop_n * step_count
 
@@ -183,16 +221,17 @@ class RDLoopWrapper:
                 "factors": factors,
                 "total_factors": len(factors),
                 "log_dir": task_log_dir,
+                "success": True,
             }
 
         except asyncio.CancelledError:
             self._cancelled = True
             logger.info("[%s] RDLoop cancelled", self.market)
-            return {"market": self.market, "cancelled": True, "factors": []}
+            return {"market": self.market, "cancelled": True, "factors": [], "success": False}
 
         except Exception as e:
             logger.exception("[%s] RDLoop failed: %s", self.market, e)
-            return {"market": self.market, "error": str(e), "factors": []}
+            return {"market": self.market, "error": str(e), "factors": [], "success": False}
 
         finally:
             self._running = False
@@ -250,12 +289,85 @@ class RDLoopWrapper:
         base_dir = task_log_dir if task_log_dir else os.getcwd()
 
         # RD-Agent data folders (relative to subprocess cwd)
-        targets = [
-            (os.path.join(base_dir, "git_ignore_folder/factor_implementation_source_data/daily_pv.h5"), source_all),
-            (os.path.join(base_dir, "git_ignore_folder/factor_implementation_source_data_debug/daily_pv.h5"), source_debug),
-        ]
+        target_all = os.path.join(base_dir, "git_ignore_folder/factor_implementation_source_data/daily_pv.h5")
+        target_debug = os.path.join(base_dir, "git_ignore_folder/factor_implementation_source_data_debug/daily_pv.h5")
 
-        for target, source in targets:
+        # A 股：优先从 QuantDB parquet 生成 .h5，失败则 fallback 到预生成文件
+        if self.market == "a_share":
+            quantdb_dir = self._resolve_quantdb_dir()
+            h5_generated = False
+            if quantdb_dir:
+                ok_all = self._generate_h5_from_parquet(quantdb_dir, target_all, debug=False)
+                ok_debug = self._generate_h5_from_parquet(quantdb_dir, target_debug, debug=True)
+                h5_generated = ok_all and ok_debug
+            if not h5_generated:
+                logger.warning("[%s] H5 generation failed or QuantDB dir missing, falling back to copy", self.market)
+                self._copy_h5_source(source_all, target_all, source_debug, target_debug)
+        else:
+            self._copy_h5_source(source_all, target_all, source_debug, target_debug)
+
+        # Ensure Qlib provider_uri data is available at ~/.qlib/qlib_data/<market>
+        qlib_source = market_cfg["qlib_source"]
+        qlib_target_name = market_cfg["qlib_target_name"]
+
+        # A 股：优先使用 QuantDB parquet 构建的 Qlib 缓存
+        if self.market == "a_share":
+            quantdb_dir = self._resolve_quantdb_dir()
+            if quantdb_dir:
+                qlib_cache = os.path.join(quantdb_dir, ".qlib_cache", "cn_data")
+                if os.path.isdir(qlib_cache):
+                    qlib_source = qlib_cache
+
+        qlib_target = os.path.expanduser(f"~/.qlib/qlib_data/{qlib_target_name}")
+        if os.path.isdir(qlib_source):
+            # 修复过期 symlink：若指向错误路径则重建
+            need_create = False
+            if os.path.islink(qlib_target):
+                current_target = os.readlink(qlib_target)
+                if os.path.abspath(current_target) != os.path.abspath(qlib_source):
+                    logger.info("[%s] Replacing stale symlink: %s -> %s (was %s)",
+                                self.market, qlib_target, qlib_source, current_target)
+                    os.unlink(qlib_target)
+                    need_create = True
+            elif os.path.isdir(qlib_target):
+                # 真实目录而非 symlink，rename 后建 symlink
+                backup = qlib_target + "_backup"
+                logger.info("[%s] Replacing real directory with symlink: %s -> %s (backup: %s)",
+                            self.market, qlib_target, qlib_source, backup)
+                try:
+                    if os.path.exists(backup):
+                        shutil.rmtree(backup)
+                    os.rename(qlib_target, backup)
+                    need_create = True
+                except Exception as e:
+                    logger.warning("[%s] Failed to replace directory with symlink: %s", self.market, e)
+            else:
+                need_create = True
+
+            if need_create:
+                try:
+                    os.makedirs(os.path.dirname(qlib_target), exist_ok=True)
+                    os.symlink(qlib_source, qlib_target)
+                    logger.info("[%s] Created symlink: %s -> %s", self.market, qlib_target, qlib_source)
+                except Exception as e:
+                    logger.warning("[%s] Failed to create Qlib symlink: %s", self.market, e)
+
+        # A 股：生成 base_factors.json 供 RD-Agent LLM 参考
+        if self.market == "a_share" and hasattr(self.adapter, "generate_base_factors_json"):
+            data_dir = os.path.join(base_dir, "git_ignore_folder", "factor_implementation_source_data")
+            os.makedirs(data_dir, exist_ok=True)
+            bf_path = self.adapter.generate_base_factors_json(data_dir)
+            if bf_path:
+                self._base_features_path = data_dir
+                logger.info("[%s] base_factors.json ready at %s", self.market, data_dir)
+            else:
+                self._base_features_path = None
+        else:
+            self._base_features_path = None
+
+    def _copy_h5_source(self, source_all, target_all, source_debug, target_debug):
+        """从预生成的 h5 文件复制。"""
+        for target, source in [(target_all, source_all), (target_debug, source_debug)]:
             if not os.path.exists(source):
                 logger.warning("[%s] Source data file not found: %s", self.market, source)
                 continue
@@ -268,17 +380,148 @@ class RDLoopWrapper:
                 except Exception as e:
                     logger.warning("[%s] Failed to copy data file to %s: %s", self.market, target, e)
 
-        # Ensure Qlib provider_uri data is available at ~/.qlib/qlib_data/<market>
-        qlib_source = market_cfg["qlib_source"]
-        qlib_target_name = market_cfg["qlib_target_name"]
-        qlib_target = os.path.expanduser(f"~/.qlib/qlib_data/{qlib_target_name}")
-        if os.path.isdir(qlib_source) and not os.path.exists(qlib_target):
+    @staticmethod
+    def _resolve_quantdb_dir() -> str | None:
+        """解析 QuantDB 数据目录，返回存在的路径或 None。"""
+        env_dir = os.getenv("QM_QUANTDB_DATA_DIR", "").strip()
+        candidates = [env_dir] if env_dir else []
+        candidates += ["/data/quantdb", "/app/data/quantdb"]
+        for d in candidates:
+            if d and os.path.isdir(d):
+                return d
+        return None
+
+    def _generate_h5_from_parquet(self, quantdb_dir: str, output_path: str, *, debug: bool = False) -> bool:
+        """从 QuantDB parquet 生成 RD-Agent 期望的 daily_pv.h5 文件。
+
+        H5 格式:
+        - Key: "data"
+        - Index: MultiIndex [datetime, instrument]
+        - Columns: ["$open", "$high", "$low", "$close", "$volume", "$factor"]
+        - instrument 格式: Qlib 格式 sh600036
+
+        Returns:
+            True if h5 file was generated/already current, False on failure.
+        """
+        if os.path.exists(output_path):
+            # 检查 parquet 最新日期是否比 h5 新
             try:
-                os.makedirs(os.path.dirname(qlib_target), exist_ok=True)
-                os.symlink(qlib_source, qlib_target)
-                logger.info("[%s] Created symlink: %s -> %s", self.market, qlib_target, qlib_source)
-            except Exception as e:
-                logger.warning("[%s] Failed to create Qlib symlink: %s", self.market, e)
+                h5_mtime = os.path.getmtime(output_path)
+                kline_dir = os.path.join(quantdb_dir, "1_kline_data", "daily_forward")
+                if os.path.isdir(kline_dir):
+                    partitions = [d for d in os.listdir(kline_dir) if d.startswith("dt=")]
+                    if partitions:
+                        latest_dt = max(partitions)
+                        latest_parquet = os.path.join(kline_dir, latest_dt, "data.parquet")
+                        if os.path.exists(latest_parquet) and os.path.getmtime(latest_parquet) > h5_mtime:
+                            logger.info("[%s] Parquet newer than h5, regenerating: %s", self.market, output_path)
+                        else:
+                            return True
+                    else:
+                        return True
+                else:
+                    return True
+            except Exception:
+                return True
+
+        try:
+            from backend.services.engine.data_platform.quantdb_hub import QuantDBDataHub
+            hub = QuantDBDataHub(quantdb_dir)
+            if not hub.available:
+                logger.error("[%s] QuantDBDataHub not available for h5 generation", self.market)
+                return False
+
+            # 获取股票列表
+            df_stocks = hub.fetch_stock_list()
+            if df_stocks.empty:
+                logger.error("[%s] No stock list from QuantDB", self.market)
+                return False
+
+            symbol_col = "Symbol" if "Symbol" in df_stocks.columns else "symbol"
+            symbols = df_stocks[symbol_col].dropna().unique()
+
+            if debug:
+                # Debug 模式：只取少量 symbol
+                symbols = symbols[:50]
+
+            import numpy as np
+
+            # 批量读取：一次查全部 symbol，避免逐股票 N 次分区扫描
+            # （早期实现对 ~5400 只股票各查 2 次，单次生成需 40 分钟以上）
+            df = hub.fetch_daily_kline_batch(
+                [str(s) for s in symbols], date(2020, 1, 1), date(2026, 12, 31), adjust="qfq"
+            )
+            if df is None or df.empty:
+                logger.error("[%s] No K-line data read from QuantDB", self.market)
+                return False
+            df_unadj = hub.fetch_daily_kline_batch(
+                [str(s) for s in symbols], date(2020, 1, 1), date(2026, 12, 31), adjust="none"
+            )
+
+            # 前复权价可能为负（高分红股票多年除权后 qfq 价转负），会污染 Qlib 因子
+            # 计算，这里整体剔除这些行。
+            valid = df["close"].to_numpy(dtype="float64") > 0
+            dropped = int((~valid).sum())
+            if dropped:
+                logger.warning(
+                    "[%s] Dropped %d rows with non-positive qfq close (negative 前复权价)",
+                    self.market,
+                    dropped,
+                )
+                df = df.loc[valid].reset_index(drop=True)
+            if df.empty:
+                logger.error("[%s] No positive-price K-line rows from QuantDB", self.market)
+                return False
+
+            # 按 (symbol, trade_date) 对齐不复权收盘价以计算 $factor
+            if df_unadj is not None and not df_unadj.empty:
+                unadj = df_unadj[["symbol", "trade_date", "close"]].rename(
+                    columns={"close": "_close_unadj"}
+                )
+                df = df.merge(unadj, on=["symbol", "trade_date"], how="left")
+                factor = np.where(
+                    df["_close_unadj"].to_numpy(dtype="float64", na_value=0.0) > 0,
+                    df["close"].to_numpy(dtype="float64")
+                    / df["_close_unadj"].to_numpy(dtype="float64", na_value=1.0),
+                    1.0,
+                )
+            else:
+                factor = np.ones(len(df))
+
+            instruments = [self._to_qlib_symbol(str(s)) for s in df["symbol"]]
+            combined = pd.DataFrame(
+                {
+                    "$open": df["open"].to_numpy(dtype="float64"),
+                    "$high": df["high"].to_numpy(dtype="float64"),
+                    "$low": df["low"].to_numpy(dtype="float64"),
+                    "$close": df["close"].to_numpy(dtype="float64"),
+                    "$volume": df["volume"].to_numpy(dtype="float64"),
+                    "$factor": factor,
+                },
+                index=pd.MultiIndex.from_arrays(
+                    [pd.to_datetime(df["trade_date"]), instruments],
+                    names=["datetime", "instrument"],
+                ),
+            )
+            combined = combined.sort_index()
+
+            os.makedirs(os.path.dirname(output_path), exist_ok=True)
+            combined.to_hdf(output_path, key="data", mode="w")
+            logger.info("[%s] Generated h5 from parquet: %s (%d rows)", self.market, output_path, len(combined))
+            return True
+
+        except Exception as exc:
+            logger.error("[%s] Failed to generate h5 from parquet: %s", self.market, exc)
+            return False
+
+    @staticmethod
+    def _to_qlib_symbol(symbol: str) -> str:
+        """suffix 格式 600036.SH -> Qlib 格式 sh600036。"""
+        s = symbol.strip()
+        if "." in s:
+            code, exchange = s.split(".", 1)
+            return f"{exchange.lower()}{code}"
+        return s.lower()
 
     @property
     def is_running(self) -> bool:

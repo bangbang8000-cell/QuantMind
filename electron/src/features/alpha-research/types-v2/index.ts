@@ -13,6 +13,50 @@ export type ExecutionPhase =
 // Factor quality level
 export type FactorQuality = 'high' | 'medium' | 'low';
 
+// Stock universe identifier (QuantDB index constituents)
+export type UniverseId =
+  | 'csi300'
+  | 'csi500'
+  | 'csi1000'
+  | 'sse50'
+  | 'gem'
+  | 'star'
+  | 'csi800'
+  | 'all_a';
+
+// Stock universe metadata from /universes API
+export interface UniverseInfo {
+  id: UniverseId;
+  name: string;
+  indexSymbol: string | null;
+  stockCount: number;
+}
+
+// L1 factor category from /factor-categories API
+export interface FactorCategory {
+  id: string;
+  name: string;
+  featureCount: number;
+  sampleFeatures: string[];
+}
+
+// QuantDB data availability summary from /data-summary API
+export interface DataSummary {
+  available: boolean;
+  dateRange?: {
+    start: string;
+    end: string;
+    tradingDays: number;
+  };
+  universes?: Record<string, { count: number; indexSymbol: string | null }>;
+  stockCount?: number;
+  datasets?: Record<
+    string,
+    { columns: number; categories?: string[]; categoryCount?: number }
+  >;
+  error?: string;
+}
+
 // Task configuration
 export interface TaskConfig {
   // Basic configuration
@@ -30,6 +74,9 @@ export interface TaskConfig {
 
   // Mining market (multi-market support)
   miningMarket?: 'a_share' | 'crypto' | 'hong_kong' | 'us_stock';
+
+  // Stock universe for mining and backtesting
+  universe?: UniverseId;
 
   // Data source selection
   dataSource?: 'qlib_bin' | 'parquet' | 'pg';
@@ -137,6 +184,7 @@ export interface Factor {
   factorDescription: string;
   quality: FactorQuality;
   market?: string;  // a_share, crypto, hong_kong, us_stock
+  universe?: string;  // csi300, csi500, csi1000, sse50, gem, star, csi800, all_a
 
   // Backtest metrics
   ic: number;

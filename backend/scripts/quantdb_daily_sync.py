@@ -111,7 +111,8 @@ def _make_client():
 SYNC_WORKERS = 8
 
 # SDK 把同步状态库放在 ~/.quantdb_state/，文件名由 save_dir 路径生成。
-_STATE_DIR = Path(os.path.expanduser("~/.quantdb_state"))
+# 容器内需挂载此目录（docker-compose 里已配置 volume）。
+_STATE_DIR = Path(os.getenv("QUANTDB_STATE_DIR", str(Path.home() / ".quantdb_state")))
 
 
 def _state_path() -> Path:
@@ -148,6 +149,11 @@ def _is_patch_key(key: str) -> bool:
     return "/patches/" in key or key.startswith("releases/")
 
 
+def _is_partition_file(path: Path) -> bool:
+    """判断是否为 V2 分区文件 (dt=YYYYMMDD/data.parquet)。"""
+    return "/dt=" in str(path) and path.name == "data.parquet"
+
+
 def _download_object(client, dataset: str, cat_id: str, key: str, target: Path, layout: str):
     """下载单个对象，返回 (sha256, md5, size)。不校验服务端声明的 size。"""
     params = {"category_id": cat_id, "sub_category": dataset, "layout": layout}
@@ -178,11 +184,14 @@ def _download_object(client, dataset: str, cat_id: str, key: str, target: Path, 
 
 
 def _sync_v2_dataset(client, state, cat_id: str, dataset: str) -> tuple[int, int]:
-    """同步 V2 分区数据集。跳过 patches，不校验服务端 size 声明。"""
+    """同步 V2 分区数据集。跳过 patches，不校验服务端 size 声明。
+
+    先走 releases 增量，再用 manifest 补漏——服务端可能已将新数据写入 manifest
+    但尚未发布 release，导致 releases-only 同步漏掉最新交易日。
+    """
+    # ---- Phase 1: releases 增量 ----
     data = client._get("/api/v1/data/releases", {"datasets": dataset, "after_release": ""})
     releases = data.get("releases", [])
-    if not releases:
-        return 0, 0
 
     # 同一 key 可被多份 manifest 引用，以 cursor 序列中最新一份为准。
     latest: dict[str, dict] = {}
@@ -192,6 +201,27 @@ def _sync_v2_dataset(client, state, cat_id: str, dataset: str) -> tuple[int, int
             if _is_patch_key(key):
                 continue
             latest[key] = obj
+
+    # ---- Phase 2: manifest 补漏 ----
+    try:
+        manifest = client.query_manifest(category_id=cat_id, sub_category=dataset)
+        if manifest:
+            for obj in manifest:
+                key = obj.get("key", "")
+                if not key or _is_patch_key(key):
+                    continue
+                if key not in latest:
+                    latest[key] = obj
+            if manifest and len(latest) > (sum(len(r.get("objects", [])) for r in releases) if releases else 0):
+                log.info("[V2] %s: manifest 补漏，releases %d → 合计 %d",
+                         dataset,
+                         sum(len(r.get("objects", [])) for r in releases),
+                         len(latest))
+    except Exception as exc:
+        log.warning("[V2] %s: manifest 补漏查询失败（不影响 releases 数据）: %s", dataset, str(exc)[:120])
+
+    if not latest:
+        return 0, 0
 
     pending = []
     for key, obj in latest.items():
@@ -231,10 +261,11 @@ def _sync_v2_dataset(client, state, cat_id: str, dataset: str) -> tuple[int, int
             if done % 200 == 0:
                 log.info("[V2] %s: %d/%d", dataset, done, len(pending))
 
-    state.execute(
-        "INSERT OR REPLACE INTO releases(dataset,release_id) VALUES(?,?)",
-        (dataset, releases[-1]["release_id"]),
-    )
+    if releases:
+        state.execute(
+            "INSERT OR REPLACE INTO releases(dataset,release_id) VALUES(?,?)",
+            (dataset, releases[-1]["release_id"]),
+        )
     state.commit()
     log.info("[V2] %s: 下载 %d, 失败 %d", dataset, done, errors)
     return done, errors
@@ -249,11 +280,16 @@ def _sync_v1_dataset(client, state, cat_id: str, dataset: str) -> tuple[int, int
     pending = []
     for obj in manifest:
         key = obj["key"]
+        remote_etag = (obj.get("etag") or "").strip('"')
         rel_path = obj.get("relative_path") or key
         target = QUANTDB_DATA_DIR / rel_path
-        row = state.execute("SELECT path FROM objects WHERE key=?", (key,)).fetchone()
-        if row and Path(row[0]).exists() and Path(row[0]).stat().st_size > 0:
-            continue
+        row = state.execute("SELECT etag, path FROM objects WHERE key=?", (key,)).fetchone()
+        if row:
+            local_etag = (row[0] or "").strip('"')
+            local_path = row[1]
+            # ETag 未变且文件存在 → 跳过
+            if local_etag and local_etag == remote_etag and local_path and Path(local_path).exists() and Path(local_path).stat().st_size > 0:
+                continue
         pending.append((key, obj, target))
 
     if not pending:
@@ -719,6 +755,7 @@ def run_daily_sync(
     skip_parquet: bool = False,
     skip_pg: bool = False,
     skip_qlib: bool = False,
+    skip_snapshot: bool = False,
     full: bool = False,
     dry_run: bool = False,
 ) -> dict:
@@ -728,6 +765,7 @@ def run_daily_sync(
         "parquet": None,
         "pg_fill": None,
         "qlib_cache": None,
+        "feature_snapshot": None,
     }
 
     # Phase 1: sync parquet
@@ -756,9 +794,107 @@ def run_daily_sync(
         log.info("=== Phase 3: Update Qlib cache ===")
         result["qlib_cache"] = update_qlib_cache()
 
+    # Phase 4: generate feature snapshot for current year
+    if not skip_snapshot:
+        log.info("=== Phase 4: Generate feature snapshot ===")
+        try:
+            from backend.scripts.generate_feature_snapshots import _build_snapshot
+            year = date.today().year
+            snap = _build_snapshot(year)
+            if snap:
+                result["feature_snapshot"] = snap
+                log.info("Feature snapshot: year=%d rows=%s", year, snap.get("row_count"))
+            else:
+                result["feature_snapshot"] = {"status": "skipped", "reason": "no_data"}
+        except Exception as exc:
+            log.warning("Feature snapshot failed: %s", exc)
+            result["feature_snapshot"] = {"status": "error", "reason": str(exc)}
+
     result["finished"] = datetime.now().isoformat()
     log.info("Daily sync complete")
     return result
+
+
+def repair_partitions(datasets: list[dict] | None = None, recent_days: int = 30) -> dict:
+    """扫描并修复残缺的分区文件。
+
+    对每个 V2 分区数据集，只检查最近 recent_days 天的分区文件，
+    如果行数 < 同数据集最近 5 日平均行数的 60%，标记为残缺并删除状态库记录，
+    下次同步时重下。历史数据不修（早期股票数量少是正常的）。
+    """
+    import duckdb
+    from datetime import timedelta
+
+    if datasets is None:
+        datasets = V2_DATASETS
+
+    cutoff = date.today() - timedelta(days=recent_days)
+    cutoff_int = int(cutoff.strftime("%Y%m%d"))
+
+    state = _open_state()
+    results = {"scanned": 0, "repaired": 0, "details": []}
+
+    for ds in datasets:
+        sub = ds["sub_category"]
+        ds_dir = QUANTDB_DATA_DIR / ds["dir"] / sub
+        if not ds_dir.exists():
+            continue
+
+        # 收集最近 recent_days 的分区文件
+        partitions = []
+        for p in sorted(ds_dir.glob("dt=*")):
+            try:
+                dt_val = int(p.name[3:])
+            except ValueError:
+                continue
+            if dt_val < cutoff_int:
+                continue
+            pq = p / "data.parquet"
+            if pq.exists() and pq.stat().st_size > 0:
+                partitions.append((p.name, pq))
+
+        if len(partitions) < 3:
+            continue
+
+        results["scanned"] += len(partitions)
+
+        # 用最近 5 个分区的行数作为基准
+        recent = partitions[-5:]
+        try:
+            con = duckdb.connect()
+            recent_counts = []
+            for _, pq in recent:
+                r = con.execute(f"SELECT count(*) FROM read_parquet('{pq}')").fetchone()
+                recent_counts.append(r[0])
+            baseline = sum(recent_counts) / len(recent_counts)
+            con.close()
+        except Exception as exc:
+            log.warning("[REPAIR] %s: 无法读取基准行数: %s", sub, exc)
+            continue
+
+        threshold = baseline * 0.6
+
+        for part_name, pq_path in partitions:
+            try:
+                con = duckdb.connect()
+                count = con.execute(f"SELECT count(*) FROM read_parquet('{pq_path}')").fetchone()[0]
+                con.close()
+            except Exception:
+                continue
+
+            if count < threshold:
+                log.warning("[REPAIR] %s/%s: 残缺 (rows=%d < baseline=%.0f * 0.6=%.0f)",
+                            sub, part_name, count, baseline, threshold)
+                state.execute("DELETE FROM objects WHERE key LIKE ?", (f"%{part_name}%",))
+                pq_path.unlink(missing_ok=True)
+                results["repaired"] += 1
+                results["details"].append({"dataset": sub, "partition": part_name,
+                                           "rows": count, "baseline": baseline})
+
+    state.commit()
+    state.close()
+    log.info("[REPAIR] 扫描 %d, 修复 %d", results["scanned"], results["repaired"])
+    return results
 
 
 def main():
@@ -767,6 +903,7 @@ def main():
     parser.add_argument("--skip-parquet", action="store_true", help="跳过 parquet 同步")
     parser.add_argument("--skip-pg", action="store_true", help="跳过 PG 填充")
     parser.add_argument("--skip-qlib", action="store_true", help="跳过 Qlib 缓存更新")
+    parser.add_argument("--skip-snapshot", action="store_true", help="跳过特征快照生成")
     parser.add_argument("--full", action="store_true", help="全量重灌 PG (从 2016-01-04 起)")
     parser.add_argument("--datasets", type=str, help="指定数据集 (逗号分隔)")
     parser.add_argument("--dry-run", action="store_true", help="仅检查，不下载")
@@ -775,6 +912,11 @@ def main():
         "--reseed-state",
         action="store_true",
         help="用本地已有文件重建 SDK 状态库（换数据目录后必须先跑，否则会全量重下）",
+    )
+    parser.add_argument(
+        "--repair",
+        action="store_true",
+        help="扫描并修复残缺的分区文件（删除后下次同步时重下）",
     )
     args = parser.parse_args()
 
@@ -794,12 +936,22 @@ def main():
         print(json.dumps(summary, indent=2, ensure_ascii=False))
         return 0
 
+    if args.repair:
+        ds_list = None
+        if datasets:
+            all_ds = V2_DATASETS + V1_DATASETS
+            ds_list = [d for d in all_ds if d["sub_category"] in datasets]
+        result = repair_partitions(ds_list)
+        print(json.dumps(result, indent=2, ensure_ascii=False))
+        return 0
+
     result = run_daily_sync(
         parquet_only=args.parquet_only,
         datasets=datasets,
         skip_parquet=args.skip_parquet,
         skip_pg=args.skip_pg,
         skip_qlib=args.skip_qlib,
+        skip_snapshot=args.skip_snapshot,
         full=args.full,
         dry_run=args.dry_run,
     )

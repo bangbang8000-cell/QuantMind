@@ -391,46 +391,31 @@ async def sync_official_data_update(
 
 @router.post(
     "/update-feature-parquet",
-    summary="更新特征快照 Parquet（从 DB 计算全部 51 个模型特征）",
+    summary="更新特征快照（从 QuantDB 生成特征快照 Parquet）",
 )
 async def update_feature_parquet(
-    rebuild: bool = Query(False, description="是否重建全部日期的特征（默认仅补充缺失日期）"),
+    year: int = Query(0, description="指定年份 (默认: 当前年份)"),
     current_user: dict = Depends(require_admin),
 ):
+    """异步提交特征快照生成任务到 Celery，立即返回 task_id。
+
+    使用 generate_feature_snapshots.py 从 QuantDB 直读 daily_backward + features_daily + l1/l2_factors，
+    替代旧版 update_feature_parquet.py（前复权 + PG 依赖）。
     """
-    运行 update_feature_parquet.py 脚本，从 stock_daily_latest 读取 OHLCV 数据，
-    计算全部 51 个模型特征（动量、波动率、流动性、资金流、风格因子等），
-    更新 /app/db/feature_snapshots/model_features_2026.parquet。
-    """
-    _ = current_user
-
-    script_path = Path("/app/backend/scripts/update_feature_parquet.py")
-    if not script_path.exists():
-        raise HTTPException(status_code=404, detail=f"脚本不存在: {script_path}")
-
-    cmd = ["python", str(script_path)]
-    if rebuild:
-        cmd.append("--rebuild")
-
     try:
-        proc = subprocess.run(
-            cmd,
-            cwd="/app",
-            capture_output=True,
-            text=True,
-            timeout=600,
-            check=False,
-        )
+        from backend.services.engine.tasks.celery_tasks import feature_snapshot_task
+
+        task = feature_snapshot_task.delay(year=year)
         return {
-            "success": proc.returncode == 0,
-            "exit_code": proc.returncode,
-            "stdout": proc.stdout[-3000:] if proc.stdout else "",
-            "stderr": proc.stderr[-3000:] if proc.stderr else "",
+            "success": True,
+            "data": {
+                "task_id": task.id,
+                "status": "submitted",
+                "message": f"特征快照生成任务已提交 (task_id={task.id})，后台执行中",
+            },
         }
-    except subprocess.TimeoutExpired:
-        raise HTTPException(status_code=504, detail="特征更新超时（>600s），请稍后重试")
     except Exception as exc:
-        raise HTTPException(status_code=500, detail=str(exc))
+        raise HTTPException(status_code=500, detail=f"failed: {exc}")
 
 
 @router.post(
@@ -830,12 +815,28 @@ async def precheck_inference(
 # ── 滚动回测（模型预测质量评估） ─────────────────────────────────────────
 
 
+class TradingCostParams(BaseModel):
+    """交易成本覆盖参数。留空则回退到模型 metadata.context，再回退 A 股标准费率。"""
+
+    commission_rate: float | None = Field(default=None, description="佣金费率（双边），如 0.00025")
+    stamp_duty: float | None = Field(default=None, description="印花税（仅卖出），如 0.001")
+    transfer_fee: float | None = Field(default=None, description="过户费（沪市），如 0.00001")
+    slippage: float | None = Field(default=None, description="滑点（单边），如 0.001")
+
+    def to_override(self) -> dict[str, float]:
+        return {k: v for k, v in self.model_dump().items() if v is not None}
+
+
 class BacktestRequest(BaseModel):
     model_id: str = Field(..., description="模型ID（目录名）")
     start_date: str = Field(..., description="回测起始日期 YYYY-MM-DD")
     end_date: str = Field(..., description="回测结束日期 YYYY-MM-DD")
     horizon: int = Field(default=10, description="预测周期 T+N（天）")
     sample_interval: int = Field(default=3, description="每隔 N 个交易日采样一次")
+    cost: TradingCostParams | None = Field(default=None, description="交易成本覆盖参数")
+    exclude_limit_moves: bool = Field(
+        default=True, description="剔除信号日触及涨跌停的标的（次日一字板买不进）"
+    )
     model_config = {"protected_namespaces": ()}
 
 
@@ -846,8 +847,8 @@ async def run_model_backtest(
 ):
     """
     对指定模型在历史日期范围内进行滚动回测。
-    每隔 sample_interval 个交易日执行一次推理，对比预测分数与实际 mom_ret_{horizon}d，
-    计算 IC、IC_IR、十分位收益、命中率等指标。
+    每隔 sample_interval 个交易日执行一次推理，对比预测分数与真实的 T+N 前瞻收益
+    （close[T+N]/close[T]-1），计算 IC、IC_IR、扣费后多头超额、Sharpe 等指标。
     """
     import asyncio
 
@@ -915,6 +916,9 @@ async def run_model_backtest(
                 horizon=request.horizon,
                 model_dir=model_dir,
                 data_dir=data_dir,
+                sample_interval=interval,
+                cost_override=request.cost.to_override() if request.cost else None,
+                exclude_limit_moves=request.exclude_limit_moves,
             ),
         )
     except Exception as e:
@@ -929,6 +933,10 @@ class MultiHorizonBacktestRequest(BaseModel):
     end_date: str = Field(..., description="回测结束日期 YYYY-MM-DD")
     horizons: list[int] = Field(default=[1, 5, 10, 20], description="预测周期列表")
     sample_interval: int = Field(default=3, description="每隔 N 个交易日采样一次")
+    cost: TradingCostParams | None = Field(default=None, description="交易成本覆盖参数")
+    exclude_limit_moves: bool = Field(
+        default=True, description="剔除信号日触及涨跌停的标的"
+    )
     model_config = {"protected_namespaces": ()}
 
 
@@ -996,6 +1004,9 @@ async def run_multi_horizon_backtest(
                 horizons=request.horizons,
                 model_dir=model_dir,
                 data_dir=data_dir,
+                sample_interval=interval,
+                cost_override=request.cost.to_override() if request.cost else None,
+                exclude_limit_moves=request.exclude_limit_moves,
             ),
         )
     except Exception as e:
@@ -1113,3 +1124,217 @@ async def delete_backtest_history(
     if not deleted:
         raise HTTPException(status_code=404, detail=f"回测记录 {run_id} 未找到")
     return {"status": "ok", "deleted": run_id}
+
+
+class InferenceBacktestStrategyParams(BaseModel):
+    """选股策略参数（默认值 = 平衡型）。"""
+
+    entry_threshold: float = Field(default=0.09, description="行业avgTop1入场线")
+    exit_threshold: float = Field(default=0.06, description="行业avgTop1空仓线")
+    strong_industry_min: int = Field(default=2, description="强行业数下限")
+    score_min: float = Field(default=0.10, description="个股分数下限")
+    score_max: float = Field(default=0.12, description="个股分数上限")
+    max_hold_days: int = Field(default=5, description="最长持有交易日")
+    take_profit: float = Field(default=0.08, description="止盈比例")
+    stop_loss: float = Field(default=0.05, description="止损比例")
+    max_positions: int = Field(default=5, description="最大持仓数")
+    daily_select_max: int = Field(default=5, description="每日新选股上限")
+    initial_capital: float = Field(default=100_000.0, description="初始资金")
+    main_board_only: bool = Field(default=True, description="仅主板")
+    exclude_limit_moves: bool = Field(default=True, description="剔除涨跌停")
+    exclude_st: bool = Field(default=True, description="剔除ST")
+    use_index_ma20_filter: bool = Field(default=True, description="大盘MA20过滤")
+
+
+class InferenceBacktestRequest(BaseModel):
+    model_id: str = Field(..., description="模型ID")
+    start_date: str = Field(..., description="回测起始日期 YYYY-MM-DD")
+    end_date: str = Field(..., description="回测结束日期 YYYY-MM-DD")
+    signal_mode: str = Field(default="realtime", description="realtime=逐日推理 | stored=读已有信号")
+    strategy: InferenceBacktestStrategyParams = Field(default_factory=InferenceBacktestStrategyParams)
+    model_config = {"protected_namespaces": ()}
+
+
+@router.post("/inference-backtest", summary="推理回测（选股策略事件驱动）")
+async def run_inference_backtest(
+    request: InferenceBacktestRequest,
+    current_user: dict = Depends(require_admin),
+):
+    """
+    基于推理信号 + 选股策略的事件驱动回测。
+
+    signal_mode=stored: 直接读 engine_signal_scores 已有推理信号（快，覆盖有限）。
+    signal_mode=realtime: 逐日跑模型推理生成信号（慢，覆盖任意区间）。
+    """
+    from backend.services.engine.inference.inference_backtest_service import (
+        StrategyConfig,
+        run_inference_backtest,
+    )
+
+    # 构建策略配置
+    s = request.strategy
+    config = StrategyConfig(
+        entry_threshold=s.entry_threshold,
+        exit_threshold=s.exit_threshold,
+        strong_industry_min=s.strong_industry_min,
+        score_min=s.score_min,
+        score_max=s.score_max,
+        max_hold_days=s.max_hold_days,
+        take_profit=s.take_profit,
+        stop_loss=s.stop_loss,
+        max_positions=s.max_positions,
+        daily_select_max=s.daily_select_max,
+        initial_capital=s.initial_capital,
+        main_board_only=s.main_board_only,
+        exclude_limit_moves=s.exclude_limit_moves,
+        exclude_st=s.exclude_st,
+        use_index_ma20_filter=s.use_index_ma20_filter,
+        signal_mode=request.signal_mode,
+    )
+
+    data_dir = Path(os.getcwd()) / "db" / "feature_snapshots"
+
+    # 信号提供者：stored 模式读 engine_signal_scores
+    signal_provider = None
+    if request.signal_mode == "stored":
+        signal_provider = _make_stored_signal_provider(request.model_id)
+
+    try:
+        import asyncio
+
+        result = await asyncio.get_event_loop().run_in_executor(
+            None,
+            lambda: run_inference_backtest(
+                model_id=request.model_id,
+                start_date=request.start_date,
+                end_date=request.end_date,
+                data_dir=data_dir,
+                config=config,
+                signal_provider=signal_provider,
+            ),
+        )
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"推理回测执行失败: {exc}") from exc
+
+    if result.status == "error":
+        raise HTTPException(status_code=400, detail=str(result.errors[0].get("error") if result.errors else "推理回测失败"))
+
+    return _serialize_backtest_result(result)
+
+
+def _make_stored_signal_provider(model_id: str):
+    """stored 模式信号提供者：从 engine_signal_scores 读该模型的已有推理信号。
+
+    一次性预取全部信号到内存 dict（按 trade_date 索引），provider 只查内存。
+    用 psycopg2 同步连接读取，避免在 FastAPI async 事件循环里调用 asyncio.run()
+    （会导致 RuntimeError: asyncio.run() cannot be called from a running event loop）。
+    """
+    import os
+
+    import psycopg2
+
+    conn_params = {
+        "host": os.getenv("DB_HOST", "db"),
+        "port": int(os.getenv("DB_PORT", "5432")),
+        "dbname": os.getenv("DB_NAME", "quantmind"),
+        "user": os.getenv("DB_USER", "quantmind"),
+        "password": os.getenv("DB_PASSWORD", ""),
+    }
+
+    by_date: dict[str, list[dict[str, Any]]] = {}
+    try:
+        conn = psycopg2.connect(**conn_params)
+        try:
+            cur = conn.cursor()
+            cur.execute(
+                """
+                SELECT e.trade_date::text, e.symbol, e.fusion_score AS score
+                FROM engine_signal_scores e
+                JOIN qm_model_inference_runs r ON e.run_id = r.run_id
+                WHERE r.model_id = %s
+                ORDER BY e.trade_date, e.fusion_score DESC
+                """,
+                (model_id,),
+            )
+            for trade_date, symbol, score in cur.fetchall():
+                if score is None:
+                    continue
+                by_date.setdefault(trade_date, []).append(
+                    {"symbol": str(symbol), "score": float(score)}
+                )
+            cur.close()
+        finally:
+            conn.close()
+    except Exception as exc:
+        logger = __import__("logging").getLogger(__name__)
+        logger.warning("预取推理信号失败 (model=%s): %s", model_id, exc)
+
+    def provider(trade_date: str):
+        import pandas as pd
+
+        records = by_date.get(trade_date, [])
+        return pd.DataFrame(records)
+
+    return provider
+
+
+def _serialize_backtest_result(result: Any) -> dict[str, Any]:
+    """序列化回测结果（dataclass → dict，处理 numpy 标量）。"""
+    import numpy as np
+
+    def _clean(v: Any) -> Any:
+        if isinstance(v, (np.floating, np.integer)):
+            return v.item()
+        if isinstance(v, float):
+            return round(v, 6)
+        if isinstance(v, dict):
+            return {k: _clean(val) for k, val in v.items()}
+        if isinstance(v, list):
+            return [_clean(x) for x in v]
+        return v
+
+    return {
+        "status": result.status,
+        "metrics": _clean(result.metrics),
+        "daily_selections": [
+            {
+                "trade_date": ds.trade_date,
+                "market_state": ds.market_state,
+                "industry_avg_top1": round(float(ds.industry_avg_top1), 6),
+                "strong_industry_count": ds.strong_industry_count,
+                "index_above_ma20": ds.index_above_ma20,
+                "selections": [
+                    {
+                        "symbol": p["symbol"],
+                        "score": round(float(p["score"]), 6),
+                        "industry": p["industry"],
+                    }
+                    for p in ds.selections
+                ],
+            }
+            for ds in result.daily_selections
+        ],
+        "trades": [
+            {
+                "date": t.date,
+                "symbol": t.symbol,
+                "name": t.name,
+                "side": t.side,
+                "price": round(float(t.price), 4),
+                "shares": t.shares,
+                "amount": round(float(t.amount), 2),
+                "industry": t.industry,
+                "score": round(float(t.score), 6),
+                "reason": t.reason,
+                "profit_pct": round(float(t.profit_pct), 6),
+                "hold_days": t.hold_days,
+            }
+            for t in result.trades
+        ],
+        "nav_curve": _clean(result.nav_curve),
+        "monthly_returns": _clean(result.monthly_returns),
+        "industry_rotation": result.industry_rotation,
+        "errors": result.errors,
+        "warnings": result.warnings,
+    }
+

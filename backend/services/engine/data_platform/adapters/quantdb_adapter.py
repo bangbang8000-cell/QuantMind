@@ -1,8 +1,8 @@
 """
-QuantDB SDK 数据源适配器
-========================
+QuantDB Remote SDK 数据源适配器
+===============================
 
-封装 quantdb-sdk (pip install quantdb-sdk)，提供：
+封装 quantdb-sdk (pip install quantdb-sdk)，提供远程 API 实时查询：
 - 日线 K 线（前复权/后复权/不复权）
 - Tick 逐笔
 - 股票列表
@@ -11,6 +11,9 @@ QuantDB SDK 数据源适配器
 
 QuantDB 是付费 CDN 数据源，通过 API Key 认证，流量配额制。
 数据以 Parquet 格式经 CDN 两跳 302 分发，SDK 返回 DataFrame。
+
+注意：本地 parquet 数据读取请使用 quantdb_local_adapter (QuantDBLocalAdapter)，
+本适配器仅用于远程 API 实时查询（如当日数据补全、特定 symbol 查询等）。
 """
 
 from __future__ import annotations

@@ -117,6 +117,8 @@ run/*.pid
 .env.local
 .env.*.local
 !.env.example
+# 后台管理页面写入的运行时密钥
+config/runtime.env
 *.pem
 *.key
 .ssh/
@@ -174,10 +176,6 @@ db/db.zip
 *.h5
 *.hdf5
 
-# Embedded git repositories (should be added as submodules if needed)
-/TradingAgents-astock/
-/dexter-finance/
-/openbb-cn/
 docker/torch_wheels/
 
 # Graphify output

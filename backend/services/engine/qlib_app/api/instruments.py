@@ -40,14 +40,17 @@ def _load_qlib_instruments() -> list[dict[str, str]]:
 
     # 获取项目根目录 (app/api -> app -> qlib_service -> backend -> root)
     project_root = Path(__file__).resolve().parent.parent.parent.parent.parent
-    default_path = project_root / "db" / "qlib_data" / "instruments" / "all.txt"
 
-    # 优先使用环境变量
-    qlib_data_path = Path(os.getenv("QLIB_INSTRUMENTS_PATH", str(default_path)))
+    # 优先使用环境变量，然后通过 qlib_paths 统一解析
+    env_path = os.getenv("QLIB_INSTRUMENTS_PATH", "").strip()
+    if env_path:
+        qlib_data_path = Path(env_path)
+    else:
+        from backend.shared.qlib_paths import resolve_qlib_instruments_path
+        qlib_data_path = resolve_qlib_instruments_path()
 
     if not qlib_data_path.exists():
-        # 尝试使用相对路径（如果是docker环境，可能挂载在不同位置）
-        # 这里假设如果绝对路径不存在，可能是在Docker容器内的 /data 目录
+        # 尝试旧路径（Docker 容器内 /data 目录）
         docker_path = Path("/data/qlib_data/instruments/all.txt")
         if docker_path.exists():
             qlib_data_path = docker_path

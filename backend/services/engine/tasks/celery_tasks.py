@@ -739,8 +739,8 @@ def daily_data_sync_task(
     """
     Celery Beat 每日 18:00 自动增量同步全市场数据。
 
-    数据源优先级：investment_data → baostock → akshare → eltdx
-    写入：PostgreSQL stock_daily_latest + Qlib bin + 技术指标校准
+    A 股：QuantDB SDK → parquet → PG stock_daily_latest → Qlib 缓存（单源）
+    HK/US/crypto：investment_data → baostock → akshare → eltdx 多源聚合
     使用 Redis 分布式锁防止并发执行。
     """
     import redis as _redis
@@ -759,9 +759,22 @@ def daily_data_sync_task(
 
     logger.info("[DailySync] 开始: market=%s incremental=%s symbols=%s", market, incremental, symbols[:100])
     try:
+        sym_list = [s.strip() for s in symbols.split(",") if s.strip()] if symbols else None
+
+        if market.upper() == "A":
+            from backend.scripts.quantdb_daily_sync import run_daily_sync
+
+            result = run_daily_sync()
+            logger.info(
+                "[DailySync] QuantDB 完成: parquet=%s pg_rows=%s qlib=%s",
+                (result.get("parquet") or {}).get("total_downloaded"),
+                (result.get("pg_fill") or {}).get("rows"),
+                (result.get("qlib_cache") or {}).get("status"),
+            )
+            return result
+
         from backend.scripts.daily_data_sync import run_sync
 
-        sym_list = [s.strip() for s in symbols.split(",") if s.strip()] if symbols else None
         result = run_sync(
             market=market,
             symbols=sym_list,
@@ -780,7 +793,7 @@ def daily_data_sync_task(
         return result
     except Exception as e:
         logger.exception("[DailySync] 失败: %s", e)
-        return {"status": "failed", "error": str(e)}
+        raise
     finally:
         try:
             rds.delete(lock_key)
@@ -791,6 +804,39 @@ def daily_data_sync_task(
 # ---------------------------------------------------------------------------
 # Strategy Lab daily scan (Day 16)
 # ---------------------------------------------------------------------------
+@celery_app.task(name="engine.tasks.feature_snapshot", max_retries=1, default_retry_delay=120, bind=True)
+def feature_snapshot_task(self, year: int = 0) -> dict[str, Any]:
+    """Celery 任务：从 QuantDB parquet 生成特征快照。
+
+    调用 generate_feature_snapshots._build_snapshot(year)，
+    替代旧的 update_feature_parquet.py 同步 subprocess。
+    """
+    from datetime import date as _date
+
+    target_year = year if year > 0 else _date.today().year
+    logger.info("[FeatureSnapshot] 开始: year=%d task_id=%s", target_year, self.request.id)
+
+    try:
+        from backend.scripts.generate_feature_snapshots import _build_snapshot
+
+        result = _build_snapshot(target_year)
+        if result is None:
+            logger.warning("[FeatureSnapshot] %d 年无数据，跳过", target_year)
+            return {"status": "skipped", "year": target_year, "reason": "no_data"}
+
+        logger.info(
+            "[FeatureSnapshot] 完成: year=%d rows=%s symbols=%s",
+            target_year,
+            result.get("row_count"),
+            result.get("symbol_count"),
+        )
+        return {"status": "success", **result}
+
+    except Exception as e:
+        logger.exception("[FeatureSnapshot] 失败: %s", e)
+        raise
+
+
 @celery_app.task(name="engine.tasks.strategy_lab_daily_scan")
 def strategy_lab_daily_scan(lookback_days: int = 7) -> dict[str, Any]:
     """Run all watched Strategy Lab scripts and persist today's signals."""

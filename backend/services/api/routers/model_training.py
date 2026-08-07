@@ -24,6 +24,7 @@ from backend.services.api.routers.admin.model_management import (
 )
 from backend.services.api.training_shap_summary import read_shap_summary_rows, to_int_or
 from backend.services.api.user_app.middleware.auth import get_current_user
+from backend.services.engine.inference.batch_aggregator import aggregate_batch
 from backend.services.engine.inference.batch_orchestrator import (
     batch_inference_orchestrator,
 )
@@ -41,6 +42,101 @@ from backend.shared.trading_calendar import calendar_service
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
+
+
+def compute_market_signals(signals: list[dict[str, Any]]) -> dict[str, Any]:
+    """从已标注行业/板块的信号列表计算市场信号指标。
+
+    输入 signals 需含 fusion_score、industry（申万128行业）、board（5大板块）、symbol。
+    输出与详情接口 summary 中的市场信号字段一致，供列表接口复用：
+      - board_top1_avg         5大板块各自最高分取平均（市场广度）
+      - industry_top1_count    Top20 涉及的申万行业数（覆盖行业数）
+      - industry_avg_top1      Top20 行业 Top1 分数均值
+      - strong_industry_count  Top1 ≥ 0.10 的行业个数
+      - market_signal          入场判断（可入场 / 谨慎 / 空仓观望）
+    """
+    if not signals:
+        return {}
+
+    # 板块 Top1（5大板块各自最高分取平均）
+    board_top1: dict[str, float] = {}
+    for item in signals:
+        score = item.get("fusion_score")
+        if score is None:
+            continue
+        board = item.get("board") or "其他"
+        try:
+            fscore = float(score)
+        except (TypeError, ValueError):
+            continue
+        if board not in board_top1 or fscore > board_top1[board]:
+            board_top1[board] = fscore
+    top1_scores = [board_top1[b] for b in ("沪主板", "深主板", "中小板", "创业板", "科创板") if b in board_top1]
+    board_top1_avg = round(sum(top1_scores) / len(top1_scores), 4) if top1_scores else None
+
+    # 行业信号：Top20 股票按申万行业分组取各行业 Top1
+    sorted_signals = sorted(
+        (it for it in signals if it.get("fusion_score") is not None),
+        key=lambda it: float(it["fusion_score"]),
+        reverse=True,
+    )
+    top20 = sorted_signals[:20]
+    industry_top1: dict[str, dict[str, Any]] = {}
+    for it in top20:
+        ind = str(it.get("industry") or "").strip()
+        if not ind:
+            continue
+        fscore = float(it["fusion_score"])
+        cur = industry_top1.get(ind)
+        if cur is None or fscore > cur["top1_score"]:
+            industry_top1[ind] = {
+                "industry": ind,
+                "top1_score": fscore,
+                "top1_symbol": str(it.get("symbol") or ""),
+                "top1_name": str(it.get("stock_name") or ""),
+            }
+
+    industry_stats = sorted(industry_top1.values(), key=lambda x: x["top1_score"], reverse=True)
+    ind_top1_values = [float(x["top1_score"]) for x in industry_stats]
+    industry_avg_top1 = round(sum(ind_top1_values) / len(ind_top1_values), 4) if ind_top1_values else None
+
+    # 阈值自适应：融合模型分数是截面百分位 [-1,1]（高分常见 0.8+），
+    # 硬编码 0.09/0.06/0.10 会把所有行业判为强信号或全部弱信号。
+    # 检测实际分数范围，wide scale 时用 80/50 分位数作为强/弱阈值。
+    _all_scores = [float(it["fusion_score"]) for it in signals if it.get("fusion_score") is not None]
+    _is_wide = bool(_all_scores) and (max(_all_scores) > 0.35 or min(_all_scores) < -0.35)
+    if _is_wide and _all_scores:
+        _sn = len(_all_scores)
+        _ss = sorted(_all_scores)
+        strong_thr = float(_ss[max(0, min(_sn - 1, int(0.80 * (_sn - 1))))])
+        entry_thr = float(_ss[max(0, min(_sn - 1, int(0.50 * (_sn - 1))))])
+        empty_thr = float(_ss[max(0, min(_sn - 1, int(0.30 * (_sn - 1))))])
+    else:
+        strong_thr, entry_thr, empty_thr = 0.10, 0.09, 0.06
+    strong_industry_count = sum(1 for x in industry_stats if float(x["top1_score"]) >= strong_thr)
+
+    # 入场判断（平衡型默认）：avg Top1 ≥ entry_thr 且 强行业数 ≥ 2
+    entry_signal = "strong" if (industry_avg_top1 is not None and industry_avg_top1 >= entry_thr and strong_industry_count >= 2) else "weak"
+    if industry_avg_top1 is not None and industry_avg_top1 < empty_thr:
+        entry_signal = "empty"  # 绝对空仓
+
+    return {
+        "board_top1_avg": board_top1_avg,
+        "industry_top1": industry_stats,
+        "industry_top1_count": len(industry_stats),
+        "industry_avg_top1": industry_avg_top1,
+        "strong_industry_count": strong_industry_count,
+        "market_signal": {
+            "avg_top1": industry_avg_top1,
+            "strong_industry_count": strong_industry_count,
+            "entry_signal": entry_signal,
+            "entry_threshold": entry_thr,
+            "empty_threshold": empty_thr,
+            "strong_threshold": strong_thr,
+            "score_scale": "wide" if _is_wide else "normal",
+            "label": "可入场" if entry_signal == "strong" else ("空仓观望" if entry_signal == "empty" else "谨慎"),
+        },
+    }
 
 # models/production 目录（相对项目根）
 _PROJECT_ROOT = Path(__file__).resolve().parents[4]
@@ -136,6 +232,20 @@ class SetDefaultModelRequest(BaseModel):
     model_id: str
 
 
+class EnsembleCreateRequest(BaseModel):
+    source_model_ids: list[str] = Field(
+        ..., min_length=2, description="源模型 ID 列表（至少 2 个）"
+    )
+    display_name: str = Field(default="", description="融合模型显示名（可选，自动生成）")
+    weight_strategy: str = Field(
+        default="equal",
+        description="权重策略: equal / icir / manual",
+    )
+    manual_weights: dict[str, float] | None = Field(
+        default=None, description="manual 策略下各源模型权重"
+    )
+
+
 class SetStrategyBindingRequest(BaseModel):
     model_id: str
 
@@ -152,7 +262,19 @@ class InferenceSettingsRequest(BaseModel):
 
 class BatchInferenceRequest(BaseModel):
     model_id: str
-    anchor_date: date = Field(..., description="锚定交易日 YYYY-MM-DD")
+    mode: str = Field(
+        default="lookback",
+        description="lookback=锚定日回溯窗口；range=显式日期区间",
+    )
+    anchor_date: date | None = Field(
+        default=None, description="锚定交易日 YYYY-MM-DD（lookback 模式用）"
+    )
+    start_date: date | None = Field(
+        default=None, description="区间起始日 YYYY-MM-DD（range 模式用）"
+    )
+    end_date: date | None = Field(
+        default=None, description="区间结束日 YYYY-MM-DD（range 模式用）"
+    )
     window_days: int | None = Field(
         default=None,
         ge=1,
@@ -162,7 +284,10 @@ class BatchInferenceRequest(BaseModel):
     top_k: int = Field(default=20, ge=1, le=500, description="榜单 Top-K")
     side: str = Field(default="both", description="long | short | both")
     reuse_existing: bool = Field(
-        default=True, description="复用已有的当日成功推理结果"
+        default=True, description="复用已有的当日成功推理结果（断点续跑）"
+    )
+    concurrency: int = Field(
+        default=1, ge=1, le=5, description="并发执行的交易日数（每个为独立子进程）"
     )
 
 
@@ -1213,19 +1338,40 @@ def _get_model_horizon_days(model_dir: Path, default: int = 10) -> int:
     return default
 
 
-@router.post("/inference/batch", status_code=202, summary="提交批量多日推理（用户态）")
+@router.post("/inference/batch", status_code=202, summary="提交批量推理（用户态）")
 async def submit_batch_inference(
     payload: BatchInferenceRequest,
     current_user: dict[str, Any] = Depends(get_current_user),
 ):
-    """提交后立即返回 batch_id，逐日推理在后台执行，通过 GET 轮询进度。"""
+    """提交后立即返回 batch_id，逐日推理在后台执行，通过 GET 轮询进度。
+
+    mode=lookback：锚定日回溯 N 个交易日；
+    mode=range：显式日期区间内逐个交易日推理。
+    """
     tenant_id, user_id = _owner_scope(current_user)
     requested_model_id, resolved = await _resolve_requested_model(current_user, payload.model_id)
     model_dir = Path(resolved.storage_path)
     horizon_days = _get_model_horizon_days(model_dir)
-    # 默认 N = H：所有信号梯队在锚定日仍持有中，等价于每日 1/H 建仓的滚动组合
-    window_days = int(payload.window_days or horizon_days)
     market = _get_model_market(model_dir)
+
+    mode = (payload.mode or "lookback").lower()
+    if mode == "range":
+        if payload.start_date is None or payload.end_date is None:
+            raise HTTPException(status_code=400, detail="range 模式必须提供 start_date 与 end_date")
+        if payload.start_date > payload.end_date:
+            raise HTTPException(status_code=400, detail="start_date 不能晚于 end_date")
+        anchor_date: date | None = None
+        start_date: date | None = payload.start_date
+        end_date: date | None = payload.end_date
+        window_days: int | None = None
+    else:
+        if payload.anchor_date is None:
+            raise HTTPException(status_code=400, detail="lookback 模式必须提供 anchor_date")
+        anchor_date = payload.anchor_date
+        start_date = None
+        end_date = None
+        # 默认 N = H：所有信号梯队在锚定日仍持有中，等价于每日 1/H 建仓的滚动组合
+        window_days = int(payload.window_days or horizon_days)
 
     async def _execute_day(*, requested_date: date, batch_id: str) -> dict[str, Any]:
         return await _execute_single_day_inference(
@@ -1243,17 +1389,22 @@ async def submit_batch_inference(
             tenant_id=tenant_id,
             user_id=user_id,
             model_id=requested_model_id,
-            anchor_date=payload.anchor_date,
+            anchor_date=anchor_date,
+            start_date=start_date,
+            end_date=end_date,
             window_days=window_days,
             horizon_days=horizon_days,
             market=market,
             params={
                 "model_id": requested_model_id,
                 "effective_model_id": resolved.effective_model_id,
+                "mode": mode,
                 "top_k": int(payload.top_k),
                 "side": payload.side,
             },
-            execute_day=_execute_day,            reuse_existing=bool(payload.reuse_existing),
+            execute_day=_execute_day,
+            reuse_existing=bool(payload.reuse_existing),
+            concurrency=int(payload.concurrency),
         )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
@@ -1300,11 +1451,240 @@ async def delete_batch_inference(
     current_user: dict[str, Any] = Depends(get_current_user),
 ):
     tenant_id, user_id = _owner_scope(current_user)
+    # 若该批次正在运行，先取消后台任务，再删除记录
+    batch = await model_inference_batch_persistence.get_batch(
+        batch_id=batch_id, tenant_id=tenant_id, user_id=user_id
+    )
+    if batch:
+        try:
+            await batch_inference_orchestrator.cancel(
+                tenant_id=tenant_id,
+                user_id=user_id,
+                model_id=str(batch.get("model_id") or ""),
+            )
+        except Exception:
+            pass
     result = await model_inference_batch_persistence.delete_batch(
         batch_id=batch_id, tenant_id=tenant_id, user_id=user_id
     )
     if not result.get("deleted"):
         raise HTTPException(status_code=404, detail="批次不存在或已删除")
+    return result
+
+
+# engine_signal_scores.trade_date 存的是信号生效日 T+1，不是数据日 T。这里用
+# member_runs 里的 (run_id -> data_trade_date) 映射回 T，才能与用户输入的锚定日、
+# 以及 load_forward_labels 的 signal_date 口径对齐。
+_BATCH_PANEL_SQL = """
+WITH members AS (
+    SELECT * FROM unnest(
+        CAST(:run_ids AS TEXT[]),
+        CAST(:data_dates AS DATE[])
+    ) AS t(run_id, data_trade_date)
+),
+scored AS (
+    SELECT
+        m.data_trade_date,
+        e.symbol,
+        e.fusion_score,
+        e.signal_side,
+        RANK() OVER (
+            PARTITION BY m.data_trade_date ORDER BY e.fusion_score DESC
+        ) AS rk,
+        PERCENT_RANK() OVER (
+            PARTITION BY m.data_trade_date ORDER BY e.fusion_score ASC
+        ) AS pct,
+        CASE
+            WHEN UPPER(e.symbol) ~ '^[0-9]{6}[.](SH|SZ|BJ)$'
+                THEN UPPER(e.symbol)
+            WHEN UPPER(e.symbol) ~ '^(SH|SZ|BJ)[0-9]{6}$'
+                THEN SUBSTRING(UPPER(e.symbol), 3)
+                     || '.' || SUBSTRING(UPPER(e.symbol), 1, 2)
+            WHEN e.symbol ~ '^[0-9]{6}$'
+                THEN e.symbol || CASE
+                    WHEN LEFT(e.symbol, 2) IN ('60', '68', '90') THEN '.SH'
+                    WHEN LEFT(e.symbol, 2) IN ('00', '30', '20') THEN '.SZ'
+                    WHEN LEFT(e.symbol, 2) IN ('83', '43', '87', '88') THEN '.BJ'
+                    ELSE ''
+                END
+            WHEN e.symbol ~ '^[0-9]{4,5}$'
+                THEN LPAD(e.symbol, 5, '0') || '.HK'
+            ELSE UPPER(e.symbol)
+        END AS canonical_symbol
+    FROM members m
+    JOIN engine_signal_scores e ON e.run_id = m.run_id
+    WHERE e.tenant_id = :tenant_id
+      AND e.user_id = :user_id
+)
+SELECT
+    s.data_trade_date AS trade_date,
+    s.symbol,
+    s.fusion_score,
+    s.signal_side,
+    s.rk,
+    s.pct,
+    COALESCE(st.name, '') AS stock_name
+FROM scored s
+LEFT JOIN stocks st
+    ON st.symbol = s.canonical_symbol
+    OR st.symbol = s.symbol
+ORDER BY s.data_trade_date, s.rk
+"""
+
+
+async def _load_batch_panel(
+    *,
+    batch: dict[str, Any],
+    tenant_id: str,
+    user_id: str,
+) -> tuple[Any, list[str]]:
+    """取批次全窗口面板，rk/pct 用窗口函数现算。
+
+    不读 engine_signal_scores.score_rank：该列虽存在但推理脚本写入恒为 NULL。
+    """
+    import pandas as pd
+
+    members = [
+        m
+        for m in (batch.get("member_runs") or [])
+        if m.get("status") == "completed" and m.get("run_id")
+    ]
+    dates = sorted({str(m["trade_date"]) for m in members})
+    if not members:
+        return pd.DataFrame(
+            columns=[
+                "trade_date",
+                "symbol",
+                "fusion_score",
+                "signal_side",
+                "rk",
+                "pct",
+                "stock_name",
+            ]
+        ), dates
+
+    async with get_session(read_only=True) as session:
+        rows = (
+            (
+                await session.execute(
+                    text(_BATCH_PANEL_SQL),
+                    {
+                        "run_ids": [str(m["run_id"]) for m in members],
+                        "data_dates": [
+                            date.fromisoformat(str(m["trade_date"])) for m in members
+                        ],
+                        "tenant_id": tenant_id,
+                        "user_id": user_id,
+                    },
+                )
+            )
+            .mappings()
+            .all()
+        )
+
+    df = pd.DataFrame([dict(r) for r in rows])
+    if not df.empty:
+        df["trade_date"] = df["trade_date"].astype(str).str.slice(0, 10)
+    return df, dates
+
+
+@router.get(
+    "/inference/batch/{batch_id}/aggregate", summary="批量推理跨日聚合统计（用户态）"
+)
+async def get_batch_inference_aggregate(
+    batch_id: str,
+    top_k: int = Query(20, ge=1, le=500, description="榜单 Top-K"),
+    decay: float = Query(0.85, gt=0.0, le=1.0, description="时间衰减系数"),
+    lam: float = Query(0.5, ge=0.0, le=2.0, description="波动惩罚系数 λ"),
+    mu: float = Query(0.1, ge=0.0, le=2.0, description="趋势加成系数 μ"),
+    min_coverage: float = Query(0.6, ge=0.0, le=1.0, description="最低覆盖率"),
+    consensus_band: float = Query(
+        0.95,
+        ge=0.5,
+        le=1.0,
+        description="共识分位带门槛（scale-free，替代绝对 Top-K 命中）",
+    ),
+    side: str = Query("both", description="long | short | both"),
+    current_user: dict[str, Any] = Depends(get_current_user),
+):
+    """聚合是纯函数：改参数只重算不重跑推理。默认参数的结果会缓存进 agg_json。"""
+    tenant_id, user_id = _owner_scope(current_user)
+    batch = await model_inference_batch_persistence.get_batch(
+        batch_id=batch_id, tenant_id=tenant_id, user_id=user_id
+    )
+    if not batch:
+        raise HTTPException(status_code=404, detail="批次不存在")
+    if batch.get("status") not in ("completed", "partial"):
+        raise HTTPException(
+            status_code=409,
+            detail=f"批次尚未就绪（当前状态 {batch.get('status')}），请等待推理完成",
+        )
+
+    # Bump when aggregator adds/removes output fields — stale cache silently drops new keys
+    _AGG_CACHE_VERSION = 2
+
+    params = batch.get("params") or {}
+    is_default = (
+        top_k == int(params.get("top_k") or 20)
+        and side == str(params.get("side") or "both")
+        and decay == 0.85
+        and lam == 0.5
+        and mu == 0.1
+        and min_coverage == 0.6
+        and consensus_band == 0.95
+    )
+    cached_agg = batch.get("agg_json") if is_default else None
+    if (
+        isinstance(cached_agg, dict)
+        and cached_agg.get("_cache_version") == _AGG_CACHE_VERSION
+    ):
+        cached = dict(cached_agg)
+        cached["cached"] = True
+        return cached
+
+    panel, dates = await _load_batch_panel(
+        batch=batch, tenant_id=tenant_id, user_id=user_id
+    )
+    try:
+        result = aggregate_batch(
+            panel,
+            dates=dates,
+            horizon_days=int(batch.get("horizon_days") or 10),
+            top_k=top_k,
+            decay=decay,
+            lam=lam,
+            mu=mu,
+            min_coverage=min_coverage,
+            consensus_band=consensus_band,
+            side=side,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    result["batch_id"] = batch_id
+    result["model_id"] = batch.get("model_id")
+    result["anchor_date"] = batch.get("anchor_date")
+    result["batch_status"] = batch.get("status")
+    result["cached"] = False
+    # 窗口口径（锚定日回退、保留期告警等）在提交时算好，聚合层看不到，需合并回来
+    window_meta = params.get("window_meta")
+    if isinstance(window_meta, dict):
+        merged = list(result.get("meta", {}).get("warnings") or [])
+        for warning in window_meta.get("warnings") or []:
+            if warning not in merged:
+                merged.append(warning)
+        result.setdefault("meta", {})["warnings"] = merged
+        result["meta"]["anchor_adjusted"] = window_meta.get("anchor_adjusted")
+        result["meta"]["requested_anchor_date"] = window_meta.get(
+            "requested_anchor_date"
+        )
+        result["meta"]["span_calendar_days"] = window_meta.get("span_calendar_days")
+
+    if is_default:
+        result["_cache_version"] = _AGG_CACHE_VERSION
+        await model_inference_batch_persistence.save_aggregate(
+            batch_id=batch_id, agg_payload=result
+        )
     return result
 
 
@@ -1319,7 +1699,7 @@ async def list_model_inference_runs(
     current_user: dict[str, Any] = Depends(get_current_user),
 ):
     tenant_id, user_id = _owner_scope(current_user)
-    return await model_inference_persistence.list_runs(
+    result = await model_inference_persistence.list_runs(
         tenant_id=tenant_id,
         user_id=user_id,
         model_id=model_id,
@@ -1329,6 +1709,59 @@ async def list_model_inference_runs(
         page=page,
         page_size=page_size,
     )
+    # 为每条 run 附带市场信号指标（板块avg Top1 / 行业avg Top1 / 强行业数 / 覆盖行业数）
+    # 只对 completed 批次计算；信号批量读取，避免 N+1 查询。
+    completed_items = [it for it in result.get("items", []) if it.get("status") == "completed"]
+    if completed_items:
+        run_ids = [str(it["run_id"]) for it in completed_items]
+        from backend.services.engine.inference.shenwan_industry import load_shenwan_industry_map
+        from backend.shared.stock_utils import StockCodeUtil
+
+        industry_map = load_shenwan_industry_map()
+        signals_by_run: dict[str, list[dict[str, Any]]] = {rid: [] for rid in run_ids}
+        try:
+            async with get_session(read_only=True) as session:
+                rows = (
+                    await session.execute(
+                        text(
+                            """
+                            SELECT symbol, fusion_score, run_id,
+                                   CASE
+                                       WHEN LEFT(symbol, 3) = '688' THEN '科创板'
+                                       WHEN LEFT(symbol, 3) IN ('300', '301') THEN '创业板'
+                                       WHEN LEFT(symbol, 3) IN ('002', '003') THEN '中小板'
+                                       WHEN LEFT(symbol, 3) IN ('000', '001') THEN '深主板'
+                                       WHEN LEFT(symbol, 1) IN ('4', '8', '9') THEN '北交所'
+                                       WHEN LEFT(symbol, 2) = '60' THEN '沪主板'
+                                       ELSE '其他'
+                                   END AS board
+                            FROM engine_signal_scores
+                            WHERE run_id = ANY(:run_ids)
+                              AND tenant_id = :tenant_id AND user_id = :user_id
+                            """
+                        ),
+                        {
+                            "run_ids": run_ids,
+                            "tenant_id": tenant_id,
+                            "user_id": user_id,
+                        },
+                    )
+                ).mappings().all()
+            for row in rows:
+                signals_by_run.setdefault(str(row["run_id"]), []).append(dict(row))
+        except Exception as exc:  # pragma: no cover
+            logger.warning("列表加载信号市场指标失败: %s", exc)
+
+        run_by_id = {str(it["run_id"]): it for it in completed_items}
+        for rid, sigs in signals_by_run.items():
+            it = run_by_id.get(rid)
+            if not it or not sigs:
+                continue
+            # 标注申万行业
+            for s in sigs:
+                s["industry"] = industry_map.get(StockCodeUtil.to_suffix(str(s.get("symbol") or ""))) or ""
+            it.update(compute_market_signals(sigs))
+    return result
 
 
 @router.get("/inference/runs/{run_id}", summary="查看模型推理结果明细（用户态）")
@@ -1372,7 +1805,35 @@ async def get_model_inference_run_detail(
                                         WHEN ess.symbol ~ '^[0-9]{4,5}$'
                                             THEN LPAD(ess.symbol, 5, '0') || '.HK'
                                         ELSE UPPER(ess.symbol)
-                                    END AS canonical_symbol
+                                    END AS canonical_symbol,
+                                    CASE
+                                        WHEN UPPER(ess.symbol) ~ '^[0-9]{6}[.](SH|SZ|BJ)$'
+                                            THEN UPPER(ess.symbol)
+                                        WHEN UPPER(ess.symbol) ~ '^(SH|SZ|BJ)[0-9]{6}$'
+                                            THEN SUBSTRING(UPPER(ess.symbol), 3)
+                                                 || '.' || SUBSTRING(UPPER(ess.symbol), 1, 2)
+                                        WHEN ess.symbol ~ '^[0-9]{6}$'
+                                            THEN ess.symbol || CASE
+                                                WHEN LEFT(ess.symbol, 2) IN ('60', '68', '90') THEN '.SH'
+                                                WHEN LEFT(ess.symbol, 2) IN ('00', '30', '20') THEN '.SZ'
+                                                WHEN LEFT(ess.symbol, 2) IN ('83', '43', '87', '88') THEN '.BJ'
+                                                ELSE ''
+                                            END
+                                        WHEN ess.symbol ~ '^[0-9]{4,5}$'
+                                            THEN LPAD(ess.symbol, 5, '0') || '.HK'
+                                        ELSE UPPER(ess.symbol)
+                                    END,
+                                    -- A股板块（按代码前缀，与选股策略口径一致）
+                                    -- 北交所：4/8 开头（43/83/87/88）及 9 开头（920 新段）
+                                    CASE
+                                        WHEN LEFT(ess.symbol, 3) = '688' THEN '科创板'
+                                        WHEN LEFT(ess.symbol, 3) IN ('300', '301') THEN '创业板'
+                                        WHEN LEFT(ess.symbol, 3) IN ('002', '003') THEN '中小板'
+                                        WHEN LEFT(ess.symbol, 3) IN ('000', '001') THEN '深主板'
+                                        WHEN LEFT(ess.symbol, 1) IN ('4', '8', '9') THEN '北交所'
+                                        WHEN LEFT(ess.symbol, 2) IN ('60') THEN '沪主板'
+                                        ELSE '其他'
+                                    END AS board
                                 FROM engine_signal_scores ess
                                 WHERE ess.run_id = :run_id
                                   AND ess.tenant_id = :tenant_id
@@ -1388,6 +1849,7 @@ async def get_model_inference_run_detail(
                                 ess.expected_price,
                                 ess.quality,
                                 ess.created_at,
+                                ess.board,
                                 COALESCE(s.name, '') AS stock_name
                             FROM scored ess
                             LEFT JOIN stocks s
@@ -1420,6 +1882,386 @@ async def get_model_inference_run_detail(
     if run.get("status") == "completed" and not signals:
         summary["signal_rows_error"] = "signal rows unavailable"
 
+    # ── 板块/行业标注 + 5大板块 Top1 统计 ──
+    if signals:
+        try:
+            from backend.services.engine.inference.shenwan_industry import load_shenwan_industry_map
+            from backend.shared.stock_utils import StockCodeUtil
+
+            industry_map = load_shenwan_industry_map()
+            for item in signals:
+                sym = str(item.get("symbol") or "").strip()
+                suffix = StockCodeUtil.to_suffix(sym)
+                item["industry"] = industry_map.get(suffix) or ""
+        except Exception as exc:  # pragma: no cover - 行业标注失败不影响主流程
+            logger.warning("标注申万行业失败: %s", exc)
+
+        # ── 市值标注（QuantDB features_daily parquet）──
+        # 市值分档：微盘<30亿 / 小盘30-100亿 / 中盘100-300亿 / 大盘300-1000亿 / 超大盘>1000亿
+        try:
+            import duckdb as _duckdb
+
+            data_date = run.get("data_trade_date") or run.get("inference_date")
+            _d = str(data_date)[:10] if data_date else ""
+            dt_int = int(_d.replace("-", "")) if _d else 0
+            if dt_int:
+                qdb_dir = os.getenv("QM_QUANTDB_DATA_DIR", "/data/quantdb")
+                fpath = f"{qdb_dir}/6_ml_datasets/features_daily/**/*.parquet"
+                mv_rows = _duckdb.connect().execute(
+                    f"""
+                    SELECT symbol, total_mv, float_mv
+                    FROM read_parquet('{fpath}', hive_partitioning=true)
+                    WHERE dt = {dt_int}
+                    """
+                ).fetchdf()
+                mv_map: dict[str, dict] = {}
+                for _, row in mv_rows.iterrows():
+                    raw_sym = str(row["symbol"]).strip().upper()
+                    # 归一化为 6 位纯数字，与信号表 symbol（纯数字）对齐
+                    key = raw_sym.split(".")[0].replace("SH", "").replace("SZ", "").replace("BJ", "")
+                    mv_map[key] = {
+                        "total_mv": float(row["total_mv"]) if row["total_mv"] is not None and str(row["total_mv"]) not in ("nan", "None") else None,
+                        "float_mv": float(row["float_mv"]) if row["float_mv"] is not None and str(row["float_mv"]) not in ("nan", "None") else None,
+                    }
+                for item in signals:
+                    sym = str(item.get("symbol") or "").strip().upper()
+                    key = sym.split(".")[0].replace("SH", "").replace("SZ", "").replace("BJ", "")
+                    mv = mv_map.get(key) or {}
+                    tm = mv.get("total_mv")
+                    item["total_mv"] = tm
+                    if tm is not None:
+                        # 单位：parquet 为元，转亿
+                        yiyi = tm / 1e8
+                        item["market_cap_yi"] = round(yiyi, 2)
+                        if yiyi < 30:
+                            item["market_cap_tier"] = "微盘"
+                        elif yiyi < 100:
+                            item["market_cap_tier"] = "小盘"
+                        elif yiyi < 300:
+                            item["market_cap_tier"] = "中盘"
+                        elif yiyi < 1000:
+                            item["market_cap_tier"] = "大盘"
+                        else:
+                            item["market_cap_tier"] = "超大盘"
+        except Exception as exc:  # pragma: no cover - 市值标注失败不影响主流程
+            logger.warning("标注市值失败: %s", exc)
+
+        board_top1: dict[str, float] = {}
+        board_top1_symbol: dict[str, str] = {}
+        board_top1_name: dict[str, str] = {}
+        for item in signals:
+            score = item.get("fusion_score")
+            if score is None:
+                continue
+            board = item.get("board") or "其他"
+            try:
+                fscore = float(score)
+            except (TypeError, ValueError):
+                continue
+            if board not in board_top1 or fscore > board_top1[board]:
+                board_top1[board] = fscore
+                board_top1_symbol[board] = str(item.get("symbol") or "")
+                board_top1_name[board] = str(item.get("stock_name") or "")
+
+        board_stats = [
+            {
+                "board": board,
+                "top1_score": board_top1[board],
+                "top1_symbol": board_top1_symbol[board],
+                "top1_name": board_top1_name[board],
+            }
+            for board in ("沪主板", "深主板", "中小板", "创业板", "科创板")
+            if board in board_top1
+        ]
+        summary["board_top1"] = board_stats
+        # 市场信号指标（板块avg Top1 / 行业avg Top1 / 强行业数 / 覆盖行业数 / 入场判断）
+        summary.update(compute_market_signals(signals))
+
+        # ── 个股分数区间统计（决定买哪只）──
+        # 区间规则来自选股策略（普通模型，分数 ~0~0.3）：
+        #   <0.10     不买（信号太弱）
+        #   0.10-0.12 黄金区间（首选）｜0.10-0.11 假信号区，须配合行业 avgTop1 ≥ 0.09
+        #   0.12-0.15 可选（主板优先，警惕追高）
+        #   0.15-0.20 谨慎（仅强市有效）
+        #   ≥0.20     极谨慎（趋势加速，样本少）
+        #
+        # 融合模型分数是截面百分位 [-1,1]（0.9+ 常见），硬编码阈值全部失效。
+        # 自适应：检测分数范围，若明显超出普通模型区间（max > 0.35），改用
+        # 基于实际分布的分位数分桶，保证每个桶都有意义、高分始终在最上层。
+        score_buckets: list[dict[str, Any]] = []
+        bucket_cfg = [
+            ("lt_010", "< 0.10", "不买", lambda s: s < 0.10, "slate"),
+            ("gold", "0.10 - 0.12", "黄金区间 · 首选", lambda s: 0.10 <= s < 0.12, "emerald"),
+            ("opt_012_015", "0.12 - 0.15", "可选 · 主板优先", lambda s: 0.12 <= s < 0.15, "amber"),
+            ("warn_015_020", "0.15 - 0.20", "谨慎 · 仅强市", lambda s: 0.15 <= s < 0.20, "orange"),
+            ("gte_020", "≥ 0.20", "极谨慎 · 样本少", lambda s: s >= 0.20, "rose"),
+        ]
+        _is_wide_scale = bool(fusion_scores) and (max(fusion_scores) > 0.35 or min(fusion_scores) < -0.35)
+        if _is_wide_scale:
+            # 融合模型：基于分数分布的分位数分桶（从高分到低分）
+            _n = len(fusion_scores)
+            _sorted = sorted(fusion_scores)
+            _thr = {p: _sorted[max(0, int(p * (_n - 1)))] for p in (0.80, 0.60, 0.40, 0.20)}
+            bucket_cfg = [
+                ("lt_010", f"< {_thr[0.20]:.3f}", "低分区间", lambda s: s < _thr[0.20], "slate"),
+                ("gold", f"{_thr[0.20]:.3f} - {_thr[0.40]:.3f}", "中低区间", lambda s: _thr[0.20] <= s < _thr[0.40], "emerald"),
+                ("opt_012_015", f"{_thr[0.40]:.3f} - {_thr[0.60]:.3f}", "中高分区间", lambda s: _thr[0.40] <= s < _thr[0.60], "amber"),
+                ("warn_015_020", f"{_thr[0.60]:.3f} - {_thr[0.80]:.3f}", "高分区", lambda s: _thr[0.60] <= s < _thr[0.80], "orange"),
+                ("gte_020", f"≥ {_thr[0.80]:.3f}", "最高分区 · 首选", lambda s: s >= _thr[0.80], "rose"),
+            ]
+        for key, label, action, predicate, color in bucket_cfg:
+            matches = [it for it in signals if it.get("fusion_score") is not None and predicate(float(it["fusion_score"]))]
+            score_buckets.append({
+                "key": key,
+                "label": label,
+                "action": action,
+                "color": color,
+                "count": len(matches),
+                "symbols": [str(it.get("symbol") or "") for it in matches],
+            })
+        # 假信号区（黄金区间内 0.10-0.11，单看胜率低，须配合行业确认）— 仅普通模型有意义
+        if _is_wide_scale:
+            fake_signal = []
+        else:
+            fake_signal = [it for it in signals if it.get("fusion_score") is not None and 0.10 <= float(it["fusion_score"]) < 0.11]
+        summary["score_buckets"] = score_buckets
+        summary["gold_zone_count"] = next((b["count"] for b in score_buckets if b["key"] == "gold"), 0)
+        summary["fake_signal_count"] = len(fake_signal)
+        summary["is_wide_scale"] = bool(_is_wide_scale)
+        summary["fake_signal_symbols"] = [str(it.get("symbol") or "") for it in fake_signal]
+
+        # ── 3天分数趋势（决定买点）──
+        # 对当前批次 T，取同一模型最近两个历史批次日（T-2 / T-1）的同股分数，判断过去3天走势：
+        #   先升后降  T-2 < T-1 > T   → 最佳买点（T-1 是峰值）
+        #   连续上升  T-2 < T-1 < T   → 过热，不追（强市除外）
+        #   连续下降  T-2 > T-1 > T   → 信号衰退，不买
+        # 全部用已发生分数，最新批次也能算出完整趋势。
+        try:
+            data_date = run.get("data_trade_date") or run.get("inference_date") or run.get("prediction_trade_date")
+            model_id = run.get("model_id")
+            if data_date and model_id:
+                from datetime import date as _date, timedelta as _td
+                if not isinstance(data_date, _date):
+                    data_date = _date.fromisoformat(str(data_date)[:10])
+                async with get_session(read_only=True) as trend_session:
+                    trend_rows = (
+                        await trend_session.execute(
+                            text(
+                                """
+                                SELECT r.data_trade_date, r.run_id
+                                FROM qm_model_inference_runs r
+                                WHERE r.model_id = :p_model
+                                  AND r.status = 'completed'
+                                  AND r.tenant_id = :p_tenant
+                                  AND r.user_id = :p_user
+                                  AND r.data_trade_date < :p_date
+                                ORDER BY r.data_trade_date DESC
+                                LIMIT 2
+                                """
+                            ),
+                            {"p_model": model_id, "p_date": data_date, "p_tenant": tenant_id, "p_user": user_id},
+                        )
+                    ).mappings().all()
+
+                # trend_rows 按日期升序 → [T-2, T-1]（不足两个时 T-2 为 None）
+                trend_rows.sort(key=lambda tr: tr["data_trade_date"])
+                prev2_rid = trend_rows[0]["run_id"] if len(trend_rows) >= 2 else None
+                prev1_rid = trend_rows[-1]["run_id"] if trend_rows else None
+
+                score_lookup: dict[str, dict[str, float]] = {}
+                for label, rid in (("prev2", prev2_rid), ("prev1", prev1_rid)):
+                    if not rid:
+                        continue
+                    async with get_session(read_only=True) as ss:
+                        srows = (
+                            await ss.execute(
+                                text(
+                                    """
+                                    SELECT symbol, fusion_score FROM engine_signal_scores
+                                    WHERE run_id = :rid AND tenant_id = :tenant_id AND user_id = :user_id
+                                    """
+                                ),
+                                {"rid": rid, "tenant_id": tenant_id, "user_id": user_id},
+                            )
+                        ).mappings().all()
+                    score_lookup[label] = {str(r["symbol"]): (float(r["fusion_score"]) if r["fusion_score"] is not None else None) for r in srows}
+
+                trend_counter: dict[str, int] = {"先升后降": 0, "连续上升": 0, "连续下降": 0, "其他": 0, "数据不足": 0}
+                for item in signals:
+                    sym = str(item.get("symbol") or "").strip()
+                    cur = item.get("fusion_score")
+                    if cur is None:
+                        item["trend"] = "数据不足"
+                        trend_counter["数据不足"] += 1
+                        continue
+                    cur = float(cur)
+                    prev1 = (score_lookup.get("prev1") or {}).get(sym)  # T-1
+                    prev2 = (score_lookup.get("prev2") or {}).get(sym)  # T-2
+                    item["prev_score"] = prev1   # 保留字段名兼容前端 tooltip（T-1）
+                    item["prev2_score"] = prev2  # T-2
+                    item["next_score"] = None
+                    if prev1 is None or prev2 is None:
+                        # 缺历史分数：只有单日方向（当前 vs T-1）
+                        if prev1 is not None:
+                            item["trend"] = "上升" if cur > prev1 else ("下降" if cur < prev1 else "持平")
+                        else:
+                            item["trend"] = "数据不足"
+                    else:
+                        if prev2 < prev1 and prev1 > cur:
+                            item["trend"] = "先升后降"
+                        elif prev2 < prev1 < cur:
+                            item["trend"] = "连续上升"
+                        elif prev2 > prev1 > cur:
+                            item["trend"] = "连续下降"
+                        else:
+                            item["trend"] = "其他"
+                    trend_counter[item["trend"]] = trend_counter.get(item["trend"], 0) + 1
+                summary["trend_stats"] = trend_counter
+        except Exception as exc:  # pragma: no cover - 趋势统计失败不影响主流程
+            logger.warning("3天趋势统计失败: %s", exc)
+
+        # ── 大盘均线过滤（系统风险）──
+        # 上证指数跌破 20 日均线 → 强制空仓（不管模型给多高分）。
+        try:
+            from datetime import date as _date, timedelta as _td
+            from backend.services.engine.data_platform.quantdb_hub import QuantDBDataHub
+
+            ref_date = run.get("data_trade_date") or run.get("inference_date") or run.get("prediction_trade_date")
+            if ref_date:
+                end = ref_date if isinstance(ref_date, _date) else _date.fromisoformat(str(ref_date)[:10])
+                start = end - _td(days=60)
+                hub = QuantDBDataHub()
+                idx = hub.fetch_index_kline("000001.SH", start, end)
+                ma_cfg = {
+                    "ma5": 5, "ma10": 10, "ma20": 20, "ma30": 30, "ma60": 60,
+                }
+                idx_meta: dict[str, Any] = {"symbol": "000001.SH", "dates": [], "close": None, "mavg": {}}
+                if not idx.empty:
+                    df = idx.sort_values("dt")
+                    closes = df["close"].astype(float).tolist()
+                    dates = [str(x)[:10] for x in df["dt"].tolist()]
+                    idx_meta["dates"] = dates[-1:] if dates else []
+                    idx_meta["close"] = closes[-1] if closes else None
+                    for name, win in ma_cfg.items():
+                        if len(closes) >= win:
+                            idx_meta["mavg"][name] = round(sum(closes[-win:]) / win, 2)
+                        else:
+                            idx_meta["mavg"][name] = None
+                    close = idx_meta["close"]
+                    ma20 = idx_meta["mavg"].get("ma20")
+                    idx_meta["below_ma20"] = bool(close is not None and ma20 is not None and close < ma20)
+                    idx_meta["ref_date"] = str(end)[:10]
+                summary["market_ma_filter"] = idx_meta
+        except Exception as exc:  # pragma: no cover - 均线过滤失败不影响主流程
+            logger.warning("大盘均线计算失败: %s", exc)
+
+        # ── 负分分析（做空/回避 决策矩阵）──
+        # 研究结论（2024-2026, 612交易日, 328万条）：
+        #   做空只做微盘/小盘 + 分数≤-0.15；大盘/超大盘/科创板负分是错杀；
+        #   极端负分≤-0.20 微盘最危险（-0.25 → 下跌77.7%）；轻负分>-0.06 无信息。
+        #   行业：银行/半导体/元器件抗跌（错杀）；酒店餐饮/渔业/焦炭/酿酒下跌持续（做空首选）。
+        try:
+            neg_items = [
+                it for it in signals
+                if it.get("fusion_score") is not None and float(it["fusion_score"]) < 0
+            ]
+            short_candidates: list[dict[str, Any]] = []
+            mistake_candidates: list[dict[str, Any]] = []
+            extreme_neg: list[dict[str, Any]] = []
+            for it in neg_items:
+                score = float(it["fusion_score"])
+                tier = it.get("market_cap_tier") or "未知"
+                # 做空候选：微盘/小盘 + 分数 ≤ -0.15
+                if tier in ("微盘", "小盘") and score <= -0.15:
+                    short_candidates.append(it)
+                # 错杀候选：大盘/超大盘 负分
+                if tier in ("大盘", "超大盘"):
+                    mistake_candidates.append(it)
+                # 极端负分
+                if score <= -0.20:
+                    extreme_neg.append(it)
+
+            # 负分区间分布
+            neg_buckets = {
+                "轻负分 (>-0.06)": sum(1 for it in neg_items if float(it["fusion_score"]) > -0.06),
+                "中负分 (-0.06~-0.15)": sum(1 for it in neg_items if -0.15 <= float(it["fusion_score"]) <= -0.06),
+                "极端负分 (≤-0.15)": sum(1 for it in neg_items if float(it["fusion_score"]) < -0.15),
+            }
+            neg_by_tier: dict[str, int] = {}
+            for it in neg_items:
+                tier = it.get("market_cap_tier") or "未知"
+                neg_by_tier[tier] = neg_by_tier.get(tier, 0) + 1
+
+            # 负分行业统计（做空 vs 抗跌）
+            def _top_industry(fn) -> list[dict[str, Any]]:
+                agg: dict[str, dict[str, Any]] = {}
+                for it in neg_items:
+                    ind = it.get("industry") or "未知"
+                    if not ind:
+                        continue
+                    sc = float(it["fusion_score"])
+                    a = agg.setdefault(ind, {"industry": ind, "count": 0, "sum_score": 0.0})
+                    a["count"] += 1
+                    a["sum_score"] += sc
+                rows = []
+                for a in agg.values():
+                    rows.append({"industry": a["industry"], "count": a["count"],
+                                 "avg_score": round(a["sum_score"] / a["count"], 4)})
+                rows.sort(key=lambda x: x["count"], reverse=True)
+                return fn(rows)[:8]
+
+            # 做空首选行业：负分股票最多的行业（下跌持续）
+            short_industries = _top_industry(lambda rows: sorted(rows, key=lambda x: x["count"], reverse=True))
+            # 抗跌行业：银行/半导体/元器件 等负分但实际错杀的
+            resistant_industries = [
+                r for r in _top_industry(lambda rows: rows)
+                if r["industry"] in ("银行", "半导体", "元件", "光学光电子", "通信设备", "电子")
+            ]
+
+            summary["negative_analysis"] = {
+                "negative_count": len(neg_items),
+                "negative_pct": round(len(neg_items) / max(len(signals), 1) * 100, 1),
+                "neg_buckets": neg_buckets,
+                "neg_by_tier": neg_by_tier,
+                "short_candidates_count": len(short_candidates),
+                "short_candidates": [
+                    {"symbol": it.get("symbol"), "name": it.get("stock_name"), "score": float(it["fusion_score"]),
+                     "tier": it.get("market_cap_tier"), "industry": it.get("industry")}
+                    for it in sorted(short_candidates, key=lambda x: float(x["fusion_score"]))[:10]
+                ],
+                "mistake_candidates_count": len(mistake_candidates),
+                "mistake_candidates": [
+                    {"symbol": it.get("symbol"), "name": it.get("stock_name"), "score": float(it["fusion_score"]),
+                     "tier": it.get("market_cap_tier"), "industry": it.get("industry")}
+                    for it in sorted(mistake_candidates, key=lambda x: float(x["fusion_score"]))[:10]
+                ],
+                "extreme_neg_count": len(extreme_neg),
+                "short_industries": short_industries,
+                "resistant_industries": resistant_industries,
+            }
+            # 每条信号打负分标签（前端高亮/筛选用）
+            short_syms = {str(it.get("symbol")) for it in short_candidates}
+            mistake_syms = {str(it.get("symbol")) for it in mistake_candidates}
+            extreme_syms = {str(it.get("symbol")) for it in extreme_neg}
+            # 抗跌行业（负分但常被错杀）：银行/半导体/元器件/光学光电子/通信设备/电子
+            resistant_set = {r["industry"] for r in resistant_industries}
+            for it in signals:
+                sym = str(it.get("symbol") or "")
+                if sym in extreme_syms:
+                    it["negative_tag"] = "极端负分"
+                elif sym in short_syms:
+                    it["negative_tag"] = "做空候选"
+                elif sym in mistake_syms:
+                    it["negative_tag"] = "错杀候选"
+                elif it.get("fusion_score") is not None and float(it["fusion_score"]) < 0:
+                    ind = str(it.get("industry") or "")
+                    if ind in resistant_set:
+                        it["negative_tag"] = "抗跌行业"
+                    else:
+                        it["negative_tag"] = "负分"
+        except Exception as exc:  # pragma: no cover - 负分分析失败不影响主流程
+            logger.warning("负分分析失败: %s", exc)
+
     return {
         "summary": summary,
         "page": 1,
@@ -1439,6 +2281,171 @@ async def delete_model_inference_run(
     if not delete.get("deleted"):
         raise HTTPException(status_code=404, detail="推理批次不存在或已删除")
     return delete
+
+
+@router.get("/inference/stock/{symbol}/history", summary="查询单只股票历史推理分数（用户态）")
+async def get_stock_inference_history(
+    symbol: str,
+    days: int = Query(180, ge=7, le=7300, description="回溯天数"),
+    model_id: str | None = Query(None, description="按模型过滤，缺省返回所有模型的最新批次"),
+    current_user: dict[str, Any] = Depends(get_current_user),
+):
+    """返回某只股票的历史推理分数（按交易日去重取最新批次），供 K 线叠加。
+
+    model_id 为空时：同一天多个 run（不同模型）只取最新一个，混合展示；
+    model_id 指定时：只返回该模型的历史分数（排名在该模型内计算）。
+    """
+    tenant_id, user_id = _owner_scope(current_user)
+    from datetime import timedelta as _td
+    from backend.shared.stock_utils import StockCodeUtil
+
+    sym = str(symbol).strip().upper()
+    cutoff = date.today() - _td(days=days)
+
+    # 归一化 symbol：兼容纯数字 / SH前缀 / suffix 三种格式
+    norm = sym
+    if "." not in norm and not norm.startswith(("SH", "SZ", "BJ")):
+        norm = StockCodeUtil.to_suffix(norm)
+
+    params: dict[str, Any] = {"sym": sym, "cutoff": cutoff, "tenant_id": tenant_id, "user_id": user_id}
+    model_filter_sql = ""
+    if model_id:
+        model_filter_sql = "AND r.model_id = :model_id"
+        params["model_id"] = model_id
+
+    async with get_session(read_only=True) as session:
+        rows = (
+            await session.execute(
+                text(
+                    f"""
+                    WITH ranked AS (
+                        SELECT e.trade_date, e.symbol, e.fusion_score, e.signal_side,
+                               -- 排名必须在同一批 run 内计算：同一天可能存在多个 run（不同模型/批次），
+                               -- 若 PARTITION BY 只按 trade_date，会把多个 run 的信号混在一起，导致排名虚高
+                               -- （如当天两个 run 各 5000+ 只，混算后某股排名能到 8000+）。
+                               -- 因此按 (trade_date, run_id) 分组，各自内部排名；最后 rn=1 取最新批次那条。
+                               RANK() OVER (PARTITION BY e.trade_date, e.run_id ORDER BY e.fusion_score DESC) AS day_rank,
+                               e.run_id, e.created_at,
+                               r.data_trade_date,
+                               r.model_id AS signal_model_id,
+                               ROW_NUMBER() OVER (PARTITION BY e.trade_date, e.symbol ORDER BY e.created_at DESC) AS rn
+                        FROM engine_signal_scores e
+                        LEFT JOIN qm_model_inference_runs r ON r.run_id = e.run_id
+                        WHERE e.trade_date >= :cutoff
+                          AND e.tenant_id = :tenant_id AND e.user_id = :user_id
+                          {model_filter_sql}
+                    )
+                    SELECT trade_date, fusion_score, signal_side, day_rank AS score_rank, run_id, created_at, data_trade_date, signal_model_id
+                    FROM ranked WHERE rn = 1 AND symbol = :sym
+                    ORDER BY trade_date DESC
+                    """
+                ),
+                params,
+            )
+        ).mappings().all()
+
+    # 按交易日去重（同一天多批次只取最新 created_at 的一条）
+    by_date: dict[str, dict[str, Any]] = {}
+    for row in rows:
+        d = str(row["trade_date"])
+        if d not in by_date:
+            by_date[d] = dict(row)
+            by_date[d]["trade_date"] = d
+            if by_date[d].get("data_trade_date") is not None:
+                by_date[d]["data_trade_date"] = str(by_date[d]["data_trade_date"])
+            if by_date[d].get("created_at") is not None:
+                by_date[d]["created_at"] = by_date[d]["created_at"].isoformat()
+
+    items = sorted(by_date.values(), key=lambda x: x["trade_date"], reverse=True)
+
+    # 附带股票名称/板块/行业（从 stocks 表）
+    stock_meta: dict[str, Any] = {}
+    try:
+        async with get_session(read_only=True) as s2:
+            r2 = (
+                await s2.execute(
+                    text("SELECT name, industry, sector FROM stocks WHERE symbol = :sym"),
+                    {"sym": norm},
+                )
+            ).mappings().first()
+        if r2:
+            stock_meta = dict(r2)
+    except Exception:  # pragma: no cover
+        pass
+
+    # 板块：按代码前缀（A股5大板块 + 北交所）
+    code = re.sub(r"[^0-9]", "", sym)
+    if code.startswith("688"):
+        board = "科创板"
+    elif code.startswith("30"):
+        board = "创业板"
+    elif code.startswith(("002", "003")):
+        board = "中小板"
+    elif code.startswith(("000", "001")):
+        board = "深主板"
+    elif code.startswith("60"):
+        board = "沪主板"
+    elif code.startswith(("4", "8", "9")):
+        board = "北交所"
+    else:
+        board = "其他"
+
+    # 该股历史信号涉及的模型列表（供前端下拉选择）
+    models: list[dict[str, Any]] = []
+    try:
+        # 只查该股涉及的去重模型ID（避免 join qm_user_models 大表慢查询）
+        async with get_session(read_only=True) as s3:
+            mrows = (
+                await s3.execute(
+                    text(
+                        """
+                        SELECT DISTINCT r.model_id
+                        FROM engine_signal_scores e
+                        LEFT JOIN qm_model_inference_runs r ON r.run_id = e.run_id
+                        WHERE e.symbol = :sym AND e.trade_date >= :cutoff
+                          AND e.tenant_id = :tenant_id AND e.user_id = :user_id
+                          AND r.model_id IS NOT NULL
+                        """
+                    ),
+                    {"sym": sym, "cutoff": cutoff, "tenant_id": tenant_id, "user_id": user_id},
+                )
+            ).mappings().all()
+        mids = [str(r["model_id"]) for r in mrows]
+        # 批量查模型元数据（名称/训练区间）
+        if mids:
+            async with get_session(read_only=True) as s4:
+                ur = (
+                    await s4.execute(
+                        text(
+                            "SELECT model_id, metadata_json FROM qm_user_models WHERE model_id = ANY(:mids)"
+                        ),
+                        {"mids": mids},
+                    )
+                ).mappings().all()
+            meta_by_id = {str(r["model_id"]): (r.get("metadata_json") or {}) for r in ur}
+            for mid in mids:
+                meta = meta_by_id.get(mid) or {}
+                if not isinstance(meta, dict):
+                    meta = {}
+                models.append({
+                    "model_id": mid,
+                    "display_name": meta.get("display_name") or meta.get("model_name") or "",
+                    "train_start": str(meta.get("train_start") or "")[:10] if meta.get("train_start") else "",
+                    "train_end": str(meta.get("train_end") or "")[:10] if meta.get("train_end") else "",
+                })
+    except Exception:  # pragma: no cover
+        pass
+
+    return {
+        "symbol": sym,
+        "normalized_symbol": norm,
+        "name": stock_meta.get("name") or "",
+        "industry": stock_meta.get("industry") or "",
+        "board": board,
+        "total": len(items),
+        "items": items,
+        "models": models,
+    }
 
 
 @router.get("/inference/settings/{model_id}", summary="获取模型自动推理设置（用户态）")
@@ -1543,3 +2550,34 @@ async def training_complete_callback(
     x_internal_call_secret: str = Header(default="", alias="X-Internal-Call-Secret"),
 ):
     return await complete_training_run(run_id, result, x_internal_call_secret)
+
+
+@router.post("/ensemble/create", summary="创建多模型融合模型（用户态）")
+async def create_ensemble_model(
+    payload: EnsembleCreateRequest,
+    current_user: dict[str, Any] = Depends(get_current_user),
+):
+    """将多个已训练模型融合为一个持久化融合模型。
+
+    融合模型像普通模型一样注册、推理、选股、回测。支持权重策略：
+      - equal   等权
+      - icir    按源模型 Val Rank ICIR 归一化加权
+      - manual  手动指定权重（自动归一化到和为 1）
+    """
+    if payload.weight_strategy not in ("equal", "icir", "manual"):
+        raise HTTPException(status_code=422, detail="weight_strategy 应为 equal / icir / manual")
+    if payload.weight_strategy == "manual" and not payload.manual_weights:
+        raise HTTPException(status_code=422, detail="manual 策略必须提供 manual_weights")
+
+    tenant_id, user_id = _owner_scope(current_user)
+    try:
+        return await model_registry_service.register_ensemble_model(
+            tenant_id=tenant_id,
+            user_id=user_id,
+            source_model_ids=payload.source_model_ids,
+            display_name=payload.display_name,
+            weight_strategy=payload.weight_strategy,
+            manual_weights=payload.manual_weights,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))

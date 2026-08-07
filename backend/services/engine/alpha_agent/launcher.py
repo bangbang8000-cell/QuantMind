@@ -11,6 +11,7 @@ import asyncio
 import json
 import logging
 import os
+import signal
 import subprocess
 import sys
 import time
@@ -37,6 +38,7 @@ class EvolutionTask:
     user_id: str
     market: str = "a_share"
     data_source: str = ""
+    universe: str = "csi300"
     status: TaskStatus = TaskStatus.PENDING
     progress: str = ""
     phase: str = "pending"
@@ -66,6 +68,7 @@ class AlphaAgentLauncher:
         self._tasks: dict[str, EvolutionTask] = {}
         self._log_dir = Path(os.getenv("LOG_TRACE_PATH", "/tmp/alpha_agent_logs"))
         self._log_dir.mkdir(parents=True, exist_ok=True)
+        self._load_tasks()
 
     # ------------------------------------------------------------------
     # Public API
@@ -76,6 +79,7 @@ class AlphaAgentLauncher:
         user_id: str,
         *,
         market: str = "a_share",
+        universe: str = "csi300",
         loop_n: int = 3,
         seed: str | None = None,
         provider_uri: str | None = None,
@@ -84,7 +88,10 @@ class AlphaAgentLauncher:
     ) -> str:
         """Start a factor evolution task. Returns task_id."""
         task_id = uuid.uuid4().hex[:16]
-        task = EvolutionTask(task_id=task_id, user_id=user_id, market=market, loop_n=loop_n, data_source=data_source or "")
+        task = EvolutionTask(
+            task_id=task_id, user_id=user_id, market=market,
+            universe=universe, loop_n=loop_n, data_source=data_source or "",
+        )
         self._tasks[task_id] = task
 
         # Determine provider URI from market adapter if not specified
@@ -100,7 +107,14 @@ class AlphaAgentLauncher:
         if data_source:
             ds = data_source.lower().strip()
             if ds == "parquet":
-                provider_uri = "/app/db/feature_snapshots"
+                from backend.services.engine.rd_agent.rd_loop_wrapper import RDLoopWrapper
+                quantdb_dir = RDLoopWrapper._resolve_quantdb_dir()
+                if quantdb_dir:
+                    # 从 QuantDB parquet 构建或更新 Qlib 缓存
+                    from backend.services.engine.qlib_data_builder import ensure_qlib_cache
+                    provider_uri = ensure_qlib_cache(quantdb_dir)
+                else:
+                    provider_uri = "/app/db/feature_snapshots"
             elif ds == "pg":
                 provider_uri = "postgresql://localhost:5432/quantmind"
             # qlib_bin uses the default provider_uri
@@ -124,6 +138,7 @@ class AlphaAgentLauncher:
             return None
         return {
             "task_id": task.task_id,
+            "user_id": task.user_id,
             "status": task.status.value,
             "progress": task.progress,
             "phase": task.phase,
@@ -131,6 +146,7 @@ class AlphaAgentLauncher:
             "current_loop": task.current_loop,
             "loop_n": task.loop_n,
             "market": task.market,
+            "universe": task.universe,
             "data_source": task.data_source,
             "error_message": task.error_message,
             "result": task.result,
@@ -140,17 +156,38 @@ class AlphaAgentLauncher:
 
     async def cancel_task(self, task_id: str) -> bool:
         task = self._tasks.get(task_id)
-        if not task or task.status != TaskStatus.RUNNING:
+        if not task:
+            return False
+        if task.status not in (TaskStatus.RUNNING, TaskStatus.PENDING):
             return False
         task._cancel_requested = True
         if task.process and task.process.poll() is None:
-            task.process.terminate()
+            try:
+                pgid = os.getpgid(task.process.pid)
+                os.killpg(pgid, signal.SIGTERM)
+                # Wait up to 5 seconds, then SIGKILL
+                for _ in range(10):
+                    if task.process.poll() is not None:
+                        break
+                    await asyncio.sleep(0.5)
+                if task.process.poll() is None:
+                    os.killpg(pgid, signal.SIGKILL)
+                    logger.warning("Force-killed process group %d for task %s", pgid, task_id)
+            except ProcessLookupError:
+                pass
+            except Exception as e:
+                logger.warning("Failed to kill process for task %s: %s", task_id, e)
         task.status = TaskStatus.FAILED
         task.error_message = "Cancelled by user"
+        self._persist_task(task)
         return True
 
-    async def get_task_log(self, task_id: str, tail: int = 200) -> str | None:
-        """Get subprocess stdout log for a task (for real-time monitoring)."""
+    async def get_task_log(self, task_id: str, tail: int = 0) -> str | None:
+        """Get subprocess stdout log for a task.
+
+        Args:
+            tail: If 0, return the full file. If > 0, return the last N lines.
+        """
         task = self._tasks.get(task_id)
         if not task:
             return None
@@ -160,7 +197,9 @@ class AlphaAgentLauncher:
         try:
             with open(log_file, errors="replace") as f:
                 lines = f.readlines()
-            return "".join(lines[-tail:])
+            if tail > 0:
+                return "".join(lines[-tail:])
+            return "".join(lines)
         except Exception:
             return None
 
@@ -171,6 +210,72 @@ class AlphaAgentLauncher:
                 continue
             results.append(await self.get_task_status(task.task_id))
         return results
+
+    def _persist_task(self, task: EvolutionTask) -> None:
+        """Save task state to disk so it survives restarts."""
+        state_file = self._log_dir / task.task_id / "task_state.json"
+        try:
+            state_file.parent.mkdir(parents=True, exist_ok=True)
+            data = {
+                "task_id": task.task_id,
+                "user_id": task.user_id,
+                "market": task.market,
+                "data_source": task.data_source,
+                "universe": task.universe,
+                "status": task.status.value,
+                "progress": task.progress,
+                "phase": task.phase,
+                "progress_pct": task.progress_pct,
+                "loop_n": task.loop_n,
+                "current_loop": task.current_loop,
+                "created_at": task.created_at,
+                "error_message": task.error_message,
+                "timeline": task.timeline,
+                "token_usage": task.token_usage,
+            }
+            with open(state_file, "w") as f:
+                json.dump(data, f, ensure_ascii=False, default=str)
+        except Exception as e:
+            logger.warning("Failed to persist task %s: %s", task.task_id, e)
+
+    def _load_tasks(self) -> None:
+        """Reload task states from disk on startup."""
+        try:
+            for task_dir in self._log_dir.iterdir():
+                state_file = task_dir / "task_state.json"
+                if not state_file.exists():
+                    continue
+                try:
+                    with open(state_file) as f:
+                        data = json.load(f)
+                    task = EvolutionTask(
+                        task_id=data["task_id"],
+                        user_id=data["user_id"],
+                        market=data.get("market", "a_share"),
+                        data_source=data.get("data_source", ""),
+                        universe=data.get("universe", "csi300"),
+                        status=TaskStatus(data.get("status", "pending")),
+                        progress=data.get("progress", ""),
+                        phase=data.get("phase", "pending"),
+                        progress_pct=data.get("progress_pct", 0),
+                        loop_n=data.get("loop_n", 3),
+                        current_loop=data.get("current_loop", 0),
+                        created_at=data.get("created_at", time.time()),
+                        error_message=data.get("error_message"),
+                        timeline=data.get("timeline", []),
+                        token_usage=data.get("token_usage", {}),
+                    )
+                    # Running tasks at startup are likely orphaned
+                    if task.status == TaskStatus.RUNNING:
+                        task.status = TaskStatus.FAILED
+                        task.error_message = "Server restarted while task was running"
+                    self._tasks[task.task_id] = task
+                except Exception as e:
+                    logger.warning("Failed to load task from %s: %s", state_file, e)
+            if self._tasks:
+                logger.info("Loaded %d tasks from disk", len(self._tasks))
+        except Exception as e:
+            logger.warning("Failed to load tasks: %s", e)
 
     # ------------------------------------------------------------------
     # Internal
@@ -197,6 +302,7 @@ class AlphaAgentLauncher:
         task.phase = "starting"
         task.progress_pct = 2
         task.progress = "正在启动因子挖掘..."
+        self._persist_task(task)
 
         task_log_dir = self._log_dir / task.task_id
         task_log_dir.mkdir(parents=True, exist_ok=True)
@@ -208,8 +314,9 @@ class AlphaAgentLauncher:
             or ""
         )
         openai_api_key = (
-            os.getenv("OPENAI_API_KEY")
-            or os.getenv("AI_IDE_LLM_API_KEY")
+            os.getenv("AI_IDE_LLM_API_KEY")
+            or os.getenv("AI_IDE_API_KEY")
+            or os.getenv("OPENAI_API_KEY")
             or ""
         )
         chat_model = os.getenv("CHAT_MODEL", "")
@@ -220,6 +327,7 @@ class AlphaAgentLauncher:
             "PYTHONPATH": os.getenv("PYTHONPATH") or "/app",
             "LOG_TRACE_PATH": str(task_log_dir),
             "QLIB_PROVIDER_URI": provider_uri,
+            "QLIB_FACTOR_UNIVERSE": task.universe,
             "REASONING_MODEL": chat_model,
             "CHAT_STREAM": "false",
             # 回测数据从 2016 年开始 (默认 2008 太慢)
@@ -262,6 +370,7 @@ class AlphaAgentLauncher:
             "--loop-n", str(loop_n),
             "--log-dir", str(task_log_dir),
             "--direction", direction,
+            "--universe", task.universe,
         ]
         if use_rd_agent:
             cmd.extend(["--market", task.market])
@@ -281,12 +390,18 @@ class AlphaAgentLauncher:
                 stderr=subprocess.STDOUT,
                 env=env,
                 cwd=str(task_log_dir),
+                preexec_fn=os.setsid,
             )
             task.process = process
+            self._persist_task(task)
 
             while process.poll() is None:
                 if task._cancel_requested:
-                    process.terminate()
+                    try:
+                        pgid = os.getpgid(process.pid)
+                        os.killpg(pgid, signal.SIGTERM)
+                    except ProcessLookupError:
+                        pass
                     break
                 self._update_progress(task, task_log_dir)
                 await asyncio.sleep(3)
@@ -311,10 +426,13 @@ class AlphaAgentLauncher:
                 task.error_message = f"Process exited with code {process.returncode}: {error_output}"
                 logger.error("Factor mining failed for task %s: %s", task.task_id, task.error_message)
 
+            self._persist_task(task)
+
         except Exception as e:
             task.status = TaskStatus.FAILED
             task.error_message = str(e)
             logger.exception("Factor mining exception for task %s", task.task_id)
+            self._persist_task(task)
 
     _PHASE_ORDER = [
         ("scenario", "scenario", "初始化场景"),

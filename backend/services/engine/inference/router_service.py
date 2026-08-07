@@ -58,7 +58,7 @@ def _get_model_data_dir(model_dir: Path) -> str:
     优先级：
     1. metadata.json 中的 qlib_data_path 字段（绝对路径）
     2. metadata.json 中的 data_source 字段判断：
-       - "qlib" -> db/qlib_data
+       - "qlib" -> 通过 qlib_paths 解析（优先 QuantDB 缓存）
        - "parquet" 或其他 -> db/feature_snapshots
     3. 默认值 -> db/feature_snapshots
     """
@@ -72,7 +72,8 @@ def _get_model_data_dir(model_dir: Path) -> str:
 
             data_source = str(meta.get("data_source", "")).lower()
             if data_source == "qlib":
-                return "db/qlib_data"
+                from backend.shared.qlib_paths import resolve_qlib_provider_uri
+                return resolve_qlib_provider_uri()
         except Exception:
             pass
 

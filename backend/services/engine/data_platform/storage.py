@@ -118,7 +118,10 @@ class ParquetWriter:
 
 
 class QlibBinExporter:
-    """从 Parquet 中间层导出到 Qlib bin 目录。
+    """[DEPRECATED] 从 Parquet 中间层导出到 Qlib bin 目录。
+
+    已被 QlibDataBuilder (从 QuantDB parquet 直接生成) 替代。
+    保留仅用于向后兼容，新代码请使用 backend.services.engine.qlib_data_builder。
 
     简化实现：将 (symbol, field) -> Parquet 集合合并成 CSV，再交给
     qlib.contrib.data.dump.DumpDataAll 写出 bin。

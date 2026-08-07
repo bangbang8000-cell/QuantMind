@@ -11,6 +11,7 @@ import sys
 from pathlib import Path
 from typing import Any
 
+import numpy as np
 import pandas as pd
 import pytest
 
@@ -121,6 +122,256 @@ class TestMonotonicRiser:
         res = ba.aggregate_batch(ladder_panel, dates=DATES, horizon_days=10, top_k=3)
         assert "FLAT3" not in _symbols(res["groups"]["rising"])
         assert "FLAT3" not in _symbols(res["groups"]["fading"])
+
+
+class TestConsensusBandGate:
+    """共识门槛必须 scale-free：绝对 Top-K 在 5500 只全市场下不可满足。"""
+
+    def _rotating_universe(self, n_symbols: int = 1000) -> pd.DataFrame:
+        """高换手宽 universe：ANCHOR 稳居分位带顶部但从不进 Top-3。
+
+        ANCHOR 恒为 1.8，标准正态下约 3.6% 超过它 → 每日约 36 只压在其上，
+        故 rank≈37（pct≈0.96，稳居 0.95 带内）而 Top-3 命中恒为 0。
+        """
+        rng = np.random.default_rng(11)
+        rows: list[dict[str, Any]] = []
+        for date in DATES:
+            for i in range(n_symbols):
+                rows.append(
+                    {
+                        "trade_date": date,
+                        "symbol": f"N{i:04d}",
+                        "fusion_score": float(rng.normal()),
+                    }
+                )
+            rows.append({"trade_date": date, "symbol": "ANCHOR", "fusion_score": 1.8})
+        return _panel(rows)
+
+    def test_band_gate_makes_consensus_nonempty_where_topk_gate_cannot(self) -> None:
+        panel = self._rotating_universe()
+        res = ba.aggregate_batch(
+            panel, dates=DATES, horizon_days=10, top_k=3, consensus_band=0.95
+        )
+        anchor = _by_symbol(res)["ANCHOR"]
+
+        # 前提：Top-3 命中次数不足 hit_gate=3，旧口径下必然落选
+        assert anchor["topk_hits"] < 3
+        assert anchor["band_hits"] == len(DATES)
+        assert anchor["coverage"] == pytest.approx(1.0)
+        assert "ANCHOR" in _symbols(res["groups"]["consensus_long"])
+
+    def test_band_hits_counts_days_above_band(self) -> None:
+        score_map: dict[str, dict[str, float]] = {
+            f"B{i:02d}": dict.fromkeys(DATES, float(i)) for i in range(20)
+        }
+        # 20 只股票 → pct 步长 1/19；B19=1.0, B18≈0.947, B17≈0.895
+        res = ba.aggregate_batch(
+            _grid(score_map), dates=DATES, horizon_days=10, consensus_band=0.9
+        )
+        rows = _by_symbol(res)
+
+        assert rows["B19"]["band_hits"] == len(DATES)
+        assert rows["B18"]["band_hits"] == len(DATES)  # 0.947 >= 0.9
+        assert rows["B17"]["band_hits"] == 0  # 0.895 < 0.9
+        # 空头侧镜像：pct <= 1 - band = 0.1
+        assert rows["B00"]["band_hits_short"] == len(DATES)
+        assert rows["B01"]["band_hits_short"] == len(DATES)
+        assert rows["B02"]["band_hits_short"] == 0
+
+    def test_consensus_short_uses_mirrored_band(self) -> None:
+        flipped = self._rotating_universe().copy()
+        flipped["fusion_score"] = -flipped["fusion_score"]
+        flipped = _panel(
+            flipped[["trade_date", "symbol", "fusion_score"]].to_dict("records")
+        )
+        res = ba.aggregate_batch(
+            flipped, dates=DATES, horizon_days=10, top_k=3, consensus_band=0.95
+        )
+        anchor = _by_symbol(res)["ANCHOR"]
+
+        assert anchor["band_hits_short"] == len(DATES)
+        assert anchor["bottomk_hits"] < 3
+        assert "ANCHOR" in _symbols(res["groups"]["consensus_short"])
+
+    def test_band_is_configurable(self) -> None:
+        panel = self._rotating_universe()
+        strict = ba.aggregate_batch(
+            panel, dates=DATES, horizon_days=10, top_k=3, consensus_band=0.999
+        )
+        loose = ba.aggregate_batch(
+            panel, dates=DATES, horizon_days=10, top_k=3, consensus_band=0.80
+        )
+        assert strict["meta"]["consensus_band"] == pytest.approx(0.999)
+        assert _by_symbol(strict)["ANCHOR"]["band_hits"] == 0  # pct≈0.96 < 0.999
+        assert _by_symbol(loose)["ANCHOR"]["band_hits"] == len(DATES)
+        assert len(loose["groups"]["consensus_long"]) >= len(
+            strict["groups"]["consensus_long"]
+        )
+
+
+class TestHitterBoards:
+    """用户原话「前20出现次数最多的股票」是排行榜，不是阈值筛选。"""
+
+    def test_top_hitters_sorted_by_hit_count_desc(self) -> None:
+        score_map: dict[str, dict[str, float]] = {
+            f"BASE{i}": dict.fromkeys(DATES, float(i)) for i in range(6)
+        }
+        # HIT5 全 5 天进 Top-2；HIT3 只有 3 天；HIT1 只有 1 天
+        score_map["HIT5"] = dict.fromkeys(DATES, 100.0)
+        score_map["HIT3"] = {
+            DATES[0]: 90.0,
+            DATES[1]: 90.0,
+            DATES[2]: 90.0,
+            DATES[3]: -9.0,
+            DATES[4]: -9.0,
+        }
+        score_map["HIT1"] = {
+            **dict.fromkeys(DATES, -9.0),
+            DATES[4]: 90.0,
+        }
+        # top_k 同时决定「什么算上榜」和「榜单返回几条」，故取 2 判定命中、
+        # 另跑一次 top_k=9 拿到完整榜单验证排序
+        res = ba.aggregate_batch(
+            _grid(score_map), dates=DATES, horizon_days=10, top_k=2
+        )
+        assert len(res["groups"]["top_hitters"]) == 2
+
+        full = ba.aggregate_batch(
+            _grid(score_map), dates=DATES, horizon_days=10, top_k=2, side="long"
+        )
+        rows = _by_symbol(full)
+        assert rows["HIT5"]["topk_hits"] == 5
+        assert rows["HIT3"]["topk_hits"] == 3
+        assert rows["HIT1"]["topk_hits"] == 1
+
+        board = res["groups"]["top_hitters"]
+        hits = [r["topk_hits"] for r in board]
+        assert hits == sorted(hits, reverse=True)
+        assert _symbols(board)[0] == "HIT5"
+        assert board[0]["topk_hits"] == 5
+
+    def test_top_hitters_breaks_ties_by_weighted_pct(self) -> None:
+        score_map: dict[str, dict[str, float]] = {
+            f"BASE{i}": dict.fromkeys(DATES, float(i)) for i in range(6)
+        }
+        score_map["STRONG"] = dict.fromkeys(DATES, 200.0)
+        score_map["WEAKER"] = dict.fromkeys(DATES, 100.0)
+        res = ba.aggregate_batch(
+            _grid(score_map), dates=DATES, horizon_days=10, top_k=5
+        )
+        board = res["groups"]["top_hitters"]
+
+        assert board[0]["topk_hits"] == board[1]["topk_hits"] == 5
+        assert _symbols(board)[:2] == ["STRONG", "WEAKER"]
+
+    def test_bottom_hitters_mirrors_top_hitters(self) -> None:
+        score_map: dict[str, dict[str, float]] = {
+            f"BASE{i}": dict.fromkeys(DATES, float(i)) for i in range(6)
+        }
+        score_map["WORST"] = dict.fromkeys(DATES, -100.0)
+        panel = _grid(score_map)
+        flipped = panel.copy()
+        flipped["fusion_score"] = -flipped["fusion_score"]
+        flipped = _panel(
+            flipped[["trade_date", "symbol", "fusion_score"]].to_dict("records")
+        )
+
+        base = ba.aggregate_batch(panel, dates=DATES, horizon_days=10, top_k=2)
+        flip = ba.aggregate_batch(flipped, dates=DATES, horizon_days=10, top_k=2)
+
+        assert _symbols(base["groups"]["bottom_hitters"])[0] == "WORST"
+        assert base["groups"]["bottom_hitters"][0]["bottomk_hits"] == 5
+        assert _symbols(flip["groups"]["top_hitters"]) == _symbols(
+            base["groups"]["bottom_hitters"]
+        )
+
+    def test_hitter_boards_respect_side_filter(self) -> None:
+        score_map = {f"S{i}": dict.fromkeys(DATES, float(i)) for i in range(6)}
+        long_only = ba.aggregate_batch(
+            _grid(score_map), dates=DATES, horizon_days=10, top_k=2, side="long"
+        )
+        short_only = ba.aggregate_batch(
+            _grid(score_map), dates=DATES, horizon_days=10, top_k=2, side="short"
+        )
+        assert "top_hitters" in long_only["groups"]
+        assert "bottom_hitters" not in long_only["groups"]
+        assert "bottom_hitters" in short_only["groups"]
+        assert "top_hitters" not in short_only["groups"]
+
+
+class TestMonotonicNoiseWarning:
+    def test_small_window_monotonic_noise_is_flagged(self) -> None:
+        """N=3 纯随机下约 1/6 股票偶然单调 —— 必须警告用户这是噪声。"""
+        rng = np.random.default_rng(5)
+        short_dates = DATES[:3]
+        rows: list[dict[str, Any]] = []
+        for date in short_dates:
+            for i in range(400):
+                rows.append(
+                    {
+                        "trade_date": date,
+                        "symbol": f"R{i:03d}",
+                        "fusion_score": float(rng.normal()),
+                    }
+                )
+        res = ba.aggregate_batch(
+            _panel(rows), dates=short_dates, horizon_days=10, top_k=20
+        )
+
+        ratio = res["meta"]["monotonic_up_ratio"]
+        assert 0.10 < ratio < 0.25  # 理论期望 1/6
+        joined = " ".join(res["meta"]["warnings"])
+        assert "严格单调" in joined
+        assert "噪声" in joined
+        assert "up_streak" in joined
+        assert "trend_rho" in joined
+
+    def test_long_window_has_no_monotonic_noise_warning(self) -> None:
+        rng = np.random.default_rng(6)
+        dates = pd.bdate_range("2026-06-01", periods=10).strftime("%Y-%m-%d").tolist()
+        rows: list[dict[str, Any]] = []
+        for date in dates:
+            for i in range(200):
+                rows.append(
+                    {
+                        "trade_date": date,
+                        "symbol": f"R{i:03d}",
+                        "fusion_score": float(rng.normal()),
+                    }
+                )
+        res = ba.aggregate_batch(_panel(rows), dates=dates, horizon_days=10, top_k=20)
+
+        # N=10 时 1/10! ≈ 2.8e-6，实际恒为 0
+        assert res["meta"]["monotonic_up_ratio"] == pytest.approx(0.0)
+        assert "严格单调" not in " ".join(res["meta"]["warnings"])
+
+    def test_deterministic_monotonic_ladder_still_flagged_and_kept(self) -> None:
+        """字段本身保留可用：构造的真单调股仍被正确标记。
+
+        4 只股票 3 日，pct ∈ {0, 1/3, 2/3, 1}。UP 名次 4→3→2（pct 0→1/3→2/3），
+        DOWN 名次 1→2→3，WOBBLE 名次 3→4→4 作非单调对照。
+        """
+        ranks_by_day = [
+            {"DOWN": 4.0, "WOBBLE": 2.0, "TOP": 3.0, "UP": 1.0},
+            {"TOP": 4.0, "DOWN": 3.0, "UP": 2.0, "WOBBLE": 1.0},
+            {"TOP": 4.0, "UP": 3.0, "DOWN": 2.0, "WOBBLE": 1.0},
+        ]
+        rows = [
+            {"trade_date": date, "symbol": sym, "fusion_score": score}
+            for date, scores in zip(DATES[:3], ranks_by_day, strict=True)
+            for sym, score in scores.items()
+        ]
+        res = ba.aggregate_batch(
+            _panel(rows), dates=DATES[:3], horizon_days=10, top_k=2
+        )
+        rows_map = _by_symbol(res)
+
+        assert rows_map["UP"]["mean_pct"] == pytest.approx(1.0 / 3.0)
+        assert rows_map["UP"]["is_monotonic_up"] is True
+        assert rows_map["UP"]["up_streak"] == 3
+        assert rows_map["DOWN"]["is_monotonic_down"] is True
+        assert rows_map["WOBBLE"]["is_monotonic_up"] is False
+        assert rows_map["WOBBLE"]["is_monotonic_down"] is False
 
 
 class TestCoveragePenalty:
@@ -384,6 +635,123 @@ class TestDailyTurnover:
         assert dist["positive_count"] == 3  # 1, 2, 3
         assert dist["zero_count"] == 1
         assert "histogram" in dist
+
+
+class TestDataIntegrityWarnings:
+    """取数层口径错误必须吵出来 —— 静默失败会让聚合结论看似正常实则失真。"""
+
+    def _base_rows(self, dates: list[str], n: int = 6) -> list[dict[str, Any]]:
+        return [
+            {"trade_date": d, "symbol": f"S{i}", "fusion_score": float(i)}
+            for d in dates
+            for i in range(n)
+        ]
+
+    def test_out_of_window_dates_are_reported_not_silently_dropped(self) -> None:
+        """T+1 未归一化时会出现窗口外日期 —— 剔除但必须报出。"""
+        rows = self._base_rows(DATES)
+        rows += [
+            {"trade_date": "2026-07-23", "symbol": "S0", "fusion_score": 9.0},
+            {"trade_date": "2026-07-24", "symbol": "S1", "fusion_score": 9.0},
+        ]
+        res = ba.aggregate_batch(_panel(rows), dates=DATES, horizon_days=10, top_k=2)
+
+        joined = " ".join(res["meta"]["warnings"])
+        assert "dates 之外的 trade_date" in joined
+        assert "2026-07-23" in joined
+        assert "T+1" in joined
+        # 窗口外数据确实未参与聚合
+        assert all(row["trade_date"] in DATES for row in res["daily"])
+        assert res["per_symbol"][0]["appear_days"] <= len(DATES)
+
+    def test_clean_panel_has_no_integrity_warning(self) -> None:
+        res = ba.aggregate_batch(
+            _panel(self._base_rows(DATES)), dates=DATES, horizon_days=10, top_k=2
+        )
+        joined = " ".join(res["meta"]["warnings"])
+        assert "trade_date" not in joined
+        assert "重复" not in joined
+        assert "中位数" not in joined
+
+    def test_duplicate_symbol_day_deduped_not_averaged(self) -> None:
+        """同日多 run 混入：按首次出现去重，绝不对两个模型的分数求平均。"""
+        rows = self._base_rows(DATES)
+        for row in rows:
+            row["run_id"] = "run_A"
+        # run_B 对 S0 给出完全相反的高分；若被平均则 S0 分数会被抬高
+        dup = [
+            {
+                "trade_date": d,
+                "symbol": "S0",
+                "fusion_score": 100.0,
+                "run_id": "run_B",
+            }
+            for d in DATES
+        ]
+        res = ba.aggregate_batch(
+            pd.DataFrame(rows + dup), dates=DATES, horizon_days=10, top_k=2
+        )
+
+        joined = " ".join(res["meta"]["warnings"])
+        assert "重复" in joined
+        assert "run_B" in joined
+        assert "run_id 精确限定" in joined
+        # 每日行数应为去重后的 6，而非 11
+        assert all(row["count"] == 6 for row in res["daily"])
+        # S0 保留 run_A 的 0.0 分 → 仍是当日最低，未被 run_B 的 100 分污染
+        s0 = _by_symbol(res)["S0"]
+        assert s0["appear_days"] == len(DATES)
+        assert s0["mean_pct"] == pytest.approx(0.0)
+        assert s0["best_rank"] == 6
+
+    def test_dedupe_recomputes_rank_and_pct_on_survivors(self) -> None:
+        """去重改变了当日截面，调用方基于混合集算的 rk/pct 必须废弃重算。"""
+        rows = self._base_rows(DATES, n=3)
+        dup = [{"trade_date": d, "symbol": "S2", "fusion_score": 2.0} for d in DATES]
+        panel = _panel(rows + dup)  # rk/pct 按 4 行/日 算出
+        res = ba.aggregate_batch(panel, dates=DATES, horizon_days=10, top_k=2)
+
+        rowmap = _by_symbol(res)
+        assert all(row["count"] == 3 for row in res["daily"])
+        # 3 只股票的截面：pct 必须是 0 / 0.5 / 1，而非 4 行时的 0 / 1/3 / 1
+        assert rowmap["S1"]["mean_pct"] == pytest.approx(0.5)
+        assert rowmap["S2"]["mean_pct"] == pytest.approx(1.0)
+        assert rowmap["S2"]["best_rank"] == 1
+        assert rowmap["S0"]["worst_rank"] == 3
+
+    def test_sparse_day_is_flagged(self) -> None:
+        """某日信号被重跑部分清理 → 行数远低于中位数，必须报出。"""
+        rows = self._base_rows(DATES, n=50)
+        # 只保留 DATES[2] 的 3 行（远低于中位数 50 的 20%）
+        rows = [
+            r for r in rows if r["trade_date"] != DATES[2] or int(r["symbol"][1:]) < 3
+        ]
+        res = ba.aggregate_batch(_panel(rows), dates=DATES, horizon_days=10, top_k=5)
+
+        joined = " ".join(res["meta"]["warnings"])
+        assert "中位数" in joined
+        assert DATES[2] in joined
+        assert "重跑" in joined
+
+    def test_moderately_thin_day_not_flagged(self) -> None:
+        """略少于中位数（停牌等正常波动）不应误报。"""
+        rows = self._base_rows(DATES, n=50)
+        rows = [
+            r for r in rows if r["trade_date"] != DATES[2] or int(r["symbol"][1:]) < 40
+        ]
+        res = ba.aggregate_batch(_panel(rows), dates=DATES, horizon_days=10, top_k=5)
+        assert "中位数" not in " ".join(res["meta"]["warnings"])
+
+    def test_null_scores_reported(self) -> None:
+        rows = self._base_rows(DATES)
+        rows += [
+            {"trade_date": DATES[0], "symbol": "SNULL", "fusion_score": float("nan")}
+        ]
+        res = ba.aggregate_batch(
+            pd.DataFrame(rows), dates=DATES, horizon_days=10, top_k=2
+        )
+        assert "fusion_score 为空" in " ".join(res["meta"]["warnings"])
+        assert "SNULL" not in _by_symbol(res)
 
 
 class TestMetaHonesty:

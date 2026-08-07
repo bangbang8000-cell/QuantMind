@@ -105,20 +105,27 @@ if NEWS_ENRICH_ENABLED:
         "schedule": float(NEWS_MATCHER_RELOAD_SEC),
     }
 
-# 每日 18:00 (A 股收盘后) 自动增量同步全市场数据
+# 每日 22:30 自动增量同步全市场数据（QuantDB 服务端晚间才发布当日数据，
+# 22:30 能拿到当天完整数据；比 18:00 更可靠）
 DAILY_SYNC_ENABLED = os.getenv("DAILY_SYNC_ENABLED", "true").lower() == "true"
 if DAILY_SYNC_ENABLED:
     beat_schedule["daily-data-sync"] = {
         "task": "engine.tasks.daily_data_sync",
-        "schedule": crontab(minute="0", hour="18", day_of_week="1-5"),
+        "schedule": crontab(minute="30", hour="22", day_of_week="1-5"),
         "kwargs": {"market": "A", "incremental": True, "calibrate": True},
+    }
+    # 22:50 触发特征快照生成（在数据同步完成后执行）
+    beat_schedule["feature-snapshot-update"] = {
+        "task": "engine.tasks.feature_snapshot",
+        "schedule": crontab(minute="50", hour="22", day_of_week="1-5"),
+        "kwargs": {"year": 0},
     }
 
 # Strategy Lab daily scan — runs after the data sync settles (Day 16)
 if os.getenv("STRATEGY_LAB_SCAN_ENABLED", "true").lower() == "true":
     beat_schedule["strategy-lab-daily-scan"] = {
         "task": "engine.tasks.strategy_lab_daily_scan",
-        "schedule": crontab(minute="30", hour="18", day_of_week="1-5"),
+        "schedule": crontab(minute="0", hour="23", day_of_week="1-5"),
         "kwargs": {"lookback_days": 7},
     }
 

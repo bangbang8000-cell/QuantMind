@@ -4,17 +4,17 @@
 ====================
 
 数据源优先级（A 股日线）：
-  1. investment_data (qlib_bin) — 最准，T-2 左右
+  1. QuantDB parquet (data/quantdb/) — 最权威，T-1 左右
   2. baostock — 稳定，T-1
   3. akshare (stock_zh_a_daily) — T-1，新浪源
   4. eltdx — T（当天），通达信
 
 流程：
   1. 查 PG: 每只股票的 MAX(trade_date)
-  2. PG 最新 < investment_data 最新 → 从 qlib_bin 读增量写入 PG
+  2. PG 最新 < QuantDB parquet 最新 → 从 parquet 读增量写入 PG
   3. PG 最新 < 今天 → baostock 补齐 → akshare 兜底
   4. 需要当日 → eltdx 获取
-  5. 增量数据追加写入本地 qlib bin
+  5. 增量更新 Qlib 缓存 (从 parquet 生成)
   6. 计算 MA/收益率等技术指标
 
 用法：
@@ -26,9 +26,6 @@
 
   # 指定股票
   python backend/scripts/daily_data_sync.py --incremental --symbols 600519.SH,000001.SZ
-
-  # 仅更新 investment_data（下载最新 qlib_bin）
-  python backend/scripts/daily_data_sync.py --update-investment-data
 
   # 仅校准指标
   python backend/scripts/daily_data_sync.py --calibrate-only
@@ -70,6 +67,10 @@ QLIB_DATA_DIR = PROJECT_ROOT / "db" / "qlib_data"
 INVESTMENT_DATA_DIR = Path(
     os.getenv("QM_INVESTMENT_DATA_DIR", "/data/third_party/investment_data")
 )
+# A 股 Qlib 缓存优先使用 QuantDB 派生目录
+QDB_QLIB_CACHE = Path(
+    os.getenv("QM_QUANTDB_DATA_DIR", str(PROJECT_ROOT / "data" / "quantdb"))
+) / ".qlib_cache" / "cn_data"
 
 # Default partition start date for stock_daily_latest backfills.
 # 历史回测可通过 --start-date YYYY-MM-DD 或 env QM_SYNC_PARTITION_START 覆盖。
@@ -173,9 +174,9 @@ _CALENDAR_CACHE: Optional[np.ndarray] = None
 
 
 def _find_qlib_root() -> Optional[Path]:
-    """Find qlib_bin root, preferring the one with the most recent calendar."""
+    """Find qlib_bin root, preferring QuantDB cache, then legacy dirs."""
     candidates = []
-    for root in (QLIB_DATA_DIR, INVESTMENT_DATA_DIR):
+    for root in (QDB_QLIB_CACHE, QLIB_DATA_DIR, INVESTMENT_DATA_DIR):
         for cand in (root / "qlib_bin", root):
             cal = cand / "calendars" / "day.txt"
             if cal.exists() and (cand / "features").exists():
@@ -231,6 +232,24 @@ def _qlib_symbol(symbol: str) -> str:
         code, ex = s.split(".", 1)
         return f"{ex.lower()}{code}"
     return s.lower()
+
+
+def _to_suffix_symbol(symbol: str) -> str:
+    """SH600036 -> 600036.SH (PG internal → suffix format for QuantDB)"""
+    s = symbol.strip().upper()
+    if s.startswith("SH") or s.startswith("SZ") or s.startswith("BJ"):
+        return f"{s[2:]}.{s[:2]}"
+    if "." in s:
+        return s
+    # 纯数字自动识别
+    if s.isdigit():
+        if s.startswith("6") or s.startswith("9"):
+            return f"{s}.SH"
+        if s.startswith("0") or s.startswith("3") or s.startswith("2"):
+            return f"{s}.SZ"
+        if s.startswith("4") or s.startswith("8"):
+            return f"{s}.BJ"
+    return s
 
 
 # ---------------------------------------------------------------------------
@@ -1057,6 +1076,12 @@ def run_sync(
     本入口仅支持 A 股 (market='A' 或 'CN')。其他市场请使用：
       - REST: POST /admin/data-platform/sync-alpha-agent-market
       - CLI: python backend/scripts/update_market_features.py --market <market>
+
+    数据源优先级:
+      1. QuantDB parquet (data/quantdb/) — 最权威
+      2. baostock — 稳定，T-1
+      3. akshare — 新浪源
+      4. eltdx — 当天
     """
     if market.upper() not in ("A", "CN"):
         raise ValueError(
@@ -1073,11 +1098,11 @@ def run_sync(
         "market": market,
         "mode": "incremental" if incremental else "full",
         "started": datetime.now().isoformat(),
-        "investment_data_synced": 0,
+        "quantdb_parquet_synced": 0,
         "baostock_synced": 0,
         "akshare_synced": 0,
         "eltdx_synced": 0,
-        "qlib_bin_updated": 0,
+        "qlib_cache_updated": False,
         "stock_names_updated": 0,
         "market_tables_synced": {},
         "indicators_calibrated": False,
@@ -1110,21 +1135,20 @@ def run_sync(
     pg_latest = _get_pg_latest_dates(engine)
     log.info("PG has %d symbols, latest dates loaded", len(pg_latest))
 
-    # 3. 确定投资数据最新日期
+    # 3. 确定投资数据最新日期 (fallback 用)
     inv_latest_date: Optional[date] = None
     qroot = _find_qlib_root()
     if qroot:
         cal = _load_calendar()
         if len(cal) > 0:
             inv_latest_date = pd.to_datetime(cal[-1]).date()
-            log.info("Investment data calendar: %s to %s (%d days)",
+            log.info("Investment data calendar (fallback): %s to %s (%d days)",
                      cal[0], cal[-1], len(cal))
 
     today = date.today()
 
     # 4. 同步每只股票
     _update_sync_progress("pg_query", "查询PG最新日期...", pct=10)
-    inv_count = 0
     bs_count = 0
     ak_count = 0
     eltdx_count = 0
@@ -1143,46 +1167,85 @@ def run_sync(
         need_sync_symbols.append(sym)
     log.info("Skip %d already-up-to-date symbols, syncing %d", skip_count, len(need_sync_symbols))
 
-    # --- Phase 1: 批量读取 investment_data（本地文件，快） ---
-    inv_batch: list[pd.DataFrame] = []
+    # --- Phase 1: 批量读取 QuantDB parquet（本地文件，快） ---
+    qdb_count = 0
     still_need_symbols: list[str] = []
-    if inv_latest_date and need_sync_symbols:
-        _update_sync_progress("data_sync", f"Phase 1: 批量读取 investment_data ({len(need_sync_symbols)} 只)...", pct=12, current=0, total=len(need_sync_symbols))
-        for idx, sym in enumerate(need_sync_symbols):
-            if (idx + 1) % 1000 == 0:
-                log.info("investment_data batch: %d/%d", idx + 1, len(need_sync_symbols))
-                pct = 12 + int(18 * (idx + 1) / len(need_sync_symbols))
-                _update_sync_progress("data_sync", f"investment_data {idx+1}/{len(need_sync_symbols)}", pct=pct, current=idx+1, total=len(need_sync_symbols))
-            pg_max = pg_latest.get(sym)
-            need_start = None
-            if pg_max is None:
-                need_start = partition_start
-            elif pg_max < inv_latest_date:
-                need_start = max(pg_max + timedelta(days=1), partition_start)
-            if need_start and need_start <= inv_latest_date:
-                try:
-                    inv_df = _read_investment_data(sym, need_start, inv_latest_date)
-                    if inv_df is not None and not inv_df.empty:
-                        inv_batch.append(inv_df)
-                        inv_count += 1
-                        # 检查是否还需要baostock补
-                        max_inv = inv_df["trade_date"].max()
-                        if isinstance(max_inv, date):
-                            pass
-                        else:
-                            max_inv = date.fromisoformat(str(max_inv))
-                        if max_inv < today:
-                            still_need_symbols.append(sym)
-                        continue
-                except Exception as exc:
-                    log.debug("investment_data failed for %s: %s", sym, exc)
-            # 没有investment_data数据，直接进baostock列表
-            still_need_symbols.append(sym)
-        if inv_batch:
-            inv_combined = pd.concat(inv_batch, ignore_index=True)
-            rows = _upsert_to_pg(engine, inv_combined)
-            all_new_data.append(inv_combined)
-            log.info("Phase 1 done: investment_data %d symbols, %d rows", inv_count, len(inv_combined))
+    quantdb_dir = Path(os.getenv("QM_QUANTDB_DATA_DIR", str(PROJECT_ROOT / "data" / "quantdb")))
+    quantdb_available = quantdb_dir.is_dir()
+
+    if quantdb_available and need_sync_symbols:
+        try:
+            from backend.services.engine.data_platform.quantdb_hub import QuantDBDataHub
+            hub = QuantDBDataHub(quantdb_dir)
+            if hub.available:
+                # 获取 QuantDB 最新日期
+                df_cal = hub.fetch_calendar()
+                qdb_latest_date: Optional[date] = None
+                if not df_cal.empty:
+                    cal_col = None
+                    for col in ("trade_date", "date", "time", "cal_date", "TradingDate"):
+                        if col in df_cal.columns:
+                            cal_col = col
+                            break
+                    if cal_col:
+                        qdb_latest_date = pd.to_datetime(df_cal[cal_col]).max().date()
+                        log.info("QuantDB parquet calendar latest: %s", qdb_latest_date)
+
+                _update_sync_progress("data_sync", f"Phase 1: 批量读取 QuantDB parquet ({len(need_sync_symbols)} 只)...", pct=12, current=0, total=len(need_sync_symbols))
+
+                qdb_batch: list[pd.DataFrame] = []
+                for idx, sym in enumerate(need_sync_symbols):
+                    if (idx + 1) % 1000 == 0:
+                        log.info("QuantDB parquet batch: %d/%d", idx + 1, len(need_sync_symbols))
+                        pct = 12 + int(18 * (idx + 1) / len(need_sync_symbols))
+                        _update_sync_progress("data_sync", f"QuantDB parquet {idx+1}/{len(need_sync_symbols)}", pct=pct, current=idx+1, total=len(need_sync_symbols))
+
+                    pg_max = pg_latest.get(sym)
+                    need_start = None
+                    if pg_max is None:
+                        need_start = partition_start
+                    elif qdb_latest_date and pg_max < qdb_latest_date:
+                        need_start = max(pg_max + timedelta(days=1), partition_start)
+
+                    if need_start and qdb_latest_date and need_start <= qdb_latest_date:
+                        try:
+                            # Convert PG internal format (SH600036) to suffix format (600036.SH)
+                            qdb_sym = _to_suffix_symbol(sym)
+                            qdb_df = hub.fetch_daily_kline(qdb_sym, need_start, qdb_latest_date, adjust="qfq")
+                            if not qdb_df.empty:
+                                qdb_df = qdb_df.copy()
+                                qdb_df["symbol"] = sym
+                                qdb_df["source"] = "quantdb_parquet"
+                                qdb_df["adj_factor"] = 1.0
+                                for c in ("open", "high", "low", "close", "volume", "amount"):
+                                    if c in qdb_df.columns:
+                                        qdb_df[c] = pd.to_numeric(qdb_df[c], errors="coerce").fillna(0)
+                                qdb_batch.append(qdb_df)
+                                qdb_count += 1
+                                # 检查是否还需要 baostock 补
+                                max_qdb = qdb_df["trade_date"].max()
+                                if isinstance(max_qdb, date):
+                                    pass
+                                else:
+                                    max_qdb = date.fromisoformat(str(max_qdb))
+                                if max_qdb < today:
+                                    still_need_symbols.append(sym)
+                                continue
+                        except Exception as exc:
+                            log.debug("QuantDB parquet failed for %s: %s", sym, exc)
+                    # 没有 QuantDB 数据，直接进 baostock 列表
+                    still_need_symbols.append(sym)
+
+                if qdb_batch:
+                    qdb_combined = pd.concat(qdb_batch, ignore_index=True)
+                    rows = _upsert_to_pg(engine, qdb_combined)
+                    all_new_data.append(qdb_combined)
+                    log.info("Phase 1 done: QuantDB parquet %d symbols, %d rows", qdb_count, len(qdb_combined))
+            else:
+                still_need_symbols = list(need_sync_symbols)
+        except Exception as exc:
+            log.warning("QuantDB parquet read failed, falling back: %s", exc)
+            still_need_symbols = list(need_sync_symbols)
     else:
         still_need_symbols = list(need_sync_symbols)
 
@@ -1273,25 +1336,25 @@ def run_sync(
                 result["errors"].append(f"{sym}: {exc}")
                 log.debug("PG upsert failed for %s: %s", sym, exc)
 
-    result["investment_data_synced"] = inv_count
+    result["quantdb_parquet_synced"] = qdb_count
     result["baostock_synced"] = bs_count
     result["akshare_synced"] = ak_count
     result["eltdx_synced"] = eltdx_count
 
-    log.info("Sync complete: inv=%d, baostock=%d, akshare=%d, eltdx=%d",
-             inv_count, bs_count, ak_count, eltdx_count)
+    log.info("Sync complete: quantdb_parquet=%d, baostock=%d, akshare=%d, eltdx=%d",
+             qdb_count, bs_count, ak_count, eltdx_count)
 
-    # 5. 更新 qlib bin
-    if update_qlib and all_new_data:
-        _update_sync_progress("qlib_bin", "更新Qlib二进制文件...", pct=75)
-        combined = pd.concat(all_new_data, ignore_index=True)
+    # 5. 更新 Qlib 缓存 (从 QuantDB parquet 生成)
+    if update_qlib:
+        _update_sync_progress("qlib_cache", "更新Qlib缓存...", pct=75)
         try:
-            qlib_updated = _update_qlib_bin(combined)
-            result["qlib_bin_updated"] = qlib_updated
-            log.info("Qlib bin updated: %d symbols", qlib_updated)
+            from backend.services.engine.qlib_data_builder import ensure_qlib_cache
+            ensure_qlib_cache(quantdb_dir)
+            result["qlib_cache_updated"] = True
+            log.info("Qlib cache updated from parquet")
         except Exception as exc:
-            result["errors"].append(f"qlib_bin: {exc}")
-            log.warning("Qlib bin update failed: %s", exc)
+            result["errors"].append(f"qlib_cache: {exc}")
+            log.warning("Qlib cache update failed: %s", exc)
 
     # 5.5 更新股票名称 + 同步多市场表
     _update_sync_progress("stock_names", "更新股票名称...", pct=78)
@@ -1570,11 +1633,11 @@ def main():
     log.info("=" * 60)
     log.info("Sync result:")
     log.info("  Mode: %s", result["mode"])
-    log.info("  investment_data: %d symbols", result["investment_data_synced"])
+    log.info("  quantdb_parquet: %d symbols", result["quantdb_parquet_synced"])
     log.info("  baostock: %d symbols", result["baostock_synced"])
     log.info("  akshare: %d symbols", result["akshare_synced"])
     log.info("  eltdx: %d symbols", result["eltdx_synced"])
-    log.info("  qlib_bin updated: %d symbols", result["qlib_bin_updated"])
+    log.info("  qlib_cache updated: %s", result["qlib_cache_updated"])
     log.info("  indicators calibrated: %s", result["indicators_calibrated"])
     if result["errors"]:
         log.warning("  errors: %d", len(result["errors"]))

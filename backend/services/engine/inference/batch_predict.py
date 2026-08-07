@@ -38,7 +38,8 @@ def run_batch_inference(model_id="model_qlib", target_date=None):
     :param target_date: 推理日期，默认为 Qlib 日历最后一天
     """
     # 1. 初始化 Qlib
-    provider_uri = str(PROJECT_ROOT / "db" / "qlib_data")
+    from backend.shared.qlib_paths import resolve_qlib_provider_uri
+    provider_uri = resolve_qlib_provider_uri()
     qlib.init(provider_uri=provider_uri, region="cn")
 
     # 2. 确定日期

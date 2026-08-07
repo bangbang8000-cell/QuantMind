@@ -92,34 +92,44 @@ export const TaskProvider: React.FC<{ children: React.ReactNode }> = ({ children
 
   const miningWsRef = useRef<WebSocket | null>(null);
   const miningPollingRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const miningWsTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const miningDataPointsRef = useRef(0);
+  const mountedRef = useRef(true);
 
-  // Chart data helper
-  const pushMiningDataPoint = useCallback(() => {
-    miningDataPointsRef.current += 1;
-    const n = miningDataPointsRef.current;
-    const startDate = new Date('2020-01-01');
-    const d = new Date(startDate);
-    d.setDate(d.getDate() + n * 7);
-    const dateStr = d.toISOString().split('T')[0];
-
-    setMiningEquityCurve((prev: TimeSeriesData[]) => [
-      ...prev,
-      { date: dateStr, value: 1 + n * 0.003 + (Math.random() - 0.5) * 0.02 },
-    ]);
-    setMiningDrawdownCurve((prev: TimeSeriesData[]) => [
-      ...prev,
-      { date: dateStr, value: -0.02 - n * 0.001 + (Math.random() - 0.5) * 0.01 },
-    ]);
-    setMiningIcTimeSeries((prev: TimeSeriesData[]) => [
-      ...prev,
-      { date: dateStr, value: 0.05 + Math.sin(n * 0.1) * 0.02 + (Math.random() - 0.5) * 0.01 },
-    ]);
+  // Cleanup on unmount: clear all polling intervals, WS connections, and
+  // the recursive setTimeout inside connectMiningWs, and prevent stale state updates.
+  useEffect(() => {
+    mountedRef.current = true;
+    return () => {
+      mountedRef.current = false;
+      // Clear mining polling
+      if (miningPollingRef.current) {
+        clearInterval(miningPollingRef.current);
+        miningPollingRef.current = null;
+      }
+      // Clear mining WS
+      miningWsRef.current?.close();
+      miningWsRef.current = null;
+      // Clear the recursive setTimeout from connectMiningWs
+      if (miningWsTimeoutRef.current) {
+        clearTimeout(miningWsTimeoutRef.current);
+        miningWsTimeoutRef.current = null;
+      }
+      // Clear backtest polling
+      if (backtestPollingRef.current) {
+        clearInterval(backtestPollingRef.current);
+        backtestPollingRef.current = null;
+      }
+      // Clear backtest WS
+      backtestWsRef.current?.close();
+      backtestWsRef.current = null;
+    };
   }, []);
 
   // WS handler for mining
   const handleMiningWsMessage = useCallback(
     (msg: WsMessage) => {
+      if (!mountedRef.current) return;
       setMiningTask((prev: Task | null) => {
         if (!prev) return prev;
         const updated = { ...prev };
@@ -129,9 +139,6 @@ export const TaskProvider: React.FC<{ children: React.ReactNode }> = ({ children
             updated.status = msg.data.phase === 'completed' ? 'completed' : 'running';
             if (msg.data.timeline) updated.timeline = msg.data.timeline;
             if (msg.data.tokenUsage) updated.tokenUsage = msg.data.tokenUsage;
-            if (['backtesting', 'analyzing', 'completed'].includes(msg.data.phase)) {
-              pushMiningDataPoint();
-            }
             break;
           case 'log':
             // Increased frontend log retention limit from 99 to 2000
@@ -217,7 +224,7 @@ export const TaskProvider: React.FC<{ children: React.ReactNode }> = ({ children
         return updated;
       });
     },
-    [pushMiningDataPoint],
+    [],
   );
 
   // Start mining (real backend)
@@ -240,6 +247,7 @@ export const TaskProvider: React.FC<{ children: React.ReactNode }> = ({ children
         const resp = await apiStartMining({
           direction,
           market: config.miningMarket || 'a_share',
+          universe: config.universe || defaults.defaultUniverse || 'csi300',
           dataSource: config.dataSource || 'qlib_bin',
           numDirections: config.numDirections || defaults.defaultNumDirections || 2,
           maxRounds: config.maxRounds || defaults.defaultMaxRounds || 3,
@@ -269,17 +277,26 @@ export const TaskProvider: React.FC<{ children: React.ReactNode }> = ({ children
           resp.data.taskId,
           handleMiningWsMessage,
           () => {
+            if (!mountedRef.current) return;
             getMiningStatus(resp.data!.taskId).then((r) => {
-              if (r.data?.task) setMiningTask(r.data.task as Task);
+              if (r.data?.task && mountedRef.current) setMiningTask(r.data.task as Task);
             });
           },
         );
         miningWsRef.current = ws;
+        // Track the recursive setTimeout from connectMiningWs for cleanup
+        miningWsTimeoutRef.current = (ws as any)._pollingTimeoutId ?? null;
 
         // Polling fallback
         miningPollingRef.current = setInterval(async () => {
+          if (!mountedRef.current) {
+            clearInterval(miningPollingRef.current!);
+            miningPollingRef.current = null;
+            return;
+          }
           try {
             const r = await getMiningStatus(resp.data!.taskId);
+            if (!mountedRef.current) return;
             if (r.data?.task) {
               const t = r.data.task as Task;
               if (t.status === 'completed' || t.status === 'failed') {
@@ -294,133 +311,49 @@ export const TaskProvider: React.FC<{ children: React.ReactNode }> = ({ children
         }, 10000);
       } catch (err: any) {
         console.error('Failed to start mining task:', err);
-        // Fall back to mock
-        startMockMining(config);
+        // Set error state instead of falling back to mock data
+        setMiningTask({
+          taskId: '',
+          status: 'failed',
+          config,
+          progress: {
+            phase: 'parsing',
+            currentRound: 0,
+            totalRounds: config.maxRounds || 3,
+            progress: 0,
+            message: `启动失败: ${err?.message || '无法连接后端服务'}`,
+            timestamp: new Date().toISOString(),
+          },
+          logs: [{
+            id: generateId(),
+            timestamp: new Date().toISOString(),
+            level: 'error' as const,
+            message: `启动挖掘任务失败: ${err?.message || '无法连接后端服务，请检查网络或登录状态'}`,
+          }],
+          createdAt: new Date().toISOString(),
+          updatedAt: new Date().toISOString(),
+        });
       }
     },
     [handleMiningWsMessage],
   );
 
-  // Mock mining fallback
-  const startMockMining = useCallback(
-    (config: TaskConfig) => {
-      const newTask: Task = {
-        taskId: generateId(),
-        status: 'running',
-        config,
-        progress: {
-          phase: 'parsing',
-          currentRound: 0,
-          totalRounds: config.maxRounds || 7,
-          progress: 0,
-          message: '正在解析用户需求...',
-          timestamp: new Date().toISOString(),
-        },
-        logs: [],
-        createdAt: new Date().toISOString(),
-        updatedAt: new Date().toISOString(),
-      };
-      setMiningTask(newTask);
-      setMiningEquityCurve([]);
-      setMiningDrawdownCurve([]);
-      setMiningIcTimeSeries([]);
-      miningDataPointsRef.current = 0;
-
-      const phases = ['parsing', 'planning', 'evolving', 'backtesting', 'analyzing', 'completed'] as const;
-      let phaseIdx = 0;
-      let progress = 0;
-      let round = 1;
-
-      const logMessages: Record<string, string[]> = {
-        parsing: ['解析需求关键词...', '识别策略类型...', '生成研究方向...'],
-        planning: ['规划探索路径...', '初始化进化框架...', '准备种子因子...'],
-        evolving: ['生成因子假设...', '构建表达式...', '计算因子值...', '评估质量...'],
-        backtesting: ['执行回测计算...', '计算IC指标...', '评估收益曲线...', '分析因子质量...'],
-        analyzing: ['综合分析结果...', '生成评估报告...', '优化因子组合...'],
-        completed: ['任务完成!', '结果已生成!'],
-      };
-
-      const interval = setInterval(() => {
-        progress += 10 + Math.random() * 15;
-        if (progress >= 100 && phaseIdx < phases.length - 1) {
-          phaseIdx++;
-          progress = 0;
-          if (phases[phaseIdx] === 'evolving') round++;
-        }
-        const phase = phases[phaseIdx];
-        const msgs = logMessages[phase];
-        const msg = msgs[Math.floor(Math.random() * msgs.length)];
-
-        const dp = miningDataPointsRef.current;
-        const metrics: RealtimeMetrics | undefined =
-          ['backtesting', 'analyzing', 'completed'].includes(phase)
-            ? {
-                ic: 0.05 + Math.random() * 0.03,
-                icir: 0.5 + Math.random() * 0.3,
-                rankIc: 0.04 + Math.random() * 0.03,
-                rankIcir: 0.45 + Math.random() * 0.3,
-                annualReturn: 0.12 + Math.random() * 0.08,
-                sharpeRatio: 1.2 + Math.random() * 0.5,
-                maxDrawdown: -(0.08 + Math.random() * 0.05),
-                totalFactors: Math.min(50 + dp * 2, 80),
-                highQualityFactors: Math.min(15 + Math.floor(dp * 0.7), 25),
-                mediumQualityFactors: Math.min(20 + Math.floor(dp * 0.8), 30),
-                lowQualityFactors: Math.min(10 + Math.floor(dp * 0.5), 20),
-              }
-            : undefined;
-
-        if (['backtesting', 'analyzing', 'completed'].includes(phase)) {
-          pushMiningDataPoint();
-        }
-
-        setMiningTask((prev: Task | null) => {
-          if (!prev) return prev;
-          return {
-            ...prev,
-            status: phase === 'completed' ? 'completed' : 'running',
-            progress: {
-              phase: phase as any,
-              currentRound: round,
-              totalRounds: config.maxRounds || 7,
-              progress,
-              message: msg,
-              timestamp: new Date().toISOString(),
-            },
-            metrics,
-            logs: [
-              ...(prev.logs || []),
-              {
-                id: generateId(),
-                timestamp: new Date().toISOString(),
-                level: (Math.random() > 0.95 ? 'warning' : 'info') as 'warning' | 'info',
-                message: msg,
-              },
-            ].slice(-30),
-            updatedAt: new Date().toISOString(),
-          };
-        });
-
-        if (phase === 'completed') clearInterval(interval);
-      }, 300);
-    },
-    [pushMiningDataPoint],
-  );
-
   // Public start mining
   const startMining = useCallback(
     (config: TaskConfig) => {
-      if (backendAvailable) {
-        startRealMining(config);
-      } else {
-        startMockMining(config);
-      }
+      startRealMining(config);
     },
-    [backendAvailable, startRealMining, startMockMining],
+    [startRealMining],
   );
 
   // Stop mining
   const stopMining = useCallback(async () => {
     if (!miningTask) return;
+    // Clear the recursive setTimeout from connectMiningWs
+    if (miningWsTimeoutRef.current) {
+      clearTimeout(miningWsTimeoutRef.current);
+      miningWsTimeoutRef.current = null;
+    }
     miningWsRef.current?.close();
     miningWsRef.current = null;
     if (miningPollingRef.current) {
@@ -440,6 +373,10 @@ export const TaskProvider: React.FC<{ children: React.ReactNode }> = ({ children
   // Reset mining task
   const resetMiningTask = useCallback(() => {
     // Ensure stopped first
+    if (miningWsTimeoutRef.current) {
+      clearTimeout(miningWsTimeoutRef.current);
+      miningWsTimeoutRef.current = null;
+    }
     miningWsRef.current?.close();
     miningWsRef.current = null;
     if (miningPollingRef.current) {
@@ -466,6 +403,7 @@ export const TaskProvider: React.FC<{ children: React.ReactNode }> = ({ children
   // because React StrictMode double-invokes updater functions in development mode,
   // which would cause every log entry to be added twice.
   const handleBacktestWsMessage = useCallback((msg: WsMessage) => {
+    if (!mountedRef.current) return;
     switch (msg.type) {
       case 'progress':
         setBacktestTask((prev: BacktestTask | null) => {
@@ -517,8 +455,9 @@ export const TaskProvider: React.FC<{ children: React.ReactNode }> = ({ children
         resp.data.taskId,
         handleBacktestWsMessage,
         () => {
+          if (!mountedRef.current) return;
           getBacktestStatus(resp.data!.taskId).then((r) => {
-            if (r.data?.task) setBacktestTask(r.data.task as unknown as BacktestTask);
+            if (r.data?.task && mountedRef.current) setBacktestTask(r.data.task as unknown as BacktestTask);
           });
         },
       );
@@ -526,8 +465,14 @@ export const TaskProvider: React.FC<{ children: React.ReactNode }> = ({ children
 
       // Polling fallback
       backtestPollingRef.current = setInterval(async () => {
+        if (!mountedRef.current) {
+          clearInterval(backtestPollingRef.current!);
+          backtestPollingRef.current = null;
+          return;
+        }
         try {
           const r = await getBacktestStatus(resp.data!.taskId);
+          if (!mountedRef.current) return;
           if (r.data?.task) {
             const t = r.data.task as unknown as BacktestTask;
 

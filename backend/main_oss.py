@@ -26,9 +26,17 @@ from backend.shared.logging_config import setup_logging
 setup_logging(service_name="quantmind-oss")
 logger = logging.getLogger(__name__)
 
+# 后台管理页面写入的运行时密钥（config/runtime.env），真实环境变量优先
+from backend.shared.runtime_secrets import load_runtime_env
+_runtime_loaded = load_runtime_env()
+if _runtime_loaded:
+    logger.info("Loaded %d runtime secrets from runtime.env", _runtime_loaded)
+
 # ── Qlib 数据目录修复 ──
 # features_real 是实际数据目录，Qlib 期望 features/
-_qlib_cn = "/app/db/qlib_data/cn_data"
+# 通过 qlib_paths 统一解析，优先 QuantDB 缓存路径
+from backend.shared.qlib_paths import resolve_qlib_provider_uri
+_qlib_cn = resolve_qlib_provider_uri()
 if os.path.isdir(_qlib_cn):
     _features = os.path.join(_qlib_cn, "features")
     _features_real = os.path.join(_qlib_cn, "features_real")

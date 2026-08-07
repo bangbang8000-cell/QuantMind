@@ -30,9 +30,11 @@ _ALLOWED_MODEL_TYPES = {
     "lightgbm", "xgboost", "catboost", "linear",
     # Deep learning models (Tier 2) — require sequential data / Qlib
     "gru", "lstm", "alstm", "transformer", "tabnet", "tcn",
+    # Custom DL models (Tier 3) — non-Qlib PyTorch models
+    "nativetft",
 }
 _TREE_MODEL_TYPES = {"lightgbm", "xgboost", "catboost", "linear"}
-_DL_MODEL_TYPES = {"gru", "lstm", "alstm", "transformer", "tabnet", "tcn"}
+_DL_MODEL_TYPES = {"gru", "lstm", "alstm", "transformer", "tabnet", "tcn", "nativetft"}
 # 市场 → exchange_calendars 日历名。CRYPTO 为 7x24 无休市，不在此映射中。
 _MARKET_TO_XCAL = {"CN": "XSHG", "US": "XNYS", "HK": "XHKG"}
 
@@ -71,7 +73,7 @@ _TRAINING_BASE_FEATURES = [
     "mom_ret_20d",
     "liq_volume",
     "liq_amount",
-    "liq_turnover_os",
+    "fun_turnover_1",
 ]
 _training_log_stream = TrainingRunLogStream()
 DEFAULT_TRAINING_IMAGE = (
@@ -311,6 +313,9 @@ def _normalize_payload(payload: dict[str, Any], allowed_features: list[str]) -> 
     xgb_params = payload.get("xgb_params", {}) or {}
     if not isinstance(xgb_params, dict):
         raise HTTPException(status_code=422, detail="xgb_params must be an object")
+    # LightGBM max_depth=-1 convention is invalid for XGBoost; strip it
+    if isinstance(xgb_params.get("max_depth"), (int, float)) and xgb_params["max_depth"] < 0:
+        xgb_params = {k: v for k, v in xgb_params.items() if k != "max_depth"}
 
     catboost_params = payload.get("catboost_params", {}) or {}
     if not isinstance(catboost_params, dict):

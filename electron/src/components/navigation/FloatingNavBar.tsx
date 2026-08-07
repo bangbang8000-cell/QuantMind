@@ -1,7 +1,6 @@
 import React from 'react';
 import {
   ArrowLeftRight,
-  BarChart3,
   Boxes,
   Layers,
   CircleUserRound,
@@ -17,7 +16,7 @@ import {
   TestTube2,
   Brain
 } from 'lucide-react';
-import { motion, AnimatePresence } from 'framer-motion';
+import { motion } from 'framer-motion';
 import { useSelector } from 'react-redux';
 
 interface FloatingNavBarProps {
@@ -49,7 +48,6 @@ export const FloatingNavBar: React.FC<FloatingNavBarProps> = ({ current, onChang
     { id: 'rss-news', label: 'RSS信息流', icon: Rss },
     { id: 'alpha-research', label: 'Alpha研究', icon: TestTube2 },
     { id: 'trading-agents', label: '投研分析', icon: Brain },
-    { id: 'daily-analysis', label: '智能分析', icon: BarChart3 },
     { id: 'profile', label: '个人中心', icon: CircleUserRound }
   ];
 
@@ -59,84 +57,49 @@ export const FloatingNavBar: React.FC<FloatingNavBarProps> = ({ current, onChang
 
   const groupedNavItems: NavItemConfig[][] = [
     navItems.filter((item) => ['dashboard', 'strategy', 'ai-ide', 'strategy-lab', 'backtest', 'agent'].includes(item.id)),
-    navItems.filter((item) => ['model-training', 'model-registry', 'research', 'trading', 'rss-news', 'alpha-research', 'trading-agents', 'daily-analysis'].includes(item.id)),
+    navItems.filter((item) => ['model-training', 'model-registry', 'research', 'trading', 'rss-news', 'alpha-research', 'trading-agents'].includes(item.id)),
     navItems.filter((item) => ['profile', 'admin'].includes(item.id))
   ].filter((group) => group.length > 0);
 
   return (
-    <nav className="floating-nav-container pointer-events-none" style={{ zIndex: 1050 }}>
-      <motion.div
-        className="floating-nav-bar pointer-events-auto"
-        initial={{ y: 20, opacity: 0 }}
-        animate={{ y: 0, opacity: 1 }}
-        transition={{ type: "spring", stiffness: 260, damping: 20 }}
-      >
-        <div className="nav-shell">
-          {groupedNavItems.map((group, groupIndex) => (
-            <React.Fragment key={`group-${groupIndex}`}>
-              <div className="nav-group">
-                {group.map((item) => {
-                  const Icon = item.icon;
-                  const isActive = current === item.id;
+    <nav className="bottom-dock" aria-label="主导航">
+      <div className="bottom-dock-inner">
+        {groupedNavItems.map((group, groupIndex) => (
+          <React.Fragment key={`group-${groupIndex}`}>
+            <div className="dock-group">
+              {group.map((item) => {
+                const Icon = item.icon;
+                const isActive = current === item.id;
 
-                  return (
-                    <button
-                      key={item.id}
-                      type="button"
-                      onClick={() => onChange?.(item.id)}
-                      className={`nav-item group relative ${isActive ? 'active' : ''}`}
-                      aria-current={isActive ? 'page' : undefined}
-                    >
-                      <span className="nav-item-glow" aria-hidden="true" />
-                      <div className="nav-item-content relative z-10">
-                        <motion.div
-                          animate={{
-                            scale: isActive ? 1.08 : 1,
-                            y: isActive ? -2 : 0,
-                            color: isActive ? 'var(--primary-blue)' : 'var(--slate-600)'
-                          }}
-                          whileHover={{ scale: 1.15, y: -4 }}
-                          transition={{ type: 'spring', stiffness: 320, damping: 22 }}
-                          className="flex flex-col items-center gap-1"
-                        >
-                          <Icon className="nav-icon" />
-                          <span className="nav-label">
-                            {item.label}
-                          </span>
-                        </motion.div>
-                      </div>
-
-                      <AnimatePresence initial={false}>
-                        {isActive && (
-                          <motion.div
-                            layoutId="nav-active-bubble"
-                            className="nav-active-bubble absolute inset-0 z-0"
-                            transition={{ type: "spring", bounce: 0.18, duration: 0.34 }}
-                          >
-                            <span className="nav-active-bar" aria-hidden="true" />
-                          </motion.div>
-                        )}
-                      </AnimatePresence>
-
-                      {!isActive && (
-                        <motion.div
-                          className="nav-hover-bubble absolute inset-0 z-0"
-                          initial={{ opacity: 0 }}
-                          whileHover={{ opacity: 1 }}
-                          transition={{ duration: 0.2 }}
-                        />
-                      )}
-                    </button>
-                  );
-                })}
-              </div>
-              {groupIndex < groupedNavItems.length - 1 && (
-                <span className="nav-divider" aria-hidden="true" />
-              )}
-            </React.Fragment>
-          ))}
-        </div>
-      </motion.div>
+                return (
+                  <button
+                    key={item.id}
+                    type="button"
+                    onClick={() => onChange?.(item.id)}
+                    className={`dock-item ${isActive ? 'active' : ''}`}
+                    aria-current={isActive ? 'page' : undefined}
+                    title={item.label}
+                  >
+                    {isActive && (
+                      <motion.span
+                        layoutId="dock-active-indicator"
+                        className="dock-active-indicator"
+                        transition={{ type: 'spring', bounce: 0.15, duration: 0.32 }}
+                        aria-hidden="true"
+                      />
+                    )}
+                    <Icon className="dock-icon" />
+                    <span className="dock-label">{item.label}</span>
+                  </button>
+                );
+              })}
+            </div>
+            {groupIndex < groupedNavItems.length - 1 && (
+              <span className="dock-divider" aria-hidden="true" />
+            )}
+          </React.Fragment>
+        ))}
+      </div>
     </nav>
   );
 };

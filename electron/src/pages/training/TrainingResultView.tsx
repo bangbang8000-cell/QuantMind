@@ -105,6 +105,15 @@ export const TrainingResultView: React.FC<TrainingResultViewProps> = ({
         ) : null}
         {result ? (
           <div className="space-y-4">
+            {result.metrics?.score_direction === 'reversed' && (
+              <Alert
+                type="warning"
+                showIcon
+                message="检测到反向模型"
+                description="验证集 IC < 0，模型预测方向与实际收益相反（高分=跌，低分=涨）。推理时已自动翻转分数，但建议检查特征选择是否合理或重新训练。"
+                className="rounded-2xl border-amber-100 bg-amber-50/70"
+              />
+            )}
             <Alert
               type="success"
               showIcon

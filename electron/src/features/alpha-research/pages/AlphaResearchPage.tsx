@@ -19,7 +19,7 @@ export default function AlphaResearchPage() {
   return (
     <div
       data-theme="alpha-research"
-      style={{ height: '100vh', width: '100%', overflow: 'auto', position: 'relative' }}
+      style={{ height: '100%', width: '100%', overflow: 'auto', position: 'relative' }}
     >
       <AppRoot />
     </div>

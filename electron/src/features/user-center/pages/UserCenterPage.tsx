@@ -233,7 +233,7 @@ const UserCenterPage: React.FC = () => {
           className="overflow-y-auto custom-scrollbar bg-slate-50/50"
           style={{ height: 'calc(100% - 60px)', scrollbarGutter: 'stable' }}
         >
-          <div className="max-w-[1320px] mx-auto px-6 py-5" style={{ paddingBottom: '50px' }}>
+          <div className="max-w-[1320px] mx-auto px-6 py-5" style={{ paddingBottom: '20px' }}>
             {/* 用户概览卡片 */}
             <div className="bg-white rounded-[32px] border border-slate-100 p-6 mb-6">
               {profileLoading ? (

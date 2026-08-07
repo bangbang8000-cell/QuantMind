@@ -19,6 +19,7 @@ from backend.services.engine.qlib_app.utils.recording_strategy import (
     DynamicRiskMixin,
     RedisLoggerMixin,
     RedisWeightStrategy,
+    strip_unsupported_kwargs,
 )
 from backend.services.engine.qlib_app.utils.structured_logger import StructuredTaskLogger
 
@@ -47,7 +48,15 @@ def _find_margin_txt() -> str | None:
     except Exception:
         pass
 
-    # 2. 常见相对于项目根目录的路径（与 backtest_service.py 保持一致）
+    # 2. 通过 qlib_paths 统一解析（优先 QuantDB 缓存）
+    try:
+        from backend.shared.qlib_paths import resolve_qlib_instruments_path
+        margin_path = str(resolve_qlib_instruments_path()).replace("all.txt", "margin.txt")
+        candidates.insert(0, margin_path)
+    except Exception:
+        pass
+
+    # 3. 常见相对于项目根目录的路径（兼容回退）
     try:
         curr = os.path.abspath(__file__)
         for _ in range(10):
@@ -148,6 +157,9 @@ class RedisTopkStrategy(DynamicRiskMixin, TopkDropoutStrategy, RedisLoggerMixin)
         for k in list(kwargs.keys()):
             if k in _OUR_KWARGS or k == "rebalance_days":
                 kwargs.pop(k, None)
+
+        # 兜底：剔除 qlib 签名不接受的其余参数（如前端传入但未实现的 momentum_period）
+        strip_unsupported_kwargs(type(self), kwargs, strategy_name="RedisTopkStrategy")
 
         # 全局规则：选股时剔除涨停/跌停/停牌股，避免无效名额占用
         kwargs.setdefault("only_tradable", True)
@@ -329,6 +341,7 @@ class RedisLongShortTopkStrategy(DynamicRiskMixin, WeightStrategyBase, RedisLogg
         self.init_redis(kwargs)
         self.init_dynamic_risk(kwargs)
         clean_kwargs = {k: v for k, v in kwargs.items() if k not in _OUR_KWARGS}
+        strip_unsupported_kwargs(type(self), clean_kwargs, strategy_name="RedisLongShortTopkStrategy")
         super().__init__(*args, **clean_kwargs)
 
     def reset(self, *args, **kwargs):
@@ -669,6 +682,7 @@ class RedisSectorRotationStrategy(DynamicRiskMixin, TopkDropoutStrategy, RedisLo
 
         for k in _OUR_KWARGS:
             kwargs.pop(k, None)
+        strip_unsupported_kwargs(type(self), kwargs, strategy_name="RedisSectorRotationStrategy")
         super().__init__(*args, **kwargs)
 
     def generate_trade_decision(self, execute_result=None):
@@ -746,14 +760,7 @@ class RedisStopLossStrategy(DynamicRiskMixin, TopkDropoutStrategy, RedisLoggerMi
         for k in _OUR_KWARGS:
             kwargs.pop(k, None)
         # 安全兜底：移除所有 Qlib BaseStrategy 不认识的剩余参数，避免意外传递
-        for k in list(kwargs.keys()):
-            if k not in ("topk", "n_drop", "method_sell", "method_buy",
-                         "hold_thresh", "only_tradable", "forbid_all_trade_at_limit",
-                         "signal", "model", "dataset", "risk_degree",
-                         "trade_exchange", "level_infra", "common_infra",
-                         "outer_trade_decision"):
-                logger.warning("stripping unexpected kwarg: %s", k)
-                kwargs.pop(k, None)
+        strip_unsupported_kwargs(type(self), kwargs, strategy_name="RedisStopLossStrategy")
         # 全局规则：选股时剔除涨停/跌停/停牌股
         kwargs.setdefault("only_tradable", True)
         super().__init__(*args, **kwargs)

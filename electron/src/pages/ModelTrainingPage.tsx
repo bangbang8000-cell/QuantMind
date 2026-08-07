@@ -15,7 +15,7 @@ import { modelTrainingService } from '../services/modelTrainingService';
 import { useAppSelector } from '../store';
 import { selectCurrentMarket } from '../store/slices/uiSlice';
 import { getMarketConfig } from '../config/marketConfig';
-import { TrainingTarget, TrainingParams, TrainingContext, TrainingStatus, TrainingDraft, SplitKey, TimePeriodMap, FeatureCategory, STORAGE_KEY, DEFAULT_FEATURE_CATEGORIES, PRESET_DEFAULT_FEATURES, MARKET_DEFAULT_FEATURES, getDefaultFeaturesForMarket, resolveDefaultSelectedFeatures, DEFAULT_TIME_PERIODS, DEFAULT_TARGET, DEFAULT_PARAMS, DEFAULT_CONTEXT, buildAutoDisplayName, buildLabelFormula, buildEffectiveTradeDate, daysBetween, toISOStringRange, restoreRange, shouldMigrateLegacyDraftPeriods, buildTrainingRequest, formatRange, toDynamicCategories, TrainingResult, buildBackendTrainingPayload, parseTrainingResult, parseSuggestedTimePeriods } from './training/trainingUtils';
+import { TrainingTarget, TrainingParams, TrainingContext, TrainingStatus, TrainingDraft, SplitKey, TimePeriodMap, FeatureCategory, STORAGE_KEY, DEFAULT_FEATURE_CATEGORIES, PRESET_DEFAULT_FEATURES, MARKET_DEFAULT_FEATURES, getDefaultFeaturesForMarket, resolveDefaultSelectedFeatures, DEFAULT_TIME_PERIODS, DEFAULT_TARGET, DEFAULT_PARAMS, DEFAULT_CONTEXT, buildAutoDisplayName, buildLabelFormula, buildEffectiveTradeDate, daysBetween, toISOStringRange, restoreRange, shouldMigrateLegacyDraftPeriods, buildTrainingRequest, formatRange, toDynamicCategories, TrainingResult, buildBackendTrainingPayload, parseTrainingResult, parseSuggestedTimePeriods, MODEL_DL_DEFAULTS } from './training/trainingUtils';
 import { AdminModelFeatureDataCoverage } from '../features/admin/types';
 import { FeatureSelector } from './training/FeatureSelector';
 import { TrainingTargetConfig } from './training/TrainingTargetConfig';
@@ -175,7 +175,18 @@ export const ModelTrainingPage: React.FC = () => {
         test: restoreRange(parsed.timePeriods?.test, DEFAULT_TIME_PERIODS.test),
       });
       setTarget(parsed.target || DEFAULT_TARGET);
-      setParams({ ...DEFAULT_PARAMS, ...parsed.params });
+      const restoredParams = { ...DEFAULT_PARAMS, ...parsed.params };
+      if (!parsed.params?.model_types && parsed.params?.model_type) {
+        restoredParams.model_types = [parsed.params.model_type];
+      }
+      // 从 localStorage 恢复时，如果保存的 params 与当前 model_type 的推荐默认值不同，
+      // 用 MODEL_DL_DEFAULTS 覆盖（确保加载正确模型的参数）
+      if (restoredParams.model_type && MODEL_DL_DEFAULTS[restoredParams.model_type]) {
+        const defaults = MODEL_DL_DEFAULTS[restoredParams.model_type];
+        // 只覆盖 DL 参数，不覆盖树模型/线性模型参数
+        Object.assign(restoredParams, defaults);
+      }
+      setParams(restoredParams);
       setContext({ ...DEFAULT_CONTEXT, ...parsed.context });
       setDisplayNameMode(parsed.displayNameMode || 'auto');
       setDisplayName(parsed.displayName || autoDisplayName);
@@ -211,6 +222,12 @@ export const ModelTrainingPage: React.FC = () => {
       pollTimerRef.current = null;
     }
   };
+
+  useEffect(() => {
+    return () => {
+      clearTimers();
+    };
+  }, []);
 
   const pushLog = (line: string) => {
     const next = [...logsRef.current, `[${dayjs().format('HH:mm:ss')}] ${line}`];

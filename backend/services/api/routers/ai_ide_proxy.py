@@ -32,11 +32,14 @@ _HOP_HEADERS = {
     "content-length",
 }
 
+# 客户端绝不允许自带身份/内部调用 Header — 否则可冒充任意用户
+_UNTRUSTED_CLIENT_HEADERS = {"x-user-id", "x-tenant-id", "x-internal-call"}
+
 
 def _sanitize_request_headers(headers: Iterable, user: dict | None = None) -> dict[str, str]:
     out: dict[str, str] = {}
     for k, v in headers:
-        if k.lower() in _HOP_HEADERS:
+        if k.lower() in _HOP_HEADERS or k.lower() in _UNTRUSTED_CLIENT_HEADERS:
             continue
         out[k] = v
 

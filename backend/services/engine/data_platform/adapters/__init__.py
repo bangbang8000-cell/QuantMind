@@ -4,8 +4,8 @@
     from backend.services.engine.data_platform.adapters import register_all
     register_all()
 
-D3 第一批：baostock / efinance / qstock / investment_data / eltdx
-D4 第二批：tdx_api / injoyai_tdx / simonlin_a_stock / mootdx / akshare
+A 股唯一数据源为 quantdb_local（本地 parquet）。
+akshare / efinance / yahoo_finance / simonlin_global 仅服务 HK/US 市场。
 """
 
 from __future__ import annotations
@@ -27,28 +27,13 @@ def _collect() -> None:
     out: list[tuple[str, Callable[[], bool]]] = []
 
     for mod_name in (
-        # D3 第一批
-        "backend.services.engine.data_platform.adapters.baostock_adapter",
-        "backend.services.engine.data_platform.adapters.efinance_adapter",
-        "backend.services.engine.data_platform.adapters.qstock_adapter",
-        "backend.services.engine.data_platform.adapters.investment_data_adapter",
-        "backend.services.engine.data_platform.adapters.eltdx_adapter",
-        # D4 第二批
-        "backend.services.engine.data_platform.adapters.akshare_adapter",
-        "backend.services.engine.data_platform.adapters.mootdx_adapter",
-        "backend.services.engine.data_platform.adapters.tdx_api_adapter",
-        "backend.services.engine.data_platform.adapters.injoyai_tdx_adapter",
-        "backend.services.engine.data_platform.adapters.simonlin_a_stock_adapter",
-        # 第三批：Yahoo Finance + simonlin_global
+        # A 股唯一数据源：QuantDB 本地 parquet
+        "backend.services.engine.data_platform.adapters.quantdb_local_adapter",
+        # HK/US 市场数据源
         "backend.services.engine.data_platform.adapters.yahoo_finance_adapter",
         "backend.services.engine.data_platform.adapters.simonlin_global_adapter",
-        # 第四批：OpenBB-CN + easyquotation
-        "backend.services.engine.data_platform.adapters.openbb_adapter",
-        "backend.services.engine.data_platform.adapters.easyquotation_adapter",
-        # 第五批：QuantDB SDK（付费高质量数据源）
-        "backend.services.engine.data_platform.adapters.quantdb_adapter",
-        # 第六批：free-stockdb（开源本地量化数据引擎）
-        "backend.services.engine.data_platform.adapters.freestockdb_adapter",
+        "backend.services.engine.data_platform.adapters.akshare_adapter",
+        "backend.services.engine.data_platform.adapters.efinance_adapter",
     ):
         try:
             import importlib

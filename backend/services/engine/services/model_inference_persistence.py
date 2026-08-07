@@ -377,23 +377,35 @@ class ModelInferencePersistence:
             total_row = (
                 (
                     await session.execute(
-                        text(f"SELECT COUNT(*) AS total FROM qm_model_inference_runs WHERE {where_sql}"),
+                        text(
+                            f"""
+                            SELECT COUNT(*) FROM (
+                                SELECT DISTINCT ON (data_trade_date) data_trade_date
+                                FROM qm_model_inference_runs
+                                WHERE {where_sql}
+                            ) sub
+                            """
+                        ),
                         params,
                     )
                 )
                 .mappings()
                 .first()
             )
-            total = int((total_row or {}).get("total") or 0)
+            total = int((total_row or {}).get("count") or 0)
             rows = (
                 (
                     await session.execute(
                         text(
                             f"""
-                            SELECT *
-                            FROM qm_model_inference_runs
-                            WHERE {where_sql}
-                            ORDER BY created_at DESC
+                            SELECT * FROM (
+                                -- 同一天多批次去重：优先保留有信号的批次(signals_count>0)
+                                SELECT DISTINCT ON (data_trade_date) *
+                                FROM qm_model_inference_runs
+                                WHERE {where_sql}
+                                ORDER BY data_trade_date DESC, signals_count DESC, created_at DESC
+                            ) sub
+                            ORDER BY data_trade_date DESC
                             LIMIT :limit OFFSET :offset
                             """
                         ),

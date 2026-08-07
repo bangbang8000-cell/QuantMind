@@ -164,10 +164,11 @@ def get_strategy_config():
         )
 
     # Per-market strategy guidance notes (injected into system prompt for non-CN markets)
+    # provider_uri 通过 qlib_paths 动态解析，此处仅作提示文本
     _MARKET_STRATEGY_NOTES = {
         "HK": (
             "## 港股策略注意事项\n"
-            "- Qlib init: provider_uri='/app/db/qlib_data/hk_data', region='hk'\n"
+            "- Qlib init: provider_uri 通过 qlib_paths 解析（默认 /app/db/qlib_data/hk_data）, region='hk'\n"
             "- 股票代码格式：纯数字（如 '00700'），不含前缀\n"
             "- 基准指数：HSTECH（恒生科技指数）\n"
             "- 无涨跌停限制，但有市场波动调节机制(VCM)\n"
@@ -176,7 +177,7 @@ def get_strategy_config():
         ),
         "US": (
             "## 美股策略注意事项\n"
-            "- Qlib init: provider_uri='/app/db/qlib_data/us_data', region='us'\n"
+            "- Qlib init: provider_uri 通过 qlib_paths 解析（默认 /app/db/qlib_data/us_data）, region='us'\n"
             "- 股票代码格式：Ticker 符号（如 'AAPL', 'MSFT'）\n"
             "- 基准指数：SPY（标普500 ETF）\n"
             "- T+0 交易，无涨跌停限制\n"
@@ -185,7 +186,7 @@ def get_strategy_config():
         ),
         "CRYPTO": (
             "## 加密货币策略注意事项\n"
-            "- Qlib init: provider_uri='/app/db/qlib_data/crypto_data', region='crypto'\n"
+            "- Qlib init: provider_uri 通过 qlib_paths 解析（默认 /app/db/qlib_data/crypto_data）, region='crypto'\n"
             "- 资产代码格式：如 'BTC', 'ETH'\n"
             "- 基准：BTC\n"
             "- 7x24 交易，无交易日历限制\n"

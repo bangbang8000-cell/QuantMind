@@ -3,8 +3,10 @@ import { Card, CardContent, CardHeader, CardTitle } from '../components-v2/ui/Ca
 import { Button } from '../components-v2/ui/Button';
 import { Badge } from '../components-v2/ui/Badge';
 import { Settings, Save, RotateCcw, Eye, EyeOff, Check, X, AlertCircle, Loader2, Database, Sliders, Box, Cpu, Compass, Shuffle } from 'lucide-react';
-import { getSystemConfig, updateSystemConfig, healthCheck } from '../services-v2/api';
-import { REFERENCE_MINING_DIRECTIONS, getDirectionLabel, type MiningDirectionItem, importFeatureCatalogDirections } from '../utils-v2/miningDirections';
+import { healthCheck, getDataSummary, getUniverses } from '../services-v2/api';
+import { apiClient } from '../../../services/aiStrategyClients';
+import { REFERENCE_MINING_DIRECTIONS, getDirectionLabel, type MiningDirectionItem, importFeatureCatalogDirections, fetchMiningDirections } from '../utils-v2/miningDirections';
+import type { DataSummary, UniverseId, UniverseInfo } from '../types-v2';
 
 interface SystemConfig {
   // LLM
@@ -17,7 +19,7 @@ interface SystemConfig {
   // Parameters
   defaultNumDirections: number;
   defaultMaxRounds: number;
-  defaultMarket: 'csi300' | 'csi500' | 'sp500';
+  defaultUniverse: UniverseId;
   // Advanced
   parallelExecution: boolean;
   qualityGateEnabled: boolean;
@@ -36,7 +38,7 @@ const DEFAULT_CONFIG: SystemConfig = {
   resultsDir: '',
   defaultNumDirections: 2,
   defaultMaxRounds: 3,
-  defaultMarket: 'csi300',
+  defaultUniverse: 'csi300',
   parallelExecution: true,
   qualityGateEnabled: true,
   backtestTimeout: 600,
@@ -56,14 +58,25 @@ export const SettingsPage: React.FC = () => {
   const [isLoading, setIsLoading] = useState(true);
   const [isSaving, setIsSaving] = useState(false);
   const [backendStatus, setBackendStatus] = useState<'checking' | 'online' | 'offline'>('checking');
-  const [factorLibraries, setFactorLibraries] = useState<string[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [catalogDirections, setCatalogDirections] = useState<MiningDirectionItem[]>([]);
   const [catalogLoading, setCatalogLoading] = useState(false);
+  const [dataSummary, setDataSummary] = useState<DataSummary | null>(null);
+  const [universes, setUniverses] = useState<UniverseInfo[]>([]);
+  const [l1Directions, setL1Directions] = useState<MiningDirectionItem[]>([]);
 
   // Load config from backend on mount
   useEffect(() => {
     loadConfig();
+    getDataSummary()
+      .then((res) => setDataSummary(res.data ?? null))
+      .catch(() => {});
+    getUniverses()
+      .then((res) => setUniverses(res.data?.universes ?? []))
+      .catch(() => {});
+    fetchMiningDirections()
+      .then(setL1Directions)
+      .catch(() => {});
   }, []);
 
   const loadConfig = async () => {
@@ -78,58 +91,21 @@ export const SettingsPage: React.FC = () => {
       setBackendStatus('offline');
     }
 
-    // Load config
+    // Load config from localStorage (backend config is managed via .env and admin panel)
     try {
-      const resp = await getSystemConfig();
-      if (resp.success && resp.data) {
-        const env = resp.data.env || {};
-        const saved = localStorage.getItem('quantaalpha_config');
-        let miningDirectionMode = DEFAULT_CONFIG.miningDirectionMode;
-        let selectedMiningDirectionIndices = DEFAULT_CONFIG.selectedMiningDirectionIndices;
-        if (saved) {
-          try {
-            const parsed = JSON.parse(saved);
-            if (parsed.miningDirectionMode) miningDirectionMode = parsed.miningDirectionMode;
-            if (Array.isArray(parsed.selectedMiningDirectionIndices)) selectedMiningDirectionIndices = parsed.selectedMiningDirectionIndices;
-          } catch { /* use defaults */ }
-        }
-        setConfig({
-          apiKey: env.OPENAI_API_KEY || '',
-          apiUrl: env.OPENAI_BASE_URL || DEFAULT_CONFIG.apiUrl,
-          modelName: env.CHAT_MODEL || DEFAULT_CONFIG.modelName,
-          qlibDataPath: env.QLIB_DATA_DIR || '',
-          resultsDir: env.DATA_RESULTS_DIR || '',
-          defaultNumDirections: 2,
-          defaultMaxRounds: 3,
-          defaultMarket: 'csi300',
-          parallelExecution: true,
-          qualityGateEnabled: true,
-          backtestTimeout: 600,
-          defaultLibrarySuffix: '',
-          miningDirectionMode,
-          selectedMiningDirectionIndices,
-        });
-        setFactorLibraries(resp.data.factorLibraries || []);
-      }
-    } catch (err: any) {
-      console.error('Failed to load config:', err);
-      // Fallback to localStorage
       const saved = localStorage.getItem('quantaalpha_config');
       if (saved) {
-        try {
-          const parsed = JSON.parse(saved);
-          setConfig({
-            ...DEFAULT_CONFIG,
-            ...parsed,
-            selectedMiningDirectionIndices: Array.isArray(parsed.selectedMiningDirectionIndices)
-              ? parsed.selectedMiningDirectionIndices
-              : DEFAULT_CONFIG.selectedMiningDirectionIndices,
-          });
-        } catch {
-          // use defaults
-        }
+        const parsed = JSON.parse(saved);
+        setConfig({
+          ...DEFAULT_CONFIG,
+          ...parsed,
+          selectedMiningDirectionIndices: Array.isArray(parsed.selectedMiningDirectionIndices)
+            ? parsed.selectedMiningDirectionIndices
+            : DEFAULT_CONFIG.selectedMiningDirectionIndices,
+        });
       }
-      setError('无法从后端加载配置，显示的是本地缓存配置');
+    } catch {
+      // use defaults
     } finally {
       setIsLoading(false);
     }
@@ -139,29 +115,8 @@ export const SettingsPage: React.FC = () => {
     setIsSaving(true);
     setError(null);
 
-    // Always save to localStorage as backup
+    // Save to localStorage (backend config is managed via .env and admin panel)
     localStorage.setItem('quantaalpha_config', JSON.stringify(config));
-
-    // Try to save to backend
-    try {
-      const update: Record<string, string> = {};
-      if (config.apiKey && !config.apiKey.includes('...')) {
-        update.OPENAI_API_KEY = config.apiKey;
-      }
-      if (config.apiUrl) update.OPENAI_BASE_URL = config.apiUrl;
-      if (config.modelName) {
-        update.CHAT_MODEL = config.modelName;
-        update.REASONING_MODEL = config.modelName;
-      }
-      if (config.qlibDataPath) update.QLIB_DATA_DIR = config.qlibDataPath;
-      if (config.resultsDir) update.DATA_RESULTS_DIR = config.resultsDir;
-
-      if (Object.keys(update).length > 0) {
-        await updateSystemConfig(update);
-      }
-    } catch (err: any) {
-      console.warn('Failed to save to backend, saved locally:', err);
-    }
 
     setIsSaved(true);
     setIsDirty(false);
@@ -179,13 +134,8 @@ export const SettingsPage: React.FC = () => {
   const handleImportFeatureCatalog = async () => {
     setCatalogLoading(true);
     try {
-      // Try to fetch from admin API
-      const token = localStorage.getItem('access_token');
-      const baseUrl = import.meta.env?.VITE_USER_API_URL || '';
-      const resp = await fetch(`${baseUrl}/api/v1/admin/models/feature-catalog`, {
-        headers: token ? { Authorization: `Bearer ${token}` } : {},
-      });
-      const data = await resp.json();
+      const resp = await apiClient.get('/admin/models/feature-catalog');
+      const data = resp.data?.data || resp.data;
       const catalog = data?.data || data;
       const directions = importFeatureCatalogDirections(catalog);
       if (directions.length > 0) {
@@ -218,6 +168,9 @@ export const SettingsPage: React.FC = () => {
     setConfig({ ...config, [key]: value });
     setIsDirty(true);
   };
+
+  /** L1 categories from QuantDB when available, else the static Alpha158 reference list */
+  const activeDirections = l1Directions.length > 0 ? l1Directions : REFERENCE_MINING_DIRECTIONS;
 
   const API_URL_PRESETS: Array<{ label: string; url: string }> = [
     { label: '阿里云 DashScope (兼容)', url: 'https://dashscope.aliyuncs.com/compatible-mode/v1' },
@@ -316,7 +269,7 @@ export const SettingsPage: React.FC = () => {
         <TabButton id="api" label="配置 API" icon={Cpu} />
         <TabButton id="data" label="数据路径" icon={Database} />
         <TabButton id="params" label="默认参数" icon={Sliders} />
-        <TabButton id="directions" label="挖掘方向" icon={Compass} />
+        <TabButton id="directions" label={l1Directions.length > 0 ? 'L1 因子类别' : '挖掘方向'} icon={Compass} />
       </div>
 
       {/* Tab Content */}
@@ -446,6 +399,64 @@ export const SettingsPage: React.FC = () => {
               </CardTitle>
             </CardHeader>
             <CardContent className="space-y-6">
+              {/* QuantDB data availability */}
+              {dataSummary && (
+                <div className={`rounded-lg p-4 border ${
+                  dataSummary.available
+                    ? 'bg-success/5 border-success/20'
+                    : 'bg-destructive/5 border-destructive/20'
+                }`}>
+                  <h4 className="text-sm font-medium mb-3 flex items-center gap-2">
+                    {dataSummary.available ? (
+                      <Check className="h-4 w-4 text-success" />
+                    ) : (
+                      <AlertCircle className="h-4 w-4 text-destructive" />
+                    )}
+                    QuantDB 数据可用性
+                  </h4>
+                  {dataSummary.available ? (
+                    <div className="grid grid-cols-2 md:grid-cols-3 gap-3 text-xs">
+                      {dataSummary.dateRange && (
+                        <>
+                          <div>
+                            <div className="text-muted-foreground">数据起始</div>
+                            <div className="font-mono font-medium">{dataSummary.dateRange.start || '—'}</div>
+                          </div>
+                          <div>
+                            <div className="text-muted-foreground">数据截止</div>
+                            <div className="font-mono font-medium">{dataSummary.dateRange.end || '—'}</div>
+                          </div>
+                          <div>
+                            <div className="text-muted-foreground">交易日数</div>
+                            <div className="font-mono font-medium">{dataSummary.dateRange.tradingDays || 0}</div>
+                          </div>
+                        </>
+                      )}
+                      {dataSummary.stockCount != null && (
+                        <div>
+                          <div className="text-muted-foreground">股票总数</div>
+                          <div className="font-mono font-medium">{dataSummary.stockCount}</div>
+                        </div>
+                      )}
+                      {dataSummary.datasets &&
+                        Object.entries(dataSummary.datasets).map(([name, info]) => (
+                          <div key={name}>
+                            <div className="text-muted-foreground">{name}</div>
+                            <div className="font-mono font-medium">
+                              {info.columns} 列
+                              {info.categoryCount ? ` / ${info.categoryCount} 类` : ''}
+                            </div>
+                          </div>
+                        ))}
+                    </div>
+                  ) : (
+                    <p className="text-xs text-muted-foreground">
+                      {dataSummary.error || 'QuantDB 数据不可用，请检查 QM_QUANTDB_DATA_DIR 配置。'}
+                    </p>
+                  )}
+                </div>
+              )}
+
               <div>
                 <label className="block text-sm font-medium mb-2">
                   Qlib 数据目录 <span className="text-destructive">*</span>
@@ -483,22 +494,6 @@ export const SettingsPage: React.FC = () => {
                   用于存放挖掘出的因子、回测报告及日志文件
                 </p>
               </div>
-
-              {factorLibraries.length > 0 && (
-                <div className="bg-secondary/20 rounded-lg p-4 mt-4">
-                  <h4 className="text-sm font-medium mb-2 flex items-center gap-2">
-                    <Check className="h-4 w-4 text-success" />
-                    已识别的因子库
-                  </h4>
-                  <div className="flex flex-wrap gap-2">
-                    {factorLibraries.map((lib, idx) => (
-                      <Badge key={idx} variant="outline" className="bg-background/50">
-                        {lib}
-                      </Badge>
-                    ))}
-                  </div>
-                </div>
-              )}
             </CardContent>
           </Card>
         )}
@@ -544,16 +539,36 @@ export const SettingsPage: React.FC = () => {
                 </div>
 
                 <div>
-                  <label className="block text-sm font-medium mb-2">默认市场</label>
+                  <label className="block text-sm font-medium mb-2">默认股票池</label>
                   <select
-                    value={config.defaultMarket}
-                    onChange={(e) => updateConfigField('defaultMarket', e.target.value)}
+                    value={config.defaultUniverse}
+                    onChange={(e) => updateConfigField('defaultUniverse', e.target.value)}
                     className="w-full rounded-lg border border-input bg-background px-4 py-2 text-sm focus:border-primary focus:outline-none focus:ring-2 focus:ring-primary transition-all"
                   >
-                    <option value="csi300">CSI 300 (沪深300)</option>
-                    <option value="csi500">CSI 500 (中证500)</option>
-                    <option value="sp500">S&P 500</option>
+                    {universes.length > 0 ? (
+                      universes.map((u) => (
+                        <option key={u.id} value={u.id}>
+                          {u.name}
+                          {u.indexSymbol ? ` (${u.indexSymbol})` : ''}
+                          {u.stockCount > 0 ? ` — ${u.stockCount} 只` : ''}
+                        </option>
+                      ))
+                    ) : (
+                      <>
+                        <option value="csi300">沪深300</option>
+                        <option value="csi500">中证500</option>
+                        <option value="csi1000">中证1000</option>
+                        <option value="sse50">上证50</option>
+                        <option value="gem">创业板指</option>
+                        <option value="star">科创50</option>
+                        <option value="csi800">中证800</option>
+                        <option value="all_a">全部A股</option>
+                      </>
+                    )}
                   </select>
+                  <p className="text-xs text-muted-foreground mt-1">
+                    因子挖掘和回测的默认股票池，来自 QuantDB 指数成分数据
+                  </p>
                 </div>
 
                 <div>
@@ -640,10 +655,12 @@ export const SettingsPage: React.FC = () => {
             <CardHeader>
               <CardTitle className="flex items-center gap-2">
                 <Compass className="h-5 w-5" />
-                挖掘方向（参考 Alpha158(20)）
+                {l1Directions.length > 0 ? 'L1 因子类别' : '挖掘方向（参考 Alpha158(20)）'}
               </CardTitle>
               <p className="text-sm text-muted-foreground mt-1">
-                选择作为默认参考的挖掘方向；启动任务时可从中选用或随机一条
+                {l1Directions.length > 0
+                  ? `来自 QuantDB L1 因子集的 ${l1Directions.length} 个类别；启动任务时可从中选用或随机一条`
+                  : '选择作为默认参考的挖掘方向；启动任务时可从中选用或随机一条'}
               </p>
             </CardHeader>
             <CardContent className="space-y-6">
@@ -686,7 +703,7 @@ export const SettingsPage: React.FC = () => {
                       onClick={() => {
                         updateConfigField(
                           'selectedMiningDirectionIndices',
-                          REFERENCE_MINING_DIRECTIONS.map((_: MiningDirectionItem, i: number) => i)
+                          activeDirections.map((_: MiningDirectionItem, i: number) => i)
                         );
                       }}
                     >
@@ -702,7 +719,7 @@ export const SettingsPage: React.FC = () => {
                   </div>
                 </div>
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 max-h-[320px] overflow-y-auto rounded-lg border border-border/50 bg-secondary/10 p-3">
-                  {REFERENCE_MINING_DIRECTIONS.map((item: MiningDirectionItem, idx: number) => {
+                  {activeDirections.map((item: MiningDirectionItem, idx: number) => {
                     const label = getDirectionLabel(item);
                     return (
                       <label
@@ -728,7 +745,7 @@ export const SettingsPage: React.FC = () => {
                   })}
                 </div>
                 <p className="text-xs text-muted-foreground mt-2">
-                  已选 {config.selectedMiningDirectionIndices.length} / {REFERENCE_MINING_DIRECTIONS.length} 项。
+                  已选 {config.selectedMiningDirectionIndices.length} / {activeDirections.length} 项。
                 </p>
               </div>
 

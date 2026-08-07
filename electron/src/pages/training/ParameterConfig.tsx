@@ -1,13 +1,16 @@
 import React from 'react';
-import { Card, Divider, Input, Button, Row, Col, InputNumber, Select, Alert, Typography, Tag } from 'antd';
-import { Settings2, MonitorPlay, TreePine, Cpu, Ruler } from 'lucide-react';
+import { Card, Divider, Input, Button, Row, Col, InputNumber, Select, Alert, Typography, Tag, Checkbox, Switch, Tooltip } from 'antd';
+import { Settings2, MonitorPlay, TreePine, Cpu, Ruler, AlertTriangle } from 'lucide-react';
 import {
   TrainingParams,
   TrainingContext,
   DealPrice,
   ModelType,
   ModelCategory,
+  ModelTypeOption,
   MODEL_TYPE_OPTIONS,
+  EnsembleMethod,
+  MODEL_DL_DEFAULTS,
 } from './trainingUtils';
 import type { AppMarket } from '../../store/slices/uiSlice';
 
@@ -85,46 +88,131 @@ export const ParameterConfig: React.FC<ParameterConfigProps> = ({
           <Card className="rounded-2xl border-slate-200" size="small" title="模型类型">
             <div className="space-y-3">
               <div className="text-xs text-slate-500">
-                选择训练模型。树模型适合快速实验，线性模型作为基线 sanity check，深度学习模型在大数据集上潜力更大。
+                选择训练模型。树模型适合快速实验，线性模型作为基线 sanity check，深度学习模型在大数据集上潜力更大。支持多选进行集成训练。
               </div>
-              <Select
-                value={params.model_type}
+              <Checkbox.Group
+                value={params.model_types}
                 className="w-full"
-                onChange={(value) => onParamsChange({ ...params, model_type: value as ModelType })}
-                optionLabelProp="label"
+                onChange={(checkedValues) => {
+                  const selected = checkedValues as ModelType[];
+                  if (selected.length === 0) return;
+                  const primary = selected[0];
+                  // 切换模型类型时，自动填充该模型的推荐 DL 默认参数
+                  const dlDefaults = MODEL_DL_DEFAULTS[primary] || {};
+                  // 对于非 DL 模型，不覆盖已设置的 DL 参数
+                  const updated: TrainingParams = {
+                    ...params,
+                    model_type: primary,
+                    model_types: selected,
+                    ensemble_method: selected.length > 1 ? (params.ensemble_method || 'none') : 'none',
+                  };
+                  if (dlDefaults.dl_hidden_size !== undefined) {
+                    Object.assign(updated, dlDefaults);
+                  }
+                  onParamsChange(updated);
+                }}
               >
-                <Select.OptGroup label={<span className="flex items-center gap-1"><TreePine size={12} /> 树模型</span>}>
-                  {MODEL_TYPE_OPTIONS.filter(m => m.category === 'tree').map(m => (
-                    <Select.Option key={m.value} value={m.value} label={m.label}>
-                      <div className="flex items-center justify-between">
-                        <span>{m.label}</span>
-                        <span className="text-xs text-slate-400">{m.description}</span>
-                      </div>
-                    </Select.Option>
-                  ))}
-                </Select.OptGroup>
-                <Select.OptGroup label={<span className="flex items-center gap-1"><Ruler size={12} /> 线性基线</span>}>
-                  {MODEL_TYPE_OPTIONS.filter(m => m.category === 'linear').map(m => (
-                    <Select.Option key={m.value} value={m.value} label={m.label}>
-                      <div className="flex items-center justify-between">
-                        <span>{m.label}</span>
-                        <span className="text-xs text-slate-400">{m.description}</span>
-                      </div>
-                    </Select.Option>
-                  ))}
-                </Select.OptGroup>
-                <Select.OptGroup label={<span className="flex items-center gap-1"><Cpu size={12} /> 深度学习</span>}>
-                  {MODEL_TYPE_OPTIONS.filter(m => m.category === 'deep_learning').map(m => (
-                    <Select.Option key={m.value} value={m.value} label={m.label}>
-                      <div className="flex items-center justify-between">
-                        <span>{m.label}</span>
-                        <span className="text-xs text-slate-400">{m.description}</span>
-                      </div>
-                    </Select.Option>
-                  ))}
-                </Select.OptGroup>
-              </Select>
-              {MODEL_TYPE_OPTIONS.find(m => m.value === params.model_type)?.category === 'deep_learning' && (
+                <div className="space-y-3">
+                  <div className="text-xs font-medium text-slate-600 flex items-center gap-1">
+                    <TreePine size={12} /> 树模型
+                  </div>
+                  <div className="grid grid-cols-2 gap-x-4 gap-y-1 pl-1">
+                    {MODEL_TYPE_OPTIONS.filter(m => m.category === 'tree').map(m => (
+                      <Checkbox key={m.value} value={m.value}>
+                        <Tooltip title={m.tooltip} placement="topLeft" overlayStyle={{ maxWidth: 360 }}>
+                          <span className="text-sm cursor-help border-b border-dashed border-slate-300">{m.label}</span>
+                        </Tooltip>
+                        <span className="text-xs text-slate-400 ml-1">{m.description}</span>
+                      </Checkbox>
+                    ))}
+                  </div>
+                  <div className="text-xs font-medium text-slate-600 flex items-center gap-1">
+                    <Ruler size={12} /> 线性基线
+                  </div>
+                  <div className="grid grid-cols-2 gap-x-4 gap-y-1 pl-1">
+                    {MODEL_TYPE_OPTIONS.filter(m => m.category === 'linear').map(m => (
+                      <Checkbox key={m.value} value={m.value}>
+                        <Tooltip title={m.tooltip} placement="topLeft" overlayStyle={{ maxWidth: 360 }}>
+                          <span className="text-sm cursor-help border-b border-dashed border-slate-300">{m.label}</span>
+                        </Tooltip>
+                        <span className="text-xs text-slate-400 ml-1">{m.description}</span>
+                      </Checkbox>
+                    ))}
+                  </div>
+                  <div className="text-xs font-medium text-slate-600 flex items-center gap-1">
+                    <Cpu size={12} /> 深度学习
+                  </div>
+                  <div className="grid grid-cols-2 gap-x-4 gap-y-1 pl-1">
+                    {MODEL_TYPE_OPTIONS.filter(m => m.category === 'deep_learning').map(m => (
+                      <Checkbox key={m.value} value={m.value}>
+                        <Tooltip title={m.tooltip} placement="topLeft" overlayStyle={{ maxWidth: 360 }}>
+                          <span className="text-sm cursor-help border-b border-dashed border-slate-300">{m.label}</span>
+                        </Tooltip>
+                        <span className="text-xs text-slate-400 ml-1">{m.description}</span>
+                      </Checkbox>
+                    ))}
+                  </div>
+                </div>
+              </Checkbox.Group>
+              {params.model_types.length > 1 && (
+                <div className="flex flex-wrap gap-1.5">
+                  {params.model_types.map(mt => {
+                    const opt = MODEL_TYPE_OPTIONS.find(m => m.value === mt);
+                    return (
+                      <Tag key={mt} color="blue" className="rounded-lg">
+                        {opt?.label ?? mt}
+                      </Tag>
+                    );
+                  })}
+                </div>
+              )}
+              {params.model_types.length > 1 && (() => {
+                const hasTree = params.model_types.some(mt => {
+                  const opt = MODEL_TYPE_OPTIONS.find(m => m.value === mt);
+                  return opt?.category === 'tree' || opt?.category === 'linear';
+                });
+                const hasDL = params.model_types.some(mt => {
+                  const opt = MODEL_TYPE_OPTIONS.find(m => m.value === mt);
+                  return opt?.category === 'deep_learning';
+                });
+                return hasTree && hasDL;
+              })() && (
+                <Alert
+                  type="warning"
+                  showIcon
+                  icon={<AlertTriangle size={14} />}
+                  message="树模型与深度学习模型混合训练时，集成方法暂不支持，将分别独立训练"
+                  className="rounded-xl"
+                />
+              )}
+              {params.model_types.length > 1 && !(() => {
+                const hasTree = params.model_types.some(mt => {
+                  const opt = MODEL_TYPE_OPTIONS.find(m => m.value === mt);
+                  return opt?.category === 'tree' || opt?.category === 'linear';
+                });
+                const hasDL = params.model_types.some(mt => {
+                  const opt = MODEL_TYPE_OPTIONS.find(m => m.value === mt);
+                  return opt?.category === 'deep_learning';
+                });
+                return hasTree && hasDL;
+              })() && (
+                <div className="space-y-1">
+                  <div className="text-xs text-slate-500">集成方法</div>
+                  <Select
+                    value={params.ensemble_method}
+                    className="w-full"
+                    onChange={(value) => onParamsChange({ ...params, ensemble_method: value as EnsembleMethod })}
+                    options={[
+                      { label: '无集成 (各自独立训练)', value: 'none' },
+                      { label: 'Stacking 集成', value: 'stacking' },
+                    ]}
+                  />
+                </div>
+              )}
+              {params.model_types.some(mt => {
+                const opt = MODEL_TYPE_OPTIONS.find(m => m.value === mt);
+                return opt?.category === 'deep_learning';
+              }) && (
                 <Alert
                   type="info"
                   showIcon
@@ -200,14 +288,12 @@ export const ParameterConfig: React.FC<ParameterConfigProps> = ({
               </Row>
 
               {/* LightGBM 专属参数 */}
-              {params.model_type === 'lightgbm' && (
+              {params.model_types.includes('lightgbm') && (
                 <>
                   <div className="text-xs font-medium text-slate-500 border-t pt-3">LightGBM 超参</div>
                   <Row gutter={[12, 12]}>
                     {[
-                      ['learning_rate', '学习率', { min: 0.0001, max: 1, step: 0.001 }],
                       ['num_leaves', '叶子数', { min: 1, max: 1024, step: 1 }],
-                      ['max_depth', '最大深度', { min: -1, max: 64, step: 1 }],
                       ['min_data_in_leaf', '叶子最小样本', { min: 1, max: 10000, step: 1 }],
                       ['lambda_l1', 'L1 正则', { min: 0, max: 10, step: 0.1 }],
                       ['lambda_l2', 'L2 正则', { min: 0, max: 10, step: 0.1 }],
@@ -230,18 +316,42 @@ export const ParameterConfig: React.FC<ParameterConfigProps> = ({
                         </div>
                       </Col>
                     ))}
+                    <Col span={12}>
+                      <div className="space-y-1">
+                        <div className="text-xs text-slate-500">学习率 (lgb_learning_rate)</div>
+                        <InputNumber
+                          value={params.lgb_learning_rate ?? params.learning_rate}
+                          min={0.0001}
+                          max={1}
+                          step={0.001}
+                          className="w-full"
+                          onChange={(v) => onParamsChange({ ...params, lgb_learning_rate: Number(v ?? params.learning_rate) })}
+                        />
+                      </div>
+                    </Col>
+                    <Col span={12}>
+                      <div className="space-y-1">
+                        <div className="text-xs text-slate-500">最大深度 (lgb_max_depth)</div>
+                        <InputNumber
+                          value={params.lgb_max_depth ?? params.max_depth}
+                          min={-1}
+                          max={64}
+                          step={1}
+                          className="w-full"
+                          onChange={(v) => onParamsChange({ ...params, lgb_max_depth: Number(v ?? params.max_depth) })}
+                        />
+                      </div>
+                    </Col>
                   </Row>
                 </>
               )}
 
               {/* XGBoost 专属参数 */}
-              {params.model_type === 'xgboost' && (
+              {params.model_types.includes('xgboost') && (
                 <>
                   <div className="text-xs font-medium text-slate-500 border-t pt-3">XGBoost 超参</div>
                   <Row gutter={[12, 12]}>
                     {[
-                      ['learning_rate', '学习率 (eta)', { min: 0.0001, max: 1, step: 0.001 }],
-                      ['max_depth', '最大深度', { min: 1, max: 16, step: 1 }],
                       ['xgb_subsample', '行采样 (subsample)', { min: 0.1, max: 1, step: 0.05 }],
                       ['xgb_colsample_bytree', '列采样', { min: 0.1, max: 1, step: 0.05 }],
                       ['xgb_reg_alpha', 'L1 正则', { min: 0, max: 10, step: 0.1 }],
@@ -263,18 +373,42 @@ export const ParameterConfig: React.FC<ParameterConfigProps> = ({
                         </div>
                       </Col>
                     ))}
+                    <Col span={12}>
+                      <div className="space-y-1">
+                        <div className="text-xs text-slate-500">学习率 (xgb_learning_rate)</div>
+                        <InputNumber
+                          value={params.xgb_learning_rate ?? params.learning_rate}
+                          min={0.0001}
+                          max={1}
+                          step={0.001}
+                          className="w-full"
+                          onChange={(v) => onParamsChange({ ...params, xgb_learning_rate: Number(v ?? params.learning_rate) })}
+                        />
+                      </div>
+                    </Col>
+                    <Col span={12}>
+                      <div className="space-y-1">
+                        <div className="text-xs text-slate-500">最大深度 (xgb_max_depth)</div>
+                        <InputNumber
+                          value={params.xgb_max_depth ?? params.max_depth}
+                          min={1}
+                          max={16}
+                          step={1}
+                          className="w-full"
+                          onChange={(v) => onParamsChange({ ...params, xgb_max_depth: Number(v ?? params.max_depth) })}
+                        />
+                      </div>
+                    </Col>
                   </Row>
                 </>
               )}
 
               {/* CatBoost 专属参数 */}
-              {params.model_type === 'catboost' && (
+              {params.model_types.includes('catboost') && (
                 <>
                   <div className="text-xs font-medium text-slate-500 border-t pt-3">CatBoost 超参</div>
                   <Row gutter={[12, 12]}>
                     {[
-                      ['learning_rate', '学习率', { min: 0.001, max: 1, step: 0.01 }],
-                      ['cb_depth', '树深度', { min: 1, max: 16, step: 1 }],
                       ['cb_l2_leaf_reg', 'L2 正则', { min: 0, max: 10, step: 0.5 }],
                       ['cb_random_strength', '随机扰动', { min: 0, max: 10, step: 0.5 }],
                       ['cb_bagging_temperature', 'Bagging 温度', { min: 0, max: 10, step: 0.5 }],
@@ -295,12 +429,38 @@ export const ParameterConfig: React.FC<ParameterConfigProps> = ({
                         </div>
                       </Col>
                     ))}
+                    <Col span={12}>
+                      <div className="space-y-1">
+                        <div className="text-xs text-slate-500">学习率 (cb_learning_rate)</div>
+                        <InputNumber
+                          value={params.cb_learning_rate ?? params.learning_rate}
+                          min={0.001}
+                          max={1}
+                          step={0.01}
+                          className="w-full"
+                          onChange={(v) => onParamsChange({ ...params, cb_learning_rate: Number(v ?? params.learning_rate) })}
+                        />
+                      </div>
+                    </Col>
+                    <Col span={12}>
+                      <div className="space-y-1">
+                        <div className="text-xs text-slate-500">树深度 (cb_depth)</div>
+                        <InputNumber
+                          value={params.cb_depth ?? params.max_depth}
+                          min={1}
+                          max={16}
+                          step={1}
+                          className="w-full"
+                          onChange={(v) => onParamsChange({ ...params, cb_depth: Number(v ?? params.max_depth) })}
+                        />
+                      </div>
+                    </Col>
                   </Row>
                 </>
               )}
 
               {/* Linear 专属参数 */}
-              {params.model_type === 'linear' && (
+              {params.model_types.includes('linear') && (
                 <>
                   <div className="text-xs font-medium text-slate-500 border-t pt-3">Ridge 回归超参</div>
                   <Row gutter={[12, 12]}>
@@ -322,10 +482,20 @@ export const ParameterConfig: React.FC<ParameterConfigProps> = ({
               )}
 
               {/* 深度学习模型参数 */}
-              {MODEL_TYPE_OPTIONS.find(m => m.value === params.model_type)?.category === 'deep_learning' && (
+              {params.model_types.some(mt => {
+                const opt = MODEL_TYPE_OPTIONS.find(m => m.value === mt);
+                return opt?.category === 'deep_learning';
+              }) && (
                 <>
                   <div className="text-xs font-medium text-slate-500 border-t pt-3">
-                    {MODEL_TYPE_OPTIONS.find(m => m.value === params.model_type)?.label} 超参
+                    深度学习超参 (主模型: {params.model_type ?
+                      MODEL_TYPE_OPTIONS.find(m => m.value === params.model_type)?.label :
+                      params.model_types.filter(mt => {
+                        const opt = MODEL_TYPE_OPTIONS.find(m => m.value === mt);
+                        return opt?.category === 'deep_learning';
+                      }).map(mt => MODEL_TYPE_OPTIONS.find(m => m.value === mt)?.label).join(', ')}
+                    )
+                    <span className="ml-2 text-slate-400">— 切换模型时自动填充推荐默认值</span>
                   </div>
                   <Row gutter={[12, 12]}>
                     {[
@@ -422,6 +592,20 @@ export const ParameterConfig: React.FC<ParameterConfigProps> = ({
                     { label: '收盘价 (close)', value: 'close' },
                   ]}
                 />
+              </div>
+              <div className="md:col-span-2 flex items-center justify-between rounded-xl border border-slate-200 bg-white px-3 py-2">
+                <div className="space-y-0.5">
+                  <div className="text-xs text-slate-500">行业编码作为特征</div>
+                  <div className="text-[11px] text-slate-400">
+                    将行业编码作为特征加入模型，CatBoost 原生支持类别特征
+                  </div>
+                </div>
+                <Tooltip title="将行业编码作为特征加入模型，CatBoost原生支持类别特征">
+                  <Switch
+                    checked={!!context.industry_as_feature}
+                    onChange={(checked) => onContextChange({ ...context, industry_as_feature: checked })}
+                  />
+                </Tooltip>
               </div>
             </div>
           </div>

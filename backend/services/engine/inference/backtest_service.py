@@ -1,14 +1,16 @@
 """
 Rolling Backtest Service — Evaluate model prediction quality across historical dates.
 
-Runs model inference on multiple dates, compares predicted scores against actual
-forward returns (mom_ret_{N}d from parquet), and computes standard quant metrics:
-IC, IC_IR, hit rate, decile analysis, long-short return.
+Runs model inference on multiple dates, compares predicted scores against genuine
+forward returns (rebuilt from close, see data_loader.load_forward_labels), and
+computes standard quant metrics: IC, IC_IR, decile analysis, long-only excess
+return net of A-share trading costs.
 """
 from __future__ import annotations
 
 import json
 import logging
+import os
 import uuid
 from collections import defaultdict
 from datetime import datetime
@@ -20,26 +22,88 @@ import pandas as pd
 from scipy.stats import spearmanr
 
 from .config import PRODUCTION_MODELS_DIR
-from .data_loader import get_available_dates, load_date_data, preprocess
-
-# History storage directory
-_HISTORY_DIR = Path("/app/db/backtest_history")
+from .data_loader import (
+    FORWARD_RETURN_COL,
+    get_available_dates,
+    load_date_data,
+    load_forward_labels,
+    preprocess,
+)
 from .model_loader import ModelLoader
+from .trading_cost import CostModel
 
 logger = logging.getLogger(__name__)
 
+# History storage directory（容器内为 /app/db/...，本地开发用相对路径）
+_HISTORY_DIR = Path(os.getenv("QM_BACKTEST_HISTORY_DIR", "db/backtest_history"))
+
+_TRADING_DAYS_PER_YEAR = 252
+
 
 def _max_drawdown(cumulative_returns: list[float]) -> float:
-    """Compute max drawdown from a cumulative return series."""
+    """Compute max relative drawdown from a cumulative return series."""
     if not cumulative_returns:
         return 0.0
     peak = cumulative_returns[0]
     max_dd = 0.0
     for r in cumulative_returns:
         peak = max(peak, r)
-        dd = peak - r
+        # 相对回撤：以峰值净值为分母，而非绝对差值
+        denom = max(1.0 + peak, 1e-9)
+        dd = (peak - r) / denom
         max_dd = max(max_dd, dd)
     return float(max_dd)
+
+
+def _newey_west_t_stat(series: list[float], lag: int) -> float | None:
+    """IC 序列的 t 统计量，用 Bartlett 核做 Newey-West 自相关校正。
+
+    重叠持有期（如 horizon=10 但每 3 日采样）会让相邻 IC 强自相关，
+    朴素 std 低估波动、t 值虚高。lag 取重叠窗口长度。
+    """
+    arr = np.asarray([v for v in series if v is not None and not np.isnan(v)], dtype=float)
+    n = arr.size
+    if n < 3:
+        return None
+
+    mean = float(arr.mean())
+    demeaned = arr - mean
+    gamma0 = float(np.dot(demeaned, demeaned) / n)
+    if gamma0 <= 0:
+        return None
+
+    variance = gamma0
+    max_lag = int(min(max(lag, 0), n - 1))
+    for k in range(1, max_lag + 1):
+        gamma_k = float(np.dot(demeaned[:-k], demeaned[k:]) / n)
+        weight = 1.0 - k / (max_lag + 1)
+        variance += 2.0 * weight * gamma_k
+
+    # Newey-West 估计量在小样本下可能为负，退回朴素方差
+    if variance <= 0:
+        variance = gamma0
+
+    return float(mean / np.sqrt(variance / n))
+
+
+def _annualized_sharpe(returns: list[float], sample_interval: int, holding_days: int) -> float:
+    """年化 Sharpe。periods_per_year 按实际采样间隔而非硬编码 252。"""
+    arr = np.asarray([v for v in returns if v is not None and not np.isnan(v)], dtype=float)
+    if arr.size < 2:
+        return 0.0
+    std = float(arr.std(ddof=1))
+    if std <= 0:
+        return 0.0
+    periods_per_year = _TRADING_DAYS_PER_YEAR / max(sample_interval, 1)
+    # 重叠持有期使收益序列自相关，朴素 std 低估波动 → 用 Newey-West 放大
+    lag = max(int(round(holding_days / max(sample_interval, 1))) - 1, 0)
+    t = _newey_west_t_stat(arr.tolist(), lag)
+    if t is not None and t != 0:
+        # 由 t = mean / (nw_std/sqrt(n)) 反解出校正后的单期 std
+        std = abs(float(arr.mean())) / (abs(t) / np.sqrt(arr.size))
+        if std <= 0:
+            return 0.0
+    return float(arr.mean() / std * np.sqrt(periods_per_year))
 
 
 def _group_by_month(results: list[dict]) -> dict[str, float]:
@@ -94,25 +158,93 @@ class BacktestService:
         horizon: int = 10,
         model_dir: Path | None = None,
         data_dir: Path | str | None = None,
+        sample_interval: int = 1,
+        cost_override: dict | None = None,
+        exclude_limit_moves: bool = True,
+        signal_lag_days: int = 1,
     ) -> dict[str, Any]:
         """
         Run rolling backtest across multiple dates.
 
         For each date:
-        1. Load parquet features
-        2. Run model inference → predicted scores
-        3. Compare with actual mom_ret_{horizon}d
-        4. Compute IC, decile returns
+        1. Load parquet features from date T
+        2. Run model inference → predicted scores for date T
+        3. Shift predictions by signal_lag_days: pred[T] is compared with
+           forward return from date T+lag (close[T+lag+N]/close[T+lag]-1),
+           modelling A-share T+1 settlement.
+        4. Compute IC, decile returns, long-only excess net of trading cost
+
+        signal_lag_days: 交易日延迟。A 股默认 1（T 日信号 → T+1 执行）。
+                        设为 0 仅用于调试/对比，会产生前视偏差。
 
         Returns per-day results + aggregate metrics.
         """
+        signal_lag_days = max(0, int(signal_lag_days))
         resolved_dir = model_dir or self.resolve_model_dir(model_id)
         meta = self.load_metadata(resolved_dir)
         feature_cols = meta.get("feature_columns") or meta.get("features", [])
         if not feature_cols:
             raise ValueError("Model metadata has no feature_columns")
 
-        actual_col = f"mom_ret_{horizon}d"
+        # 防回归硬门禁：标签列绝不能同时是模型输入。历史 bug 正是用
+        # mom_ret_{N}d（过去收益、且在 feature_columns 里）当 "实际收益"。
+        if FORWARD_RETURN_COL in set(feature_cols):
+            raise ValueError(
+                f"标签列 {FORWARD_RETURN_COL} 出现在模型特征中，"
+                "回测将退化为『模型复现自身输入』，拒绝执行"
+            )
+
+        sample_interval = max(1, int(sample_interval))
+        warnings: list[str] = []
+
+        # 样本内检测：回测区间落在训练区间内时拒绝执行（而非仅警告）
+        train_end = str(meta.get("train_end") or "").strip()
+        if train_end and dates and dates[0] <= train_end:
+            raise ValueError(
+                f"回测区间起点 {dates[0]} 不晚于训练结束日 {train_end}，"
+                "回测结果包含样本内成分，指标无泛化意义。"
+                "请将回测起始日调整至训练结束日之后。"
+            )
+
+        # signal_lag_days=0 前视偏差警告
+        if signal_lag_days == 0:
+            warnings.append(
+                "signal_lag_days=0：信号与成交同日，存在前视偏差。"
+                "A 股建议使用 signal_lag_days=1（T 日信号 → T+1 执行）。"
+                "此配置仅用于调试/对比，指标不能作为实盘依据。"
+            )
+
+        cost_model = CostModel.resolve(meta, cost_override)
+
+        # 一次性构造全区间前瞻标签，避免按天重复加载大 parquet
+        # 当 signal_lag_days > 0 时，预测日期 T 的信号在 T+lag 才执行，
+        # 因此标签从 T+lag 开始计算：fwd_return = close[T+lag+N]/close[T+lag]-1
+        labels = load_forward_labels(
+            dates=dates, horizon=horizon, data_dir=data_dir, meta=meta,
+            signal_lag_days=signal_lag_days,
+        )
+        if labels.empty:
+            return {
+                "status": "error",
+                "model_id": model_id,
+                "error": (
+                    f"无法构造 {horizon} 日前瞻收益标签："
+                    "数据末尾不足或 parquet 缺失"
+                ),
+                "warnings": warnings,
+            }
+        labels_by_date: dict[str, pd.Series] = {
+            date: group.set_index("symbol")[FORWARD_RETURN_COL]
+            for date, group in labels.groupby("trade_date")
+        }
+
+        labelable = set(labels_by_date)
+        skipped_dates = [d for d in dates if d not in labelable]
+        if skipped_dates:
+            warnings.append(
+                f"{len(skipped_dates)} 个日期无前瞻标签（区间末尾不足 "
+                f"{horizon} 个交易日），已跳过：{skipped_dates[:3]}"
+            )
 
         # Load model once
         cache_key = f"backtest:{model_id}"
@@ -126,14 +258,17 @@ class BacktestService:
         self._prev_top_symbols = []  # reset for each backtest run
 
         for date_str in dates:
+            day_labels = labels_by_date.get(date_str)
+            if day_labels is None:
+                continue
             try:
                 day_result = self._evaluate_single_date(
                     date_str=date_str,
                     model=model,
                     meta=meta,
-                    feature_cols=feature_cols,
-                    actual_col=actual_col,
+                    day_labels=day_labels,
                     data_dir=data_dir,
+                    exclude_limit_moves=exclude_limit_moves,
                 )
                 if day_result is not None:
                     results.append(day_result)
@@ -147,80 +282,116 @@ class BacktestService:
                 "model_id": model_id,
                 "error": "所有日期回测均失败",
                 "errors": errors,
+                "warnings": warnings,
             }
 
         # Aggregate metrics
         ic_series = [r["ic"] for r in results]
         ic_arr = np.array(ic_series)
 
-        # Random baseline: shuffle predictions, compute IC, repeat 100 times
-        rng = np.random.RandomState(42)
-        random_ics = []
-        for _ in range(100):
-            shuffled = ic_arr.copy()
-            rng.shuffle(shuffled)
-            random_ics.append(float(np.nanmean(shuffled)))
-        random_ic_mean = float(np.nanmean(random_ics))
-        random_ic_std = float(np.nanstd(random_ics))
+        # 重叠倍数：持有 horizon 天但每 sample_interval 天采样一次，
+        # 相邻样本的持有区间重叠，收益不可直接累加。
+        overlap_factor = max(1.0, horizon / sample_interval)
+        nw_lag = max(int(round(overlap_factor)) - 1, 0)
 
-        metrics = {
+        metrics: dict[str, Any] = {
             "ic_mean": float(np.nanmean(ic_arr)),
             "ic_std": float(np.nanstd(ic_arr)),
             "ic_ir": float(np.nanmean(ic_arr) / np.nanstd(ic_arr)) if np.nanstd(ic_arr) > 0 else 0.0,
-            "hit_rate": float(np.mean([ic > 0 for ic in ic_series])),
             "ic_positive_rate": float(np.mean([ic > 0 for ic in ic_series])),
             "n_dates": len(results),
             "n_errors": len(errors),
-            "random_ic_mean": random_ic_mean,
-            "random_ic_std": random_ic_std,
-            "ic_vs_random": float(np.nanmean(ic_arr) - random_ic_mean),
-            "t_stat": float((np.nanmean(ic_arr) - random_ic_mean) / (np.nanstd(ic_arr) / np.sqrt(len(ic_series)))) if np.nanstd(ic_arr) > 0 and len(ic_series) > 1 else 0.0,
+            # 真正的个股方向命中率：top 组合中前瞻收益为正的比例
+            "hit_rate": float(np.mean([r["top_win_rate"] for r in results])),
+            # Newey-West 校正后的显著性。旧实现 shuffle 已算好的 IC 序列，
+            # 均值对置换不变 ⇒ t_stat 恒等于 0，检验完全失效。
+            "t_stat": _newey_west_t_stat(ic_series, nw_lag),
+            "overlap_factor": float(overlap_factor),
+            "sample_interval": sample_interval,
+            "benchmark_type": "equal_weight_universe",
+            "cost_model": cost_model.as_dict(),
         }
 
-        # Decile aggregation
-        decile_keys = list(range(10))
+        # Decile aggregation：缺失分位跳过而非补 0（补 0 会污染单调性与 rank IC）
+        n_deciles = max(int(r.get("n_deciles", 10)) for r in results)
         avg_decile_returns: dict[int, float] = {}
-        for d in decile_keys:
-            vals = [r["decile_returns"].get(d, 0.0) for r in results if d in r.get("decile_returns", {})]
-            avg_decile_returns[d] = float(np.mean(vals)) if vals else 0.0
+        for d in range(n_deciles):
+            vals = [
+                r["decile_returns"][d]
+                for r in results
+                if d in r.get("decile_returns", {})
+            ]
+            if vals:
+                avg_decile_returns[d] = float(np.mean(vals))
 
-        metrics["avg_top_decile"] = avg_decile_returns.get(9, 0.0)
-        metrics["avg_bottom_decile"] = avg_decile_returns.get(0, 0.0)
-        metrics["long_short_return"] = metrics["avg_top_decile"] - metrics["avg_bottom_decile"]
+        metrics["n_deciles"] = n_deciles
+        present = sorted(avg_decile_returns)
+        top_key = present[-1] if present else None
+        bottom_key = present[0] if present else None
+        metrics["avg_top_decile"] = avg_decile_returns.get(top_key, 0.0) if present else 0.0
+        metrics["avg_bottom_decile"] = avg_decile_returns.get(bottom_key, 0.0) if present else 0.0
 
-        # Monotonicity: check if decile returns are monotonically increasing
-        decile_vals = [avg_decile_returns.get(d, 0.0) for d in range(10)]
-        monotone_count = sum(1 for i in range(1, len(decile_vals)) if decile_vals[i] >= decile_vals[i - 1])
-        metrics["monotonicity"] = float(monotone_count / (len(decile_vals) - 1)) if len(decile_vals) > 1 else 0.0
-
-        # Rank IC (Spearman of decile vs return)
-        try:
-            rank_ic = spearmanr(list(range(10)), decile_vals).correlation
-            metrics["decile_rank_ic"] = float(rank_ic) if not np.isnan(rank_ic) else 0.0
-        except Exception:
+        # Monotonicity / rank IC：只用实际存在的分位
+        decile_vals = [avg_decile_returns[d] for d in present]
+        if len(decile_vals) > 1:
+            monotone = sum(
+                1 for i in range(1, len(decile_vals)) if decile_vals[i] >= decile_vals[i - 1]
+            )
+            metrics["monotonicity"] = float(monotone / (len(decile_vals) - 1))
+            try:
+                rank_ic = spearmanr(present, decile_vals).correlation
+                metrics["decile_rank_ic"] = float(rank_ic) if not np.isnan(rank_ic) else 0.0
+            except Exception:
+                metrics["decile_rank_ic"] = 0.0
+        else:
+            metrics["monotonicity"] = 0.0
             metrics["decile_rank_ic"] = 0.0
 
-        # ── Enhanced metrics ──
+        # ── 交易成本与换手 ──
+        turnovers = [r.get("top_turnover", 0.0) for r in results]
+        turnover_mean = float(np.mean(turnovers))
+        metrics["turnover_mean"] = turnover_mean
 
-        # Turnover
-        turnovers = [r.get("top_turnover", 0) for r in results]
-        metrics["turnover_mean"] = float(np.mean(turnovers))
+        round_trip = cost_model.round_trip_cost()
+        # 每次调仓的成本 = 单边换手 × 往返成本率
+        cost_per_period = turnover_mean * round_trip
+        metrics["cost_per_period"] = float(cost_per_period)
+        metrics["cost_drag_annual"] = float(
+            cost_per_period * (_TRADING_DAYS_PER_YEAR / max(sample_interval, 1))
+        )
 
-        # Long-short series for Sharpe and drawdown
-        ls_series = [r.get("top_10pct_return", 0) - r.get("bottom_10pct_return", 0) for r in results]
-        ls_arr = np.array(ls_series)
-        ls_mean = float(np.mean(ls_arr))
-        ls_std = float(np.std(ls_arr)) if len(ls_arr) > 1 else 1.0
-        avg_interval = len(dates) / max(len(results), 1)  # approximate trading day interval
-        metrics["sharpe_ls"] = float(ls_mean / ls_std * np.sqrt(252 / max(avg_interval, 1))) if ls_std > 0 else 0.0
+        # ── 主指标：纯多头（A 股可实现） ──
+        long_gross = [r["top_return"] for r in results]
+        long_net = [v - cost_per_period for v in long_gross]
+        long_excess_net = [
+            r["top_return"] - r["market_return"] - cost_per_period for r in results
+        ]
 
-        # Cumulative series for charts
+        metrics["long_return_gross"] = float(np.mean(long_gross))
+        metrics["long_return_net"] = float(np.mean(long_net))
+        metrics["long_excess_net"] = float(np.mean(long_excess_net))
+        metrics["sharpe_long"] = _annualized_sharpe(long_net, sample_interval, horizon)
+        metrics["sharpe_long_excess"] = _annualized_sharpe(
+            long_excess_net, sample_interval, horizon
+        )
+
+        # 重叠持有期下直接 cumsum 会把同一段行情重复计入 overlap_factor 次
+        long_net_scaled = np.asarray(long_net) / overlap_factor
+        metrics["cumulative_long_net"] = list(np.cumsum(long_net_scaled))
+        metrics["max_drawdown_long"] = _max_drawdown(
+            np.cumsum(long_net_scaled).tolist()
+        )
+
+        # ── 参考指标：多空（A 股需融券，券源受限，实盘不可直接复制） ──
+        ls_gross = [r["top_return"] - r["bottom_return"] for r in results]
+        metrics["long_short_return"] = float(np.mean(ls_gross))
+        metrics["long_short_is_theoretical"] = True
+        metrics["sharpe_ls"] = _annualized_sharpe(ls_gross, sample_interval, horizon)
+        ls_scaled = np.asarray(ls_gross) / overlap_factor
+        metrics["cumulative_ls"] = list(np.cumsum(ls_scaled))
+        metrics["max_drawdown_ls"] = _max_drawdown(np.cumsum(ls_scaled).tolist())
+
         metrics["cumulative_ic"] = list(np.cumsum(ic_arr))
-        metrics["cumulative_ls"] = list(np.cumsum(ls_arr))
-
-        # Max drawdown of long-short cumulative returns
-        cum_ls = np.cumsum(ls_arr)
-        metrics["max_drawdown_ls"] = _max_drawdown(cum_ls.tolist())
 
         # Up/Down capture: IC in up vs down market days
         up_ics = [r["ic"] for r in results if r.get("market_return", 0) > 0.001]
@@ -231,14 +402,21 @@ class BacktestService:
         # Monthly IC breakdown
         metrics["monthly_ic"] = _group_by_month(results)
 
+        evaluated = [r["date"] for r in results]
         output = {
             "status": "success",
             "run_id": uuid.uuid4().hex[:12],
             "model_id": model_id,
             "horizon": horizon,
+            "signal_lag_days": signal_lag_days,
             "created_at": datetime.now().isoformat(),
-            "date_range": [dates[0], dates[-1]] if dates else [],
-            "sample_interval": len(dates),
+            "date_range": [evaluated[0], evaluated[-1]] if evaluated else [],
+            "sample_interval": sample_interval,
+            "label_definition": (
+                f"fwd_return = close[T+{signal_lag_days}+{horizon}] / close[T+{signal_lag_days}] - 1 "
+                f"(signal_lag={signal_lag_days}, forward-looking)"
+            ),
+            "warnings": warnings,
             "metrics": metrics,
             "avg_decile_returns": avg_decile_returns,
             "per_day": results,
@@ -258,18 +436,18 @@ class BacktestService:
         date_str: str,
         model: Any,
         meta: dict,
-        feature_cols: list[str],
-        actual_col: str,
+        day_labels: pd.Series,
         data_dir: Path | str | None = None,
+        exclude_limit_moves: bool = True,
     ) -> dict[str, Any] | None:
         """Evaluate model on a single date. Returns result dict or None."""
-        day_df = load_date_data(date_str, data_dir=data_dir, meta=meta)
+        day_df = load_date_data(
+            date_str,
+            data_dir=data_dir,
+            meta=meta,
+            exclude_limit_moves=exclude_limit_moves,
+        )
         if day_df is None or len(day_df) == 0:
-            return None
-
-        # Check if actual return column exists
-        if actual_col not in day_df.columns:
-            logger.warning("日期 %s 缺少 %s 列", date_str, actual_col)
             return None
 
         # Prepare features
@@ -282,27 +460,14 @@ class BacktestService:
         if predictions is None or len(predictions) == 0:
             return None
 
-        # Build results DataFrame
+        # Join predictions with genuine forward returns
         pred_series = pd.Series(predictions, index=symbols, name="pred")
-        actual_series = day_df.set_index("symbol")[actual_col].astype(float)
+        pred_series = pred_series[~pred_series.index.duplicated(keep="last")]
 
-        joined = pd.DataFrame({"pred": pred_series, "actual": actual_series})
+        joined = pd.DataFrame(
+            {"pred": pred_series, "actual": day_labels.astype(float)}
+        )
         joined = joined.replace([np.inf, -np.inf], np.nan).dropna()
-
-        # Normalize: if mean |actual| > 1, assume it's percentage (e.g. 10 = 10%)
-        if joined["actual"].abs().mean() > 1:
-            joined["actual"] = joined["actual"] / 100.0
-
-        # Filter extreme outliers (new stock IPOs, data errors)
-        q01 = joined["actual"].quantile(0.01)
-        q99 = joined["actual"].quantile(0.99)
-        iqr = q99 - q01
-        lower = q01 - 3 * iqr
-        upper = q99 + 3 * iqr
-        before = len(joined)
-        joined = joined[(joined["actual"] >= lower) & (joined["actual"] <= upper)]
-        if len(joined) < before:
-            logger.info("日期 %s 过滤极端值: %d -> %d", date_str, before, len(joined))
 
         if len(joined) < 20:
             logger.warning("日期 %s 有效样本不足 (%d)", date_str, len(joined))
@@ -321,21 +486,26 @@ class BacktestService:
 
         decile_returns = joined.groupby("decile")["actual"].mean().to_dict()
         decile_returns = {int(k): float(v) for k, v in decile_returns.items()}
+        n_deciles = int(joined["decile"].nunique())
 
-        # Top/Bottom N returns
+        # Top/Bottom decile portfolios (equal weight)
         n = max(1, len(joined) // 10)
-        top_n = joined.nlargest(n, "pred")["actual"].mean()
-        bottom_n = joined.nsmallest(n, "pred")["actual"].mean()
+        top = joined.nlargest(n, "pred")
+        bottom = joined.nsmallest(n, "pred")
+        top_return = float(top["actual"].mean())
+        bottom_return = float(bottom["actual"].mean())
+        # 真正的方向命中率：top 组合里前瞻收益为正的占比
+        top_win_rate = float((top["actual"] > 0).mean())
 
-        # Market return (equal-weight average)
+        # Benchmark: equal-weight universe return (not an index)
         market_return = float(joined["actual"].mean())
 
-        # Turnover: % of top decile that changed from previous date
-        curr_top = set(joined.nlargest(n, "pred").index)
+        # 单边换手：本期新进入 top 组合的占比。旧实现用 Jaccard 距离
+        # (symdiff/union)，半数换仓会给出 66.7% 而非 50%。
+        curr_top = set(top.index)
         if self._prev_top_symbols:
             prev_top = set(self._prev_top_symbols)
-            union = prev_top | curr_top
-            turnover = len(prev_top.symmetric_difference(curr_top)) / max(len(union), 1)
+            turnover = len(curr_top - prev_top) / max(len(curr_top), 1)
         else:
             turnover = 0.0
         self._prev_top_symbols = list(curr_top)
@@ -344,12 +514,17 @@ class BacktestService:
             "date": date_str,
             "ic": float(ic),
             "n_stocks": len(joined),
+            "n_deciles": n_deciles,
             "decile_returns": decile_returns,
-            "top_10pct_return": float(top_n),
-            "bottom_10pct_return": float(bottom_n),
+            "top_return": top_return,
+            "bottom_return": bottom_return,
+            # 兼容旧前端字段名
+            "top_10pct_return": top_return,
+            "bottom_10pct_return": bottom_return,
+            "top_win_rate": top_win_rate,
             "pred_mean": float(joined["pred"].mean()),
             "pred_std": float(joined["pred"].std()),
-            "actual_mean": float(joined["actual"].mean()),
+            "actual_mean": market_return,
             "market_return": market_return,
             "top_turnover": float(turnover),
         }
@@ -361,6 +536,9 @@ class BacktestService:
         horizons: list[int] | None = None,
         model_dir: Path | None = None,
         data_dir: Path | str | None = None,
+        sample_interval: int = 1,
+        cost_override: dict | None = None,
+        exclude_limit_moves: bool = True,
     ) -> dict[str, Any]:
         """Run backtest across multiple prediction horizons and compare."""
         horizons = horizons or [1, 5, 10, 20]
@@ -373,25 +551,38 @@ class BacktestService:
                     horizon=h,
                     model_dir=model_dir,
                     data_dir=data_dir,
+                    sample_interval=sample_interval,
+                    cost_override=cost_override,
+                    exclude_limit_moves=exclude_limit_moves,
                 )
+                if result.get("status") != "success":
+                    horizon_results[f"T+{h}"] = {"error": result.get("error", "回测失败")}
+                    continue
+                m = result["metrics"]
                 horizon_results[f"T+{h}"] = {
-                    "ic_mean": result["metrics"]["ic_mean"],
-                    "ic_ir": result["metrics"]["ic_ir"],
-                    "hit_rate": result["metrics"]["hit_rate"],
-                    "long_short_return": result["metrics"]["long_short_return"],
-                    "sharpe_ls": result["metrics"].get("sharpe_ls", 0),
-                    "max_drawdown_ls": result["metrics"].get("max_drawdown_ls", 0),
-                    "turnover_mean": result["metrics"].get("turnover_mean", 0),
-                    "n_dates": result["metrics"]["n_dates"],
+                    "ic_mean": m["ic_mean"],
+                    "ic_ir": m["ic_ir"],
+                    "t_stat": m.get("t_stat"),
+                    "hit_rate": m["hit_rate"],
+                    # 决策依据用可实现的多头超额，而非需融券的多空
+                    "long_excess_net": m.get("long_excess_net", 0.0),
+                    "long_return_net": m.get("long_return_net", 0.0),
+                    "sharpe_long": m.get("sharpe_long", 0.0),
+                    "max_drawdown_long": m.get("max_drawdown_long", 0.0),
+                    "cost_drag_annual": m.get("cost_drag_annual", 0.0),
+                    "long_short_return": m.get("long_short_return", 0.0),
+                    "turnover_mean": m.get("turnover_mean", 0.0),
+                    "n_dates": m["n_dates"],
+                    "warnings": result.get("warnings", []),
                 }
             except Exception as e:
                 logger.warning("Multi-horizon T+%d failed: %s", h, e)
                 horizon_results[f"T+{h}"] = {"error": str(e)}
 
-        # Find best horizon by IC_IR
+        # 最优周期按多头超额净收益的年化 Sharpe 选，而非可能虚高的 IC_IR
         best = max(
-            ((k, v) for k, v in horizon_results.items() if "ic_ir" in v),
-            key=lambda x: x[1]["ic_ir"],
+            ((k, v) for k, v in horizon_results.items() if "sharpe_long" in v),
+            key=lambda x: x[1]["sharpe_long"],
             default=(None, None),
         )
 
@@ -400,6 +591,7 @@ class BacktestService:
             "model_id": model_id,
             "horizons": horizon_results,
             "best_horizon": best[0] if best[0] else "N/A",
+            "best_horizon_criterion": "sharpe_long (多头净收益年化 Sharpe)",
         }
 
     @staticmethod

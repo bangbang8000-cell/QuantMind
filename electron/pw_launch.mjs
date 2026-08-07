@@ -1,0 +1,15 @@
+import { chromium } from 'playwright';
+const browser = await chromium.launch({ executablePath: '/usr/bin/google-chrome-stable' });
+const page = await browser.newPage({ viewport: { width: 1400, height: 900 } });
+const errors = [];
+page.on('pageerror', e => errors.push('PAGEERROR: ' + e.message));
+page.on('console', m => { if (m.type() === 'error') errors.push('CONSOLE: ' + m.text()); });
+await page.goto('http://localhost:3080/', { waitUntil: 'networkidle', timeout: 30000 }).catch(e => errors.push('NAV: ' + e.message));
+await page.waitForTimeout(2000);
+console.log('URL:', page.url());
+console.log('title:', await page.title());
+const body = await page.evaluate(() => document.body.innerText.slice(0, 200));
+console.log('body:', body.replace(/\n/g, ' | '));
+console.log('errors:', errors.length ? errors.join('\n') : 'NONE');
+await page.screenshot({ path: '/tmp/qm_home.png' });
+await browser.close();

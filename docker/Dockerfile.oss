@@ -54,7 +54,7 @@ RUN python -m pip install --upgrade pip setuptools wheel cython \
     && rm -rf /tmp/requirements*.txt /tmp/torch_wheels
 
 # 安装 QuantDB SDK（付费高质量数据源：K线/Tick/财报/估值/315维AI因子）
-RUN python -m pip install --no-cache-dir --root-user-action=ignore "quantdb-sdk>=0.2.6"
+RUN python -m pip install --no-cache-dir --root-user-action=ignore "quantdb-sdk>=0.2.10"
 
 # 修复 qlib 0.9.7 bug: position.py 中 price=None 导致 TypeError
 COPY docker/patch_qlib.py /tmp/patch_qlib.py
@@ -63,17 +63,21 @@ RUN python /tmp/patch_qlib.py && rm /tmp/patch_qlib.py
 # 安装 rd-agent 因子演化模块（可选，目录不存在则跳过）
 # rd-agent 在 .gitignore 中，OSS 克隆后可能不存在
 COPY docker/install_rdagent.sh /tmp/install_rdagent.sh
+# rd-agent 源码（OSS 克隆可能不存在；install 脚本会自行跳过）
+COPY rd-agent/ /app/rd-agent/
 RUN chmod +x /tmp/install_rdagent.sh && /tmp/install_rdagent.sh && rm /tmp/install_rdagent.sh
+
+# 复制训练脚本（确保容器内 /app/train.py 存在，避免卷挂载失败时 Docker 创建目录）
+COPY docker/training/train.py /app/train.py
 
 # 复制源代码
 COPY backend backend
 COPY config config
 COPY strategy_templates strategy_templates
 
-# 创建数据目录 & Qlib 符号链接（AlphaAgent 硬编码 ~/.qlib/qlib_data/cn_data）
+# 创建数据目录 & Qlib 符号链接（运行时由 rd_loop_wrapper 按实际缓存路径创建）
 RUN mkdir -p /data/models /data/qlib_data /data/uploads /data/strategies /tmp \
-    && mkdir -p /root/.qlib/qlib_data \
-    && ln -sf /app/db/qlib_data/cn_data /root/.qlib/qlib_data/cn_data
+    && mkdir -p /root/.qlib/qlib_data
 # Qlib features 符号链接在运行时由 entrypoint 或首次访问时创建（数据卷挂载后才存在）
 
 # 暴露端口

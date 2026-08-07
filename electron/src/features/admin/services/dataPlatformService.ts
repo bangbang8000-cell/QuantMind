@@ -88,6 +88,117 @@ export interface OnlineStatusItem {
     checked_at: string;
 }
 
+/** QuantDB 落盘形态：按交易日分区 / 每标的一文件 / 单文件 */
+export type QuantDBLayout = 'partition' | 'symbol' | 'single';
+
+export interface QuantDBConfig {
+    api_key_configured: boolean;
+    api_key_masked: string;
+    data_dir: string;
+    runtime_env_file: string;
+    timestamp: string;
+}
+
+export interface QuantDBGroup {
+    id: string;
+    name: string;
+    category_id: string;
+    dataset_count: number;
+    synced_count: number;
+    files: number;
+    size_mb: number;
+}
+
+export interface QuantDBDataset {
+    dataset: string;
+    name: string;
+    group: string;
+    category_id: string;
+    layout: QuantDBLayout;
+    rel_dir: string;
+    note: string;
+    synced: boolean;
+    files: number;
+    size_mb: number;
+    start_date?: string;
+    end_date?: string;
+    partitions?: number;
+    updated_at?: string;
+}
+
+export interface QuantDBPreview {
+    dataset: string;
+    name?: string;
+    source: 'local' | 'remote';
+    file?: string | null;
+    rows_total: number;
+    column_count?: number;
+    columns: Array<{ name: string; dtype: string }>;
+    data: Array<Record<string, unknown>>;
+    symbol_total?: number;
+    symbol_choices?: string[];
+    timestamp: string;
+}
+
+export interface QuantDBSyncJob {
+    job_id: string;
+    status: 'running' | 'completed' | 'failed' | 'cancelled' | 'cancelling';
+    stage: string;
+    datasets: string[];
+    total: number;
+    done: number;
+    current?: string | null;
+    results: Array<{
+        dataset: string;
+        status: 'synced' | 'up_to_date' | 'failed';
+        downloaded: number;
+        layout?: string;
+        error?: string;
+    }>;
+    with_pg: boolean;
+    with_qlib: boolean;
+    cancel_requested?: boolean;
+    pg_fill?: { status: string; rows?: number; reason?: string };
+    qlib_cache?: { status: string; provider_uri?: string; reason?: string };
+    error?: string;
+    started_at: string;
+    finished_at?: string;
+    started_by?: string;
+}
+
+export interface QuantDBDatasetDiff {
+    dataset: string;
+    name: string;
+    category_id: string;
+    layout: QuantDBLayout;
+    local: {
+        synced: boolean;
+        files: number;
+        size_mb: number;
+        end_date?: string | null;
+        partitions?: number;
+    };
+    remote: {
+        end_date?: string | null;
+        rows?: number | null;
+        files?: number | null;
+    } | null;
+    status: 'up_to_date' | 'updates_available' | 'not_synced' | 'unknown';
+    new_files: number;
+}
+
+export interface QuantDBDiffResult {
+    datasets: QuantDBDatasetDiff[];
+    summary: {
+        total_datasets: number;
+        up_to_date: number;
+        updates_available: number;
+        not_synced: number;
+        unknown: number;
+    };
+    timestamp: string;
+}
+
 class DataPlatformService {
     private axiosInstance: AxiosInstance;
     private readonly baseURL =
@@ -287,27 +398,124 @@ class DataPlatformService {
         return this.unwrap(resp);
     }
 
-    async syncQuantDBData(payload: {
-        mode: 'kline' | 'calendar' | 'ai_factors' | 'valuation' | 'all';
-        symbols?: string[];
-        incremental?: boolean;
-        start_date?: string;
-        end_date?: string;
-        adj_type?: string;
-    }): Promise<{ message: string; mode: string; incremental: boolean; timestamp: string }> {
-        const resp = await this.axiosInstance.post('/admin/data-platform/quantdb/sync', payload);
+    async queryQuantDBTick(payload: {
+        symbol: string;
+        trade_date: string;
+        start_ts?: string;
+        end_ts?: string;
+        fields?: string;
+        limit?: number;
+    }): Promise<{
+        symbol: string;
+        trade_date: string;
+        rows: number;
+        columns: string[];
+        data: any[];
+        timestamp: string;
+    }> {
+        const resp = await this.axiosInstance.post('/admin/data-platform/quantdb/query-tick', payload, {
+            timeout: 120000,
+        });
         return this.unwrap(resp);
     }
 
-    async getQuantDBSyncStatus(): Promise<{
-        status: {
-            quantdb_factors: { files: number; total_rows: number };
-            quantdb_valuation: { files: number };
-            quantdb_cache: { calendar_cached: boolean };
-        };
+    async queryQuantDBManifest(payload: {
+        category_id: string;
+        sub_category: string;
+        trade_date?: string;
+        limit?: number;
+    }): Promise<{
+        files: any[];
+        count: number;
+        total: number;
+        truncated: boolean;
         timestamp: string;
     }> {
-        const resp = await this.axiosInstance.get('/admin/data-platform/quantdb/sync-status');
+        const resp = await this.axiosInstance.post('/admin/data-platform/quantdb/query-manifest', payload);
+        return this.unwrap(resp);
+    }
+
+    async getQuantDBConfig(): Promise<QuantDBConfig> {
+        const resp = await this.axiosInstance.get('/admin/data-platform/quantdb/config');
+        return this.unwrap(resp);
+    }
+
+    async saveQuantDBConfig(apiKey: string): Promise<{
+        api_key_masked: string;
+        verified: boolean;
+        error?: string | null;
+        timestamp: string;
+    }> {
+        const resp = await this.axiosInstance.post('/admin/data-platform/quantdb/config', {
+            api_key: apiKey,
+        });
+        return this.unwrap(resp);
+    }
+
+    async getQuantDBCatalog(): Promise<{
+        data_dir: string;
+        groups: QuantDBGroup[];
+        datasets: QuantDBDataset[];
+        timestamp: string;
+    }> {
+        const resp = await this.axiosInstance.get('/admin/data-platform/quantdb/catalog', {
+            timeout: 120000, // 目录统计需遍历数万个 parquet 文件
+        });
+        return this.unwrap(resp);
+    }
+
+    async previewQuantDBDataset(params: {
+        dataset: string;
+        symbol?: string;
+        limit?: number;
+        remote?: boolean;
+    }): Promise<QuantDBPreview> {
+        const resp = await this.axiosInstance.get('/admin/data-platform/quantdb/preview', {
+            params,
+            timeout: 120000,
+        });
+        return this.unwrap(resp);
+    }
+
+    async syncQuantDBDatasets(payload: {
+        datasets: string[];
+        with_pg?: boolean;
+        with_qlib?: boolean;
+        pg_full?: boolean;
+    }): Promise<{ job: QuantDBSyncJob }> {
+        const resp = await this.axiosInstance.post(
+            '/admin/data-platform/quantdb/sync-datasets',
+            payload,
+        );
+        return this.unwrap(resp);
+    }
+
+    async listQuantDBSyncJobs(): Promise<{ jobs: QuantDBSyncJob[]; timestamp: string }> {
+        const resp = await this.axiosInstance.get('/admin/data-platform/quantdb/sync-jobs');
+        return this.unwrap(resp);
+    }
+
+    async getQuantDBSyncJob(jobId: string): Promise<{ job: QuantDBSyncJob }> {
+        const resp = await this.axiosInstance.get(`/admin/data-platform/quantdb/sync-jobs/${jobId}`);
+        return this.unwrap(resp);
+    }
+
+    async cancelQuantDBSyncJob(jobId: string): Promise<{
+        job_id: string;
+        status: string;
+        message: string;
+    }> {
+        const resp = await this.axiosInstance.post(
+            `/admin/data-platform/quantdb/sync-jobs/${jobId}/cancel`,
+        );
+        return this.unwrap(resp);
+    }
+
+    async checkQuantDBDiff(datasets?: string[]): Promise<QuantDBDiffResult> {
+        const resp = await this.axiosInstance.get('/admin/data-platform/quantdb/diff', {
+            params: datasets ? { datasets: datasets.join(',') } : undefined,
+            timeout: 120000,
+        });
         return this.unwrap(resp);
     }
 }

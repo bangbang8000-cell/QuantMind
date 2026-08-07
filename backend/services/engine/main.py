@@ -114,6 +114,19 @@ async def lifespan(app: FastAPI):
     else:
         logger.info("AI Strategy Warmup disabled by env")
 
+    # 预热 QuantDB DuckDB 连接（消除首次查询延迟，不依赖 AI_STRATEGY_WARMUP 开关）
+    try:
+        from backend.services.engine.data_platform.quantdb_hub import QuantDBDataHub
+
+        hub = QuantDBDataHub.get_instance()
+        if hub.available:
+            await asyncio.to_thread(hub.warm_up)
+            logger.info("✅ QuantDB DuckDB warm-up completed")
+        else:
+            logger.info("QuantDB data not available, skipping warm-up")
+    except Exception as e:
+        logger.warning(f"⚠️ QuantDB warm-up failed (non-fatal): {e}")
+
     # --- 此处 Yield，之后代码在 shutdown 时运行 ---
     yield
 
@@ -190,9 +203,15 @@ async def auth_middleware(request: Request, call_next):
     internal_secret = request.headers.get("X-Internal-Call")
     expected_secret = get_internal_call_secret()
 
-    # 1. 尝试从网关透传的信任 Header 获取
-    user_id = request.headers.get("X-User-Id")
-    tenant_id = request.headers.get("X-Tenant-Id", "default")
+    # 1. 仅当内部密钥匹配时才信任网关透传的身份 Header。
+    #    否则 X-User-Id 可被任意客户端伪造以冒充其他用户。
+    is_internal_call = bool(expected_secret) and internal_secret == expected_secret
+    if is_internal_call:
+        user_id = request.headers.get("X-User-Id")
+        tenant_id = request.headers.get("X-Tenant-Id", "default")
+    else:
+        user_id = None
+        tenant_id = "default"
 
     # 2. 如果没有信任 Header，尝试直接校验 JWT (支持 Nginx 直接转发)
     auth_header = request.headers.get("Authorization")
@@ -211,7 +230,7 @@ async def auth_middleware(request: Request, call_next):
     # 额外：对于需要用户上下文的业务路由（backtest/strategies/inference/analysis/selection），
     # 即使内部密钥匹配，也必须提供 user_id，否则下游会报 "Missing authenticated user context"。
     if method != "OPTIONS" and path.startswith("/api/v1/"):
-        if internal_secret != expected_secret and not user_id:
+        if not is_internal_call and not user_id:
             return JSONResponse(
                 status_code=status.HTTP_401_UNAUTHORIZED,
                 content={"detail": "Authentication required (Invalid internal secret or missing user context)"},
@@ -299,6 +318,14 @@ try:
 except ImportError as e:
     logger.error(f"❌ Failed to load Realtime Contract router: {e}")
 
+# 3.2 选股（策略 v2.0 三层过滤）
+try:
+    from backend.services.engine.routers.selection import router as selection_router
+
+    app.include_router(selection_router, prefix="/api/v1")
+except ImportError as e:
+    logger.error(f"❌ Failed to load Selection router: {e}")
+
 # 4. 量化回测
 try:
     from backend.services.engine.qlib_app.api.backtest import router as backtest_router
@@ -379,14 +406,6 @@ try:
     logger.info("✅ TradingAgents routers loaded")
 except ImportError as e:
     logger.error(f"❌ Failed to load TradingAgents routers: {e}")
-
-try:
-    from backend.services.engine.routers.daily_analysis import router as daily_analysis_router
-
-    app.include_router(daily_analysis_router)
-    logger.info("✅ Daily Analysis routers loaded")
-except ImportError as e:
-    logger.error(f"❌ Failed to load Daily Analysis routers: {e}")
 
 try:
     from backend.services.engine.routers.quantbot_router import router as quantbot_router

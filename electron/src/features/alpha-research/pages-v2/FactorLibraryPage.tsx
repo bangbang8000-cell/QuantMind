@@ -2,9 +2,9 @@ import React, { useState, useEffect, useCallback } from 'react';
 import { Card, CardContent, CardHeader, CardTitle } from '../components-v2/ui/Card';
 import { Button } from '../components-v2/ui/Button';
 import { Badge } from '../components-v2/ui/Badge';
-import { Factor, FactorQuality } from '../types-v2';
+import { Factor, FactorQuality, UniverseInfo } from '../types-v2';
 import { formatNumber, getQualityBadgeClass } from '../utils-v2';
-import { getFactors, getFactorDetail } from '../services-v2/api';
+import { getFactors, getFactorDetail, getUniverses, UNIVERSE_LABELS } from '../services-v2/api';
 import { alphaAgentService, MarketInfo } from '../services/alphaAgentService';
 import {
   Database,
@@ -38,6 +38,8 @@ export const FactorLibraryPage: React.FC = () => {
   const [searchQuery, setSearchQuery] = useState('');
   const [qualityFilter, setQualityFilter] = useState<FactorQuality | 'all'>('all');
   const [marketFilter, setMarketFilter] = useState<string>('all');
+  const [universeFilter, setUniverseFilter] = useState<string>('all');
+  const [universes, setUniverses] = useState<UniverseInfo[]>([]);
   const [markets, setMarkets] = useState<MarketInfo[]>([]);
   const [selectedFactor, setSelectedFactor] = useState<any | null>(null);
   const [isLoading, setIsLoading] = useState(false);
@@ -48,15 +50,18 @@ export const FactorLibraryPage: React.FC = () => {
 
   useEffect(() => {
     alphaAgentService.listMarkets().then(setMarkets).catch(() => {});
+    getUniverses()
+      .then((res) => setUniverses(res.data?.universes ?? []))
+      .catch(() => {});
   }, []);
 
   useEffect(() => {
     loadFactors();
-  }, [selectedLibrary, marketFilter]);
+  }, [selectedLibrary, marketFilter, universeFilter]);
 
   useEffect(() => {
     filterFactors();
-  }, [factors, searchQuery, qualityFilter, marketFilter]);
+  }, [factors, searchQuery, qualityFilter, marketFilter, universeFilter]);
 
   const loadFactors = useCallback(async () => {
     setIsLoading(true);
@@ -65,6 +70,7 @@ export const FactorLibraryPage: React.FC = () => {
       const resp = await getFactors({
         library: selectedLibrary || undefined,
         market: marketFilter !== 'all' ? marketFilter : undefined,
+        universe: universeFilter !== 'all' ? universeFilter : undefined,
         limit: 200,
       });
       if (resp.success && resp.data) {
@@ -77,6 +83,7 @@ export const FactorLibraryPage: React.FC = () => {
             factorDescription: f.factorDescription || '',
             quality: (f.quality || 'low') as FactorQuality,
             market: f.market || f.metadata?.market || undefined,
+            universe: f.universe || f.metadata?.universe || undefined,
             // Prioritize specific metrics from backtest results to match detail view
             ic: (typeof bt['IC'] === 'number' ? bt['IC'] : (f.ic || bt['1day.excess_return_without_cost.information_coefficient'] || 0)),
             icir: (typeof bt['ICIR'] === 'number' ? bt['ICIR'] : (f.icir || bt['1day.excess_return_without_cost.information_coefficient_ir'] || 0)),
@@ -107,32 +114,20 @@ export const FactorLibraryPage: React.FC = () => {
       } else {
         setError('无法连接 AlphaAgent 接口，请检查网络或登录状态。');
       }
-      // Fallback to mock data
-      loadMockFactors();
+      // Show empty state with error message instead of mock data
+      setFactors([]);
     } finally {
       setIsLoading(false);
     }
-  }, [selectedLibrary, marketFilter]);
-
-  const loadMockFactors = () => {
-    const cached = localStorage.getItem('quantaalpha_factors');
-    if (cached) {
-      try {
-        setFactors(JSON.parse(cached));
-      } catch {
-        setFactors(generateMockFactors());
-      }
-    } else {
-      const mock = generateMockFactors();
-      setFactors(mock);
-      localStorage.setItem('quantaalpha_factors', JSON.stringify(mock));
-    }
-  };
+  }, [selectedLibrary, marketFilter, universeFilter]);
 
   const filterFactors = () => {
     let filtered = factors;
     if (marketFilter !== 'all') {
       filtered = filtered.filter((f) => f.market === marketFilter);
+    }
+    if (universeFilter !== 'all') {
+      filtered = filtered.filter((f) => f.universe === universeFilter);
     }
     if (qualityFilter !== 'all') {
       filtered = filtered.filter((f) => f.quality === qualityFilter);
@@ -314,6 +309,32 @@ export const FactorLibraryPage: React.FC = () => {
                 </Button>
               ))}
             </div>
+            {/* Universe filter — A-share stock pools */}
+            <div className="flex flex-wrap items-center gap-2">
+              <span className="text-xs text-muted-foreground mr-1">股票池</span>
+              <Button
+                variant={universeFilter === 'all' ? 'primary' : 'outline'}
+                size="sm"
+                onClick={() => setUniverseFilter('all')}
+              >
+                全部
+              </Button>
+              {(universes.length > 0
+                ? universes
+                : (Object.keys(UNIVERSE_LABELS) as Array<keyof typeof UNIVERSE_LABELS>).map(
+                    (id) => ({ id, name: UNIVERSE_LABELS[id], stockCount: 0, indexSymbol: null }),
+                  )
+              ).map((u) => (
+                <Button
+                  key={u.id}
+                  variant={universeFilter === u.id ? 'primary' : 'outline'}
+                  size="sm"
+                  onClick={() => setUniverseFilter(u.id)}
+                >
+                  {u.name}
+                </Button>
+              ))}
+            </div>
             {/* Search + quality filter */}
             <div className="flex flex-col md:flex-row gap-4">
               <div className="flex-1">
@@ -484,6 +505,13 @@ export const FactorLibraryPage: React.FC = () => {
                         {MARKET_LABELS[selectedFactor.market || selectedFactor.metadata?.market] || selectedFactor.market || selectedFactor.metadata?.market}
                       </span>
                     )}
+                    {(selectedFactor.universe || selectedFactor.metadata?.universe) && (
+                      <span className="inline-flex items-center rounded-md border border-primary/30 bg-primary/10 px-2 py-0.5 text-xs font-medium text-primary">
+                        {UNIVERSE_LABELS[
+                          (selectedFactor.universe || selectedFactor.metadata?.universe) as keyof typeof UNIVERSE_LABELS
+                        ] || selectedFactor.universe || selectedFactor.metadata?.universe}
+                      </span>
+                    )}
                   </div>
                 </div>
                 <Button variant="ghost" onClick={() => setSelectedFactor(null)}>
@@ -572,27 +600,3 @@ export const FactorLibraryPage: React.FC = () => {
     </div>
   );
 };
-
-// Generate mock factors for demo when backend is unavailable
-function generateMockFactors(): Factor[] {
-  const qualities: FactorQuality[] = ['high', 'medium', 'low'];
-  const directions = ['动量类', '价值类', '成长类', '技术指标'];
-  const factors: Factor[] = [];
-  for (let i = 0; i < 30; i++) {
-    factors.push({
-      factorId: `factor_${i + 1}`,
-      factorName: `Factor_${i + 1}_${directions[i % 4]}`,
-      factorExpression: `RANK(TS_MEAN($close / DELAY($close, ${10 + i}), ${5 + i}) * $volume)`,
-      factorDescription: `这是一个${directions[i % 4]}因子，结合了价格动量和成交量特征`,
-      quality: qualities[i % 3],
-      ic: 0.03 + Math.random() * 0.05,
-      icir: 0.3 + Math.random() * 0.5,
-      rankIc: 0.025 + Math.random() * 0.05,
-      rankIcir: 0.25 + Math.random() * 0.5,
-      round: Math.floor(i / 5) + 1,
-      direction: directions[i % 4],
-      createdAt: new Date(Date.now() - i * 86400000).toISOString(),
-    });
-  }
-  return factors;
-}

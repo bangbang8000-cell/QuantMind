@@ -845,14 +845,17 @@ class StrategyStorageService:
             }
 
         try:
+            from backend.shared.auth import get_internal_call_secret
+
             async with httpx.AsyncClient(timeout=10.0) as client:
-                # 注意：由于 strategy-service 有身份验证中间件，这里需要模拟或传递 token
-                # 在内部服务间调用中，通常使用内部密钥或信任机制。
-                # 暂时通过 Header 传递当前 user_id，由 nginx-gateway 或服务中间件识别
+                # 服务间调用：X-User-Id 仅在 X-Internal-Call 密钥匹配时被下游信任
                 response = await client.post(
                     f"{strategy_service_url}/api/v1/strategies",
                     json=payload,
-                    headers={"X-User-Id": str(user_int_id)},
+                    headers={
+                        "X-User-Id": str(user_int_id),
+                        "X-Internal-Call": get_internal_call_secret(),
+                    },
                 )
 
                 if response.status_code != 200:

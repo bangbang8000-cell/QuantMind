@@ -17,7 +17,7 @@ export type DealPrice = 'open' | 'close';
 export type TimePeriodMap = Record<SplitKey, [Dayjs, Dayjs]>;
 
 // 模型类型定义
-export type ModelType = 'lightgbm' | 'xgboost' | 'catboost' | 'linear' | 'gru' | 'lstm' | 'alstm' | 'transformer' | 'tabnet' | 'tcn';
+export type ModelType = 'lightgbm' | 'xgboost' | 'catboost' | 'linear' | 'gru' | 'lstm' | 'alstm' | 'transformer' | 'tabnet' | 'tcn' | 'nativetft';
 export type ModelCategory = 'tree' | 'linear' | 'deep_learning';
 
 export interface ModelTypeOption {
@@ -26,22 +26,35 @@ export interface ModelTypeOption {
   category: ModelCategory;
   description: string;
   framework: string;
+  tooltip: string;
 }
 
 export const MODEL_TYPE_OPTIONS: ModelTypeOption[] = [
   // 树模型
-  { value: 'lightgbm', label: 'LightGBM', category: 'tree', description: '速度快、效果稳，基线必备', framework: 'lightgbm' },
-  { value: 'xgboost', label: 'XGBoost', category: 'tree', description: '与LGB异构，集成提升明显', framework: 'xgboost' },
-  { value: 'catboost', label: 'CatBoost', category: 'tree', description: '类别特征友好，自带有序提升', framework: 'catboost' },
+  { value: 'lightgbm', label: 'LightGBM', category: 'tree', description: '速度快、效果稳，基线必备', framework: 'lightgbm',
+    tooltip: 'QuantMind 实证 IC 最稳定的模型。对动量因子（mom_ret_*）和换手率（liq_turnover_os）敏感，训练 3 分钟内完成。建议作为首个基线，再与 XGBoost 做 Stacking 集成可提升 10-15% ICIR。' },
+  { value: 'xgboost', label: 'XGBoost', category: 'tree', description: '与LGB异构，集成提升明显', framework: 'xgboost',
+    tooltip: '分裂策略与 LightGBM 不同（level-wise vs leaf-wise），集成时互补性强。对资金流因子（flow_vpin、flow_pressure_index）捕获能力略优于 LGB。单模型训练比 LGB 慢约 30%。' },
+  { value: 'catboost', label: 'CatBoost', category: 'tree', description: '类别特征友好，自带有序提升', framework: 'catboost',
+    tooltip: '开启"行业作为特征"（ind_code_l1）时优势最大——CatBoost 原生支持类别特征，无需 one-hot。对风格因子（style_bp、style_ep_ttm）的交互捕捉较好。训练速度三者最慢，但过拟合风险最低。' },
   // 线性基线模型
-  { value: 'linear', label: 'Ridge 线性', category: 'linear', description: '简单线性回归基线，sanity check 用', framework: 'sklearn' },
+  { value: 'linear', label: 'Ridge 线性', category: 'linear', description: '简单线性回归基线，sanity check 用', framework: 'sklearn',
+    tooltip: '重要诊断工具：如果 Ridge 的 IC > 0.03，说明特征集有线性可分信号，树模型应该表现更好；如果 Ridge IC ≈ 0 但树模型 IC 很高，说明信号在非线性交互中。IC 应显著低于树模型，否则树模型可能过拟合。' },
   // 深度学习模型
-  { value: 'gru', label: 'GRU', category: 'deep_learning', description: '门控循环单元，时序建模性价比最高', framework: 'pytorch' },
-  { value: 'lstm', label: 'LSTM', category: 'deep_learning', description: '长短期记忆网络', framework: 'pytorch' },
-  { value: 'alstm', label: 'ALSTM', category: 'deep_learning', description: '带注意力的LSTM', framework: 'pytorch' },
-  { value: 'transformer', label: 'Transformer', category: 'deep_learning', description: '标准Transformer', framework: 'pytorch' },
-  { value: 'tabnet', label: 'TabNet', category: 'deep_learning', description: 'Google表格数据SOTA，自带特征选择', framework: 'pytorch' },
-  { value: 'tcn', label: 'TCN', category: 'deep_learning', description: '时间卷积网络，比RNN快', framework: 'pytorch' },
+  { value: 'gru', label: 'GRU', category: 'deep_learning', description: '门控循环单元，时序建模性价比最高', framework: 'pytorch',
+    tooltip: '默认 20 日滚动窗口（step_len=20），捕捉动量反转模式。对波动率因子（vol_std_*、vol_parkinson_*）时序衰减敏感。GPU 训练约 10-20 分钟，是最推荐的 DL 入门模型。数据量 < 50 万行时慎用，容易过拟合。' },
+  { value: 'lstm', label: 'LSTM', category: 'deep_learning', description: '长短期记忆网络', framework: 'pytorch',
+    tooltip: '比 GRU 多一个门控单元，理论记忆更长，但 QuantMind A 股数据实测 IC 提升有限（<5%），训练慢约 40%。适合训练窗口 > 5 年的大数据集。如果 GRU 已经效果好，LSTM 通常不会明显更好。' },
+  { value: 'alstm', label: 'ALSTM', category: 'deep_learning', description: '带注意力的LSTM', framework: 'pytorch',
+    tooltip: '在 LSTM 基础上加注意力机制，自动学习哪些时间步更重要。对事件驱动行情（如业绩公告前后）有更好的捕捉。QuantMind 实测中 ALSTM 偶尔优于 LSTM，但不稳定——建议先跑 GRU，如果 IC > 0.05 再尝试 ALSTM。' },
+  { value: 'transformer', label: 'Transformer', category: 'deep_learning', description: '标准Transformer', framework: 'pytorch',
+    tooltip: '自注意力机制可捕捉任意时间步依赖，不局限于近邻。对跨周期因子组合（如短期动量 + 长期风格）有独特优势。但参数量大，需至少 100 万行训练数据才能收敛。d_model 默认 64，可调至 128 但需更多数据防过拟合。' },
+  { value: 'tabnet', label: 'TabNet', category: 'deep_learning', description: 'Google表格数据SOTA，自带特征选择', framework: 'pytorch',
+    tooltip: '唯一不需要滚动窗口的 DL 模型——直接吃扁平特征，类似"可学习的树模型"。自带 mask 机制做特征选择，适合不确定哪些因子有效时探索。对资金流因子（flow_*）和微结构因子有独特偏好。训练需预训练阶段，总时间约为 GRU 的 2 倍。' },
+  { value: 'tcn', label: 'TCN', category: 'deep_learning', description: '时间卷积网络，比RNN快', framework: 'pytorch',
+    tooltip: '用因果卷积替代循环，训练速度比 GRU/LSTM 快约 50%，推理更快。对波动率突变（如 vol_jump_zadj）和成交量异动（liq_volume_ratio_*）的检测能力较强。适合需要频繁重训模型的场景。kernel_size 默认 5，增大到 7 可捕捉更长期依赖。' },
+  { value: 'nativetft', label: 'NativeTFT', category: 'deep_learning', description: '轻量TFT变体，GRU+注意力+门控残差', framework: 'pytorch',
+    tooltip: 'QuantMind 自研轻量 TFT：GRU 时序编码 + MultiheadAttention + 门控残差网络(GRN)。比 pytorch_forecasting TFT 轻量 10 倍，无需额外依赖。hidden_dim 默认 64，num_heads 默认 4。适合 GRU 效果好但想尝试注意力机制的场景。' },
 ];
 
 export interface TrainingTarget {
@@ -49,8 +62,12 @@ export interface TrainingTarget {
   horizonDays: number;
 }
 
+export type EnsembleMethod = 'none' | 'stacking';
+
 export interface TrainingParams {
   model_type: ModelType;
+  model_types: ModelType[];
+  ensemble_method: EnsembleMethod;
   learning_rate: number;
   num_leaves: number;
   max_depth: number;
@@ -63,12 +80,18 @@ export interface TrainingParams {
   early_stopping_rounds: number;
   objective: 'regression' | 'binary';
   metric: 'l2' | 'rmse' | 'mae' | 'auc' | 'binary_logloss';
+  // LightGBM specific (optional, falls back to shared learning_rate/max_depth)
+  lgb_learning_rate?: number;
+  lgb_max_depth?: number;
   // XGBoost specific
+  xgb_learning_rate?: number;
+  xgb_max_depth?: number;
   xgb_subsample?: number;
   xgb_colsample_bytree?: number;
   xgb_reg_alpha?: number;
   xgb_reg_lambda?: number;
   // CatBoost specific
+  cb_learning_rate?: number;
   cb_depth?: number;
   cb_l2_leaf_reg?: number;
   cb_random_strength?: number;
@@ -92,6 +115,7 @@ export interface TrainingContext {
   slippage: number;
   dealPrice: DealPrice;
   market?: 'CN' | 'US' | 'HK' | 'CRYPTO';
+  industry_as_feature?: boolean;
 }
 
 export interface TrainingRequestPayload {
@@ -137,6 +161,7 @@ export interface TrainingResult {
     train: { rmse: number; auc: number; ic: number; rank_ic: number; rank_icir: number };
     val: { rmse: number; auc: number; ic: number; rank_ic: number; rank_icir: number };
     test: { rmse: number; auc: number; ic: number; rank_ic: number; rank_icir: number };
+    score_direction?: 'normal' | 'reversed';
   };
   artifacts: string[];
   summary: {
@@ -403,6 +428,8 @@ export const LEGACY_DEFAULT_TIME_PERIODS: TimePeriodMap = {
 
 export const DEFAULT_PARAMS: TrainingParams = {
   model_type: 'lightgbm',
+  model_types: ['lightgbm'],
+  ensemble_method: 'none',
   learning_rate: 0.02,
   num_leaves: 31,
   max_depth: -1,
@@ -416,25 +443,93 @@ export const DEFAULT_PARAMS: TrainingParams = {
   objective: 'regression',
   metric: 'l2',
   // XGBoost
+  xgb_max_depth: 4,
   xgb_subsample: 0.7,
-  xgb_colsample_bytree: 0.6,
-  xgb_reg_alpha: 0.1,
-  xgb_reg_lambda: 1.0,
+  xgb_colsample_bytree: 0.65,
+  xgb_reg_alpha: 0.5,
+  xgb_reg_lambda: 2.0,
   // CatBoost
   cb_depth: 6,
   cb_l2_leaf_reg: 3.0,
-  cb_random_strength: 1.0,
+  cb_random_strength: 1.5,
   cb_bagging_temperature: 0.8,
   // Linear
-  linear_alpha: 1.0,
+  linear_alpha: 3.0,
   // DL
   dl_hidden_size: 64,
   dl_num_layers: 2,
-  dl_dropout: 0.3,
+  dl_dropout: 0.2,
   dl_n_epochs: 200,
-  dl_batch_size: 8000,
-  dl_lr: 0.001,
+  dl_batch_size: 4000,
+  dl_lr: 0.0001,
   dl_step_len: 20,
+};
+
+/** 各 DL 模型的推荐默认参数，切换模型时自动填充 */
+export const MODEL_DL_DEFAULTS: Record<string, Partial<TrainingParams>> = {
+  gru: {
+    dl_hidden_size: 64,
+    dl_num_layers: 2,
+    dl_dropout: 0.2,
+    dl_lr: 0.001,
+    dl_batch_size: 4000,
+    dl_n_epochs: 200,
+    dl_step_len: 20,
+  },
+  lstm: {
+    dl_hidden_size: 64,
+    dl_num_layers: 2,
+    dl_dropout: 0.2,
+    dl_lr: 0.001,
+    dl_batch_size: 4000,
+    dl_n_epochs: 200,
+    dl_step_len: 20,
+  },
+  alstm: {
+    dl_hidden_size: 64,
+    dl_num_layers: 2,
+    dl_dropout: 0.2,
+    dl_lr: 0.001,
+    dl_batch_size: 4000,
+    dl_n_epochs: 200,
+    dl_step_len: 20,
+  },
+  transformer: {
+    dl_hidden_size: 64,
+    dl_num_layers: 2,
+    dl_dropout: 0.2,
+    dl_lr: 0.0001,
+    dl_batch_size: 4000,
+    dl_n_epochs: 200,
+    dl_step_len: 20,
+  },
+  tabnet: {
+    dl_hidden_size: 64,
+    dl_num_layers: 5,
+    dl_dropout: 0.2,
+    dl_lr: 0.005,
+    dl_batch_size: 4000,
+    dl_n_epochs: 200,
+    dl_step_len: 20,
+  },
+  tcn: {
+    dl_hidden_size: 128,
+    dl_num_layers: 2,
+    dl_dropout: 0.2,
+    dl_lr: 0.0001,
+    dl_batch_size: 4000,
+    dl_n_epochs: 200,
+    dl_step_len: 20,
+  },
+  nativetft: {
+    dl_hidden_size: 64,
+    dl_num_layers: 2,
+    dl_dropout: 0.2,
+    dl_lr: 0.0005,
+    dl_batch_size: 4000,
+    dl_n_epochs: 200,
+    dl_step_len: 20,
+  },
 };
 
 export const DEFAULT_CONTEXT: TrainingContext = {
@@ -643,8 +738,10 @@ export const buildBackendTrainingPayload = (
   const valRatio = Math.min(0.5, Math.max(0.01, daysBetween(timePeriods.val) / splitTotal));
 
   const modelType = request.params.model_type || 'lightgbm';
+  const modelTypes = request.params.model_types?.length > 1 ? request.params.model_types : null;
+  const ensembleMethod = request.params.ensemble_method ?? 'none';
 
-  return {
+  const payload: Record<string, unknown> = {
     job_name: `model_train_t${request.target.horizonDays}_${dayjs().format('YYYYMMDDHHmmss')}`,
     display_name: request.displayName,
     model_type: modelType,
@@ -672,11 +769,12 @@ export const buildBackendTrainingPayload = (
       slippage: request.context.slippage,
       deal_price: request.context.dealPrice,
       market: request.context.market || 'CN',
+      industry_as_feature: request.context.industry_as_feature ?? false,
     },
     lgb_params: {
-      learning_rate: request.params.learning_rate,
+      learning_rate: request.params.lgb_learning_rate ?? request.params.learning_rate,
       num_leaves: request.params.num_leaves,
-      max_depth: request.params.max_depth,
+      max_depth: request.params.lgb_max_depth ?? request.params.max_depth,
       min_data_in_leaf: request.params.min_data_in_leaf,
       lambda_l1: request.params.lambda_l1,
       lambda_l2: request.params.lambda_l2,
@@ -686,33 +784,40 @@ export const buildBackendTrainingPayload = (
       metric: request.params.metric,
     },
     xgb_params: {
-      max_depth: request.params.max_depth,
-      learning_rate: request.params.learning_rate,
+      max_depth: request.params.xgb_max_depth ?? (request.params.max_depth && request.params.max_depth > 0 ? request.params.max_depth : 4),
+      learning_rate: request.params.xgb_learning_rate ?? request.params.learning_rate,
       subsample: request.params.xgb_subsample ?? 0.7,
-      colsample_bytree: request.params.xgb_colsample_bytree ?? 0.6,
-      reg_alpha: request.params.xgb_reg_alpha ?? 0.1,
-      reg_lambda: request.params.xgb_reg_lambda ?? 1.0,
+      colsample_bytree: request.params.xgb_colsample_bytree ?? 0.65,
+      reg_alpha: request.params.xgb_reg_alpha ?? 0.5,
+      reg_lambda: request.params.xgb_reg_lambda ?? 2.0,
       objective: request.params.objective === 'binary' ? 'binary:logistic' : 'reg:squarederror',
     },
     catboost_params: {
-      depth: request.params.cb_depth ?? 6,
-      learning_rate: request.params.learning_rate,
+      depth: request.params.cb_depth ?? request.params.max_depth ?? 6,
+      learning_rate: request.params.cb_learning_rate ?? request.params.learning_rate,
       l2_leaf_reg: request.params.cb_l2_leaf_reg ?? 3.0,
-      random_strength: request.params.cb_random_strength ?? 1.0,
+      random_strength: request.params.cb_random_strength ?? 1.5,
       bagging_temperature: request.params.cb_bagging_temperature ?? 0.8,
       loss_function: request.params.metric === 'auc' ? 'Logloss' : 'RMSE',
     },
     dl_params: {
       hidden_size: request.params.dl_hidden_size ?? 64,
       num_layers: request.params.dl_num_layers ?? 2,
-      dropout: request.params.dl_dropout ?? 0.3,
+      dropout: request.params.dl_dropout ?? 0.2,
       n_epochs: request.params.dl_n_epochs ?? 200,
-      batch_size: request.params.dl_batch_size ?? 2000,
-      lr: request.params.dl_lr ?? 0.001,
+      batch_size: request.params.dl_batch_size ?? 4000,
+      lr: request.params.dl_lr ?? 0.0001,
       step_len: request.params.dl_step_len ?? 20,
-      alpha: request.params.linear_alpha ?? 1.0,
+      alpha: request.params.linear_alpha ?? 3.0,
     },
   };
+
+  if (modelTypes) {
+    payload.model_types = modelTypes;
+    payload.ensemble = ensembleMethod;
+  }
+
+  return payload;
 };
 
 const normalizeFeatureKeys = (features?: Array<string | null | undefined> | null): string[] => {
@@ -812,6 +917,7 @@ export const parseTrainingResult = (
         rank_ic: Number(test.rank_ic ?? (metadata as any)?.metrics?.test_rank_ic ?? 0),
         rank_icir: Number(test.rank_icir ?? (metadata as any)?.metrics?.test_rank_icir ?? 0),
       },
+      score_direction: ((metadata as any)?.metrics?.score_direction ?? metrics?.score_direction) === 'reversed' ? 'reversed' : 'normal',
     },
     artifacts,
     summary: {

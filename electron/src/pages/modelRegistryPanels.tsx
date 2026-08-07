@@ -7,6 +7,7 @@ import {
   History, Archive, Brain, CheckCircle2, Clock, XCircle, Trash2,
   ChevronRight, Play, Cpu, TrendingUp, Download, ChevronDown,
   ChevronUp, Shield, Zap, Activity, ListFilter, BarChart3, Info, AlertCircle,
+  Check,
 } from 'lucide-react';
 import {
   UserModelRecord,
@@ -53,7 +54,9 @@ export const ModelCard: React.FC<{
   onClick: () => void;
   onSetDefault: () => void;
   canSetDefault: boolean;
-}> = ({ model, isSelected, onClick, onSetDefault, canSetDefault }) => {
+  isChecked?: boolean;
+  showCheckbox?: boolean;
+}> = ({ model, isSelected, onClick, onSetDefault, canSetDefault, isChecked = false, showCheckbox = false }) => {
   const sc = getStatusConfig(model.status);
   const mt = extractModelType(model);
   const fc = getMeta(model).feature_count ?? null;
@@ -64,11 +67,21 @@ export const ModelCard: React.FC<{
         'p-3.5 rounded-2xl cursor-pointer transition-all duration-200 border select-none',
         isSelected
           ? 'bg-white border-blue-500 shadow-lg shadow-blue-100 ring-1 ring-blue-400'
-          : 'bg-transparent border-transparent hover:bg-white hover:border-slate-200 hover:shadow-sm'
+          : isChecked
+            ? 'bg-blue-50/60 border-blue-300 shadow-sm'
+            : 'bg-transparent border-transparent hover:bg-white hover:border-slate-200 hover:shadow-sm'
       )}
     >
       <div className="flex justify-between items-start mb-1.5 gap-2">
         <div className="flex items-center gap-1.5 min-w-0">
+          {showCheckbox && (
+            <span className={clsx(
+              'inline-flex items-center justify-center h-3.5 w-3.5 rounded border transition-all flex-shrink-0',
+              isChecked ? 'bg-blue-600 border-blue-600' : 'bg-white border-slate-300'
+            )}>
+              {isChecked && <Check size={9} className="text-white" strokeWidth={3.5} />}
+            </span>
+          )}
           <span className={clsx('px-1.5 py-0.5 rounded-md text-[8px] font-black tracking-wider flex items-center gap-0.5', sc.bg, sc.color)}>
             {sc.icon}{sc.label}
           </span>
@@ -373,7 +386,7 @@ export const TrainingSourcePanel: React.FC<{
   const status = effectiveRunData?.status || model.status || 'unknown';
 
   return (
-    <div className="h-[calc(100vh-360px)] flex flex-col space-y-4 pt-6 pb-2 overflow-hidden">
+    <div className="h-[calc(var(--app-h)-360px)] flex flex-col space-y-4 pt-6 pb-2 overflow-hidden">
       {/* 顶部任务概览 */}
       <div className="flex gap-4 shrink-0 px-1">
         <div className="glass-panel flex-1 rounded-2xl p-4 border border-slate-100/50 flex items-center justify-between">
@@ -513,7 +526,7 @@ export const AttributionAnalysisPanel: React.FC<{
   const maxAbsShap = Math.max(...rows.map(r => r.mean_abs_shap || 0), 0.0001);
 
   return (
-    <div className="h-[calc(100vh-340px)] flex flex-col space-y-4 overflow-hidden pt-4">
+    <div className="h-[calc(var(--app-h)-340px)] flex flex-col space-y-4 overflow-hidden pt-4">
       {/* 头部统计 */}
       <div className="glass-panel rounded-2xl p-5 border border-slate-200 bg-white shadow-sm flex items-center justify-between shrink-0">
         <div className="flex items-center gap-4">
@@ -703,7 +716,6 @@ export const InferenceCenterPanel: React.FC<{
   lastRun: InferenceRunRecord | null;
   history: InferenceRunRecord[];
   historyLoading: boolean;
-  onViewRanking: (runId: string) => void;
   autoSettings: AutoInferenceSettings | null;
   autoSaving: boolean;
   onToggleAuto: (enabled: boolean) => void;
@@ -721,7 +733,7 @@ export const InferenceCenterPanel: React.FC<{
   onDeleteHistory?: (runId: string) => void;
 }> = ({
   model, inferenceDate, onDateChange, targetDate, targetDateLoading, horizonDays,
-  running, onRun, onRunAsDefault, isDefault, lastRun, history, historyLoading, onViewRanking,
+  running, onRun, onRunAsDefault, isDefault, lastRun, history, historyLoading,
   autoSettings, autoSaving, onToggleAuto, latestInferenceRun, latestInferenceRunLoading, precheck, precheckLoading, onRefreshPrecheck,
   historyRunIdFilter, onHistoryRunIdFilterChange, historyStatusFilter, onHistoryStatusFilterChange, historyDateFilter, onHistoryDateFilterChange,
   onDeleteHistory,
@@ -730,10 +742,6 @@ export const InferenceCenterPanel: React.FC<{
   const latestRunModelLabel = latestInferenceRun?.model_id === model.model_id
     ? currentModelName
     : modelIdToDisplayName(latestInferenceRun?.model_id);
-
-  const [currentPage, setCurrentPage] = useState(1);
-  const pageSize = 5;
-  const paginatedHistory = history.slice((currentPage - 1) * pageSize, currentPage * pageSize);
 
   return (
     <div className="pt-0 pb-10">
@@ -925,82 +933,6 @@ export const InferenceCenterPanel: React.FC<{
                 </div>
               </div>
               <Switch size="small" checked={autoSettings?.enabled} loading={autoSaving} onChange={onToggleAuto} className={autoSettings?.enabled ? 'bg-blue-600' : ''} />
-           </div>
-
-           {/* 历史记录卡片：通过 flex-1 撑满高度，与左侧对齐 */}
-           <div className="glass-panel rounded-2xl p-4 border border-slate-100/50 flex flex-col flex-1">
-              <div className="flex items-center justify-between mb-4">
-                <div className="flex items-center gap-2 text-slate-400">
-                  <History size={14} />
-                  <Text className="text-[10px] font-black uppercase tracking-widest">推理历史</Text>
-                </div>
-                <Select
-                  size="small"
-                  value={historyStatusFilter}
-                  onChange={onHistoryStatusFilterChange}
-                  className="w-24 h-7 text-[10px]"
-                  classNames={{ popup: { root: "rounded-xl text-[11px]" } }}
-                >
-                  <Select.Option value="all">全部批次</Select.Option>
-                  <Select.Option value="completed">推理成功</Select.Option>
-                  <Select.Option value="failed">执行失败</Select.Option>
-                </Select>
-              </div>
-
-              <div className="space-y-1.5 flex-1 pr-0.5">
-                {historyLoading ? <div className="text-center py-6"><Spin size="small" /></div> : 
-                 history.length === 0 ? <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description={<span className="text-[9px]">暂无记录</span>} /> :
-                 paginatedHistory.map(run => (
-                  <div key={run.run_id} className="group flex items-center justify-between p-2.5 rounded-xl bg-slate-50/40 border border-slate-100/30 hover:bg-white hover:border-blue-100 transition-all cursor-pointer" onClick={() => onViewRanking(run.run_id)}>
-                    <div className="flex flex-col min-w-0">
-                      <div className="flex items-center gap-2 mb-0.5">
-                        <div className={clsx("w-1.5 h-1.5 rounded-full shrink-0", run.status === 'completed' ? 'bg-emerald-500' : run.status === 'running' ? 'bg-blue-500' : 'bg-rose-500')} />
-                        <Text className="text-[10px] font-mono font-bold text-slate-700 truncate w-24">{run.run_id}</Text>
-                      </div>
-                      <Text className="text-[9px] text-slate-400 pl-3.5">{run.prediction_trade_date}</Text>
-                    </div>
-                    <div className="flex items-center gap-1">
-                      <Button
-                        size="small"
-                        type="text"
-                        danger
-                        icon={<Trash2 size={12} />}
-                        className="opacity-0 group-hover:opacity-100 transition-opacity p-0 h-6 w-6 flex items-center justify-center hover:bg-rose-50 rounded-lg"
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          onDeleteHistory?.(run.run_id);
-                        }}
-                      />
-                      <ChevronRight size={12} className="text-slate-200 group-hover:text-blue-400" />
-                    </div>
-                  </div>
-                ))}
-              </div>
-
-              {/* 分页器：固定在卡片底部 */}
-              {history.length > pageSize && (
-                <div className="mt-auto pt-3 border-t border-slate-50 flex justify-center">
-                  <div className="flex items-center gap-3">
-                    <Button 
-                      size="small" 
-                      disabled={currentPage === 1} 
-                      onClick={(e) => { e.stopPropagation(); setCurrentPage(currentPage - 1); }}
-                      className="border-0 bg-slate-100/50 hover:bg-slate-100 rounded-lg h-6 w-6 p-0 flex items-center justify-center text-slate-500"
-                    >
-                      <ChevronDown size={14} className="rotate-90" />
-                    </Button>
-                    <Text className="text-[10px] font-bold text-slate-400">{currentPage} / {Math.ceil(history.length / pageSize)}</Text>
-                    <Button 
-                      size="small" 
-                      disabled={currentPage >= Math.ceil(history.length / pageSize)} 
-                      onClick={(e) => { e.stopPropagation(); setCurrentPage(currentPage + 1); }}
-                      className="border-0 bg-slate-100/50 hover:bg-slate-100 rounded-lg h-6 w-6 p-0 flex items-center justify-center text-slate-500"
-                    >
-                      <ChevronDown size={14} className="-rotate-90" />
-                    </Button>
-                  </div>
-                </div>
-              )}
            </div>
         </div>
       </div>

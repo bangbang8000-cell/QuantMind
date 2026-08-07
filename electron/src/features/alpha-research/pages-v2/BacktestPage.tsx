@@ -13,17 +13,15 @@ import {
   ChevronDown,
   Clock,
   BarChart3,
-  Database,
   RefreshCw,
   CheckCircle2,
 } from 'lucide-react';
 import {
   getFactors,
   listFactorLibraries,
-  getCacheStatus,
-  warmCache,
+  getUniverses,
 } from '../services-v2/api';
-import type { CacheStatusResponse } from '../services-v2/api';
+import type { UniverseId, UniverseInfo } from '../types-v2';
 import {
   AreaChart,
   Area,
@@ -141,15 +139,11 @@ export const BacktestPage: React.FC = () => {
   // Initialize with saved library from localStorage if available
   const [selectedLibrary, setSelectedLibrary] = useState(localStorage.getItem('quantaalpha_active_library') || '');
   const [factorSource, setFactorSource] = useState<'custom' | 'combined'>('custom');
+  const [universe, setUniverse] = useState<UniverseId>('csi300');
+  const [universes, setUniverses] = useState<UniverseInfo[]>([]);
   const [factorCount, setFactorCount] = useState(0);
   const [isStarting, setIsStarting] = useState(false);
   const logsEndRef = useRef<HTMLDivElement>(null);
-
-  // Cache status state
-  const [cacheStatus, setCacheStatus] = useState<CacheStatusResponse | null>(null);
-  const [cacheLoading, setCacheLoading] = useState(false);
-  const [warmingCache, setWarmingCache] = useState(false);
-  const [warmCacheResult, setWarmCacheResult] = useState<string | null>(null);
 
   // -- Load libraries (on mount + manual refresh) --
   const [libsLoading, setLibsLoading] = useState(false);
@@ -177,30 +171,21 @@ export const BacktestPage: React.FC = () => {
     if (initDone.current) return;
     initDone.current = true;
     loadLibraries();
+    getUniverses()
+      .then((res) => setUniverses(res.data?.universes ?? []))
+      .catch(() => {});
   }, [loadLibraries]);
 
-  // Load factor count and cache status when library changes
+  // Load factor count when library changes
   useEffect(() => {
     if (!selectedLibrary) return;
     (async () => {
       try {
-        const resp = await getFactors({ library: selectedLibrary, limit: 500 });
+        const resp = await getFactors({ limit: 500 });
         if (resp.success && resp.data) {
           setFactorCount(resp.data.total || 0);
         }
       } catch { /* ignore */ }
-    })();
-    // Also load cache status
-    (async () => {
-      setCacheLoading(true);
-      setWarmCacheResult(null);
-      try {
-        const resp = await getCacheStatus(selectedLibrary);
-        if (resp.success && resp.data) {
-          setCacheStatus(resp.data as unknown as CacheStatusResponse);
-        }
-      } catch { /* ignore */ }
-      setCacheLoading(false);
     })();
   }, [selectedLibrary]);
 
@@ -215,8 +200,9 @@ export const BacktestPage: React.FC = () => {
     setIsStarting(true);
     try {
       await startBacktestTask({
-        factorJson: selectedLibrary,
+        factorId: selectedLibrary,
         factorSource,
+        universe,
       });
     } catch (err: any) {
       console.error('Failed to start backtest:', err);
@@ -228,28 +214,6 @@ export const BacktestPage: React.FC = () => {
   // -- Cancel backtest --
   const handleCancel = async () => {
     stopBacktestTask();
-  };
-
-  // -- Warm cache --
-  const handleWarmCache = async () => {
-    if (!selectedLibrary) return;
-    setWarmingCache(true);
-    setWarmCacheResult(null);
-    try {
-      const resp = await warmCache(selectedLibrary);
-      if (resp.success) {
-        // Use the detailed message from backend
-        setWarmCacheResult(resp.message || '完成');
-      }
-      // Refresh cache status
-      const cs = await getCacheStatus(selectedLibrary);
-      if (cs.success && cs.data) {
-        setCacheStatus(cs.data as unknown as CacheStatusResponse);
-      }
-    } catch (err: any) {
-      setWarmCacheResult(`预热失败: ${err.message}`);
-    }
-    setWarmingCache(false);
   };
 
   const isRunning = task?.status === 'running';
@@ -390,92 +354,37 @@ export const BacktestPage: React.FC = () => {
                 </button>
               </div>
             </div>
-          </div>
 
-          {/* Cache Status */}
-          {selectedLibrary && (
-            <div className="pt-2 border-t border-border/50">
-              <div className="flex items-center justify-between mb-2">
-                <div className="flex items-center gap-2 text-sm font-medium">
-                  <Database className="h-4 w-4 text-primary" />
-                  因子缓存状态
-                </div>
-                <div className="flex items-center gap-2">
-                  {warmCacheResult && (
-                    <span className="text-xs text-muted-foreground">{warmCacheResult}</span>
+            {/* Stock Universe */}
+            <div>
+              <label className="block text-sm font-medium mb-2">回测股票池</label>
+              <div className="relative">
+                <select
+                  value={universe}
+                  onChange={e => setUniverse(e.target.value as UniverseId)}
+                  disabled={isRunning}
+                  className="w-full rounded-lg border border-input bg-background px-4 py-2.5 text-sm focus:border-primary focus:outline-none focus:ring-2 focus:ring-primary transition-all appearance-none pr-10"
+                >
+                  {universes.length > 0 ? (
+                    universes.map(u => (
+                      <option key={u.id} value={u.id}>
+                        {u.name}
+                        {u.stockCount > 0 ? ` — ${u.stockCount} 只` : ''}
+                      </option>
+                    ))
+                  ) : (
+                    <option value="csi300">沪深300</option>
                   )}
-                  <Button
-                    variant="outline"
-                    size="sm"
-                    onClick={handleWarmCache}
-                    disabled={warmingCache || isRunning || !cacheStatus}
-                  >
-                    {warmingCache ? (
-                      <Loader2 className="h-3 w-3 mr-1 animate-spin" />
-                    ) : (
-                      <RefreshCw className="h-3 w-3 mr-1" />
-                    )}
-                    同步缓存
-                  </Button>
-                </div>
+                </select>
+                <ChevronDown className="absolute right-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground pointer-events-none" />
               </div>
-              {cacheLoading ? (
-                <div className="flex items-center gap-2 text-xs text-muted-foreground">
-                  <Loader2 className="h-3 w-3 animate-spin" />
-                  正在检查缓存状态...
-                </div>
-              ) : cacheStatus ? (
-                <div className="space-y-2">
-                  {/* Summary bar */}
-                  <div className="flex items-center gap-3 text-xs flex-wrap">
-                    <span className="text-muted-foreground">共 {cacheStatus.total} 个因子</span>
-                    {(cacheStatus.h5_cached + cacheStatus.md5_cached) > 0 && (
-                      <span className="flex items-center gap-1 text-green-500">
-                        <CheckCircle2 className="h-3 w-3" />
-                        已缓存: {cacheStatus.h5_cached + cacheStatus.md5_cached}
-                        <span className="text-muted-foreground font-normal">
-                          (HDF5 {cacheStatus.h5_cached} + MD5 {cacheStatus.md5_cached})
-                        </span>
-                      </span>
-                    )}
-                    {cacheStatus.need_compute > 0 && (
-                      <span className="flex items-center gap-1 text-muted-foreground/70">
-                        <AlertCircle className="h-3 w-3" />
-                        未缓存: {cacheStatus.need_compute}（将跳过）
-                      </span>
-                    )}
-                  </div>
-                  {/* Progress bar */}
-                  <div className="h-2 bg-secondary rounded-full overflow-hidden flex">
-                    {cacheStatus.total > 0 && (
-                      <>
-                        <div
-                          className="h-full bg-green-500 transition-all"
-                          style={{ width: `${(cacheStatus.h5_cached / cacheStatus.total) * 100}%` }}
-                          title={`HDF5 缓存: ${cacheStatus.h5_cached}`}
-                        />
-                        <div
-                          className="h-full bg-blue-500 transition-all"
-                          style={{ width: `${(cacheStatus.md5_cached / cacheStatus.total) * 100}%` }}
-                          title={`MD5 缓存: ${cacheStatus.md5_cached}`}
-                        />
-                        <div
-                          className="h-full bg-muted-foreground/20 transition-all"
-                          style={{ width: `${(cacheStatus.need_compute / cacheStatus.total) * 100}%` }}
-                          title={`未缓存（跳过）: ${cacheStatus.need_compute}`}
-                        />
-                      </>
-                    )}
-                  </div>
-                  <p className="text-xs text-muted-foreground">
-                    {cacheStatus.need_compute === 0
-                      ? '所有因子已缓存，回测将快速执行'
-                      : `将使用 ${cacheStatus.h5_cached + cacheStatus.md5_cached} 个已缓存因子进行回测，${cacheStatus.need_compute} 个未缓存因子已自动跳过`}
-                  </p>
-                </div>
-              ) : null}
+              <p className="text-xs text-muted-foreground mt-1">
+                {universes.find(u => u.id === universe)?.indexSymbol
+                  ? `基准指数 ${universes.find(u => u.id === universe)?.indexSymbol}`
+                  : '来自 QuantDB 指数成分数据'}
+              </p>
             </div>
-          )}
+          </div>
 
           {/* Fixed display fields */}
           <div className="grid grid-cols-1 md:grid-cols-3 gap-4 pt-2 border-t border-border/50">
@@ -610,7 +519,7 @@ export const BacktestPage: React.FC = () => {
             <div className="grid grid-cols-2 md:grid-cols-4 gap-3 text-xs text-muted-foreground">
               <div>任务 ID: <span className="font-mono text-foreground">{task.taskId}</span></div>
               <div>开始时间: {new Date(task.createdAt).toLocaleTimeString()}</div>
-              <div>因子库: {task.config?.factorJson || selectedLibrary}</div>
+              <div>因子ID: {task.config?.factorId || selectedLibrary}</div>
               <div>因子源: {task.config?.factorSource || factorSource}</div>
             </div>
           </CardContent>

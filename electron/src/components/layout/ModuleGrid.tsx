@@ -77,16 +77,15 @@ export const ModuleGrid: React.FC<ModuleGridProps> = ({ modules, onLayoutChange 
   };
 
   return (
-    <div className="w-full h-full relative overflow-hidden">
+    <div className="w-full h-full relative overflow-hidden flex flex-col">
       {/* 顶部标题栏 */}
       <HeaderBar />
 
       <div
-        className="grid gap-6 p-6"
+        className="grid gap-5 px-6 pb-4 flex-1 min-h-0"
         style={{
-          height: 'calc(100% - 164px)',
           gridTemplateColumns: 'repeat(3, minmax(0, 1fr))',
-          gridAutoRows: 'minmax(380px, 1fr)',
+          gridAutoRows: 'minmax(340px, 1fr)',
           overflowY: 'auto'
         }}
       >

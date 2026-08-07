@@ -605,10 +605,14 @@ def register_to_strategy_service(
     }
 
     # 用 user_id 构造 internal auth header
+    # X-User-Id 仅在 X-Internal-Call 密钥匹配时才被下游信任
+    from backend.shared.auth import get_internal_call_secret
+
     headers = {
         "Content-Type": "application/json",
         "X-User-Id": str(user_id) if user_id else "0",
         "X-Internal-Service": "ai_strategy",
+        "X-Internal-Call": get_internal_call_secret(),
     }
 
     try:

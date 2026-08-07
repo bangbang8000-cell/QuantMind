@@ -58,7 +58,6 @@ const AdminTagManagement = lazy(() => import('./features/admin/components/AdminT
 const AdminFeatureCatalog = lazy(() => import('./features/admin/components/AdminFeatureCatalog').then(m => ({ default: m.AdminFeatureCatalog })));
 const AlphaResearchPage = lazy(() => import('./features/alpha-research/pages/AlphaResearchPage'));
 const TradingAgentsPage = lazy(() => import('./features/trading-agents/pages/TradingAgentsPage'));
-const DailyAnalysisPage = lazy(() => import('./features/daily-analysis/pages/DailyAnalysisPage'));
 
 // 主题切换hook
 // 主题管理已移除 - 应用统一使用浅色主题
@@ -130,7 +129,6 @@ export default function App() {
       'rss-news': '/rss-news',
       'alpha-research': '/alpha-research',
       'trading-agents': '/trading-agents',
-      'daily-analysis': '/daily-analysis',
       'strategy-lab': '/strategy-lab',
       'profile': '/user-center',
       'admin': '/admin',
@@ -169,8 +167,6 @@ export default function App() {
       dispatch(setCurrentTab('research' as DashboardTab));
     } else if (location.pathname.startsWith('/trading-agents')) {
       dispatch(setCurrentTab('trading-agents' as DashboardTab));
-    } else if (location.pathname.startsWith('/daily-analysis')) {
-      dispatch(setCurrentTab('daily-analysis' as DashboardTab));
     } else if (location.pathname.startsWith('/trading')) {
       dispatch(setCurrentTab('trading' as DashboardTab));
     } else if (location.pathname.startsWith('/rss-news')) {
@@ -411,9 +407,10 @@ export default function App() {
       <QueryProvider>
         <WebSocketProvider>
           <ConfigProvider locale={zhCN}>
-            <div className="app-root">
+            <div className={`app-root${shouldShowNavigation ? ' has-dock' : ''}`}>
             <TitleBar />
             <ErrorBoundary>
+              <div className="app-main">
               <Suspense
                 fallback={<DashboardSkeleton />}
               >
@@ -513,7 +510,7 @@ export default function App() {
                     path="/rss-news"
                     element={
                       <ProtectedRoute>
-                        <div style={{ height: '100vh', width: '100%', display: 'flex', flexDirection: 'column' }}>
+                        <div style={{ height: '100%', width: '100%', display: 'flex', flexDirection: 'column' }}>
                           <Suspense fallback={<Spin size="large" />}>
                             <AdminNewsPage />
                           </Suspense>
@@ -537,16 +534,6 @@ export default function App() {
                       <ProtectedRoute>
                         <Suspense fallback={<Spin size="large" />}>
                           <TradingAgentsPage />
-                        </Suspense>
-                      </ProtectedRoute>
-                    }
-                  />
-                  <Route
-                    path="/daily-analysis"
-                    element={
-                      <ProtectedRoute>
-                        <Suspense fallback={<Spin size="large" />}>
-                          <DailyAnalysisPage />
                         </Suspense>
                       </ProtectedRoute>
                     }
@@ -593,8 +580,9 @@ export default function App() {
                   />
                 </Routes>
               </Suspense>
+              </div>
 
-              {/* macOS 风格毛玻璃悬浮导航栏 */}
+              {/* 底部 Dock 导航栏（占位式，不遮挡内容） */}
               {shouldShowNavigation && (
                 <FloatingNavBar
                   current={tab}

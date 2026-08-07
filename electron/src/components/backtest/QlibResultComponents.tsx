@@ -216,6 +216,32 @@ export const QlibResultDisplay: React.FC<{ result: BacktestResult | QlibBacktest
 
   return (
     <div className="space-y-6">
+      {/* 多空策略理论值警告 */}
+      {(result as any)?.long_short_is_theoretical && (
+        <div className="flex items-start gap-3 px-4 py-3 bg-amber-50 border border-amber-200 rounded-2xl">
+          <AlertCircle className="w-5 h-5 text-amber-500 shrink-0 mt-0.5" />
+          <div className="text-sm text-amber-800">
+            <span className="font-bold">多空策略指标为理论值</span>
+            <span className="text-amber-700 ml-1">
+              —— A 股做空需融券，券源受限且成本未完全计入。
+              多头收益（纯买入）为实盘可实现口径，多空收益仅供参考。
+            </span>
+          </div>
+        </div>
+      )}
+      {/* 信号延迟警告 */}
+      {((result as any)?.signal_lag_days === 0) && (
+        <div className="flex items-start gap-3 px-4 py-3 bg-red-50 border border-red-200 rounded-2xl">
+          <AlertCircle className="w-5 h-5 text-red-500 shrink-0 mt-0.5" />
+          <div className="text-sm text-red-800">
+            <span className="font-bold">前视偏差警告</span>
+            <span className="text-red-700 ml-1">
+              —— signal_lag_days=0 表示信号与成交同日，存在未来信息泄漏。
+              指标不能作为实盘交易依据，请使用 signal_lag_days=1 重新回测。
+            </span>
+          </div>
+        </div>
+      )}
       <div className="grid grid-cols-4 gap-4">
         {metrics.map((m, i) => (
           <div key={i} className="bg-white rounded-2xl border border-gray-200 p-4 relative">

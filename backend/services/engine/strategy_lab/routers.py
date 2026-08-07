@@ -153,15 +153,17 @@ async def post_translate(body: TranslateBody, request: Request) -> dict[str, Any
         logger.exception("translate failed")
         raise HTTPException(status_code=500, detail=f"转模板失败：{e}")
 
-    # Resolve user_id; engine service typically passes JWT through
+    # Resolve user_id; engine auth middleware populates request.state.user.
+    # 不读原始 X-User-Id header —— 该 header 仅在内部密钥匹配时可信，
+    # 直接读取会让持有任意 JWT 的用户以他人身份写入策略。
     user_id = "0"
     try:
         user_id = str(getattr(request.state, "user_id", None) or "0")
     except Exception:
         pass
     if user_id == "0":
-        # Fallback: read from header for headless calls
-        user_id = request.headers.get("X-User-Id", "0")
+        _user = getattr(request.state, "user", None) or {}
+        user_id = str(_user.get("user_id") or "0")
 
     try:
         from backend.shared.strategy_storage import get_strategy_storage_service
@@ -210,7 +212,8 @@ async def post_watch(body: WatchBody, request: Request) -> dict[str, Any]:
     except Exception:
         pass
     if user_id == "0":
-        user_id = request.headers.get("X-User-Id", "0")
+        _user = getattr(request.state, "user", None) or {}
+        user_id = str(_user.get("user_id") or "0")
     add_watch(script_sha=sha, user_id=user_id, name=body.name, code=body.code)
     return {"script_sha": sha, "registered": True}
 

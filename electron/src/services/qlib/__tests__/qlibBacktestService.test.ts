@@ -86,7 +86,7 @@ describe('QlibBacktestService', () => {
         user_id: 'test_user',
         qlib_strategy_type: 'TopkDropout',
         qlib_strategy_params: {},
-        signal_lag_days: 0,
+        signal_lag_days: 1,
         allow_feature_signal_fallback: true,
       };
       const service = qlibBacktestService as any;
@@ -112,7 +112,7 @@ describe('QlibBacktestService', () => {
       expect(post).toHaveBeenCalledWith(
         '/qlib/backtest',
         expect.objectContaining({
-          signal_lag_days: 0,
+          signal_lag_days: 1,
           allow_feature_signal_fallback: true,
           use_vectorized: false,
         }),

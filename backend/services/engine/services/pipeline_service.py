@@ -138,7 +138,7 @@ class PipelineService:
         self.inference_service = inference_service or InferenceService()
         self.inference_router_service = InferenceRouterService(inference_service=self.inference_service)
         self.backtest_service = backtest_service or QlibBacktestService(
-            provider_uri=os.getenv("QLIB_PROVIDER_URI", "db/qlib_data"),
+            provider_uri=os.getenv("QLIB_PROVIDER_URI", "") or None,
             region=os.getenv("QLIB_REGION", "cn"),
         )
         self.artifacts_root = artifacts_root or Path("data/pipeline_artifacts")

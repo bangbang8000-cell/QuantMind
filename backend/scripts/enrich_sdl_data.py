@@ -709,13 +709,120 @@ def _fill_idx_hs300(engine, dry_run: bool = False) -> int:
             UPDATE stock_daily_latest s
             SET idx_hs300 = 1
             FROM tmp_hs300 t
-            WHERE s.symbol = t.symbol AND s.volume > 0
+            WHERE UPPER(RIGHT(t.symbol, 2)) || LEFT(t.symbol, 6) = UPPER(s.symbol)
+              AND s.volume > 0
         """))
         cnt = conn.execute(text(
             "SELECT COUNT(DISTINCT symbol) FROM stock_daily_latest WHERE idx_hs300 = 1"
         )).scalar()
         conn.execute(text("DROP TABLE IF EXISTS tmp_hs300"))
     print(f"     ✅ idx_hs300=1: {cnt} 只成分股 (跨全部日期行)")
+    return cnt
+
+
+def _fill_idx_zz500(engine, dry_run: bool = False) -> int:
+    """idx_zz500 中证500成分: baostock query_zz500_stocks (无封禁). 用当前成分填全日期行."""
+    print("\n  [D2b] idx_zz500 中证500成分 (baostock)...")
+    if dry_run:
+        print("     [DRY RUN] 将用 baostock 成分股列表标 idx_zz500")
+        return 0
+    import baostock as bs
+    from datetime import timedelta
+    bs.login()
+    with engine.connect() as conn:
+        d = conn.execute(text("SELECT MAX(trade_date) FROM stock_daily_latest WHERE volume>0")).scalar()
+    target = d
+    rows = []
+    for _ in range(6):
+        rs = bs.query_zz500_stocks(date=target.strftime("%Y-%m-%d"))
+        if rs.error_code == "0":
+            while rs.next():
+                rows.append(rs.get_row_data())
+            if rows:
+                break
+        target = target - timedelta(days=1)
+    bs.logout()
+    if not rows:
+        print("     ❌ baostock 未能取到中证500成分")
+        return 0
+    constituents = set()
+    for r in rows:
+        code = r[1]
+        if "." in code:
+            mk, num = code.split(".")
+            constituents.add(f"{num}.{mk.upper()}")
+    print(f"     中证500成分: {len(constituents)} 只 (截至 {target})")
+    df = pd.DataFrame({"symbol": sorted(constituents)})
+    df["is_zz500"] = 1
+    with engine.begin() as conn:
+        conn.execute(text("DROP TABLE IF EXISTS tmp_zz500"))
+    df.to_sql("tmp_zz500", engine, if_exists="replace", index=False, method="multi", chunksize=5000)
+    with engine.begin() as conn:
+        conn.execute(text("UPDATE stock_daily_latest SET idx_zz500 = 0 WHERE volume > 0"))
+        conn.execute(text("""
+            UPDATE stock_daily_latest s
+            SET idx_zz500 = 1
+            FROM tmp_zz500 t
+            WHERE UPPER(RIGHT(t.symbol, 2)) || LEFT(t.symbol, 6) = UPPER(s.symbol)
+              AND s.volume > 0
+        """))
+        cnt = conn.execute(text(
+            "SELECT COUNT(DISTINCT symbol) FROM stock_daily_latest WHERE idx_zz500 = 1"
+        )).scalar()
+        conn.execute(text("DROP TABLE IF EXISTS tmp_zz500"))
+    print(f"     ✅ idx_zz500=1: {cnt} 只成分股 (跨全部日期行)")
+    return cnt
+
+
+def _fill_idx_zz1000(engine, dry_run: bool = False) -> int:
+    """idx_zz1000 中证1000成分: akshare 中证官方成分表 (baostock 无此接口)."""
+    print("\n  [D2c] idx_zz1000 中证1000成分 (akshare)...")
+    if dry_run:
+        print("     [DRY RUN] 将用 akshare 中证1000成分股列表标 idx_zz1000")
+        return 0
+    import akshare as ak
+
+    df_cons = ak.index_stock_cons_csindex(symbol="000852")
+    if df_cons is None or df_cons.empty:
+        print("     ❌ akshare 未能取到中证1000成分")
+        return 0
+
+    def _to_prefix(code: str, exchange: str) -> str:
+        if "深圳" in exchange:
+            return f"SZ{code}"
+        if "上海" in exchange or "上证" in exchange:
+            return f"SH{code}"
+        if "北京" in exchange:
+            return f"BJ{code}"
+        if code[:1] in ("6", "9"):
+            return f"SH{code}"
+        if code[:1] in ("4", "8"):
+            return f"BJ{code}"
+        return f"SZ{code}"
+
+    codes = df_cons["成分券代码"].astype(str).str.zfill(6)
+    constituents = {
+        _to_prefix(c, e) for c, e in zip(codes, df_cons["交易所"].astype(str))
+    }
+    print(f"     中证1000成分: {len(constituents)} 只")
+    df = pd.DataFrame({"symbol": sorted(constituents)})
+    df["is_zz1000"] = 1
+    with engine.begin() as conn:
+        conn.execute(text("DROP TABLE IF EXISTS tmp_zz1000"))
+    df.to_sql("tmp_zz1000", engine, if_exists="replace", index=False, method="multi", chunksize=5000)
+    with engine.begin() as conn:
+        conn.execute(text("UPDATE stock_daily_latest SET idx_zz1000 = 0 WHERE volume > 0"))
+        conn.execute(text("""
+            UPDATE stock_daily_latest s
+            SET idx_zz1000 = 1
+            FROM tmp_zz1000 t
+            WHERE UPPER(t.symbol) = UPPER(s.symbol) AND s.volume > 0
+        """))
+        cnt = conn.execute(text(
+            "SELECT COUNT(DISTINCT symbol) FROM stock_daily_latest WHERE idx_zz1000 = 1"
+        )).scalar()
+        conn.execute(text("DROP TABLE IF EXISTS tmp_zz1000"))
+    print(f"     ✅ idx_zz1000=1: {cnt} 只成分股 (跨全部日期行)")
     return cnt
 
 
@@ -785,6 +892,8 @@ def phase_extras(engine, dry_run: bool = False):
     print("=" * 72)
     _fill_listing_market(engine, dry_run)
     _fill_idx_hs300(engine, dry_run)
+    _fill_idx_zz500(engine, dry_run)
+    _fill_idx_zz1000(engine, dry_run)
     _fill_listed_days(engine, dry_run)
 
 

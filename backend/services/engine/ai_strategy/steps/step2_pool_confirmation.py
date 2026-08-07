@@ -6,6 +6,7 @@ import re
 from datetime import date
 from typing import Any, Dict, List, Optional
 
+import pandas as pd
 from fastapi import HTTPException, Request, status
 from sqlalchemy import text
 
@@ -49,6 +50,7 @@ from .step1_stock_selection import (
     LATEST_TABLE,
     _map_factor,
     _parse_dsl,
+    is_quantdb_factor,
 )
 
 logger = logging.getLogger(__name__)
@@ -78,6 +80,54 @@ def _get_table_columns(session, table_name: str) -> set[str]:
         return {str(r[0]).lower() for r in rows}
     except Exception:
         return set()
+
+
+def _strip_invalid_columns(sql: str, valid_columns: set[str]) -> str:
+    """Remove WHERE-clause conditions that reference columns not in the actual PG table.
+
+    Strips ``col op value`` and ``col ILIKE ...`` fragments for columns absent from
+    *valid_columns*.  Handles AND/OR connectors and nested parentheses conservatively:
+    if a condition references an invalid column, the entire ``AND <condition>`` or
+    ``OR <condition>`` fragment is removed so that the remaining SQL stays syntactically
+    valid.
+    """
+    if not valid_columns:
+        return sql
+
+    # Identify all column-like identifiers in the SQL
+    identifiers = set(re.findall(r'\b([a-zA-Z_][a-zA-Z0-9_]*)\b', sql))
+    # SQL keywords to ignore
+    sql_keywords = {
+        "select", "from", "where", "and", "or", "not", "in", "is", "null",
+        "like", "between", "exists", "order", "by", "limit", "offset", "asc",
+        "desc", "join", "left", "right", "inner", "outer", "on", "group",
+        "having", "as", "case", "when", "then", "else", "end", "distinct",
+        "cast", "coalesce", "max", "min", "sum", "avg", "count", "ilike",
+        "true", "false", "desc", "nulls", "last", "first",
+    }
+
+    invalid_cols = identifiers - valid_columns - sql_keywords
+    if not invalid_cols:
+        return sql
+
+    # For each invalid column, remove the condition referencing it
+    for col in invalid_cols:
+        # Pattern: AND/OR <col> <op> <value>  (possibly with parentheses)
+        # Handle: AND ind_code_l1 ILIKE '%xxx%'
+        # Handle: OR ind_code_l2 ILIKE '%xxx%'
+        # Handle: AND ind_code_l1 = 'xxx'
+        pattern = re.compile(
+            r'\s+(?:AND|OR)\s+'
+            r'(?:\(\s*)?'
+            + re.escape(col)
+            + r'\s+(?:ILIKE|LIKE|>=|<=|!=|<>|=|>|<)\s*(?:[^\s\)]+|\$\d+\s*\))',
+            re.IGNORECASE,
+        )
+        sql = pattern.sub('', sql)
+
+    # Clean up any trailing empty parentheses or double spaces
+    sql = re.sub(r'\s+', ' ', sql).strip()
+    return sql
 
 
 def _resolve_compatible_column(columns: set[str], logical_name: str) -> str:
@@ -264,6 +314,10 @@ def _execute_raw_selection_sql(sql: str, table_name: str | None = None) -> tuple
         with get_db() as session:
             target_columns = _get_table_columns(session, target_table)
             as_of_date = session.execute(text(f"select max(trade_date) from {target_table}")).scalar()
+
+            # --- Strip invalid column references from WHERE clause ---
+            normalized_sql = _strip_invalid_columns(normalized_sql, target_columns)
+
             compat_table_sql = _build_compat_table_sql(target_table, target_columns)
             normalized_sql = _inject_trade_date_filter(normalized_sql, as_of_date)
             normalized_sql = _replace_table_with_compat_subquery(normalized_sql, target_table, compat_table_sql)
@@ -336,9 +390,12 @@ def _query_stock_pool(
             # 基础条件：日期匹配
             where_clauses = ["trade_date = :d"]
 
-            # 3. 翻译 DSL 条件
+            # 3. 翻译 DSL 条件（跳过 QuantDB 因子，由 QuantDBQueryExecutor 单独处理）
             flag_cols = {"is_st", "idx_hs300", "idx_zz1000"}
             for idx, cond in enumerate(conditions):
+                # Skip QuantDB factors — they are not in PG tables
+                if is_quantdb_factor(cond.get("factor", "")):
+                    continue
                 col = _map_factor(cond["factor"])
                 param_key = f"p{idx}"
                 op = "=" if cond["op"] == "==" else cond["op"]
@@ -542,6 +599,120 @@ async def _ensure_latest_table_data(session, table_name: str | None = None) -> b
         return False
 
 
+def _to_suffix_symbol(sym: str) -> str:
+    """Convert PG internal format (SH600036) to QuantDB suffix format (600036.SH)."""
+    s = sym.upper()
+    if s.startswith("SH") or s.startswith("SZ") or s.startswith("BJ"):
+        return f"{s[2:]}.{s[:2]}"
+    if "." in s:
+        return s
+    return s
+
+
+def _enrich_with_quantdb_data(symbols: list[str]) -> dict[str, dict]:
+    """从 QuantDB 补充关键维度数据（best-effort，不阻塞主查询）。
+
+    Returns:
+        dict mapping PG-format symbol -> {field: value, ...} for key metrics.
+    """
+    try:
+        from backend.services.engine.data_platform.quantdb_hub import QuantDBDataHub
+
+        hub = QuantDBDataHub.get_instance()
+        if not hub.available:
+            return {}
+    except ImportError:
+        return {}
+
+    if not symbols:
+        return {}
+
+    result: dict[str, dict] = {}
+
+    # Build lookup: suffix_symbol -> original PG symbol
+    suffix_to_orig: dict[str, str] = {}
+    for sym in symbols:
+        suffix_sym = _to_suffix_symbol(sym)
+        suffix_to_orig[suffix_sym] = sym
+
+    target_suffixes = set(suffix_to_orig.keys())
+
+    # --- Valuation: dividend_rate, ps_ttm, pe_static ---
+    try:
+        df_val = hub.fetch_valuation(start=None, end=None)
+        if df_val is not None and not df_val.empty:
+            sym_col = "symbol" if "symbol" in df_val.columns else "Symbol"
+            # Take only the latest row per symbol
+            if "trade_date" in df_val.columns:
+                df_val = df_val.sort_values("trade_date").groupby(sym_col).last().reset_index()
+            elif "dt" in df_val.columns:
+                df_val = df_val.sort_values("dt").groupby(sym_col).last().reset_index()
+
+            matched = df_val[df_val[sym_col].isin(target_suffixes)]
+            for _, row in matched.iterrows():
+                suffix_sym = str(row[sym_col])
+                orig_sym = suffix_to_orig.get(suffix_sym)
+                if not orig_sym:
+                    continue
+                if orig_sym not in result:
+                    result[orig_sym] = {}
+                for field in ("dividend_rate", "ps_ttm", "pe_static"):
+                    if field in row and pd.notna(row[field]):
+                        result[orig_sym][field] = float(row[field])
+    except Exception as exc:
+        logger.debug("QuantDB valuation enrichment failed: %s", exc)
+
+    # --- Market Sentiment: liquidity_score, buy_pressure, momentum_1d ---
+    try:
+        df_sent = hub.fetch_market_sentiment(start=None, end=None)
+        if df_sent is not None and not df_sent.empty:
+            sym_col = "symbol" if "symbol" in df_sent.columns else "Symbol"
+            if "trade_date" in df_sent.columns:
+                df_sent = df_sent.sort_values("trade_date").groupby(sym_col).last().reset_index()
+            elif "dt" in df_sent.columns:
+                df_sent = df_sent.sort_values("dt").groupby(sym_col).last().reset_index()
+
+            matched = df_sent[df_sent[sym_col].isin(target_suffixes)]
+            for _, row in matched.iterrows():
+                suffix_sym = str(row[sym_col])
+                orig_sym = suffix_to_orig.get(suffix_sym)
+                if not orig_sym:
+                    continue
+                if orig_sym not in result:
+                    result[orig_sym] = {}
+                for field in ("liquidity_score", "buy_pressure", "momentum_1d"):
+                    if field in row and pd.notna(row[field]):
+                        result[orig_sym][field] = float(row[field])
+    except Exception as exc:
+        logger.debug("QuantDB sentiment enrichment failed: %s", exc)
+
+    # --- L1 Factors: chip_profit_ratio_20, ind_strength_20, style_beta_20 ---
+    try:
+        df_l1 = hub.fetch_l1_factors(start=None, end=None)
+        if df_l1 is not None and not df_l1.empty:
+            sym_col = "symbol" if "symbol" in df_l1.columns else "Symbol"
+            if "trade_date" in df_l1.columns:
+                df_l1 = df_l1.sort_values("trade_date").groupby(sym_col).last().reset_index()
+            elif "dt" in df_l1.columns:
+                df_l1 = df_l1.sort_values("dt").groupby(sym_col).last().reset_index()
+
+            matched = df_l1[df_l1[sym_col].isin(target_suffixes)]
+            for _, row in matched.iterrows():
+                suffix_sym = str(row[sym_col])
+                orig_sym = suffix_to_orig.get(suffix_sym)
+                if not orig_sym:
+                    continue
+                if orig_sym not in result:
+                    result[orig_sym] = {}
+                for field in ("chip_profit_ratio_20", "ind_strength_20", "style_beta_20"):
+                    if field in row and pd.notna(row[field]):
+                        result[orig_sym][field] = float(row[field])
+    except Exception as exc:
+        logger.debug("QuantDB l1_factors enrichment failed: %s", exc)
+
+    return result
+
+
 async def query_pool(dsl: str, user_id: str, market: str | None = None) -> QueryPoolResponse:
     """执行 DSL/SQL 查询并返回股票池"""
     from .step1_stock_selection import get_latest_table
@@ -563,5 +734,9 @@ async def query_pool(dsl: str, user_id: str, market: str | None = None) -> Query
         items, as_of_date = _query_stock_pool(conditions, combiners, user_id, market_table)
 
     universe_total = _get_universe_total(user_id, market_table)
+
+    # QuantDB enrichment is now handled at the wizard layer (faster DuckDB SQL approach)
+    # The pandas-based _enrich_with_quantdb_data is too slow for interactive use
+
     summary, charts = _build_pool_summary(items, as_of_date, universe_total=universe_total)
     return QueryPoolResponse(items=items, summary=summary, charts=charts)

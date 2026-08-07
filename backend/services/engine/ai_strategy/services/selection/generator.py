@@ -295,17 +295,17 @@ class QuantDBQueryExecutor:
 
                 where_clause = " AND ".join(where_parts) if where_parts else "1=1"
 
-                # Get latest date in the view if target_date has no data
-                date_str = target_date.strftime("%Y-%m-%d")
+                # dt 为 BIGINT YYYYMMDD，不是日期字符串
+                dt_int = int(target_date.strftime("%Y%m%d"))
 
                 sql = f"""
                     SELECT DISTINCT symbol FROM {view_name}
-                    WHERE dt = '{date_str}' AND ({where_clause})
+                    WHERE dt = {dt_int} AND ({where_clause})
                 """
-                try:
-                    df = conn.execute(sql).fetchdf()
-                except Exception:
-                    # Date might not exist, try latest available
+                df = conn.execute(sql).fetchdf()
+
+                # 目标日无数据（非交易日/视图滞后）时回退到该视图最新日期
+                if df is None or df.empty:
                     sql = f"""
                         SELECT DISTINCT symbol FROM {view_name}
                         WHERE dt = (SELECT MAX(dt) FROM {view_name}) AND ({where_clause})

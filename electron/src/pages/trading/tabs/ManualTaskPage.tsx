@@ -496,7 +496,7 @@ const ManualTaskPage: React.FC<ManualTaskPageProps> = ({ tradingMode, onBack }) 
     const previewTaskSummary = (selectedTask?.result_json as Record<string, unknown> | undefined)?.preview_summary as Record<string, unknown> | undefined;
 
     return (
-        <div className="h-full overflow-y-auto bg-gray-50 p-4 pb-32 custom-scrollbar">
+        <div className="h-full overflow-y-auto bg-gray-50 p-4 custom-scrollbar">
             <div className="flex items-center justify-between mb-4">
                 <div className="flex items-center gap-3">
                     <div className="p-2 rounded-xl bg-blue-50 text-blue-600">

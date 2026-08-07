@@ -741,6 +741,58 @@ def _simple_parse_text(text_input: str):
             {"field": "pe_ttm", "operator": "<=", "value": 15.0, "table": "quantdb_valuation"},
             {"field": "pb", "operator": "<=", "value": 1.5, "table": "quantdb_valuation"},
         ],
+        # === 新增预设（与前端 SimpleLogicBuilder 一致）===
+        "融资加仓": [
+            {"field": "finance_net", "operator": ">", "value": 0, "table": "quantdb_margin"},
+            {"field": "finance_balance", "operator": ">", "value": 1e4, "table": "quantdb_margin"},
+        ],
+        "主力吸筹": [
+            {"field": "chip_profit_ratio_20", "operator": "<", "value": 0.3, "table": "quantdb_factors"},
+            {"field": "chip_concentration_20", "operator": ">", "value": 0.5, "table": "quantdb_factors"},
+        ],
+        "行业强势": [
+            {"field": "ind_strength_20", "operator": ">", "value": 0.0, "table": "quantdb_factors"},
+            {"field": "liq_mfi_14", "operator": ">", "value": 50.0, "table": "quantdb_factors"},
+        ],
+        "概念热点": [
+            {"field": "concept_hot_score", "operator": ">", "value": 0.6, "table": "quantdb_factors"},
+            {"field": "concept_leader_score", "operator": ">", "value": 0.5, "table": "quantdb_factors"},
+        ],
+        "趋势突破": [
+            {"field": "tech_adx_14", "operator": ">", "value": 25.0, "table": "quantdb_factors"},
+            {"field": "tech_bb_pos", "operator": ">", "value": 0.5, "table": "quantdb_factors"},
+            {"field": "volume_ratio_5", "operator": ">", "value": 1.5, "table": "quantdb_factors"},
+        ],
+        "布林收口": [
+            {"field": "tech_bb_width", "operator": "<", "value": 0.1, "table": "quantdb_factors"},
+            {"field": "tech_adx_14", "operator": ">", "value": 20.0, "table": "quantdb_factors"},
+        ],
+        "放量突破": [
+            {"field": "turnover_rate", "operator": ">", "value": 5.0, "table": "quantdb_turnover"},
+            {"field": "pct_change", "operator": ">", "value": 3.0, "table": "quantdb_technical"},
+            {"field": "volume_ratio_5", "operator": ">", "value": 2.0, "table": "quantdb_factors"},
+        ],
+        "资金流入": [
+            {"field": "liq_mfi_14", "operator": ">", "value": 60.0, "table": "quantdb_factors"},
+            {"field": "liq_obv_20", "operator": ">", "value": 0.0, "table": "quantdb_factors"},
+        ],
+        "低波质量": [
+            {"field": "style_beta_20", "operator": "<", "value": 1.0, "table": "quantdb_factors"},
+            {"field": "style_idio_vol_20", "operator": "<", "value": 0.15, "table": "quantdb_factors"},
+        ],
+        "动量强势": [
+            {"field": "momentum_1d", "operator": ">", "value": 2.0, "table": "quantdb_sentiment"},
+            {"field": "momentum_3d", "operator": ">", "value": 5.0, "table": "quantdb_sentiment"},
+        ],
+        "主力净流入": [
+            {"field": "liq_mfi_14", "operator": ">", "value": 50.0, "table": "quantdb_factors"},
+            {"field": "pct_change", "operator": ">", "value": 2.0, "table": "quantdb_technical"},
+        ],
+        "流动性筛选": [
+            {"field": "liquidity_score", "operator": ">", "value": 0.02, "table": "quantdb_sentiment"},
+            {"field": "buy_pressure", "operator": ">", "value": 0.5, "table": "quantdb_sentiment"},
+            {"field": "sell_pressure", "operator": "<", "value": 0.3, "table": "quantdb_sentiment"},
+        ],
     }
     _preset_qdb_filters: list[dict] = []
     _preset_dsl_parts: list[str] = []
@@ -1153,15 +1205,16 @@ def _simple_parse_text(text_input: str):
             factors.append("style_value_20")
         local_hit = True
     if re.search(r"概念热度|热门概念", text_input):
-        quantdb_filters.append({"field": "concept_hot_score", "operator": ">", "value": 0.5, "table": "quantdb_factors"})
+        quantdb_filters.append({"field": "concept_hot_score", "operator": ">", "value": 16.0, "table": "quantdb_factors"})
         factors.append("concept_hot_score")
         local_hit = True
     if re.search(r"概念轮动|板块轮动", text_input):
-        quantdb_filters.append({"field": "concept_rotation_score", "operator": ">", "value": 0.0, "table": "quantdb_factors"})
+        quantdb_filters.append({"field": "concept_rotation_score", "operator": ">", "value": 137.0, "table": "quantdb_factors"})
         factors.append("concept_rotation_score")
         local_hit = True
     if re.search(r"流动性|流动性评分", text_input):
-        val = 0.3
+        # liquidity_score 实际分布 0.0006-0.17（中位数 0.014），默认取 p75 附近
+        val = 0.02
         m_liq = re.search(r"(?:流动性|流动性评分)[≥>=≥大于等于不少于不低于不小于大于高于超过以上至少]*(\d+(?:\.\d+)?)", s)
         if m_liq:
             val = float(m_liq.group(1))
@@ -1169,7 +1222,7 @@ def _simple_parse_text(text_input: str):
         factors.append("liquidity_score")
         local_hit = True
     if re.search(r"买入压力|买压", text_input):
-        quantdb_filters.append({"field": "buy_pressure", "operator": ">", "value": 0.0, "table": "quantdb_sentiment"})
+        quantdb_filters.append({"field": "buy_pressure", "operator": ">", "value": 0.7, "table": "quantdb_sentiment"})
         factors.append("buy_pressure")
         local_hit = True
     if re.search(r"融资余额|两融余额|融资净买入", text_input):
@@ -1177,11 +1230,26 @@ def _simple_parse_text(text_input: str):
             quantdb_filters.append({"field": "finance_net", "operator": ">", "value": 0, "table": "quantdb_margin"})
             factors.append("finance_net")
         else:
-            quantdb_filters.append({"field": "finance_balance", "operator": ">", "value": 0, "table": "quantdb_margin"})
+            # margin_trading 视图仅含两融标的，finance_balance>0 无过滤效果，默认取中位数
+            # finance_balance 存储单位为万元
+            val = 28164.0
+            m_fb = re.search(r"(\d+(?:\.\d+)?)\s*(亿|万)", s)
+            if m_fb:
+                amount = float(m_fb.group(1))
+                val = amount * 1e4 if m_fb.group(2) == "亿" else amount
+            quantdb_filters.append({"field": "finance_balance", "operator": ">", "value": val, "table": "quantdb_margin"})
             factors.append("finance_balance")
         local_hit = True
+    if re.search(r"低波动|低波率|波动率低|波动小", text_input):
+        quantdb_filters.append({"field": "style_idio_vol_20", "operator": "<", "value": 0.15, "table": "quantdb_factors"})
+        factors.append("style_idio_vol_20")
+        local_hit = True
+    elif re.search(r"高波动|波动率高|波动大", text_input):
+        quantdb_filters.append({"field": "style_idio_vol_20", "operator": ">", "value": 0.4, "table": "quantdb_factors"})
+        factors.append("style_idio_vol_20")
+        local_hit = True
     if re.search(r"融券|卖空", text_input):
-        quantdb_filters.append({"field": "slo_volume", "operator": "<", "value": 1000000, "table": "quantdb_margin"})
+        quantdb_filters.append({"field": "slo_volume", "operator": "<", "value": 191023, "table": "quantdb_margin"})
         factors.append("slo_volume")
         local_hit = True
     if re.search(r"商誉", text_input):

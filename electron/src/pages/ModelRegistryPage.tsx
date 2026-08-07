@@ -2,14 +2,14 @@ import React, { useState, useEffect, useCallback } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import {
   Layers, Star, RefreshCw, Search, Code, Calendar, Layers2,
-  History, Archive, Brain, CheckCircle2, Clock, XCircle, X,
-  ChevronRight, Play, Cpu, TrendingUp, Download, ChevronDown,
-  ChevronUp, Shield, Zap, Activity, ListFilter, BarChart3,
+  History, Archive, Brain, Clock, XCircle, X,
+  ChevronRight, Play, Cpu, Download, ChevronDown,
+  ChevronUp, Shield, Zap, Activity, ListFilter, BarChart3, TrendingUp, TrendingDown,
 } from 'lucide-react';
 import {
   Button, Card, Tag, Typography, Empty, Spin, message,
   Progress, Divider, Row, Col, Input, Modal, Tabs, Switch,
-  DatePicker, Table, Drawer, Badge, Tooltip, Collapse, Select,
+  DatePicker, Table, Badge, Tooltip, Select,
 } from 'antd';
 import { clsx } from 'clsx';
 import dayjs from 'dayjs';
@@ -21,7 +21,6 @@ import {
   ModelTrainingRunStatus,
   InferenceRunRecord,
   InferencePrecheckResult,
-  InferenceRankingResult,
   AutoInferenceSettings,
   LatestInferenceRunInfo,
   ModelShapSummaryResponse,
@@ -49,8 +48,13 @@ import {
   TimeItem,
   InfoCell,
 } from './modelRegistryPanels';
-import { ModelEvaluationModule } from '../components/backtestCenter/ModelEvaluationModule';
-import { ScoreDistributionPanel } from '../components/inference/ScoreDistributionPanel';
+import { CreateEnsembleModal } from './CreateEnsembleModal';
+import { InferenceBacktestModule } from '../components/backtestCenter/InferenceBacktestModule';
+import { BatchInferencePanel } from '../components/inference/BatchInferencePanel';
+import { BatchSingleDayPanel } from '../components/inference/BatchSingleDayPanel';
+import { InferenceHistoryPanel } from '../components/inference/InferenceHistoryPanel';
+import { StockPickingPanel } from '../components/inference/StockPickingPanel';
+import { NegativeScorePanel } from '../components/inference/NegativeScorePanel';
 import {
   buildFeatureLabelMap,
   DEFAULT_FEATURE_CATEGORIES,
@@ -69,6 +73,9 @@ export const ModelRegistryPage: React.FC = () => {
   const [loading, setLoading] = useState(true);
   const [userModels, setUserModels] = useState<UserModelRecord[]>([]);
   const [selectedId, setSelectedId] = useState<string | null>(null);
+  const [ensembleMode, setEnsembleMode] = useState(false);
+  const [ensembleChecked, setEnsembleChecked] = useState<string[]>([]);
+  const [showEnsembleModal, setShowEnsembleModal] = useState(false);
   const [showArchived, setShowArchived] = useState(false);
   const [searchQuery, setSearchQuery] = useState('');
   const [settingDefault, setSettingDefault] = useState(false);
@@ -83,8 +90,9 @@ export const ModelRegistryPage: React.FC = () => {
   const [shapError, setShapError] = useState('');
   const [featureLabelMap, setFeatureLabelMap] = useState<Record<string, string>>(() => buildFeatureLabelMap(DEFAULT_FEATURE_CATEGORIES));
   const [featureCatalogLoaded, setFeatureCatalogLoaded] = useState(false);
-  const [inferenceDate, setInferenceDate] = useState<dayjs.Dayjs | null>(dayjs().subtract(1, 'day'));
+  const [inferenceDate, setInferenceDate] = useState<dayjs.Dayjs | null>(dayjs());
   const [inferenceRunning, setInferenceRunning] = useState(false);
+  const [inferenceMode, setInferenceMode] = useState<'single' | 'batch' | 'batch-range' | 'history'>('single');
   const [lastInferenceRun, setLastInferenceRun] = useState<InferenceRunRecord | null>(null);
   const [inferenceHistory, setInferenceHistory] = useState<InferenceRunRecord[]>([]);
   const [inferenceHistoryLoading, setInferenceHistoryLoading] = useState(false);
@@ -96,11 +104,6 @@ export const ModelRegistryPage: React.FC = () => {
   const [autoSaving, setAutoSaving] = useState(false);
   const [latestInferenceRun, setLatestInferenceRun] = useState<LatestInferenceRunInfo | null>(null);
   const [latestInferenceRunLoading, setLatestInferenceRunLoading] = useState(false);
-  const [rankingOpen, setRankingOpen] = useState(false);
-  const [rankingResult, setRankingResult] = useState<InferenceRankingResult | null>(null);
-  const [rankingLoading, setRankingLoading] = useState(false);
-  const [rankingExporting, setRankingExporting] = useState(false);
-  const [rankingSearch, setRankingSearch] = useState('');
   const [historyRunIdFilter, setHistoryRunIdFilter] = useState('');
   const [historyStatusFilter, setHistoryStatusFilter] = useState<'all' | 'running' | 'completed' | 'failed'>('all');
   const [historyDateFilter, setHistoryDateFilter] = useState<dayjs.Dayjs | null>(null);
@@ -119,36 +122,6 @@ export const ModelRegistryPage: React.FC = () => {
   const metrics = selectedModel ? getMetrics(selectedModel) : {} as ReturnType<typeof getMetrics>;
   const timePeriods = selectedModel ? extractTimePeriods(getMeta(selectedModel)) : null;
   const horizonDays = Number(meta?.target_horizon_days ?? meta?.horizon_days ?? 3);
-
-  const splitInferenceLogs = useCallback((stdout?: string | null, stderr?: string | null) => {
-    const infoLines: string[] = [];
-    const errorLines: string[] = [];
-    const pushLines = (raw: string, source: 'stdout' | 'stderr') => {
-      raw.split(/\r?\n/).forEach((line) => {
-        const text = line.trimEnd();
-        if (!text) return;
-        const upper = text.toUpperCase();
-        const isError = /\b(ERROR|CRITICAL|EXCEPTION|TRACEBACK|FAILED|FAILURE)\b/.test(upper);
-        const isInfo = /\bINFO\b/.test(upper);
-        const isWarn = /\b(WARNING|WARN)\b/.test(upper);
-        if (isError) {
-          errorLines.push(text);
-          return;
-        }
-        if (source === 'stderr' && isInfo && !isWarn) {
-          infoLines.push(text);
-          return;
-        }
-        infoLines.push(text);
-      });
-    };
-    if (stdout) pushLines(stdout, 'stdout');
-    if (stderr) pushLines(stderr, 'stderr');
-    return {
-      stdout: infoLines.join('\n'),
-      stderr: errorLines.join('\n'),
-    };
-  }, []);
 
   const loadModels = useCallback(async (silent = false) => {
     if (!silent) setLoading(true);
@@ -484,18 +457,6 @@ export const ModelRegistryPage: React.FC = () => {
     finally { setAutoSaving(false); }
   };
 
-  const handleViewRanking = async (runId: string) => {
-    setRankingOpen(true);
-    setRankingLoading(true);
-    setRankingResult(null);
-    setRankingSearch('');
-    try {
-      const r = await modelTrainingService.getInferenceResult(runId);
-      setRankingResult(r);
-    } catch { message.error('加载排名数据失败'); }
-    finally { setRankingLoading(false); }
-  };
-
   const handleDeleteHistory = (runId: string) => {
     Modal.confirm({
       title: '删除推理历史',
@@ -521,41 +482,6 @@ export const ModelRegistryPage: React.FC = () => {
         }
       },
     });
-  };
-
-  const handleExportCSV = () => {
-    if (!rankingResult || rankingResult.rankings.length === 0) {
-      message.warning('暂无可导出的排名数据');
-      return;
-    }
-    setRankingExporting(true);
-    const rows = [
-      ['排名', '股票代码', '股票名称', '预测得分', '信号'],
-      ...rankingResult.rankings.map(r => [r.rank, r.code, r.name, r.score, r.signal]),
-    ];
-    const escapeCsvCell = (value: unknown) => {
-      const raw = value === null || value === undefined ? '' : String(value);
-      if (!/[",\n\r]/.test(raw)) return raw;
-      return `"${raw.replace(/"/g, '""')}"`;
-    };
-    try {
-      const csv = rows.map(r => r.map(escapeCsvCell).join(',')).join('\n');
-      const blob = new Blob(['\uFEFF' + csv], { type: 'text/csv;charset=utf-8;' });
-      const url = URL.createObjectURL(blob);
-      const a = document.createElement('a');
-      a.href = url;
-      a.download = `ranking_${rankingResult.target_date || 'result'}_${rankingResult.summary?.run_id || 'run'}.csv`;
-      a.style.display = 'none';
-      document.body.appendChild(a);
-      a.click();
-      document.body.removeChild(a);
-      URL.revokeObjectURL(url);
-      message.success(`已导出 ${rankingResult.rankings.length} 条排名数据`);
-    } catch (err: any) {
-      message.error(`导出失败: ${err?.message ?? '未知错误'}`);
-    } finally {
-      setRankingExporting(false);
-    }
   };
 
   const targetDate = inferenceTargetDate || '—';
@@ -623,18 +549,58 @@ export const ModelRegistryPage: React.FC = () => {
                 </div>
               ) : (
                 <>
-                  <div className="px-2 pt-2 pb-1 flex items-center gap-1.5">
-                    <Brain size={10} className="text-blue-500" />
-                    <span className="text-[9px] font-black text-blue-500 tracking-widest">我的模型资产</span>
+                  <div className="px-2 pt-2 pb-1 flex items-center justify-between">
+                    <div className="flex items-center gap-1.5">
+                      <Brain size={10} className="text-blue-500" />
+                      <span className="text-[9px] font-black text-blue-500 tracking-widest">我的模型资产</span>
+                    </div>
+                    {!ensembleMode ? (
+                      <button
+                        className="text-[9px] font-bold text-blue-600 hover:text-blue-700 flex items-center gap-0.5 bg-blue-50 hover:bg-blue-100 rounded-md px-1.5 py-0.5 transition-colors"
+                        onClick={(e) => { e.stopPropagation(); setEnsembleMode(true); setEnsembleChecked([]); }}
+                      >
+                        <Layers size={9} /> 多选融合
+                      </button>
+                    ) : (
+                      <button
+                        className="text-[9px] font-bold text-slate-500 hover:text-slate-600 flex items-center gap-0.5 bg-slate-100 hover:bg-slate-200 rounded-md px-1.5 py-0.5 transition-colors"
+                        onClick={(e) => { e.stopPropagation(); setEnsembleMode(false); setEnsembleChecked([]); }}
+                      >
+                        退出
+                      </button>
+                    )}
                   </div>
+                  {ensembleMode && ensembleChecked.length >= 2 && (
+                    <div className="px-2 pb-1.5">
+                      <Button
+                        type="primary" size="small" block
+                        icon={<Layers size={10} />}
+                        className="rounded-lg bg-blue-600 border-none font-bold text-[10px]"
+                        onClick={() => setShowEnsembleModal(true)}
+                      >
+                        创建融合模型 ({ensembleChecked.length})
+                      </Button>
+                    </div>
+                  )}
                   {displayModels.map(model => (
                     <ModelCard
                       key={model.model_id}
                       model={model}
                       isSelected={selectedId === model.model_id}
-                      onClick={() => setSelectedId(model.model_id)}
+                      onClick={() => {
+                        if (ensembleMode) {
+                          const next = ensembleChecked.includes(model.model_id)
+                            ? ensembleChecked.filter(id => id !== model.model_id)
+                            : [...ensembleChecked, model.model_id];
+                          setEnsembleChecked(next);
+                        } else {
+                          setSelectedId(model.model_id);
+                        }
+                      }}
                       onSetDefault={() => void handleSetDefaultById(model.model_id)}
                       canSetDefault={!model.is_default && model.status !== 'archived'}
+                      showCheckbox={ensembleMode}
+                      isChecked={ensembleMode && ensembleChecked.includes(model.model_id)}
                     />
                   ))}
                 </>
@@ -795,51 +761,129 @@ export const ModelRegistryPage: React.FC = () => {
                           </span>
                         ),
                         children: (
-                          <InferenceCenterPanel
-                            model={selectedModel}
-                            inferenceDate={inferenceDate}
-                            onDateChange={setInferenceDate}
-                            targetDate={targetDate}
-                            targetDateLoading={inferenceTargetLoading}
-                            horizonDays={horizonDays}
-                            running={inferenceRunning}
-                            onRun={handleRunInference}
-                            onRunAsDefault={handleSetDefault}
-                            isDefault={selectedModel.is_default}
-                            lastRun={lastInferenceRun}
-                            history={inferenceHistory}
-                            historyLoading={inferenceHistoryLoading}
-                            onViewRanking={handleViewRanking}
-                            autoSettings={autoSettings}
-                            autoSaving={autoSaving}
-                            onToggleAuto={handleToggleAuto}
-                            latestInferenceRun={latestInferenceRun}
-                            latestInferenceRunLoading={latestInferenceRunLoading}
-                            precheck={inferencePrecheck}
-                            precheckLoading={inferencePrecheckLoading}
-                            onRefreshPrecheck={() => {
-                              if (selectedModel) {
-                                void loadPrecheck(selectedModel.model_id, inferenceDate?.format('YYYY-MM-DD'));
-                              }
-                            }}
-                            historyRunIdFilter={historyRunIdFilter}
-                            onHistoryRunIdFilterChange={setHistoryRunIdFilter}
-                            historyStatusFilter={historyStatusFilter}
-                            onHistoryStatusFilterChange={setHistoryStatusFilter}
-                            historyDateFilter={historyDateFilter}
-                            onHistoryDateFilterChange={setHistoryDateFilter}
-                            onDeleteHistory={handleDeleteHistory}
-                          />
+                          <div>
+                            <div className="flex items-center gap-2 mb-4">
+                              <Button
+                                size="small"
+                                type={inferenceMode === 'single' ? 'primary' : 'default'}
+                                className={clsx('rounded-lg text-[10px] font-bold h-7 px-4', inferenceMode === 'single' ? 'bg-blue-600 border-blue-600' : 'border-slate-200')}
+                                onClick={() => setInferenceMode('single')}
+                              >
+                                单日推理
+                              </Button>
+                              <Button
+                                size="small"
+                                type={inferenceMode === 'batch' ? 'primary' : 'default'}
+                                className={clsx('rounded-lg text-[10px] font-bold h-7 px-4', inferenceMode === 'batch' ? 'bg-violet-600 border-violet-600' : 'border-slate-200')}
+                                onClick={() => setInferenceMode('batch')}
+                              >
+                                批量多日
+                              </Button>
+                              <Button
+                                size="small"
+                                type={inferenceMode === 'batch-range' ? 'primary' : 'default'}
+                                className={clsx('rounded-lg text-[10px] font-bold h-7 px-4', inferenceMode === 'batch-range' ? 'bg-emerald-600 border-emerald-600' : 'border-slate-200')}
+                                onClick={() => setInferenceMode('batch-range')}
+                              >
+                                批量单日
+                              </Button>
+                              <Button
+                                size="small"
+                                type={inferenceMode === 'history' ? 'primary' : 'default'}
+                                className={clsx('rounded-lg text-[10px] font-bold h-7 px-4', inferenceMode === 'history' ? 'bg-indigo-600 border-indigo-600' : 'border-slate-200')}
+                                onClick={() => setInferenceMode('history')}
+                              >
+                                推理历史
+                              </Button>
+                            </div>
+                            {inferenceMode === 'single' ? (
+                              <InferenceCenterPanel
+                                model={selectedModel}
+                                inferenceDate={inferenceDate}
+                                onDateChange={setInferenceDate}
+                                targetDate={targetDate}
+                                targetDateLoading={inferenceTargetLoading}
+                                horizonDays={horizonDays}
+                                running={inferenceRunning}
+                                onRun={handleRunInference}
+                                onRunAsDefault={handleSetDefault}
+                                isDefault={selectedModel.is_default}
+                                lastRun={lastInferenceRun}
+                                history={inferenceHistory}
+                                historyLoading={inferenceHistoryLoading}
+                                autoSettings={autoSettings}
+                                autoSaving={autoSaving}
+                                onToggleAuto={handleToggleAuto}
+                                latestInferenceRun={latestInferenceRun}
+                                latestInferenceRunLoading={latestInferenceRunLoading}
+                                precheck={inferencePrecheck}
+                                precheckLoading={inferencePrecheckLoading}
+                                onRefreshPrecheck={() => {
+                                  if (selectedModel) {
+                                    void loadPrecheck(selectedModel.model_id, inferenceDate?.format('YYYY-MM-DD'));
+                                  }
+                                }}
+                                historyRunIdFilter={historyRunIdFilter}
+                                onHistoryRunIdFilterChange={setHistoryRunIdFilter}
+                                historyStatusFilter={historyStatusFilter}
+                                onHistoryStatusFilterChange={setHistoryStatusFilter}
+                                historyDateFilter={historyDateFilter}
+                                onHistoryDateFilterChange={setHistoryDateFilter}
+                                onDeleteHistory={handleDeleteHistory}
+                              />
+                            ) : inferenceMode === 'batch' ? (
+                              <BatchInferencePanel modelId={selectedModel.model_id} horizonDays={horizonDays} />
+                            ) : inferenceMode === 'batch-range' ? (
+                              <BatchSingleDayPanel modelId={selectedModel.model_id} horizonDays={horizonDays} />
+                            ) : (
+                              <InferenceHistoryPanel
+                                modelId={selectedModel.model_id}
+                                onDelete={handleDeleteHistory}
+                              />
+                            )}
+                          </div>
                         ),
                       },
                       {
                         key: 'backtest',
                         label: (
                           <span className="text-xs font-black uppercase tracking-widest px-1 flex items-center gap-1.5">
-                            <BarChart3 size={11} />回测评估
+                            <BarChart3 size={11} />推理回测
                           </span>
                         ),
-                        children: <ModelEvaluationModule initialModelId={selectedModel.model_id} compact />,
+                        children: <InferenceBacktestModule modelId={selectedModel.model_id} />,
+                      },
+                      {
+                        key: 'stock-picking',
+                        label: (
+                          <span className="text-xs font-black uppercase tracking-widest px-1 flex items-center gap-1.5">
+                            <TrendingUp size={11} />选股
+                          </span>
+                        ),
+                        children: <StockPickingPanel />,
+                      },
+                      {
+                        key: 'negative-score',
+                        label: (
+                          <span className="text-xs font-black uppercase tracking-widest px-1 flex items-center gap-1.5">
+                            <TrendingDown size={11} />负分参考
+                          </span>
+                        ),
+                        children: <NegativeScorePanel />,
+                      },
+                      {
+                        key: 'inference-research',
+                        label: (
+                          <span className="text-xs font-black uppercase tracking-widest px-1 flex items-center gap-1.5">
+                            <History size={11} />推理研究
+                          </span>
+                        ),
+                        children: (
+                          <InferenceHistoryPanel
+                            modelId={selectedModel.model_id}
+                            onDelete={handleDeleteHistory}
+                          />
+                        ),
                       },
                     ]}
                   />
@@ -952,290 +996,19 @@ export const ModelRegistryPage: React.FC = () => {
           </div>
         </div>
       </Modal>
-      {/* ═══ 排名结果 Drawer ═══ */}
-      <Drawer
-        open={rankingOpen}
-        onClose={() => { setRankingOpen(false); setRankingResult(null); }}
-        closable={false}
-        zIndex={1000}
-        styles={{
-          wrapper: { width: 580 },
-          header: { padding: '31px 20px 16px 20px', borderBottom: '1px solid #f8fafc' },
-          body: { padding: '24px' }
+
+      {/* 多模型融合创建对话框 */}
+      <CreateEnsembleModal
+        open={showEnsembleModal}
+        onCancel={() => setShowEnsembleModal(false)}
+        onCreated={(newModelId) => {
+          setEnsembleMode(false);
+          setEnsembleChecked([]);
+          setSelectedId(newModelId);
+          void loadModels(true);
         }}
-        title={
-          <div className="flex items-center gap-3 min-w-0">
-            <button 
-              onClick={() => { setRankingOpen(false); setRankingResult(null); }}
-              className="window-no-drag group flex items-center justify-center w-8 h-8 rounded-xl hover:bg-slate-50 text-slate-400 hover:text-slate-900 transition-all cursor-pointer relative z-50 flex-shrink-0"
-            >
-              <X size={18} className="transition-transform group-hover:scale-110" />
-            </button>
-            <div className="w-10 h-10 bg-blue-50 rounded-2xl flex items-center justify-center text-blue-600 shadow-sm border border-blue-100/50 flex-shrink-0">
-              <TrendingUp size={20} />
-            </div>
-            <div className="flex flex-col min-w-0">
-              <span className="font-black text-slate-800 text-base tracking-tight leading-none truncate">
-                排名结果
-              </span>
-              {rankingResult && (
-                <span className="text-[10px] font-bold text-slate-400 mt-1 uppercase tracking-widest truncate">
-                  目标交易日：{rankingResult.target_date}
-                </span>
-              )}
-            </div>
-          </div>
-        }
-        extra={
-          <Tooltip title={!rankingResult?.rankings.length ? '当前没有可导出的排名数据' : '导出当前排名结果为 CSV'}>
-            <Button
-              type="default"
-              icon={<Download size={14} className={rankingExporting ? 'animate-pulse' : ''} />}
-              className="rounded-xl h-9 px-4 font-black border-slate-200 text-[11px] shadow-sm hover:translate-y-[-1px] transition-all flex-shrink-0"
-              disabled={rankingExporting || !rankingResult || rankingResult.rankings.length === 0}
-              loading={rankingExporting}
-              onClick={handleExportCSV}
-            >
-              {rankingExporting ? '导出中...' : '导出 CSV'}
-            </Button>
-          </Tooltip>
-        }
-      >
-        {rankingLoading ? (
-          <div className="flex items-center justify-center h-48"><Spin size="large" /></div>
-        ) : rankingResult ? (
-          <div className="space-y-3">
-            {rankingResult.summary && (
-              <div className="space-y-3 rounded-2xl border border-slate-100 bg-slate-50 p-3">
-                <div className="grid grid-cols-2 gap-2">
-                  <div>
-                    <Text className="text-[10px] text-slate-400 font-black uppercase block">运行批次</Text>
-                    <Text className="text-xs font-black text-slate-800 font-mono">{rankingResult.summary.run_id}</Text>
-                  </div>
-                  <div>
-                    <Text className="text-[10px] text-slate-400 font-black uppercase block">模型</Text>
-                    <Text className="text-xs font-black text-slate-800 font-mono">{rankingResult.summary.effective_model_id || rankingResult.summary.model_id}</Text>
-                  </div>
-                  <div>
-                    <Text className="text-[10px] text-slate-400 font-black uppercase block">状态</Text>
-                    <Tag color={rankingResult.summary.status === 'failed' ? 'red' : 'green'} className="m-0 rounded-full text-[9px] font-black">
-                      {rankingResult.summary.status === 'failed' ? '失败' : rankingResult.summary.status === 'completed' ? '成功' : '进行中'}
-                    </Tag>
-                  </div>
-                  <div>
-                    <Text className="text-[10px] text-slate-400 font-black uppercase block">信号数</Text>
-                    <Text className="text-xs font-black text-slate-800">{rankingResult.summary.signals_count}</Text>
-                  </div>
-                  <div>
-                    <Text className="text-[10px] text-slate-400 font-black uppercase block">模型切换</Text>
-                    <Text className="text-xs font-black text-slate-800">{(rankingResult.summary.model_switch_used ?? rankingResult.summary.fallback_used) ? '是' : '否'}</Text>
-                  </div>
-                  <div>
-                    <Text className="text-[10px] text-slate-400 font-black uppercase block">执行模式</Text>
-                    <Text className="text-xs font-black text-slate-800">{rankingResult.summary.execution_mode === 'independent_model' ? '独立模型' : rankingResult.summary.execution_mode === 'system_chain' ? '系统链路' : '—'}</Text>
-                  </div>
-                  <div>
-                    <Text className="text-[10px] text-slate-400 font-black uppercase block">耗时</Text>
-                    <Text className="text-xs font-black text-slate-800">{(Number(rankingResult.summary.duration_ms || 0) / 1000).toFixed(1)}s</Text>
-                  </div>
-                </div>
-                <Collapse
-                  key={rankingResult.summary.run_id}
-                  ghost
-                  className="inference-result-collapse"
-                  defaultActiveKey={rankingResult.summary.status === 'failed' ? ['diagnostics', 'precheck', 'stderr'] : []}
-                  items={[
-                    {
-                      key: 'diagnostics',
-                      label: <span className="text-[11px] font-black text-slate-700">诊断信息</span>,
-                      children: (
-                        <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
-                          <div className="rounded-xl border border-slate-100 bg-white p-3">
-                            <Text className="text-[10px] text-slate-400 font-black uppercase block">失败阶段</Text>
-                            <Text className="text-xs font-black text-slate-800">{rankingResult.summary.failure_stage || '—'}</Text>
-                          </div>
-                          <div className="rounded-xl border border-slate-100 bg-white p-3">
-                            <Text className="text-[10px] text-slate-400 font-black uppercase block">模型切换原因</Text>
-                            <Text className="text-xs font-black text-slate-800 break-all">{rankingResult.summary.model_switch_reason || rankingResult.summary.fallback_reason || '—'}</Text>
-                          </div>
-                          <div className="rounded-xl border border-slate-100 bg-white p-3">
-                            <Text className="text-[10px] text-slate-400 font-black uppercase block">实际模型</Text>
-                            <Text className="text-xs font-black text-slate-800 font-mono break-all">
-                              {rankingResult.summary.active_model_id || '—'}
-                            </Text>
-                          </div>
-                          <div className="rounded-xl border border-slate-100 bg-white p-3">
-                            <Text className="text-[10px] text-slate-400 font-black uppercase block">生效模型</Text>
-                            <Text className="text-xs font-black text-slate-800 font-mono break-all">
-                              {rankingResult.summary.effective_model_id || '—'}
-                            </Text>
-                          </div>
-                          <div className="rounded-xl border border-slate-100 bg-white p-3 sm:col-span-2">
-                            <Text className="text-[10px] text-slate-400 font-black uppercase block">数据源</Text>
-                            <Text className="text-xs font-black text-slate-800 font-mono break-all">
-                              {rankingResult.summary.active_data_source || '—'}
-                            </Text>
-                          </div>
-                          <div className="rounded-xl border border-slate-100 bg-white p-3 sm:col-span-2">
-                            <Text className="text-[10px] text-slate-400 font-black uppercase block">错误信息</Text>
-                            <Text className="text-xs font-black text-rose-600 break-all">
-                              {rankingResult.summary.error_message || rankingResult.summary.error_msg || '—'}
-                            </Text>
-                          </div>
-                        </div>
-                      ),
-                    },
-                    {
-                      key: 'precheck',
-                      label: <span className="text-[11px] font-black text-slate-700">前置检查</span>,
-                      children: (() => {
-                        const precheck = (rankingResult.summary?.result_json as any)?.precheck || (rankingResult.summary?.request_json as any)?.precheck || null;
-                        if (!precheck) {
-                          return <Empty description={<span className="text-xs text-slate-400">暂无前置检查记录</span>} />;
-                        }
-                        const items = Array.isArray(precheck.items) ? precheck.items : [];
-                        return (
-                          <div className="space-y-2">
-                            <div className="flex flex-wrap gap-2">
-                              <Tag color={precheck.passed ? 'green' : 'red'} className="m-0 rounded-full text-[9px] font-black">
-                                {precheck.passed ? '通过' : '阻断'}
-                              </Tag>
-                              <Tag className="m-0 rounded-full border-0 bg-slate-100 text-slate-600 font-bold">
-                                {precheck.effective_model_id || precheck.model_id || '—'}
-                              </Tag>
-                              <Tag className="m-0 rounded-full border-0 bg-blue-50 text-blue-700 font-bold">
-                                {precheck.prediction_trade_date || '—'}
-                              </Tag>
-                            </div>
-                            <div className="space-y-2">
-                              {items.length > 0 ? items.map((item: any) => (
-                                <div
-                                  key={item.key}
-                                  className={clsx(
-                                    'flex items-start justify-between gap-3 rounded-xl border px-3 py-2',
-                                    item.passed ? 'border-slate-100 bg-white' : 'border-rose-100 bg-rose-50/60',
-                                  )}
-                                >
-                                  <div className="min-w-0">
-                                    <div className="flex items-center gap-2">
-                                      {item.passed ? <CheckCircle2 size={11} className="text-emerald-500 flex-shrink-0" /> : <XCircle size={11} className="text-rose-500 flex-shrink-0" />}
-                                      <Text className="text-[11px] font-black text-slate-800">{item.label}</Text>
-                                      <Tag className={clsx('m-0 rounded-full border-0 text-[9px] font-bold', item.severity === 'hard' ? 'bg-rose-50 text-rose-500' : 'bg-slate-100 text-slate-500')}>
-                                        {item.severity === 'hard' ? '硬门禁' : '提示'}
-                                      </Tag>
-                                    </div>
-                                    <Text className="mt-1 block text-[10px] text-slate-500 break-all">{item.detail}</Text>
-                                  </div>
-                                  <Tag color={item.passed ? 'green' : 'red'} className="m-0 rounded-full text-[9px] font-black">
-                                    {item.passed ? '通过' : '未通过'}
-                                  </Tag>
-                                </div>
-                              )) : (
-                                <Empty description={<span className="text-xs text-slate-400">暂无检查明细</span>} />
-                              )}
-                            </div>
-                          </div>
-                        );
-                      })(),
-                    },
-                    {
-                      key: 'stdout',
-                      label: <span className="text-[11px] font-black text-slate-700">标准输出</span>,
-                      children: (() => {
-                        const logs = splitInferenceLogs(rankingResult.summary.stdout, rankingResult.summary.stderr);
-                        return logs.stdout ? (
-                          <div className="rounded-xl border border-slate-200 bg-slate-950 p-3">
-                            <pre className="max-h-56 overflow-auto whitespace-pre-wrap break-all text-[10px] leading-relaxed text-emerald-400 custom-scrollbar scrollbar-dark">
-                              {logs.stdout}
-                            </pre>
-                          </div>
-                        ) : (
-                          <Empty description={<span className="text-xs text-slate-400">暂无标准输出</span>} />
-                        );
-                      })(),
-                    },
-                    {
-                      key: 'stderr',
-                      label: <span className="text-[11px] font-black text-slate-700">错误输出</span>,
-                      children: (() => {
-                        const logs = splitInferenceLogs(rankingResult.summary.stdout, rankingResult.summary.stderr);
-                        return logs.stderr ? (
-                          <div className="rounded-xl border border-rose-100 bg-rose-50/70 p-3">
-                            <pre className="max-h-56 overflow-auto whitespace-pre-wrap break-all text-[10px] leading-relaxed text-rose-700 custom-scrollbar">
-                              {logs.stderr}
-                            </pre>
-                          </div>
-                        ) : (
-                          <Empty description={<span className="text-xs text-slate-400">暂无错误输出</span>} />
-                        );
-                      })(),
-                    },
-                  ]}
-                />
-              </div>
-            )}
-            {rankingResult.summary?.score_distribution && (
-              <ScoreDistributionPanel dist={rankingResult.summary.score_distribution} />
-            )}
-            <Input
-              prefix={<Search size={13} className="text-slate-300" />}
-              placeholder="搜索股票代码或名称..."
-              value={rankingSearch}
-              onChange={e => setRankingSearch(e.target.value)}
-              className="rounded-xl h-9 text-xs border-slate-200"
-            />
-            <Table
-              size="small"
-              rowKey="rank"
-              pagination={{ pageSize: 20, showTotal: t => `共 ${t} 支` }}
-              dataSource={rankingResult.rankings.filter(r =>
-                !rankingSearch || r.code.includes(rankingSearch) || r.name.includes(rankingSearch)
-              )}
-              columns={[
-                {
-                  title: '排名', dataIndex: 'rank', width: 56,
-                  render: (n: number) => (
-                    <span className={clsx('font-black text-xs', n <= 3 ? 'text-amber-500' : 'text-slate-500')}>
-                      {n <= 3 ? ['🥇', '🥈', '🥉'][n - 1] : n}
-                    </span>
-                  ),
-                },
-                {
-                  title: '股票', key: 'stock',
-                  render: (_: any, r: any) => (
-                    <div>
-                      <div className="text-xs font-black text-slate-800">{r.name}</div>
-                      <div className="text-[10px] font-mono text-slate-400">{r.code}</div>
-                    </div>
-                  ),
-                },
-                {
-                  title: '得分', dataIndex: 'score',
-                  render: (s: number) => (
-                    <span className="font-black text-xs text-slate-900">
-                      {s.toFixed(4)}
-                    </span>
-                  ),
-                },
-                {
-                  title: '信号', dataIndex: 'signal',
-                  render: (sig: string) => {
-                    const map: Record<string, { color: string; label: string }> = {
-                      buy: { color: 'green', label: '↑ 做多' },
-                      sell: { color: 'red', label: '↓ 做空' },
-                      hold: { color: 'default', label: '→ 持有' },
-                    };
-                    const c = map[sig] ?? map.hold;
-                    return <Tag color={c.color} className="text-[9px] font-black">{c.label}</Tag>;
-                  },
-                },
-              ]}
-            />
-          </div>
-        ) : (
-          <Empty description={<span className="text-xs text-slate-400">暂无数据</span>} />
-        )}
-      </Drawer>
+        models={userModels.filter(m => ensembleChecked.includes(m.model_id))}
+      />
     </div>
   );
 };

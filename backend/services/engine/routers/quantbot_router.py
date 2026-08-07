@@ -131,7 +131,7 @@ async def _handle_chat_stream(
         "\n"
         "## 挖好的因子去哪看 / 怎么测试\n"
         "- 演化完成的因子保存在数据库 `rd_agent_factors` 表，可通过 "
-        "`GET /api/v1/alpha-agent/factors?user_id={当前用户}` 列出，"
+        "`GET /api/v1/alpha-agent/factors` 列出（自动按登录用户过滤），"
         "或通过 `GET /api/v1/alpha-agent/factors/{factor_id}` 看详情（含 IC、IR、夏普、因子代码）。\n"
         "- 一键回测：`POST /api/v1/alpha-agent/factors/{factor_id}/backtest`，"
         "回测结果会更新到同一条记录的 metrics 字段，可继续轮询。\n"

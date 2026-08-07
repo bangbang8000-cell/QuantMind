@@ -2,6 +2,12 @@
 
 输入是调用方备好的 panel DataFrame，输出是纯 dict —— 本模块不碰 DB/Redis/文件。
 
+日期口径：`trade_date` 与 `dates` 均为**数据交易日 T**（生成信号所用特征的日期），
+由调用方负责归一化。注意 `engine_signal_scores.trade_date` 实际存的是信号生效日
+T+1，取数层应改用 `qm_model_inference_runs.data_trade_date` 才能与用户输入的锚定日
+及 `load_forward_labels` 的 signal_date 对齐。**本模块不做任何 T/T+1 转换**；
+若 panel 里出现 `dates` 之外的日期，会剔除并在 `meta.warnings` 中报出。
+
 核心口径约束：跨日主排序键一律用每日截面百分位 `pct`（0~1）或日内排名 `rk`，
 不用原始 `fusion_score`。模型输出随市场 regime 漂移（普涨日整体分数上移），
 直接平均原始分数会把市场 beta 当成选股 alpha。`movers.raw_score_change` 是
@@ -9,6 +15,9 @@
 
 缺席语义：某股票某日因停牌/ST/涨跌停过滤不在 panel 里 —— 缺席是 NaN，不是 0。
 均值/趋势只在实际出现的日子上计算，缺席程度由 `coverage` 单独反映。
+
+数据完整性：同日多 run 共存、同日重跑清理旧信号都会让聚合结论看似正常实则失真，
+故 (trade_date, symbol) 重复与行数异常稀疏的日期一律记入 `meta.warnings`。
 """
 
 from __future__ import annotations
@@ -23,6 +32,13 @@ import pandas as pd
 from backend.shared.inference_stats import compute_score_distribution
 
 _REQUIRED_COLUMNS = ("trade_date", "symbol", "fusion_score")
+
+# 某日行数低于全窗口中位数的此比例即视为「信号被部分清理」
+_SPARSE_DAY_RATIO = 0.2
+
+# 严格单调在小 N 下退化为噪声（N=3 纯随机即约 1/6 单调），超此占比即告警
+_MONOTONIC_NOISE_MAX_N = 4
+_MONOTONIC_NOISE_RATIO = 0.10
 
 # 趋势"显著"判定阈值：小样本（N=5）Spearman p 值本就不可信，
 # 故显著性 = |rho| 阈值 + Mann-Kendall S 归一化阈值 + 最小观测数的组合，
@@ -272,9 +288,10 @@ def _dedupe_rows(df: pd.DataFrame) -> tuple[pd.DataFrame, list[str]]:
     if "run_id" in df.columns:
         runs = sorted({str(r) for r in df.loc[dup_mask, "run_id"].dropna()})
         detail = f"，涉及 run_id: {runs[:5]}"
-    removed = int(dup_mask.sum() - df.loc[dup_mask].groupby(
-        ["trade_date", "symbol"], sort=False
-    ).ngroups)
+    removed = int(
+        dup_mask.sum()
+        - df.loc[dup_mask].groupby(["trade_date", "symbol"], sort=False).ngroups
+    )
 
     kept = df[~df.duplicated(subset=["trade_date", "symbol"], keep="first")].copy()
     kept.loc[kept["trade_date"].isin(dup_dates), ["rk", "pct"]] = np.nan
@@ -427,6 +444,7 @@ def _symbol_stats(
     present_dates: list[str],
     top_k: int,
     decay: float,
+    consensus_band: float,
 ) -> dict[str, dict[str, Any]]:
     n_dates = len(dates)
     anchor_i = n_dates - 1
@@ -477,6 +495,7 @@ def _symbol_stats(
             "up_streak": _longest_run(pcts, ascending=True),
             "down_streak": _longest_run(pcts, ascending=False),
             "topk_hits": len(topk_days),
+            "band_hits": int(np.count_nonzero(pcts >= consensus_band)),
             "first_seen": day_list[0],
             "last_seen": day_list[-1],
             "first_topk_day": topk_days[0] if topk_days else None,
@@ -546,6 +565,8 @@ _GROUP_FIELDS = (
     "mk_s",
     "topk_hits",
     "bottomk_hits",
+    "band_hits",
+    "band_hits_short",
     "membership",
     "conviction_long",
     "conviction_short",
@@ -572,14 +593,20 @@ def _build_groups(
     groups: dict[str, list[dict[str, Any]]] = {}
 
     if side in ("long", "both"):
+        # 门槛用分位带而非绝对 Top-K：K=20 在 5500 只里是前 0.36%，
+        # 在 75%+ 换手率下「10 天有 6 天进前 0.36%」是不可能事件，恒为空集。
         groups["consensus_long"] = _project(
             [
                 r
                 for r in by_conv_long
                 if r["coverage"] >= 0.8
                 and r["weighted_pct"] >= 0.9
-                and r["topk_hits"] >= hit_gate
+                and r["band_hits"] >= hit_gate
             ],
+            top_k,
+        )
+        groups["top_hitters"] = _project(
+            sorted(rows, key=lambda r: (-r["topk_hits"], -r["weighted_pct"])),
             top_k,
         )
         groups["stable_core"] = _project(
@@ -624,8 +651,12 @@ def _build_groups(
                 for r in by_conv_short
                 if r["coverage"] >= 0.8
                 and r["weighted_pct"] <= 0.1
-                and r["bottomk_hits"] >= hit_gate
+                and r["band_hits_short"] >= hit_gate
             ],
+            top_k,
+        )
+        groups["bottom_hitters"] = _project(
+            sorted(rows, key=lambda r: (-r["bottomk_hits"], r["weighted_pct"])),
             top_k,
         )
         # 空头视图内趋势显著上升（= 多头分位持续下滑）且已落入偏空区间
@@ -834,8 +865,11 @@ def _build_meta(
     lam: float,
     mu: float,
     min_coverage: float,
+    consensus_band: float,
     side: str,
     symbol_count: int,
+    monotonic_ratio: float,
+    data_warnings: list[str],
 ) -> dict[str, Any]:
     n = len(dates)
     h = max(1, int(horizon_days))
@@ -849,7 +883,7 @@ def _build_meta(
             if rho is not None:
                 autocorrs.append(rho)
 
-    warnings: list[str] = []
+    warnings: list[str] = list(data_warnings)
     if n > h:
         warnings.append(
             f"窗口 {n} 天 > 持有期 {h} 天：最早梯队在锚定日前已退出，"
@@ -868,6 +902,12 @@ def _build_meta(
     missing = [d for d in dates if d not in set(present_dates)]
     if missing:
         warnings.append(f"{len(missing)} 个交易日无推理结果: {missing}")
+    if n <= _MONOTONIC_NOISE_MAX_N and monotonic_ratio > _MONOTONIC_NOISE_RATIO:
+        warnings.append(
+            f"窗口仅 {n} 天，{monotonic_ratio:.0%} 的股票「严格单调」—— "
+            "纯随机下 N=3 时也约有 1/6 的股票偶然单调，该榜单主要是噪声，"
+            "请改看 up_streak 与 trend_rho"
+        )
 
     return {
         "anchor_date": dates[-1] if dates else None,
@@ -886,7 +926,9 @@ def _build_meta(
         "lam": lam,
         "mu": mu,
         "min_coverage": min_coverage,
+        "consensus_band": consensus_band,
         "side": side,
+        "monotonic_up_ratio": round(monotonic_ratio, 6),
         "warnings": warnings,
     }
 
@@ -906,6 +948,7 @@ def aggregate_batch(
     lam: float = 0.5,
     mu: float = 0.1,
     min_coverage: float = 0.6,
+    consensus_band: float = 0.95,
     side: str = "both",
 ) -> dict[str, Any]:
     """聚合多日推理面板，返回 per_symbol / groups / movers / daily / meta。
@@ -917,7 +960,7 @@ def aggregate_batch(
         raise ValueError(f"side 必须是 long/short/both，收到 {side!r}")
     dates = [str(d) for d in dates]
 
-    df = _normalize_panel(panel, dates)
+    df, data_warnings = _normalize_panel(panel, dates)
     present_di = set(df["_di"].tolist())
     present_dates = [d for i, d in enumerate(dates) if i in present_di]
 
@@ -933,8 +976,11 @@ def aggregate_batch(
                 lam=lam,
                 mu=mu,
                 min_coverage=min_coverage,
+                consensus_band=consensus_band,
                 side=side,
                 symbol_count=0,
+                monotonic_ratio=0.0,
+                data_warnings=data_warnings,
             ),
             "daily": [{"trade_date": d, "missing": True, "count": 0} for d in dates],
             "per_symbol": [],
@@ -949,6 +995,7 @@ def aggregate_batch(
         present_dates=present_dates,
         top_k=top_k,
         decay=decay,
+        consensus_band=consensus_band,
     )
     short_stats = _symbol_stats(
         _side_view(columnar, "short"),
@@ -956,6 +1003,7 @@ def aggregate_batch(
         present_dates=present_dates,
         top_k=top_k,
         decay=decay,
+        consensus_band=consensus_band,
     )
     conv_long = _conviction(long_stats, lam=lam, mu=mu)
     conv_short = _conviction(short_stats, lam=lam, mu=mu)
@@ -966,12 +1014,20 @@ def aggregate_batch(
             {
                 **row,
                 "bottomk_hits": short_stats[symbol]["topk_hits"],
+                "band_hits_short": short_stats[symbol]["band_hits"],
                 "membership_short": short_stats[symbol]["membership"],
                 "conviction_long": conv_long[symbol],
                 "conviction_short": conv_short[symbol],
             }
         )
     rows.sort(key=lambda r: -r["conviction_long"])
+
+    eligible = [r for r in rows if r["appear_days"] >= 2]
+    monotonic_ratio = (
+        sum(1 for r in eligible if r["is_monotonic_up"]) / len(eligible)
+        if eligible
+        else 0.0
+    )
 
     consensus_pool = {
         r["symbol"] for r in sorted(rows, key=lambda r: -r["conviction_long"])[:top_k]
@@ -989,8 +1045,11 @@ def aggregate_batch(
             lam=lam,
             mu=mu,
             min_coverage=min_coverage,
+            consensus_band=consensus_band,
             side=side,
             symbol_count=len(rows),
+            monotonic_ratio=monotonic_ratio,
+            data_warnings=data_warnings,
         ),
         "daily": daily,
         "per_symbol": rows,

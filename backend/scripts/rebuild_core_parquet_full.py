@@ -1,153 +1,237 @@
 #!/usr/bin/env python3
-"""
-重建完整历史数据的 core parquet (2016-2026)
-从 yearly parquet 文件中提取 78 个核心因子
+"""重建完整历史数据的 core parquet (2016-2026)。
+
+训练脚本 docker/training/train.py 优先读 model_features_core.parquet；
+文件缺失时会回退到逐年 parquet 并 concat 全部 1000 万+行，实测触发 OOM。
+
+列集合来自 config/features/model_training_feature_catalog_v1.json 中
+default_selected=true 的因子，只保留全年份 schema 都存在的列，
+外加 label 构建与行过滤所需的基础列。
 """
 
+import argparse
+import json
 import os
 import sys
 from pathlib import Path
+
+import numpy as np
 import pandas as pd
+import pyarrow as pa
 import pyarrow.parquet as pq
 
 # 路径配置
 if os.path.exists("/app"):
-    DATA_DIR = Path("/app/db/feature_snapshots")
+    PROJECT_ROOT = Path("/app")
+    DATA_DIR = PROJECT_ROOT / "db" / "feature_snapshots"
 else:
-    DATA_DIR = Path("/workspace/quantmind/db/feature_snapshots")
+    PROJECT_ROOT = Path(__file__).resolve().parents[2]
+    DATA_DIR = PROJECT_ROOT / "db" / "feature_snapshots"
 
-# 核心因子列表 (78个)
-CORE_FACTORS = [
-    # 基础行情 (6)
-    'close', 'open', 'high', 'low', 'volume', 'amount',
-    # 动量 (11)
-    'mom_ret_1d', 'mom_ret_5d', 'mom_ret_20d', 'mom_ret_60d',
-    'mom_ma_gap_5', 'mom_ma_gap_20',
-    'mom_macd_hist', 'mom_rsi_14', 'kdj_k',
-    'mom_breakout_20d', 'mom_sharpe_20',
-    # 波动率 (9)
-    'vol_std_20', 'vol_atr_14',
-    'vol_parkinson_20', 'vol_downside_20', 'vol_upside_20',
-    'vol_realized_rv', 'vol_realized_rrv',
-    'vol_jump_zadj',
-    # 成交量 (6)
-    'liq_volume', 'liq_amount', 'liq_turnover_os',
-    'liq_volume_ratio_5', 'liq_mfi_14', 'liq_amihud_20',
-    # 资金流 (7)
-    'flow_net_amount', 'flow_net_amount_ratio', 'flow_large_net_amount',
-    'flow_vpin', 'flow_vpin_ma_5', 'flow_vpin_ma_20',
-    'flow_pressure_index',
-    # 风格因子 (7)
-    'style_ln_mv_total', 'style_ln_mv_float', 'style_beta_20',
-    'style_beta_60', 'style_idio_vol_20',
-    'style_bp', 'style_ep_ttm',
-    # 行业因子 (4)
-    'ind_ret_1d', 'ind_ret_20d', 'ind_strength_20',
-    'ind_momentum_rank_20',
-    # 技术形态 (8)
-    'kline_kmid', 'kline_klen', 'kline_kup2', 'kline_klow2',
-    'kline_ksft2', 'prel_vwap0', 'tech_bollinger_position', 'tech_cci_20',
-    # Alpha因子 (7)
-    'alpha_decay_ret_10', 'alpha_corr_cv_20', 'alpha_tsrank_ret_20',
-    'alpha_high_20d_ratio',
-    'alpha_close_open_gap', 'fund_pe_percentile', 'fund_pb_percentile',
-    # 趋势质量 (3)
-    'trend_r2_20', 'trend_slope_20', 'pv_corr_20',
-    # 基础列
-    'symbol', 'trade_date', 'industry', 'is_st', 'listing_market',
-]
+CATALOG_PATH = PROJECT_ROOT / "config" / "features" / "model_training_feature_catalog_v1.json"
+
+# 基础列：训练脚本用于 label 构建（mom_ret_Nd）、行过滤（is_st/volume）、分组（symbol/trade_date）
+BASE_COLUMNS = ["trade_date", "symbol", "volume", "is_st"]
+
+# label 可能用到的任意 horizon，即使未被默认勾选也要保留
+LABEL_COLUMNS = [f"mom_ret_{h}d" for h in (1, 3, 5, 10, 20, 60, 120)]
+
+# 行业编码：训练脚本的 industry_as_feature 分支会用到
+INDUSTRY_COLUMNS = ["ind_code_l1", "ind_code_l2"]
+
+BATCH_SIZE = 200_000
 
 
-def main():
-    import pyarrow as pa
-    import pyarrow.parquet as pq
+def _load_default_features() -> list[str]:
+    """从特征目录读取 default_selected=true 的因子 key。"""
+    if not CATALOG_PATH.exists():
+        print(f"❌ 特征目录不存在: {CATALOG_PATH}")
+        sys.exit(1)
+    catalog = json.loads(CATALOG_PATH.read_text(encoding="utf-8"))
+    keys: list[str] = []
+    for category in catalog.get("categories", []):
+        for feat in category.get("features", []):
+            if feat.get("default_selected") and feat.get("key"):
+                keys.append(str(feat["key"]))
+    if not keys:
+        print("❌ 特征目录中没有 default_selected=true 的因子")
+        sys.exit(1)
+    return list(dict.fromkeys(keys))
+
+
+def _yearly_files() -> list[Path]:
+    files = sorted(DATA_DIR.glob("model_features_20*.parquet"))
+    skip = ("core", "hk", "us", "crypto")
+    return [f for f in files if not any(s in f.name for s in skip)]
+
+
+def _load_industry_map() -> pd.DataFrame | None:
+    """读取 symbol → ind_code_l1 映射。
+
+    编码必须一次性建立并全年复用：若在每个 batch 内各自 Categorical(...).codes，
+    同一行业在不同 batch 会得到不同整数，编码彻底失效。
+    """
+    candidates = [
+        Path(os.getenv("QM_QUANTDB_DATA_DIR", str(PROJECT_ROOT / "data" / "quantdb"))) / "2_base_sector",
+        DATA_DIR / "2_base_sector",
+    ]
+    for base in candidates:
+        path = base / "instrument_detail" / "instrument_detail.parquet"
+        if not path.exists():
+            continue
+        detail = pd.read_parquet(path)
+        sym_col = next(
+            (c for c in ("Symbol", "symbol", "wind_code") if c in detail.columns), None
+        )
+        if sym_col is None or "rs_hycode_sim" not in detail.columns:
+            print(f"  ⚠️ {path} 缺少 symbol/rs_hycode_sim 列")
+            continue
+        ind_map = detail[[sym_col, "rs_hycode_sim"]].dropna()
+        ind_map = ind_map.rename(columns={sym_col: "symbol", "rs_hycode_sim": "ind_code_l1"})
+        ind_map["symbol"] = _normalize_symbol(ind_map["symbol"])
+        ind_map = ind_map.drop_duplicates(subset="symbol")
+        ind_map["ind_code_l1"] = pd.Categorical(ind_map["ind_code_l1"]).codes.astype(np.float32)
+        ind_map["ind_code_l2"] = np.float32(-1.0)
+        print(f"  行业映射: {len(ind_map)} 只股票 ← {path}")
+        return ind_map.set_index("symbol")
+    print("  ⚠️ instrument_detail.parquet 未找到，行业编码填 -1")
+    return None
+
+
+def _normalize_symbol(series: pd.Series) -> pd.Series:
+    """统一股票代码为 6 位数字：000001.SZ / SZ000001 / 1 → 000001。
+
+    2026 年 parquet 的最后两个交易日混入了后缀格式（000001.SZ），
+    仅 zfill 无法归一，会让同一只股票在 groupby 时裂成两条序列，
+    直接破坏按 symbol 分组构建的 label。
+    """
+    s = series.astype(str).str.strip().str.upper()
+    s = s.str.split(".").str[0]
+    s = s.str.replace(r"^(SH|SZ|BJ)", "", regex=True)
+    return s.str.zfill(6)
+
+
+def _build_schema(feature_cols: list[str]) -> pa.Schema:
+    """固定输出 schema。
+
+    逐年 parquet 的 trade_date dtype 不一致（2016-2025 为 timestamp[ns]，
+    2026 为 date32[day]）。若让 ParquetWriter 沿用首个 batch 的 schema，
+    写到 2026 会因类型不符抛错。这里统一钉死为 timestamp[ns] + float32。
+    """
+    fields = [
+        pa.field("trade_date", pa.timestamp("ns")),
+        pa.field("symbol", pa.string()),
+    ]
+    fields += [pa.field(c, pa.float32()) for c in feature_cols]
+    return pa.schema(fields)
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser(description="重建 core parquet")
+    parser.add_argument("--dry-run", action="store_true", help="只打印列集合，不写文件")
+    args = parser.parse_args()
 
     print("=" * 70)
-    print("重建完整历史 Core Parquet (2016-2026) - 分块处理模式")
+    print("重建完整历史 Core Parquet - 流式分块模式")
     print("=" * 70)
 
-    # 查找所有 yearly parquet 文件
-    yearly_files = sorted(DATA_DIR.glob("model_features_20*.parquet"))
-    yearly_files = [f for f in yearly_files if "core" not in f.name and "hk" not in f.name and "us" not in f.name and "crypto" not in f.name]
-
-    if not yearly_files:
+    files = _yearly_files()
+    if not files:
         print(f"❌ 未找到 yearly parquet 文件: {DATA_DIR}")
         sys.exit(1)
 
-    print(f"\n找到 {len(yearly_files)} 个 yearly parquet 文件:")
-    total_size = 0
-    for f in yearly_files:
-        size_mb = f.stat().st_size / (1024 * 1024)
-        total_size += size_mb
-        print(f"  {f.name}: {size_mb:.1f} MB")
-    print(f"  总计: {total_size:.1f} MB")
+    schemas = {f: set(pq.ParquetFile(f).schema_arrow.names) for f in files}
+    common = set.intersection(*schemas.values())
+
+    default_features = _load_default_features()
+    wanted = list(dict.fromkeys(default_features + LABEL_COLUMNS))
+
+    # 只保留全年份都有的列：缺列的年份会整段变 NaN，等于污染训练集
+    feature_cols = [c for c in wanted if c in common and c not in BASE_COLUMNS]
+    dropped = [c for c in wanted if c not in common]
+    # is_st / volume 用于行过滤，独立于因子集合
+    passthrough = [c for c in BASE_COLUMNS if c not in ("trade_date", "symbol") and c in common]
+    # 行业编码由 instrument_detail 映射生成，不依赖逐年 parquet（仅 2026 带这两列）
+    feature_cols = list(dict.fromkeys(feature_cols + passthrough + INDUSTRY_COLUMNS))
+
+    print(f"\n输入: {len(files)} 个年度文件, 各年共有列 {len(common)}")
+    print(f"默认勾选因子: {len(default_features)}")
+    if dropped:
+        print(f"⚠️ 因非全年份覆盖而剔除 {len(dropped)} 列: {dropped}")
+    missing_base = [c for c in BASE_COLUMNS if c not in common]
+    if missing_base:
+        print(f"⚠️ 基础列缺失（非全年份存在）: {missing_base}")
+    print(f"输出列: {len(feature_cols) + 2} (trade_date + symbol + {len(feature_cols)})")
+
+    if args.dry_run:
+        print("\nDRY RUN，未写入")
+        return
+
+    print("\n读取行业映射...")
+    ind_map = _load_industry_map()
 
     output_path = DATA_DIR / "model_features_core.parquet"
-    writer = None
+    tmp_path = output_path.with_suffix(".parquet.tmp")
+    schema = _build_schema(feature_cols)
+    writer = pq.ParquetWriter(tmp_path, schema, compression="snappy")
     total_rows = 0
 
-    # 分块处理每个 yearly 文件
-    for f in yearly_files:
-        print(f"\n处理 {f.name}...")
-        try:
-            # 读取 schema 以确定可用列
-            pf = pq.ParquetFile(f)
-            available_cols = [c for c in CORE_FACTORS if c in pf.schema_arrow.names]
-            missing_cols = [c for c in CORE_FACTORS if c not in pf.schema_arrow.names]
-
-            if missing_cols and total_rows == 0:
-                print(f"  ⚠️ 缺失列 (前5个): {missing_cols[:5]}")
-
-            # 分块读取（每次 10 万行）
-            for batch in pf.iter_batches(batch_size=100000, columns=available_cols):
+    try:
+        for f in files:
+            # 行业编码一律由 instrument_detail 映射生成，不读逐年 parquet 的同名列：
+            # 2026 自带的 ind_code_l1 覆盖率仅 1.5% 且编码口径与映射不同（原始 rs_hycode
+            # vs Categorical 序号），混用会让同一行业在不同年份对应不同数值。
+            available = [
+                c
+                for c in ["trade_date", "symbol"] + feature_cols
+                if c in schemas[f] and c not in INDUSTRY_COLUMNS
+            ]
+            year_rows = 0
+            for batch in pq.ParquetFile(f).iter_batches(
+                batch_size=BATCH_SIZE, columns=available
+            ):
                 df = batch.to_pandas()
+                df["trade_date"] = pd.to_datetime(df["trade_date"], errors="coerce")
+                df["symbol"] = _normalize_symbol(df["symbol"])
 
-                # 数值列转为 float32 以节省内存
-                for col in df.columns:
-                    if col not in ['symbol', 'trade_date', 'industry', 'listing_market']:
-                        if pd.api.types.is_numeric_dtype(df[col]):
-                            df[col] = df[col].astype('float32')
+                # 行业编码：从全局映射取，保证跨 batch/跨年编码一致
+                for col in INDUSTRY_COLUMNS:
+                    if ind_map is not None:
+                        df[col] = (
+                            df["symbol"].map(ind_map[col]).fillna(-1.0).astype(np.float32)
+                        )
+                    else:
+                        df[col] = np.float32(-1.0)
 
-                # 转换为 PyArrow Table
-                table = pa.Table.from_pandas(df, preserve_index=False)
+                # 该年缺失的列补 NaN，保持 schema 一致
+                for col in feature_cols:
+                    if col not in df.columns:
+                        df[col] = np.nan
+                    df[col] = pd.to_numeric(df[col], errors="coerce").astype(np.float32)
 
-                # 初始化 writer（使用第一个 batch 的 schema）
-                if writer is None:
-                    writer = pq.ParquetWriter(output_path, table.schema, compression='snappy')
-
+                table = pa.Table.from_pandas(
+                    df[["trade_date", "symbol"] + feature_cols],
+                    schema=schema,
+                    preserve_index=False,
+                )
                 writer.write_table(table)
+                year_rows += len(df)
                 total_rows += len(df)
-
-                if total_rows % 500000 == 0:
-                    print(f"  已处理 {total_rows:,} 行...")
-
-        except Exception as e:
-            print(f"  ❌ 处理失败: {e}")
-            import traceback
-            traceback.print_exc()
-            continue
-
-    # 关闭 writer
-    if writer:
+            print(f"  {f.name}: {year_rows:,} 行 (累计 {total_rows:,})")
+    except Exception:
         writer.close()
-        print(f"\n✅ 写入完成!")
-    else:
-        print("❌ 没有成功写入任何数据")
-        sys.exit(1)
+        tmp_path.unlink(missing_ok=True)
+        raise
 
-    # 验证输出文件
-    if output_path.exists():
-        size_mb = output_path.stat().st_size / (1024 * 1024)
-        pf_out = pq.ParquetFile(output_path)
-        print(f"\n📊 输出文件统计:")
-        print(f"  文件: {output_path}")
-        print(f"  大小: {size_mb:.1f} MB")
-        print(f"  行数: {total_rows:,}")
-        print(f"  列数: {len(pf_out.schema_arrow.names)}")
-        print(f"  列名: {pf_out.schema_arrow.names[:10]}...")
-    else:
-        print(f"❌ 输出文件不存在: {output_path}")
-        sys.exit(1)
+    writer.close()
+    tmp_path.replace(output_path)
+
+    size_mb = output_path.stat().st_size / (1024 * 1024)
+    out = pq.ParquetFile(output_path)
+    print(f"\n✅ 写入完成: {output_path}")
+    print(f"  大小: {size_mb:.1f} MB")
+    print(f"  行数: {out.metadata.num_rows:,}")
+    print(f"  列数: {len(out.schema_arrow.names)}")
 
     print("\n" + "=" * 70)
     print("✅ 完成! Core parquet 已重建")

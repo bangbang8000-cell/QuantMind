@@ -109,7 +109,7 @@ const SettingsCenter: React.FC<SettingsCenterProps> = ({ userId, isActive }) => 
   if (!isActive) return null;
 
   return (
-    <div className="h-full flex flex-col p-4 pb-[100px] bg-gray-50/30 overflow-y-auto custom-scrollbar">
+    <div className="h-full flex flex-col p-4 bg-gray-50/30 overflow-y-auto custom-scrollbar">
       <div className="mb-4 pb-3 border-b border-gray-200">
         <h3 className="text-xl font-bold text-gray-800 flex items-center">
           <Settings className="mr-3 text-blue-600" size={24} />

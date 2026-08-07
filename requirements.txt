@@ -65,3 +65,4 @@ astor==0.8.1
 pyarrow>=15.0.0
 python-alipay-sdk>=3.4.0
 pyahocorasick
+tables>=3.8.0

@@ -4,8 +4,12 @@ import asyncio
 import logging
 from typing import Any, Optional
 
-from fastapi import APIRouter, HTTPException, Query
+from fastapi import APIRouter, HTTPException, Query, Request
 
+from backend.services.engine.auth_context import (
+    assert_identity_not_spoofed,
+    get_authenticated_identity,
+)
 from backend.services.engine.qlib_app.services.rd_agent_persistence import (
     RDAgentFactorPersistence,
 )
@@ -19,36 +23,51 @@ persistence = RDAgentFactorPersistence()
 _running_backtests: set[str] = set()
 
 
+async def _require_owned_factor(factor_id: str, request: Request) -> dict:
+    """返回因子，若不属于当前认证用户则 404（不泄露因子是否存在）。"""
+    auth_user_id, _ = get_authenticated_identity(request)
+    factor = await persistence.get_factor(factor_id)
+    if not factor:
+        raise HTTPException(status_code=404, detail=f"Factor {factor_id} not found")
+    if factor.get("user_id") != auth_user_id:
+        raise HTTPException(status_code=404, detail=f"Factor {factor_id} not found")
+    return factor
+
+
 @router.get("/factors")
 async def list_factors(
-    user_id: Optional[str] = Query(None, description="按用户过滤"),
+    request: Request,
+    user_id: Optional[str] = Query(None, description="已废弃：身份取自 JWT，仅用于防伪校验"),
     status: Optional[str] = Query(None, description="按状态过滤: pending/backtesting/completed/failed"),
     limit: int = Query(50, ge=1, le=200),
 ):
-    """列出所有已生成的因子"""
-    factors = await persistence.list_factors(user_id=user_id, status=status, limit=limit)
+    """列出当前用户已生成的因子"""
+    auth_user_id, auth_tenant_id = get_authenticated_identity(request)
+    assert_identity_not_spoofed(
+        auth_user_id=auth_user_id,
+        auth_tenant_id=auth_tenant_id,
+        provided_user_id=user_id,
+    )
+    factors = await persistence.list_factors(user_id=auth_user_id, status=status, limit=limit)
     return {"code": 200, "data": {"factors": factors, "total": len(factors)}}
 
 
 @router.get("/factors/{factor_id}")
-async def get_factor(factor_id: str):
+async def get_factor(factor_id: str, request: Request):
     """获取单个因子详情"""
-    factor = await persistence.get_factor(factor_id)
-    if not factor:
-        raise HTTPException(status_code=404, detail=f"Factor {factor_id} not found")
+    factor = await _require_owned_factor(factor_id, request)
     return {"code": 200, "data": factor}
 
 
 @router.post("/factors/{factor_id}/backtest")
 async def backtest_factor(
     factor_id: str,
+    request: Request,
     start_date: Optional[str] = None,
     end_date: Optional[str] = None,
 ):
     """对 RD-Agent 因子发起轻量验证（异步跑 IC/夏普，回填到因子表）"""
-    factor = await persistence.get_factor(factor_id)
-    if not factor:
-        raise HTTPException(status_code=404, detail=f"Factor {factor_id} not found")
+    factor = await _require_owned_factor(factor_id, request)
 
     if not factor.get("factor_code"):
         raise HTTPException(status_code=400, detail="因子代码为空，无法回测")
@@ -99,7 +118,7 @@ async def _run_lightweight_backtest(
 
         factor_cls = None
         for v in ns.values():
-            if isinstance(v, type) and hasattr(v, "__call__") and v.__module__ == "builtins":
+            if isinstance(v, type) and callable(v) and v.__module__ == "builtins":
                 if getattr(v, "name", None) or v.__name__.lower().endswith("factor"):
                     factor_cls = v
                     break
@@ -180,10 +199,13 @@ async def _run_lightweight_backtest(
 
 
 @router.get("/stats")
-async def get_stats():
-    """RD-Agent 因子统计信息"""
-    from backend.shared.database_manager_v2 import get_session
+async def get_stats(request: Request):
+    """当前用户的 RD-Agent 因子统计信息"""
     from sqlalchemy import text
+
+    from backend.shared.database_manager_v2 import get_session
+
+    auth_user_id, _ = get_authenticated_identity(request)
 
     async with get_session(read_only=True) as session:
         rows = await session.execute(text("""
@@ -198,7 +220,8 @@ async def get_stats():
                 MAX(ic_value) AS best_ic,
                 MAX(sharpe_ratio) AS best_sharpe
             FROM rd_agent_factors
-        """))
+            WHERE user_id = :user_id
+        """), {"user_id": auth_user_id})
         row = rows.mappings().first()
 
     if not row:

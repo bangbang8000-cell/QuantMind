@@ -25,10 +25,16 @@ class AIStrategyConfig(BaseSettings):
     # ============ LLM配置 ============
     LLM_PROVIDER: str = os.getenv("LLM_PROVIDER", "qwen")
     LLM_MODEL: str = os.getenv("QWEN_MODEL", "qwen3.6-plus")
-    # 支持 DASHSCOPE_API_KEY（官方推荐）或 QWEN_API_KEY
-    LLM_API_KEY: str = os.getenv("DASHSCOPE_API_KEY") or os.getenv("QWEN_API_KEY", "")
-    # 使用官方 OpenAI 兼容模式 base_url
+    # 复用 AI_IDE_LLM_API_KEY（全项目统一 LLM 入口），失败再回退 DASHSCOPE/QWEN
+    LLM_API_KEY: str = (
+        os.getenv("AI_IDE_LLM_API_KEY")
+        or os.getenv("DASHSCOPE_API_KEY")
+        or os.getenv("QWEN_API_KEY", "")
+    )
+    # 优先使用 AI_IDE_LLM_BASE_URL（与 AI_IDE 一致），否则用官方 OpenAI 兼容模式 base_url
     LLM_API_BASE: str = os.getenv(
+        "AI_IDE_LLM_BASE_URL"
+    ) or os.getenv(
         "DASHSCOPE_BASE_URL",
         "https://dashscope.aliyuncs.com/compatible-mode/v1",
     )

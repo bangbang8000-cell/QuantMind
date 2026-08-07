@@ -187,7 +187,7 @@ export const LiveCharts: React.FC<LiveChartsProps> = ({
       <div className="grid grid-cols-1 lg:grid-cols-4 gap-4">
 
         {/* Real-time Logs (Full Width, taller for big screens) */}
-        <Card className="glass card-hover animate-fade-in-left lg:col-span-4 flex flex-col" style={{ height: 'calc(100vh - 380px)', minHeight: '400px' }}>
+        <Card className="glass card-hover animate-fade-in-left lg:col-span-4 flex flex-col" style={{ height: 'calc(var(--app-h) - 380px)', minHeight: '400px' }}>
           <CardHeader className="pb-2">
             <CardTitle className="text-base flex items-center justify-between">
               <span>实时日志</span>
