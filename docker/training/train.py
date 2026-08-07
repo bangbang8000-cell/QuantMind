@@ -18,8 +18,10 @@ config.yaml 结构：
 from __future__ import annotations
 
 import argparse
+import gc
 import json
 import logging
+import os
 import sys
 import time
 from datetime import datetime
@@ -66,6 +68,11 @@ def detect_hardware() -> dict[str, Any]:
     return info
 
 
+# 树模型线程数：不限制，用满所有核心（速度最快）。
+# 跳过 OOF 全量预测的改动不影响速度且省内存，保留。
+_TRAIN_NTHREAD = -1
+
+
 # ── 模型默认参数 ──────────────────────────────────────────────────────────────
 DEFAULT_LGB_PARAMS: dict[str, Any] = {
     "objective":         "regression",
@@ -77,9 +84,9 @@ DEFAULT_LGB_PARAMS: dict[str, Any] = {
     "bagging_fraction":  0.7,
     "bagging_freq":      5,
     "min_child_samples": 50,
-    "lambda_l1":         0.1,
+    "lambda_l1":         0.5,
     "lambda_l2":         1.0,
-    "max_depth":         6,
+    "max_depth":         -1,
     "path_smooth":       0.5,
     "n_jobs":            -1,
     "verbosity":         -1,
@@ -88,12 +95,12 @@ DEFAULT_LGB_PARAMS: dict[str, Any] = {
 DEFAULT_XGB_PARAMS: dict[str, Any] = {
     "objective":        "reg:squarederror",
     "eval_metric":      "rmse",
-    "max_depth":        6,
+    "max_depth":        4,
     "learning_rate":    0.05,
     "subsample":        0.7,
-    "colsample_bytree": 0.6,
-    "reg_alpha":        0.1,
-    "reg_lambda":       1.0,
+    "colsample_bytree": 0.65,
+    "reg_alpha":        0.5,
+    "reg_lambda":       2.0,
     "min_child_weight": 50,
     "tree_method":      "hist",
     "nthread":          -1,
@@ -103,10 +110,10 @@ DEFAULT_XGB_PARAMS: dict[str, Any] = {
 DEFAULT_CATBOOST_PARAMS: dict[str, Any] = {
     "loss_function":    "RMSE",
     "depth":            6,
-    "learning_rate":    0.05,
-    "iterations":       1000,
+    "learning_rate":    0.03,
+    "iterations":       1500,
     "l2_leaf_reg":      3.0,
-    "random_strength":  1.0,
+    "random_strength":  1.5,
     "bagging_temperature": 0.8,
     "od_type":          "Iter",
     "od_wait":          50,
@@ -116,7 +123,8 @@ DEFAULT_CATBOOST_PARAMS: dict[str, Any] = {
 
 # 支持的模型类型集合
 _TREE_MODEL_TYPES = {"lightgbm", "xgboost", "catboost", "linear"}
-_DL_MODEL_TYPES = {"gru", "lstm", "alstm", "transformer", "tabnet", "tcn"}
+_DL_MODEL_TYPES = {"gru", "lstm", "alstm", "transformer", "tabnet", "tcn", "nativetft"}
+_CUSTOM_DL_MODEL_TYPES = {"nativetft"}  # 非 Qlib 的自定义 DL 模型
 _ALL_MODEL_TYPES = _TREE_MODEL_TYPES | _DL_MODEL_TYPES
 _ENSEMBLE_MODEL_TYPES = _TREE_MODEL_TYPES - {"linear"}  # 可参与集成的树模型
 
@@ -126,7 +134,7 @@ TRAINING_BASE_FEATURES: list[str] = [
     "mom_ret_20d",
     "liq_volume",
     "liq_amount",
-    "liq_turnover_os",
+    "fun_turnover_1",
 ]
 _ALLOWED_SHAP_SPLIT = {"valid", "test", "train"}
 _DEFAULT_EXPLAIN_CFG: dict[str, Any] = {
@@ -233,7 +241,9 @@ def _compute_metrics(df: pd.DataFrame, y_true: np.ndarray, y_pred: np.ndarray) -
     if pos > 0 and neg > 0:
         ranks = pd.Series(y_pred).rank(method="average").to_numpy()
         auc = float((ranks[labels == 1].sum() - pos * (pos + 1) / 2.0) / (pos * neg))
-    return {"ic": ic, "rank_ic": rank_ic, "rank_icir": rank_icir, "rmse": rmse, "auc": auc}
+    # 方向检测：IC < 0 说明模型预测与标签方向相反
+    score_direction = "normal" if np.isnan(ic) or ic >= 0 else "reversed"
+    return {"ic": ic, "rank_ic": rank_ic, "rank_icir": rank_icir, "rmse": rmse, "auc": auc, "score_direction": score_direction}
 
 
 def _normalize_explain_cfg(raw: Any) -> dict[str, Any]:
@@ -399,6 +409,10 @@ def load_data(
             + list(features)
         )
     )
+    # features_daily.return_Nd 是未来 N 日收益（return_1d[T] == pct_change[T+1]），
+    # 曾被别名映射为 mom_ret_Nd 当特征使用，导致标签泄漏与虚高 RankIC。
+    # 现只读取 l1_factors 提供的 mom_ret_Nd（过去收益），不做任何回退映射。
+    _read_columns = list(required_columns)
     logger.info(
         "Memory-optimized read: selected %d columns (horizon=%s, market=%s)",
         len(required_columns),
@@ -429,7 +443,7 @@ def load_data(
         has_instrument = "instrument" in schema_cols
         valid_cols = []
         missing_cols = []
-        for c in required_columns:
+        for c in _read_columns:
             if c in schema_cols:
                 valid_cols.append(c)
             elif c == "symbol" and has_instrument:
@@ -464,8 +478,8 @@ def load_data(
             logger.info("Using core parquet (78 factors): %s", core_parquet_path)
 
             schema_cols = set(pq.ParquetFile(core_parquet_path).schema_arrow.names)
-            valid_cols = [c for c in required_columns if c in schema_cols]
-            missing_cols = [c for c in required_columns if c not in schema_cols]
+            valid_cols = [c for c in _read_columns if c in schema_cols]
+            missing_cols = [c for c in _read_columns if c not in schema_cols]
             if missing_cols:
                 logger.warning("Columns not in core parquet (skipped): %s", missing_cols)
 
@@ -505,7 +519,7 @@ def load_data(
                 df_year = _load_local_parquet(
                     local_root,
                     year,
-                    required_columns=required_columns,
+                    required_columns=_read_columns,
                     clip_start=range_start,
                     clip_end=range_end,
                 )
@@ -538,8 +552,19 @@ def load_data(
         # 行业条件化：合并 ind_code_l1（CSRC 一级行业编码）
         if industry_as_feature or "ind_code_l1" in features:
             try:
-                ind_detail_path = local_root / "2_base_sector" / "instrument_detail" / "instrument_detail.parquet"
-                if ind_detail_path.exists():
+                # 优先从 QuantDB 全量挂载目录查找，回退到 feature_snapshots 子目录
+                _qdb_mount = os.getenv("QUANTDB_DATA_DIR", "/tmp/quantdb_data")
+                _sector_dirs = [
+                    Path(_qdb_mount) / "2_base_sector",  # local_docker_orchestrator 挂载的 QuantDB 全量数据
+                    local_root / "2_base_sector",  # feature_snapshots 内的子目录（兼容旧部署）
+                ]
+                ind_detail_path = None
+                for _d in _sector_dirs:
+                    _p = _d / "instrument_detail" / "instrument_detail.parquet"
+                    if _p.exists():
+                        ind_detail_path = _p
+                        break
+                if ind_detail_path is not None:
                     ind_df = pd.read_parquet(ind_detail_path, engine="pyarrow")
                     sym_col = "symbol" if "symbol" in ind_df.columns else "wind_code" if "wind_code" in ind_df.columns else None
                     if sym_col and "rs_hycode_sim" in ind_df.columns:
@@ -555,9 +580,33 @@ def load_data(
                     else:
                         logger.warning("instrument_detail.parquet missing symbol/wind_code or rs_hycode_sim columns")
                 else:
-                    logger.warning("instrument_detail.parquet not found at %s", ind_detail_path)
+                    logger.warning("instrument_detail.parquet not found (searched: %s)", ", ".join(str(d) for d in _sector_dirs))
             except Exception as e:
                 logger.warning("Failed to merge industry data (non-fatal): %s", e)
+
+    # ── 丢弃 features_daily.return_Nd：这些列是【未来 N 日收益】 ──
+    # return_1d[T] == pct_change[T+1]，当特征使用会直接泄漏标签。
+    # 历史上曾把它们重命名为 mom_ret_Nd，导致 RankIC 虚高到 0.7+。
+    _LEAKY_RETURN_COLS = (
+        "return_1d", "return_3d", "return_5d", "return_10d", "return_20d", "return_60d",
+    )
+    _leaky_present = [c for c in _LEAKY_RETURN_COLS if c in df.columns]
+    if _leaky_present:
+        df = df.drop(columns=_leaky_present, errors="ignore")
+        logger.warning(
+            "Dropped forward-looking return columns (label leakage): %s", _leaky_present
+        )
+
+    # 如果仍缺 mom_ret_1d，尝试从 pct_change 或 close 构建
+    if "mom_ret_1d" not in df.columns:
+        if "pct_change" in df.columns:
+            df["mom_ret_1d"] = pd.to_numeric(df["pct_change"], errors="coerce") / 100.0
+            logger.info("Built mom_ret_1d from pct_change column")
+        elif "close" in df.columns:
+            df["mom_ret_1d"] = df.groupby("symbol")["close"].pct_change(1)
+            logger.info("Built mom_ret_1d from close column pct_change")
+        else:
+            raise RuntimeError("Column 'mom_ret_1d' not found and cannot be constructed (no pct_change or close)")
 
     # 剔除节假日填充行：QuantDB parquet 含约 6.6% 的假交易日
     # （close>0、mom_ret_1d=0，但全市场 volume==0），如春节/清明/劳动节。
@@ -584,9 +633,6 @@ def load_data(
     # 注：mom_ret_{N}d 列是过去 N 日收益（backward-looking），如 mom_ret_5d[T] = (close[T]-close[T-5])/close[T-5]
     # shift(-N) 后，行 T 得到行 T+N 的值 = (close[T+N]-close[T])/close[T]，即正确的 N 日远期收益
     # 等价于: label = next_N_day_return = pct_change(N).shift(-N)
-    if "mom_ret_1d" not in df.columns:
-        raise RuntimeError("Column 'mom_ret_1d' not found in parquet")
-
     # 从参数读取预测周期（不依赖全局 cfg）
     _horizon = max(1, int(target_horizon_days or 1))
 
@@ -644,7 +690,10 @@ def load_data(
 # ── 训练 ──────────────────────────────────────────────────────────────────────
 
 def _split_data(df: pd.DataFrame, cfg: dict) -> tuple:
-    """数据切分：显式 split 优先于 val_ratio。返回 (train_df, val_df, test_df)。"""
+    """数据切分：显式 split 优先于 val_ratio。返回 (train_df, val_df, test_df)。
+
+    时间序列切分必须保证 train < val < test，严禁 test=val（经典数据泄漏）。
+    """
     model_cfg = cfg.get("model", {})
 
     def _frame_range_text(frame: pd.DataFrame) -> str:
@@ -655,43 +704,104 @@ def _split_data(df: pd.DataFrame, cfg: dict) -> tuple:
     split_cfg = cfg.get("split", {})
     if split_cfg.get("valid"):
         valid_start_str, valid_end_str = split_cfg["valid"]
-        requested_train = f"{split_cfg['train'][0]}~{split_cfg['train'][1]}"
+        train_start_str, train_end_str = split_cfg["train"]
+        requested_train = f"{train_start_str}~{train_end_str}"
         requested_val = f"{valid_start_str}~{valid_end_str}"
-        train_df = df[df["trade_date"] <= pd.Timestamp(split_cfg["train"][1])].copy()
+        # train 必须有下界，否则会吃进 train_start 之前的数据；
+        # 且 train_end 必须早于 valid_start，否则三段重叠造成泄漏
+        if pd.Timestamp(train_end_str) >= pd.Timestamp(valid_start_str):
+            raise RuntimeError(
+                f"split.train end ({train_end_str}) must be strictly before "
+                f"split.valid start ({valid_start_str}); overlapping segments "
+                "leak validation data into training."
+            )
+        train_df = df[
+            (df["trade_date"] >= pd.Timestamp(train_start_str)) &
+            (df["trade_date"] <= pd.Timestamp(train_end_str))
+        ].copy()
         val_df   = df[
             (df["trade_date"] >= pd.Timestamp(valid_start_str)) &
             (df["trade_date"] <= pd.Timestamp(valid_end_str))
         ].copy()
         if split_cfg.get("test"):
             test_start_str, test_end_str = split_cfg["test"]
+            if pd.Timestamp(test_start_str) <= pd.Timestamp(valid_end_str):
+                raise RuntimeError(
+                    f"split.test start ({test_start_str}) must be strictly after "
+                    f"split.valid end ({valid_end_str}); overlapping segments "
+                    "make early stopping and final evaluation share data."
+                )
             requested_test = f"{test_start_str}~{test_end_str}"
             test_df = df[
                 (df["trade_date"] >= pd.Timestamp(test_start_str)) &
                 (df["trade_date"] <= pd.Timestamp(test_end_str))
             ].copy()
         else:
-            requested_test = requested_val
-            test_df = val_df.copy()
+            raise RuntimeError(
+                "split.test is required when split.valid is configured. "
+                "test=val is a classic data leakage pattern — early stopping "
+                "and model selection would both happen on test data, "
+                "inflating all reported metrics. "
+                "Please add a 'test' section to the split config, e.g.:\n"
+                "  split:\n"
+                "    train: ['2020-01-01', '2023-12-31']\n"
+                "    valid: ['2024-01-01', '2024-06-30']\n"
+                "    test:  ['2024-07-01', '2024-12-31']"
+            )
         logger.info(f"Split mode: train~{split_cfg['train'][1]}  val {valid_start_str}~{valid_end_str}")
     else:
         val_ratio = float(model_cfg.get("val_ratio") or 0.15)
         dates = sorted(df["trade_date"].unique())
         if not dates:
             raise RuntimeError("No rows available for split after preprocessing. 请检查训练时间窗口与特征快照覆盖范围。")
-        val_start = dates[int(len(dates) * (1 - val_ratio))]
-        train_df  = df[df["trade_date"] < val_start].copy()
-        val_df    = df[df["trade_date"] >= val_start].copy()
-        test_df = val_df.copy()
+        # 三段式切分：train | val | test，避免 test=val 的数据泄漏
+        test_ratio = val_ratio / 2.0
+        val_start_idx = int(len(dates) * (1 - val_ratio))
+        test_start_idx = int(len(dates) * (1 - test_ratio))
+        val_start = dates[val_start_idx]
+        test_start = dates[test_start_idx]
+        train_df = df[df["trade_date"] < val_start].copy()
+        val_df   = df[(df["trade_date"] >= val_start) & (df["trade_date"] < test_start)].copy()
+        test_df  = df[df["trade_date"] >= test_start].copy()
         train_start = pd.Timestamp(df["trade_date"].min()).date()
         train_end = (pd.Timestamp(val_start) - pd.Timedelta(days=1)).date()
         requested_train = f"{train_start}~{train_end}"
-        requested_val = f"{pd.Timestamp(val_start).date()}~{pd.Timestamp(df['trade_date'].max()).date()}"
-        requested_test = requested_val
+        requested_val = f"{pd.Timestamp(val_start).date()}~{pd.Timestamp(test_start).date() - pd.Timedelta(days=1)}"
+        requested_test = f"{pd.Timestamp(test_start).date()}~{pd.Timestamp(df['trade_date'].max()).date()}"
         logger.info(
-            f"val_ratio mode: train~{pd.Timestamp(val_start).date() - pd.Timedelta(days=1)}"
-            f"  val {pd.Timestamp(val_start).date()}~"
+            f"val_ratio mode (3-way split): train[{len(train_df)}]~{pd.Timestamp(val_start).date() - pd.Timedelta(days=1)}"
+            f"  val[{len(val_df)}] {pd.Timestamp(val_start).date()}~{pd.Timestamp(test_start).date() - pd.Timedelta(days=1)}"
+            f"  test[{len(test_df)}] {pd.Timestamp(test_start).date()}~"
         )
 
+    # ── Embargo：标签是未来 horizon 日收益，train 末尾样本的标签落在 val 区间内 ──
+    # 不隔离会让 val/test 的价格信息经标签渗回 train。裁掉每段尾部 horizon 个交易日。
+    _horizon = max(1, int((cfg.get("label", {}) or {}).get("target_horizon_days") or 1))
+    if _horizon > 1:
+        def _embargo(frame: pd.DataFrame, name: str) -> pd.DataFrame:
+            if frame.empty:
+                return frame
+            days = sorted(frame["trade_date"].unique())
+            if len(days) <= _horizon:
+                logger.warning(
+                    "Embargo skipped for %s: only %d trading days <= horizon %d",
+                    name, len(days), _horizon,
+                )
+                return frame
+            cutoff = days[-_horizon]
+            trimmed = frame[frame["trade_date"] < cutoff].copy()
+            logger.info(
+                "Embargo %s: dropped last %d trading days (%d -> %d rows)",
+                name, _horizon, len(frame), len(trimmed),
+            )
+            return trimmed
+
+        train_df = _embargo(train_df, "train")
+        val_df = _embargo(val_df, "val")
+
+    train_df = train_df.reset_index(drop=True)
+    val_df = val_df.reset_index(drop=True)
+    test_df = test_df.reset_index(drop=True)
     if train_df.empty or val_df.empty or test_df.empty:
         available_range = "EMPTY"
         if not df.empty:
@@ -731,6 +841,8 @@ def _train_lgb(cfg: dict, features: list[str], X_train: np.ndarray, y_train: np.
     """LightGBM 训练。"""
     model_cfg = cfg.get("model", {})
     params = {**DEFAULT_LGB_PARAMS, **model_cfg.get("params", {})}
+    # 限制线程：n_jobs=-1 用满所有核心，多模型/OOF 训练时内存叠加易 OOM
+    params["n_jobs"] = _TRAIN_NTHREAD
     num_boost_round = int(model_cfg.get("num_boost_round", 1000))
     early_stopping_rounds = max(1, int(model_cfg.get("early_stopping_rounds", 100) or 100))
 
@@ -757,6 +869,15 @@ def _train_xgb(cfg: dict, features: list[str], X_train: np.ndarray, y_train: np.
     import xgboost as xgb
     model_cfg = cfg.get("model", {})
     params = {**DEFAULT_XGB_PARAMS, **model_cfg.get("xgb_params", {})}
+    # 限制线程：nthread=-1 用满所有核心，多模型/OOF 训练时内存叠加易 OOM
+    params["nthread"] = _TRAIN_NTHREAD
+    # LightGBM 用 max_depth=-1 表示不限深度，XGBoost 只接受 >=0，直接传会启动失败
+    if int(params.get("max_depth") or 0) < 0:
+        logger.warning(
+            "xgb_params.max_depth=%s invalid for XGBoost (LightGBM convention), fallback to %s",
+            params["max_depth"], DEFAULT_XGB_PARAMS["max_depth"],
+        )
+        params["max_depth"] = DEFAULT_XGB_PARAMS["max_depth"]
     num_boost_round = int(model_cfg.get("num_boost_round", 1000))
     early_stopping_rounds = max(1, int(model_cfg.get("early_stopping_rounds", 100) or 100))
 
@@ -781,6 +902,8 @@ def _train_catboost(cfg: dict, features: list[str], X_train: np.ndarray, y_train
     from catboost import CatBoost, Pool
     model_cfg = cfg.get("model", {})
     params = {**DEFAULT_CATBOOST_PARAMS, **model_cfg.get("catboost_params", {})}
+    # 限制线程：thread_count=-1 用满所有核心，多模型/OOF 训练时内存叠加易 OOM
+    params["thread_count"] = _TRAIN_NTHREAD
     # iterations 覆盖 num_boost_round
     if "iterations" not in model_cfg.get("catboost_params", {}):
         params["iterations"] = int(model_cfg.get("num_boost_round", 1000))
@@ -812,7 +935,7 @@ def _train_linear(cfg: dict, features: list[str], X_train: np.ndarray, y_train: 
     from sklearn.linear_model import Ridge
     model_cfg = cfg.get("model", {})
     dl_params = model_cfg.get("dl_params", {})
-    alpha = float(dl_params.get("alpha", 1.0))
+    alpha = float(dl_params.get("alpha", 3.0))
     model = Ridge(alpha=alpha)
     model.fit(X_train, y_train)
     return model
@@ -825,11 +948,11 @@ _QLIB_TS_MODEL_MAP: dict[str, tuple[str, str]] = {
     "gru":         ("qlib.contrib.model.pytorch_gru_ts",         "GRU"),
     "lstm":        ("qlib.contrib.model.pytorch_lstm_ts",        "LSTM"),
     "alstm":       ("qlib.contrib.model.pytorch_alstm_ts",       "ALSTM"),
-    "transformer": ("qlib.contrib.model.pytorch_transformer_ts", "Transformer"),
+    "transformer": ("qlib.contrib.model.pytorch_transformer_ts", "TransformerModel"),
     "tcn":         ("qlib.contrib.model.pytorch_tcn_ts",         "TCN"),
 }
 _QLIB_FLAT_MODEL_MAP: dict[str, tuple[str, str]] = {
-    "tabnet":      ("qlib.contrib.model.pytorch_tabnet",         "TabNet"),
+    "tabnet":      ("qlib.contrib.model.pytorch_tabnet",         "TabnetModel"),
 }
 _QLIB_MODEL_MAP = {**_QLIB_TS_MODEL_MAP, **_QLIB_FLAT_MODEL_MAP}
 
@@ -845,14 +968,23 @@ class _TSLazyDataset(torch.utils.data.Dataset):
         self.X = X              # [total_rows, d_feat] float32 contiguous
         self.y = y              # [total_rows] float32
         self.step_len = step_len
-        # 每个 instrument 的有效窗口起始行号 (全局索引)
-        self.indices: list[int] = []
-        for start, end in zip(instrument_offsets[:-1], instrument_offsets[1:]):
-            n = end - start
-            for i in range(n - step_len + 1):
-                self.indices.append(start + i)
-        if not self.indices:
+        # 每个 instrument 的有效窗口起始行号 (全局索引)。
+        # 向量化构造：逐 instrument 的 Python 循环在千万行规模下会退化为分钟级开销，
+        # 且 list 存数百万 int 对象内存放大数倍，这里直接生成 ndarray。
+        bounds = np.asarray(instrument_offsets, dtype=np.int64)
+        starts = bounds[:-1]
+        lengths = bounds[1:] - starts
+        n_windows = np.maximum(lengths - step_len + 1, 0)
+        keep = n_windows > 0
+        if not keep.any():
             raise ValueError(f"No valid TS samples (step_len={step_len}, rows={len(X)})")
+        starts, n_windows = starts[keep], n_windows[keep]
+        # 每个 instrument 生成 [start, start+1, ..., start+n_windows-1]
+        base = np.repeat(starts, n_windows)
+        within = np.arange(n_windows.sum(), dtype=np.int64) - np.repeat(
+            np.concatenate([[0], np.cumsum(n_windows)[:-1]]), n_windows
+        )
+        self.indices = base + within
 
     def __len__(self) -> int:
         return len(self.indices)
@@ -877,11 +1009,19 @@ def _build_ts_dataloader(
     step_len: int,
     batch_size: int,
     shuffle: bool = True,
-) -> "torch.utils.data.DataLoader":
+    feat_norm: tuple[np.ndarray, np.ndarray] | None = None,
+) -> "tuple[torch.utils.data.DataLoader, tuple[np.ndarray, np.ndarray]]":
     """将扁平 DataFrame (MultiIndex: instrument x datetime) 转为 3D DataLoader。
 
     每个样本是 [step_len, d_feat+1]，最后一列为 label (取自最后一个时间步)。
     使用 LazyDataset 按需生成窗口，内存占用 O(rows * d_feat)。
+
+    参数:
+        feat_norm: (mean, std) 元组。如果为 None，从数据中计算统计量并返回。
+                   验证集应传入训练集的统计量，避免 look-ahead。
+
+    返回:
+        (DataLoader, (mean, std)) — mean/std 始终返回，方便下游记录。
     """
     import torch
     from torch.utils.data import DataLoader
@@ -896,23 +1036,56 @@ def _build_ts_dataloader(
         logger.info("Cleaning features: %d NaN, %d inf -> 0.0", nan_count, inf_count)
         X_values = np.nan_to_num(X_values, nan=0.0, posinf=0.0, neginf=0.0)
 
+    # 清理标签中的 NaN/inf，否则 _TSLazyDataset 会让 label_col 含 NaN，
+    # 导致 Transformer/TCN 的 loss_fn 和 metric_fn 输出 NaN
+    y_nan = np.isnan(y_values).sum()
+    y_inf = np.isinf(y_values).sum()
+    if y_nan > 0 or y_inf > 0:
+        logger.info("Cleaning labels: %d NaN, %d inf -> 0.0", y_nan, y_inf)
+        y_values = np.nan_to_num(y_values, nan=0.0, posinf=0.0, neginf=0.0)
+
+    # Z-score 标准化：Qlib DataHandlerLP 默认做全局 z-score，我们绕过数据管道
+    # 直接用 parquet 数据，需手动标准化。不标准化的话，特征值范围在 ±10^10
+    # 级别的数据进入 Transformer self-attention softmax 会产生 NaN。
+    # 每列分别计算 mean/std，验证集复用训练集的统计量（避免 look-ahead）。
+    if feat_norm is not None:
+        _feat_mean, _feat_std = feat_norm
+    else:
+        _feat_mean = X_values.mean(axis=0)
+        _feat_std = X_values.std(axis=0)
+        _feat_std = np.where(_feat_std == 0, 1.0, _feat_std)  # 避免除零
+    X_values = (X_values - _feat_mean) / _feat_std
+    # 标准化后再次确保无 NaN（mean/std 计算过程中可能引入）
+    _post_nan = np.isnan(X_values).sum()
+    if _post_nan:
+        X_values = np.nan_to_num(X_values, nan=0.0)
+
     if isinstance(df_X.index, pd.MultiIndex):
-        instruments = df_X.index.get_level_values(0).unique()
-        # 预计算每个 instrument 在连续数组中的 offset
-        offsets = [0]
-        for inst in instruments:
-            mask = df_X.index.get_level_values(0) == inst
-            offsets.append(offsets[-1] + int(mask.sum()))
-        # 重排为 instrument-连续布局
-        order = np.concatenate([np.where(df_X.index.get_level_values(0) == inst)[0] for inst in instruments])
+        # 单次取出 instrument 层，避免在循环内反复 get_level_values + 全量 == 比较
+        # （旧实现对每只股票各扫一遍全表，5400股 x 640万行 ≈ 350亿次比较，单核跑数小时）
+        inst_codes, inst_uniques = pd.factorize(df_X.index.get_level_values(0), sort=False)
+        # 按 instrument 稳定排序，使同股票行连续（stable 保持各股票内部的时间顺序）
+        order = np.argsort(inst_codes, kind="stable")
         X_values = X_values[order]
         y_values = y_values[order]
+        counts = np.bincount(inst_codes, minlength=len(inst_uniques))
+        offsets = np.concatenate([[0], np.cumsum(counts)]).tolist()
     else:
         offsets = [0, len(X_values)]
 
     dataset = _TSLazyDataset(X_values, y_values, offsets, step_len)
     logger.info("TS DataLoader: %d samples from %d rows (step_len=%d)", len(dataset), len(X_values), step_len)
-    return DataLoader(dataset, batch_size=batch_size, shuffle=shuffle, drop_last=False, num_workers=0)
+    # drop_last=True 与 Qlib 官方 fit() 一致：末批若只剩 1 个样本，
+    # collate 会把 weight 压成 0 维标量，Qlib loss_fn 内的 weight[mask] 会抛
+    # IndexError: too many indices for tensor of dimension 0。
+    loader = DataLoader(
+        dataset,
+        batch_size=batch_size,
+        shuffle=shuffle,
+        drop_last=True,
+        num_workers=0,
+    )
+    return loader, (_feat_mean, _feat_std)
 
 
 def _train_dl(
@@ -939,36 +1112,74 @@ def _train_dl(
     d_feat = len(features)
     is_ts = model_type in _QLIB_TS_MODEL_MAP
 
-    # 构建模型参数
-    model_params: dict[str, Any] = {"d_feat": d_feat}
-    if model_type == "tabnet":
+    # 构建模型参数（按 Qlib 实际 API 签名映射 + 量化最佳实践调优）
+    # 前端 dl_params 传 key 不带 dl_ 前缀（如 dropout, batch_size, hidden_size），
+    # train.py 之前用 dl_ 前缀（如 dl_dropout, dl_batch_size, dl_hidden_size），
+    # 兼容两种写法：优先取 dl_ 前缀 key，回退到无前缀 key。
+    def _dl(key: str, default: Any) -> Any:
+        return dl_params.get(f"dl_{key}", dl_params.get(key, default))
+
+    model_params: dict[str, Any] = {}
+    if model_type == "transformer":
+        # Transformer: d_model 需被 nhead 整除；lr 宜小（1e-4），dropout 0.2 防过拟合
+        d_model = int(_dl("hidden_size", 64))
+        nhead = max(1, d_model // 16)  # 64/16=4 heads, 128/16=8 heads
+        d_model = nhead * (d_model // nhead)
+        if d_model < nhead:
+            d_model = nhead * 2
         model_params.update({
-            "n_d":     int(dl_params.get("dl_hidden_size", 64)),
-            "n_a":     int(dl_params.get("dl_hidden_size", 64)),
-            "n_steps": max(1, int(dl_params.get("dl_num_layers", 3))),
-            "lr":      float(dl_params.get("dl_lr", 0.001)),
+            "d_feat": d_feat,
+            "d_model": d_model,
+            "nhead": nhead,
+            "num_layers": int(_dl("num_layers", 2)),
+            "dropout": float(_dl("dropout", 0.2)),
+            "lr": float(_dl("lr", 0.0001)),  # Transformer 需较小学习率
+        })
+    elif model_type == "tabnet":
+        # TabNet: out_dim=1 绕过 Qlib decoder bug；n_steps 控制决策步数
+        model_params.update({
+            "d_feat": d_feat,
+            "out_dim": 1,
+            "final_out_dim": 1,
+            "n_d": int(_dl("hidden_size", 64)),
+            "n_a": int(_dl("hidden_size", 64)),
+            "n_steps": max(1, int(_dl("num_layers", 5))),
+            "lr": float(_dl("lr", 0.005)),  # TabNet lr 宜适中
+        })
+    elif model_type == "tcn":
+        # TCN: n_chans 建议 64~128，dropout 0.2~0.3 防过拟合，lr 1e-4
+        model_params.update({
+            "d_feat": d_feat,
+            "n_chans": int(_dl("hidden_size", 128)),
+            "kernel_size": int(_dl("kernel_size", 5)),
+            "num_layers": int(_dl("num_layers", 2)),
+            "dropout": float(_dl("dropout", 0.2)),
+            "lr": float(_dl("lr", 0.0001)),
         })
     else:
+        # GRU/LSTM/ALSTM: hidden_size 64~128，dropout 0.2 防过拟合，lr 1e-3
         model_params.update({
-            "hidden_size": int(dl_params.get("dl_hidden_size", 64)),
-            "num_layers":  int(dl_params.get("dl_num_layers", 2)),
-            "dropout":     float(dl_params.get("dl_dropout", 0.3)),
+            "d_feat": d_feat,
+            "hidden_size": int(_dl("hidden_size", 64)),
+            "num_layers": int(_dl("num_layers", 2)),
+            "dropout": float(_dl("dropout", 0.2)),
         })
 
-    n_epochs    = int(dl_params.get("dl_n_epochs", 200))
-    batch_size  = int(dl_params.get("dl_batch_size", 8000))
-    lr          = float(dl_params.get("dl_lr", 0.001))
+    n_epochs    = int(_dl("n_epochs", 200))
+    batch_size  = int(_dl("batch_size", 4000))
+    lr          = float(_dl("lr", 0.001))
     step_len    = int(dl_params.get("dl_step_len", 20))
     early_stop  = int(dl_params.get("early_stopping_rounds", 20))
     metric_name = str(dl_params.get("metric", "")).lower()
 
-    # 确定 GPU
+    # 确定 GPU 和训练参数
+    # 所有 Qlib DL 模型（GRU/LSTM/ALSTM/TransformerModel/TCN/TabnetModel）都接受 GPU/n_epochs/lr/batch_size/early_stop/metric
     gpu_id = 0
     if hardware and not hardware.get("gpu_available"):
         gpu_id = -1
     model_params["GPU"] = gpu_id
     model_params["n_epochs"] = n_epochs
-    model_params["lr"] = lr
+    model_params.setdefault("lr", lr)  # 不覆盖模型特定 lr（Transformer/TCN/TabNet 已在上方设置）
     model_params["batch_size"] = batch_size
     model_params["early_stop"] = early_stop
     model_params["metric"] = metric_name
@@ -978,21 +1189,83 @@ def _train_dl(
     # 实例化模型
     model_obj = ModelCls(**model_params)
 
+    # TabNet: Qlib 的 tabnet_model(feature, priors) 返回 (vec, sparse_loss) 元组，
+    # 但 train_epoch 内部 self.loss_fn(pred, label) 未解包 pred。
+    # 修复：覆盖 loss_fn 自动解包元组。out_dim=1 已在 model_params 中设置。
+    if model_type == "tabnet":
+        _orig_loss_fn = model_obj.loss_fn.__func__ if hasattr(model_obj.loss_fn, '__func__') else model_obj.loss_fn
+        def _safe_loss_fn(self, pred, label):
+            if isinstance(pred, tuple):
+                pred = pred[0]
+            if hasattr(pred, 'dim') and pred.dim() == 2 and pred.shape[1] == 1:
+                pred = pred.squeeze(-1)
+            return _orig_loss_fn(self, pred, label)
+        import types
+        model_obj.loss_fn = types.MethodType(_safe_loss_fn, model_obj)
+        _orig_metric_fn = model_obj.metric_fn.__func__ if hasattr(model_obj.metric_fn, '__func__') else model_obj.metric_fn
+        def _safe_metric_fn(self, pred, label):
+            return -self.loss_fn(pred, label)
+        model_obj.metric_fn = types.MethodType(_safe_metric_fn, model_obj)
+
     # 准备训练/验证数据
     X_train = train_df[features]
     y_train = train_df["label"]
     X_val = val_df[features]
     y_val = val_df["label"]
 
+    # Qlib TS 模型（pytorch_*_ts）的 train_epoch/test_epoch 只接受 DataLoader，
+    # 且要求样本形如 [step_len, d_feat+1]（最后一列末行为 label）；
+    # flat 模型（pytorch_tabnet 等）才接受 (x_df, y_df)。
+    is_ts = model_type in _QLIB_TS_MODEL_MAP
+
     if is_ts:
-        train_loader = _build_ts_dataloader(X_train, y_train, step_len, batch_size, shuffle=True)
-        val_loader = _build_ts_dataloader(X_val, y_val, step_len, batch_size, shuffle=False)
-        logger.info("TS DataLoader: train_batches=%d, val_batches=%d, step_len=%d",
-                     len(train_loader), len(val_loader), step_len)
+        # TS 滑窗必须按 symbol 分组，否则窗口会跨越不同股票边界产生污染样本。
+        # train_df 是扁平 RangeIndex，这里用 (symbol, trade_date) 建 MultiIndex
+        # 供 _build_ts_dataloader 计算每只股票的连续区间 offset。
+        def _ts_indexed(frame: pd.DataFrame) -> tuple[pd.DataFrame, pd.Series]:
+            f = frame.sort_values(["symbol", "trade_date"])
+            idx = pd.MultiIndex.from_arrays(
+                [f["symbol"].to_numpy(), f["trade_date"].to_numpy()],
+                names=["instrument", "datetime"],
+            )
+            return f[features].set_axis(idx), f["label"].set_axis(idx)
+
+        _xt, _yt = _ts_indexed(train_df)
+        _xv, _yv = _ts_indexed(val_df)
+        _train_loader, _feat_norm = _build_ts_dataloader(
+            _xt, _yt, step_len=step_len, batch_size=batch_size, shuffle=True
+        )
+        _val_loader, _ = _build_ts_dataloader(
+            _xv, _yv, step_len=step_len, batch_size=batch_size, shuffle=False,
+            feat_norm=_feat_norm,  # 验证集复用训练集统计量
+        )
+        train_args: tuple = (_train_loader,)
+        val_args: tuple = (_val_loader,)
+
+        # Qlib Transformer/TCN 的 train_epoch/test_epoch 用 `for data in loader`
+        # （不解包 weight），而 GRU/LSTM/ALSTM 用 `for data, weight in loader`。
+        # 包装 DataLoader，让 Transformer/TCN 只返回 data tensor。
+        _needs_weight_unpack = model_type not in ("transformer", "tcn")
+        if not _needs_weight_unpack:
+            _orig_train_loader = train_args[0]
+            _orig_val_loader = val_args[0]
+
+            class _WeightlessLoader:
+                """Strip weight from (data, weight) tuples for Qlib models that don't expect it."""
+                def __init__(self, loader):
+                    self._loader = loader
+                def __iter__(self):
+                    for batch in self._loader:
+                        data = batch[0] if isinstance(batch, (list, tuple)) else batch
+                        yield data
+                def __len__(self):
+                    return len(self._loader)
+
+            train_args = (_WeightlessLoader(_orig_train_loader),)
+            val_args = (_WeightlessLoader(_orig_val_loader),)
     else:
-        # TabNet: 使用扁平数据
-        train_loader = (X_train, y_train)
-        val_loader = (X_val, y_val)
+        train_args = (X_train, y_train)
+        val_args = (X_val, y_val)
 
     # 训练循环 (直接调用 Qlib 模型的 train_epoch/test_epoch)
     best_score = -np.inf
@@ -1004,14 +1277,14 @@ def _train_dl(
     logger.info("DL training: %d epochs, batch_size=%d, lr=%s", n_epochs, batch_size, lr)
 
     for epoch in range(n_epochs):
-        # Train
-        model_obj.train_epoch(train_loader) if is_ts else model_obj.train_epoch(X_train, y_train)
+        model_obj.train_epoch(*train_args)
 
-        # Evaluate (only on val set — skip train set test for speed)
-        if is_ts:
-            val_loss, val_score = model_obj.test_epoch(val_loader)
+        # Evaluate — TS 模型 test_epoch 只返回 score，flat 模型返回 (loss, score)
+        _val_out = model_obj.test_epoch(*val_args)
+        if isinstance(_val_out, tuple):
+            val_loss, val_score = _val_out
         else:
-            val_loss, val_score = model_obj.test_epoch(X_val, y_val)
+            val_loss, val_score = float("nan"), float(_val_out)
 
         train_score = float("nan")  # placeholder, not computed each epoch
         evals["train"].append(train_score)
@@ -1025,12 +1298,13 @@ def _train_dl(
             best_epoch = epoch
             stop_steps = 0
             # 保存最佳状态
-            inner_model = getattr(model_obj, "model", None)
-            if inner_model is None:
-                for attr_name in ("GRU_model", "gru_model", "lstm_model", "alstm_model", "transformer_model", "tcn_model", "tabnet_model"):
-                    inner_model = getattr(model_obj, attr_name, None)
-                    if inner_model is not None:
-                        break
+            inner_model = None
+            for attr_name in ("model", "GRU_model", "gru_model", "LSTM_model", "lstm_model",
+                              "ALSTM_model", "alstm_model", "TCN_model", "tcn_model",
+                              "tabnet_model", "transformer_model"):
+                inner_model = getattr(model_obj, attr_name, None)
+                if inner_model is not None:
+                    break
             if inner_model is not None:
                 best_state = copy.deepcopy(inner_model.state_dict())
         else:
@@ -1041,12 +1315,13 @@ def _train_dl(
 
     # 恢复最佳模型
     if best_state is not None:
-        inner_model = getattr(model_obj, "model", None)
-        if inner_model is None:
-            for attr_name in ("GRU_model", "gru_model", "lstm_model", "alstm_model", "transformer_model", "tcn_model", "tabnet_model"):
-                inner_model = getattr(model_obj, attr_name, None)
-                if inner_model is not None:
-                    break
+        inner_model = None
+        for attr_name in ("model", "GRU_model", "gru_model", "LSTM_model", "lstm_model",
+                          "ALSTM_model", "alstm_model", "TCN_model", "tcn_model",
+                          "tabnet_model", "transformer_model"):
+            inner_model = getattr(model_obj, attr_name, None)
+            if inner_model is not None:
+                break
         if inner_model is not None:
             inner_model.load_state_dict(best_state)
 
@@ -1071,6 +1346,191 @@ def _train_dl(
     }
 
     return model_obj, train_m, val_m, dl_metadata
+
+
+def _train_nativetft(
+    model_type: str,
+    train_df: pd.DataFrame,
+    val_df: pd.DataFrame,
+    features: list[str],
+    dl_params: dict[str, Any],
+    output_dir: Path,
+    hardware: dict[str, Any] | None = None,
+) -> tuple:
+    """NativeTFT (轻量 TFT 变体) 训练。
+
+    架构: input_proj → GRU → MultiheadAttention → GRN → output
+    非 Qlib 模型，使用自定义训练循环 + _build_ts_dataloader 构建 3D 窗口。
+    """
+    import torch
+    import torch.nn as nn
+    import torch.nn.functional as F
+    import copy
+
+    d_feat = len(features)
+    _dl_h = dl_params.get("dl_hidden_size", dl_params.get("hidden_size", 64))
+    hidden_dim = int(_dl_h)
+    _dl_nh = dl_params.get("dl_num_heads", dl_params.get("num_heads", 4))
+    num_heads = max(1, int(_dl_nh))
+    # 确保 hidden_dim 被 num_heads 整除
+    hidden_dim = num_heads * (hidden_dim // num_heads)
+    if hidden_dim < num_heads:
+        hidden_dim = num_heads * 2
+    dropout = float(dl_params.get("dl_dropout", dl_params.get("dropout", 0.2)))
+    step_len = int(dl_params.get("dl_step_len", dl_params.get("step_len", 20)))
+    n_epochs = int(dl_params.get("dl_n_epochs", dl_params.get("n_epochs", 200)))
+    batch_size = int(dl_params.get("dl_batch_size", dl_params.get("batch_size", 4000)))
+    lr = float(dl_params.get("dl_lr", dl_params.get("lr", 0.0005)))
+    early_stop = int(dl_params.get("early_stopping_rounds", dl_params.get("early_stop", 20)))
+
+    device = torch.device("cpu")
+    if hardware and hardware.get("gpu_available"):
+        device = torch.device("cuda:0")
+
+    # ── 构建模型 ──
+    class _GRN(nn.Module):
+        def __init__(self, input_size, hidden_size, output_size, p_dropout):
+            super().__init__()
+            self.lin1 = nn.Linear(input_size, hidden_size)
+            self.lin2 = nn.Linear(hidden_size, hidden_size)
+            self.gate = nn.Linear(hidden_size, output_size)
+            self.drop = nn.Dropout(p_dropout)
+            self.norm = nn.LayerNorm(output_size)
+            self.skip = nn.Linear(input_size, output_size) if input_size != output_size else nn.Identity()
+
+        def forward(self, x):
+            h = F.elu(self.lin1(x))
+            h = self.lin2(h)
+            h = self.drop(h)
+            g = self.gate(h).sigmoid()
+            return self.norm(self.skip(x) + g * h)
+
+    class _NativeTFTNet(nn.Module):
+        def __init__(self):
+            super().__init__()
+            self.input_proj = nn.Linear(d_feat, hidden_dim)
+            self.gru = nn.GRU(hidden_dim, hidden_dim, batch_first=True)
+            self.attn = nn.MultiheadAttention(embed_dim=hidden_dim, num_heads=num_heads, batch_first=True)
+            self.grn = _GRN(hidden_dim, hidden_dim, hidden_dim, dropout)
+            self.output_layer = nn.Linear(hidden_dim, 1)
+
+        def forward(self, x):
+            h = self.input_proj(x)
+            h_gru, _ = self.gru(h)
+            attn_out, _ = self.attn(h_gru, h_gru, h_gru)
+            h = h_gru + attn_out
+            h = self.grn(h[:, -1, :])
+            return self.output_layer(h).squeeze(-1)
+
+    model = _NativeTFTNet().to(device)
+    logger.info("NativeTFT: d_feat=%d, hidden=%d, heads=%d, step_len=%d, device=%s",
+                d_feat, hidden_dim, num_heads, step_len, device)
+
+    # ── 构建 DataLoader ──
+    train_loader = _build_ts_dataloader(
+        train_df[features], train_df["label"], step_len, batch_size, shuffle=True)
+    val_loader = _build_ts_dataloader(
+        val_df[features], val_df["label"], step_len, batch_size, shuffle=False)
+
+    optimizer = torch.optim.Adam(model.parameters(), lr=lr)
+    loss_fn = nn.MSELoss()
+
+    # ── 训练循环 ──
+    best_score = -np.inf
+    best_epoch = 0
+    stop_steps = 0
+    best_state = None
+    evals: dict[str, list[float]] = {"train": [], "valid": []}
+
+    logger.info("NativeTFT training: %d epochs, batch_size=%d, lr=%s", n_epochs, batch_size, lr)
+
+    for epoch in range(n_epochs):
+        # Train
+        model.train()
+        epoch_loss = 0.0
+        n_batches = 0
+        for batch in train_loader:
+            data = batch[0] if isinstance(batch, (list, tuple)) else batch
+            feature = data[:, :, 0:-1].float().to(device)
+            label = batch[1].float().to(device) if isinstance(batch, (list, tuple)) and len(batch) > 1 else None
+            if label is None:
+                label = data[:, -1, -1].float().to(device)
+
+            optimizer.zero_grad()
+            pred = model(feature)
+            loss = loss_fn(pred, label)
+            loss.backward()
+            optimizer.step()
+            epoch_loss += loss.item()
+            n_batches += 1
+
+        # Evaluate
+        model.eval()
+        val_preds = []
+        val_labels = []
+        with torch.no_grad():
+            for batch in val_loader:
+                data = batch[0] if isinstance(batch, (list, tuple)) else batch
+                feature = data[:, :, 0:-1].float().to(device)
+                label = batch[1].float().to(device) if isinstance(batch, (list, tuple)) and len(batch) > 1 else None
+                if label is None:
+                    label = data[:, -1, -1].float().to(device)
+                pred = model(feature)
+                val_preds.append(pred.cpu().numpy())
+                val_labels.append(label.cpu().numpy())
+
+        val_pred_arr = np.concatenate(val_preds)
+        val_label_arr = np.concatenate(val_labels)
+        # IC (Pearson correlation) as validation metric
+        val_score = float(np.corrcoef(val_pred_arr, val_label_arr)[0, 1]) if len(val_pred_arr) > 1 else 0.0
+
+        evals["train"].append(float("nan"))
+        evals["valid"].append(val_score)
+
+        if (epoch + 1) % 10 == 0 or epoch == 0:
+            logger.info("Epoch %d/%d: valid_ic=%.6f, loss=%.6f", epoch + 1, n_epochs, val_score,
+                        epoch_loss / max(1, n_batches))
+
+        if val_score > best_score:
+            best_score = val_score
+            best_epoch = epoch
+            stop_steps = 0
+            best_state = copy.deepcopy(model.state_dict())
+        else:
+            stop_steps += 1
+            if stop_steps >= early_stop:
+                logger.info("Early stopping at epoch %d (best=%d, score=%.6f)", epoch + 1, best_epoch, best_score)
+                break
+
+    if best_state is not None:
+        model.load_state_dict(best_state)
+
+    # 保存模型
+    torch.save(best_state, str(output_dir / "model.pth"))
+    logger.info("NativeTFT saved: model.pth (best_epoch=%d, best_ic=%.6f)", best_epoch, best_score)
+
+    train_m = {"ic": evals["train"][best_epoch] if evals["train"] else float("nan"),
+               "rank_ic": float("nan"), "rank_icir": float("nan"), "rmse": float("nan"), "auc": float("nan")}
+    val_m = {"ic": evals["valid"][best_epoch] if evals["valid"] else float("nan"),
+             "rank_ic": float("nan"), "rank_icir": float("nan"), "rmse": float("nan"), "auc": float("nan")}
+
+    dl_metadata = {
+        "model_type": "NativeTFT",
+        "model_arch": {
+            "input_dim": d_feat,
+            "hidden_dim": hidden_dim,
+            "num_heads": num_heads,
+            "dropout": dropout,
+        },
+        "is_sequence_model": True,
+        "input_spec": {
+            "tensor_shape": [None, step_len, d_feat],
+            "feature_columns": features,
+        },
+        "dl_params": {k: v for k, v in dl_params.items()},
+    }
+
+    return model, train_m, val_m, dl_metadata
 
 
 def _predict_dl(
@@ -1111,12 +1571,13 @@ def _predict_dl(
         raise FileNotFoundError(f"model.pth not found at {model_path}")
 
     state_dict = torch.load(str(model_path), map_location="cpu")
-    inner_model = getattr(model_obj, "model", None)
-    if inner_model is None:
-        for attr_name in ("GRU_model", "gru_model", "lstm_model", "alstm_model", "transformer_model", "tcn_model", "tabnet_model"):
-            inner_model = getattr(model_obj, attr_name, None)
-            if inner_model is not None:
-                break
+    inner_model = None
+    for attr_name in ("model", "GRU_model", "gru_model", "LSTM_model", "lstm_model",
+                      "ALSTM_model", "alstm_model", "TCN_model", "tcn_model",
+                      "tabnet_model", "transformer_model"):
+        inner_model = getattr(model_obj, attr_name, None)
+        if inner_model is not None:
+            break
     if inner_model is not None:
         inner_model.load_state_dict(state_dict)
     model_obj.fitted = True
@@ -1125,39 +1586,127 @@ def _predict_dl(
     if is_ts:
         step_len = dl_metadata.get("dl_params", {}).get("dl_step_len", 20)
         loader = _build_ts_dataloader(df_X[features], pd.Series(0.0, index=df_X.index), step_len, batch_size, shuffle=False)
-        # 找到内部模型（GRU 用 GRU_model，LSTM 用 lstm_model 等）
-        inner_model = getattr(model_obj, "model", None)
-        if inner_model is None:
-            for attr_name in ("GRU_model", "gru_model", "lstm_model", "alstm_model", "transformer_model", "tcn_model", "tabnet_model"):
-                inner_model = getattr(model_obj, attr_name, None)
-                if inner_model is not None:
-                    break
+        # 找到内部模型
+        inner_model = None
+        for attr_name in ("model", "GRU_model", "gru_model", "LSTM_model", "lstm_model",
+                          "ALSTM_model", "alstm_model", "TCN_model", "tcn_model",
+                          "tabnet_model", "transformer_model"):
+            inner_model = getattr(model_obj, attr_name, None)
+            if inner_model is not None:
+                break
         inner_model.eval() if inner_model is not None else None
         preds = []
         for batch in loader:
             data = batch[0] if isinstance(batch, (list, tuple)) else batch
             feature = data[:, :, 0:-1]
             with torch.no_grad():
-                pred = inner_model(feature.float()).detach().cpu().numpy()
-            preds.append(pred)
+                pred = inner_model(feature.float())
+                if isinstance(pred, tuple):
+                    pred = pred[0]
+                if hasattr(pred, 'dim') and pred.dim() == 2 and pred.shape[1] == 1:
+                    pred = pred.squeeze(-1)
+                preds.append(pred.detach().cpu().numpy())
         return np.concatenate(preds)
     else:
         X_values = df_X[features].values.astype(np.float32)
         X_tensor = torch.from_numpy(X_values)
-        inner_model = getattr(model_obj, "model", None)
-        if inner_model is None:
-            for attr_name in ("GRU_model", "gru_model", "lstm_model", "alstm_model", "transformer_model", "tcn_model", "tabnet_model"):
-                inner_model = getattr(model_obj, attr_name, None)
-                if inner_model is not None:
-                    break
+        inner_model = None
+        for attr_name in ("model", "GRU_model", "gru_model", "LSTM_model", "lstm_model",
+                          "ALSTM_model", "alstm_model", "TCN_model", "tcn_model",
+                          "tabnet_model", "transformer_model"):
+            inner_model = getattr(model_obj, attr_name, None)
+            if inner_model is not None:
+                break
         inner_model.eval() if inner_model is not None else None
         preds = []
         for i in range(0, len(X_tensor), batch_size):
             batch = X_tensor[i:i+batch_size]
             with torch.no_grad():
-                pred = inner_model(batch.float()).detach().cpu().numpy()
-            preds.append(pred)
+                pred = inner_model(batch.float())
+                if isinstance(pred, tuple):
+                    pred = pred[0]
+                if hasattr(pred, 'dim') and pred.dim() == 2 and pred.shape[1] == 1:
+                    pred = pred.squeeze(-1)
+                preds.append(pred.detach().cpu().numpy())
         return np.concatenate(preds)
+
+
+def _predict_nativetft(
+    model_dir: Path,
+    df_X: pd.DataFrame,
+    features: list[str],
+    dl_metadata: dict[str, Any],
+    batch_size: int = 8000,
+) -> np.ndarray:
+    """加载训练好的 NativeTFT 模型并预测。"""
+    import torch
+
+    model_arch = dl_metadata.get("model_arch", {})
+    input_dim = int(model_arch.get("input_dim", len(features)))
+    hidden_dim = int(model_arch.get("hidden_dim", 64))
+    num_heads = int(model_arch.get("num_heads", 4))
+    dropout = float(model_arch.get("dropout", 0.1))
+    step_len = int(dl_metadata.get("dl_params", {}).get("dl_step_len", 20))
+
+    # 重建模型架构 (与 _train_nativetft 中一致)
+    import torch.nn as nn
+    import torch.nn.functional as F
+
+    class _GRN(nn.Module):
+        def __init__(self, input_size, hidden_size, output_size, p_dropout):
+            super().__init__()
+            self.lin1 = nn.Linear(input_size, hidden_size)
+            self.lin2 = nn.Linear(hidden_size, hidden_size)
+            self.gate = nn.Linear(hidden_size, output_size)
+            self.drop = nn.Dropout(p_dropout)
+            self.norm = nn.LayerNorm(output_size)
+            self.skip = nn.Linear(input_size, output_size) if input_size != output_size else nn.Identity()
+
+        def forward(self, x):
+            h = F.elu(self.lin1(x))
+            h = self.lin2(h)
+            h = self.drop(h)
+            g = self.gate(h).sigmoid()
+            return self.norm(self.skip(x) + g * h)
+
+    class _NativeTFTNet(nn.Module):
+        def __init__(self):
+            super().__init__()
+            self.input_proj = nn.Linear(input_dim, hidden_dim)
+            self.gru = nn.GRU(hidden_dim, hidden_dim, batch_first=True)
+            self.attn = nn.MultiheadAttention(embed_dim=hidden_dim, num_heads=num_heads, batch_first=True)
+            self.grn = _GRN(hidden_dim, hidden_dim, hidden_dim, dropout)
+            self.output_layer = nn.Linear(hidden_dim, 1)
+
+        def forward(self, x):
+            h = self.input_proj(x)
+            h_gru, _ = self.gru(h)
+            attn_out, _ = self.attn(h_gru, h_gru, h_gru)
+            h = h_gru + attn_out
+            h = self.grn(h[:, -1, :])
+            return self.output_layer(h).squeeze(-1)
+
+    model = _NativeTFTNet()
+    model_path = model_dir / "model.pth"
+    if not model_path.exists():
+        raise FileNotFoundError(f"model.pth not found at {model_path}")
+    state_dict = torch.load(str(model_path), map_location="cpu")
+    model.load_state_dict(state_dict)
+    model.eval()
+
+    # 构建 TS DataLoader 并预测
+    loader = _build_ts_dataloader(
+        df_X[features], pd.Series(0.0, index=df_X.index), step_len, batch_size, shuffle=False)
+
+    preds = []
+    with torch.no_grad():
+        for batch in loader:
+            data = batch[0] if isinstance(batch, (list, tuple)) else batch
+            feature = data[:, :, 0:-1].float()
+            pred = model(feature)
+            preds.append(pred.cpu().numpy())
+
+    return np.concatenate(preds)
 
 
 def _predict_with_model(model: Any, X: np.ndarray, model_type: str, features: list[str] | None = None) -> np.ndarray:
@@ -1167,7 +1716,8 @@ def _predict_with_model(model: Any, X: np.ndarray, model_type: str, features: li
     elif model_type == "xgboost":
         import xgboost as xgb
         dmat = xgb.DMatrix(X, feature_names=features)
-        return model.predict(dmat, iteration_range=(0, model.best_iteration + 1))
+        n_iter = model.best_iteration
+        return model.predict(dmat, iteration_range=(0, (n_iter + 1) if n_iter is not None else 0))
     elif model_type == "catboost":
         return model.predict(X)
     elif model_type == "linear":
@@ -1222,6 +1772,7 @@ def _get_model_framework(model_type: str) -> str:
         "hist": "pytorch",
         "tabnet": "pytorch",
         "tcn": "pytorch",
+        "nativetft": "pytorch",
     }
     return mapping.get(model_type, "unknown")
 
@@ -1254,6 +1805,51 @@ def train_model(df: pd.DataFrame, features: list[str], cfg: dict, hardware: dict
         model = _train_catboost(cfg, features, X_train, y_train, X_val, y_val)
     elif model_type == "linear":
         model = _train_linear(cfg, features, X_train, y_train, X_val, y_val)
+    elif model_type == "nativetft":
+        dl_params = model_cfg.get("dl_params", {})
+        output_dir = Path("/workspace")
+        model, train_m, val_m, dl_metadata = _train_nativetft(
+            model_type, train_df, val_df, features, dl_params, output_dir, hardware=hardware
+        )
+        train_elapsed = time.time() - train_t0
+        logger.info("Training finished in %.2fs (%s)", train_elapsed, model_type)
+        logger.info(f"Val IC={val_m['ic']:.4f}")
+
+        y_full_pred = _predict_nativetft(output_dir, df, features, dl_metadata)
+        full_pred_df = df[["symbol", "trade_date", "label"]].copy()
+        full_pred_df["pred"] = y_full_pred
+        full_pred_df["split"] = "train"
+        full_pred_df.loc[
+            (full_pred_df["trade_date"] >= val_df["trade_date"].min()) &
+            (full_pred_df["trade_date"] <= val_df["trade_date"].max()),
+            "split",
+        ] = "valid"
+        full_pred_df.loc[
+            (full_pred_df["trade_date"] >= test_df["trade_date"].min()) &
+            (full_pred_df["trade_date"] <= test_df["trade_date"].max()),
+            "split",
+        ] = "test"
+
+        test_mask = full_pred_df["split"] == "test"
+        y_test_pred = full_pred_df.loc[test_mask, "pred"].values
+        y_test_true = full_pred_df.loc[test_mask, "label"].values
+        test_m = _compute_metrics(test_df, y_test_true.astype("float32"), y_test_pred.astype("float32"))
+
+        return (
+            model,
+            fill_values,
+            train_m,
+            val_m,
+            test_m,
+            full_pred_df.reset_index(drop=True),
+            {
+                "train": train_df.reset_index(drop=True),
+                "valid": val_df.reset_index(drop=True),
+                "test": test_df.reset_index(drop=True),
+            },
+            model_type,
+            dl_metadata,
+        )
     elif model_type in _DL_MODEL_TYPES:
         dl_params = model_cfg.get("dl_params", {})
         output_dir = Path("/workspace")
@@ -1459,8 +2055,14 @@ def _train_single_model(
     features: list[str],
     cfg: dict,
     hardware: dict | None = None,
+    need_full_pred: bool = True,
 ) -> dict[str, Any]:
-    """训练单个模型，返回结果字典（可序列化）。"""
+    """训练单个模型，返回结果字典（可序列化）。
+
+    need_full_pred=False 时跳过全量预测与 pred_df 生成：
+    OOF fold 训练只需要 fold 内验证集预测，传全量 df 会导致每个 fold 都
+    对全量数据做一次预测 + 生成 644 万行 DataFrame，9 次叠加是 OOM 主因之一。
+    """
     logger.info("--- Training %s ---", model_type)
     t0 = time.time()
 
@@ -1475,6 +2077,38 @@ def _train_single_model(
         model = _train_catboost(cfg, features, X_train, y_train, X_val, y_val)
     elif model_type == "linear":
         model = _train_linear(cfg, features, X_train, y_train, X_val, y_val)
+    elif model_type == "nativetft":
+        output_dir = Path("/workspace")
+        dl_params = model_cfg.get("dl_params", {})
+        model, train_m, val_m, dl_metadata = _train_nativetft(
+            model_type, train_df, val_df, features, dl_params, output_dir, hardware=hardware
+        )
+        y_full_pred = _predict_nativetft(output_dir, df, features, dl_metadata)
+        full_pred_df = df[["symbol", "trade_date", "label"]].copy()
+        full_pred_df["pred"] = y_full_pred
+        full_pred_df["split"] = "train"
+        full_pred_df.loc[
+            (full_pred_df["trade_date"] >= val_df["trade_date"].min()) &
+            (full_pred_df["trade_date"] <= val_df["trade_date"].max()), "split"] = "valid"
+        full_pred_df.loc[
+            (full_pred_df["trade_date"] >= test_df["trade_date"].min()) &
+            (full_pred_df["trade_date"] <= test_df["trade_date"].max()), "split"] = "test"
+        test_mask = full_pred_df["split"] == "test"
+        y_test_pred = full_pred_df.loc[test_mask, "pred"].values
+        y_test_true = full_pred_df.loc[test_mask, "label"].values
+        test_m = _compute_metrics(test_df, y_test_true.astype("float32"), y_test_pred.astype("float32"))
+        elapsed = time.time() - t0
+        return {
+            "model_type": model_type,
+            "model": model,
+            "fill_values": fill_values,
+            "train_m": train_m,
+            "val_m": val_m,
+            "test_m": test_m,
+            "dl_metadata": dl_metadata,
+            "full_pred_df": full_pred_df,
+            "elapsed": elapsed,
+        }
     elif model_type in _DL_MODEL_TYPES:
         output_dir = Path("/workspace")
         dl_params = model_cfg.get("dl_params", {})
@@ -1519,15 +2153,20 @@ def _train_single_model(
     val_m = _compute_metrics(val_df, y_val, y_val_pred)
     test_m = _compute_metrics(test_df, test_df["label"].astype("float32").to_numpy(), y_test_pred)
 
-    full_pred_df = df[["symbol", "trade_date", "label"]].copy()
-    full_pred_df["pred"] = _predict_with_model(model, _fill(df), model_type, features)
-    full_pred_df["split"] = "train"
-    full_pred_df.loc[
-        (full_pred_df["trade_date"] >= val_df["trade_date"].min()) &
-        (full_pred_df["trade_date"] <= val_df["trade_date"].max()), "split"] = "valid"
-    full_pred_df.loc[
-        (full_pred_df["trade_date"] >= test_df["trade_date"].min()) &
-        (full_pred_df["trade_date"] <= test_df["trade_date"].max()), "split"] = "test"
+    # 全量预测（pred_df）只在需要时生成：OOF fold 训练不需要，跳过可避免
+    # 每个 fold 对全量数据(644万行)预测+拷贝，9次叠加是 OOM 主因
+    if need_full_pred:
+        full_pred_df = df[["symbol", "trade_date", "label"]].copy()
+        full_pred_df["pred"] = _predict_with_model(model, _fill(df), model_type, features)
+        full_pred_df["split"] = "train"
+        full_pred_df.loc[
+            (full_pred_df["trade_date"] >= val_df["trade_date"].min()) &
+            (full_pred_df["trade_date"] <= val_df["trade_date"].max()), "split"] = "valid"
+        full_pred_df.loc[
+            (full_pred_df["trade_date"] >= test_df["trade_date"].min()) &
+            (full_pred_df["trade_date"] <= test_df["trade_date"].max()), "split"] = "test"
+    else:
+        full_pred_df = None
 
     best_iteration = getattr(model, "best_iteration", None)
     if best_iteration is None and hasattr(model, "get_best_iteration"):
@@ -1547,7 +2186,7 @@ def _train_single_model(
         "train_m": train_m,
         "val_m": val_m,
         "test_m": test_m,
-        "pred_df": full_pred_df.reset_index(drop=True),
+        "pred_df": full_pred_df.reset_index(drop=True) if full_pred_df is not None else None,
         "split_frames": {"train": train_df.reset_index(drop=True), "valid": val_df.reset_index(drop=True), "test": test_df.reset_index(drop=True)},
         "best_iteration": best_iteration,
         "elapsed": elapsed,
@@ -1638,15 +2277,12 @@ def _generate_oof_predictions(
     train_df: pd.DataFrame,
     features: list[str],
     cfg: dict,
-    n_folds: int = 5,
+    n_folds: int = 3,
     hardware: dict | None = None,
-) -> tuple[pd.Series, object, dict]:
-    """时序扩展窗口 K-Fold 生成 OOF 预测，训练最终全量基模型。
+) -> pd.Series:
+    """时序扩展窗口 K-Fold 生成 OOF 预测。
 
-    返回 (oof_pred_series, full_model, fill_values)
-    - oof_pred_series: 与 train_df 等长的 OOF 预测（fold 外部分为 NaN）
-    - full_model: 在全量 train_df 上训练的最终基模型
-    - fill_values: 特征填充值
+    返回与 train_df 等长的 OOF 预测（fold 未覆盖部分为 NaN）。
     """
     dates = sorted(train_df["trade_date"].unique())
     n_dates = len(dates)
@@ -1675,43 +2311,26 @@ def _generate_oof_predictions(
             logger.warning("Fold %d too small (train=%d, val=%d), skipping", fold_i, len(fold_train), len(fold_val))
             continue
 
-        # 训练 fold 基模型
+        # 训练 fold 基模型：OOF 只需要 fold 内验证集预测，跳过全量 pred_df 生成
+        # （fold 传全量 df 会对 644 万行做全量预测 + 拷贝，9 次叠加是 OOM 主因）
         fold_result = _train_single_model(
             model_type, fold_train, fold_val, fold_val,
-            train_df, features, cfg, hardware=hardware,
+            train_df, features, cfg, hardware=hardware, need_full_pred=False,
         )
         fold_model = fold_result["model"]
         fill_values = fold_result["fill_values"]
 
         # 预测 fold 验证集
         X_val = fold_val[features].fillna(fill_values).values
-        if model_type == "lightgbm":
-            fold_pred = fold_model.predict(X_val)
-        elif model_type == "xgboost":
-            import xgboost as xgb
-            fold_pred = fold_model.predict(xgb.DMatrix(X_val))
-        elif model_type == "catboost":
-            from catboost import Pool
-            fold_pred = fold_model.predict(Pool(X_val))[0].flatten()
-        else:
-            fold_pred = fold_model.predict(X_val).flatten()
+        fold_pred = np.asarray(
+            _predict_with_model(fold_model, X_val, model_type, features)
+        ).flatten()
 
         oof_pred.iloc[fold_val.index] = fold_pred
         logger.info("OOF fold %d: train=%d dates, val=%d dates, pred_rows=%d",
                      fold_i, len(train_dates), len(val_dates), len(fold_val))
 
-    # 训练全量基模型
-    val_ratio = cfg.get("model", {}).get("val_ratio", 0.15)
-    split_idx = int(len(train_df) * (1 - val_ratio))
-    full_train = train_df.iloc[:split_idx]
-    full_val = train_df.iloc[split_idx:]
-
-    full_result = _train_single_model(
-        model_type, full_train, full_val, full_val,
-        train_df, features, cfg, hardware=hardware,
-    )
-
-    return oof_pred, full_result["model"], full_result["fill_values"]
+    return oof_pred
 
 
 def train_stacking(
@@ -1719,14 +2338,14 @@ def train_stacking(
     features: list[str],
     cfg: dict,
     model_types: list[str],
-    n_folds: int = 5,
+    n_folds: int = 3,
     hardware: dict | None = None,
 ) -> dict[str, Any]:
     """Stacking 集成训练：时序 K-Fold OOF + Ridge 元学习器。
 
     流程：
     1. 数据切分 train/val/test
-    2. 对每个基模型生成 OOF 预测（时序扩展窗口）
+    2. 对每个基模型生成 OOF 预测（时序扩展窗口）+ 训练全量基模型
     3. 构建元特征矩阵 [oof_lgb, oof_xgb, oof_cbm]
     4. 训练 Ridge 元学习器
     5. 在 val/test 上评估集成效果
@@ -1737,26 +2356,33 @@ def train_stacking(
 
     # Step 1: 生成各基模型 OOF 预测 + 全量基模型
     oof_preds: dict[str, pd.Series] = {}
-    base_models: dict[str, Any] = {}
     base_fill_values: dict[str, dict] = {}
     base_results: dict[str, dict] = {}
 
     for mt in model_types:
         logger.info("=== Stacking: generating OOF for %s ===", mt)
-        oof_pred, full_model, fill_values = _generate_oof_predictions(
+        oof_preds[mt] = _generate_oof_predictions(
             mt, train_df, features, cfg, n_folds=n_folds, hardware=hardware,
         )
-        oof_preds[mt] = oof_pred
-        base_models[mt] = full_model
-        base_fill_values[mt] = fill_values
+        gc.collect()
 
-        # 评估全量基模型在 val/test 上的表现
+        # 全量基模型：既用于 val/test 评估，也是保存/推理时使用的模型。
+        # stacking 用 OOF 构建元特征，不需要 base 的 pred_df，跳过全量预测省内存
         base_result = _train_single_model(
             mt, train_df, val_df, test_df, df, features, cfg, hardware=hardware,
+            need_full_pred=False,
         )
+        # stacking 用 OOF 构建元特征，pred_df（全量1000万行预测）不再需要，
+        # 立即释放降低峰值内存，避免 3 个模型累积后 OOM
+        base_result.pop("pred_df", None)
+        base_result.pop("full_pred_df", None)
         base_results[mt] = base_result
+        base_fill_values[mt] = base_result["fill_values"]
         logger.info("Base model %s: val_icir=%.4f, test_icir=%.4f",
                      mt, base_result["val_m"]["rank_icir"], base_result["test_m"]["rank_icir"])
+        gc.collect()
+
+    base_models: dict[str, Any] = {mt: base_results[mt]["model"] for mt in model_types}
 
     # Step 2: 构建元特征矩阵（OOF 预测作为特征）
     meta_features_train = pd.DataFrame({
@@ -1783,16 +2409,7 @@ def train_stacking(
         fv = base_fill_values[model_type]
         X = data_df[features].fillna(fv).values
         model = base_models[model_type]
-        if model_type == "lightgbm":
-            return model.predict(X)
-        elif model_type == "xgboost":
-            import xgboost as xgb
-            return model.predict(xgb.DMatrix(X))
-        elif model_type == "catboost":
-            from catboost import Pool
-            return model.predict(Pool(X))[0].flatten()
-        else:
-            return model.predict(X).flatten()
+        return np.asarray(_predict_with_model(model, X, model_type, features)).flatten()
 
     # Val 集成预测
     val_base_preds = {mt: _predict_base(mt, val_df) for mt in model_types}
@@ -1827,18 +2444,30 @@ def train_stacking(
     logger.info("Best single (%s): val_icir=%.4f vs Stacking: val_icir=%.4f",
                 best_single[0], best_single[1]["val_m"]["rank_icir"], val_ensemble_m["rank_icir"])
 
-    # 构建全量预测 DataFrame（使用集成预测覆盖 val+test，train 用 OOF）
-    pred_df = df[["trade_date", "symbol"]].copy()
-    pred_df["pred"] = np.nan
-    # Train 部分：使用 OOF 集成预测
-    oof_ensemble = meta_model.predict(meta_features_train.values)
-    pred_df.loc[valid_mask, "pred"] = oof_ensemble[valid_mask.values] if hasattr(valid_mask, 'values') else oof_ensemble
-    # Val 部分
-    val_idx = val_df.index
-    pred_df.loc[val_idx, "pred"] = val_ensemble_pred
-    # Test 部分
-    test_idx = test_df.index
-    pred_df.loc[test_idx, "pred"] = test_ensemble_pred
+    # 构建全量预测 DataFrame（val/test 用集成预测，train 用 OOF 集成预测）
+    # train/val/test 已 reset_index 且 df 按 symbol 排序，不能按位置索引回 df，
+    # 必须按 (symbol, trade_date) 对齐，否则预测会写到错误的行上。
+    oof_ensemble = meta_model.predict(meta_X_train)
+    pred_parts = pd.concat([
+        pd.DataFrame({
+            "trade_date": train_df.loc[valid_mask, "trade_date"].values,
+            "symbol": train_df.loc[valid_mask, "symbol"].values,
+            "pred": oof_ensemble,
+        }),
+        pd.DataFrame({
+            "trade_date": val_df["trade_date"].values,
+            "symbol": val_df["symbol"].values,
+            "pred": val_ensemble_pred,
+        }),
+        pd.DataFrame({
+            "trade_date": test_df["trade_date"].values,
+            "symbol": test_df["symbol"].values,
+            "pred": test_ensemble_pred,
+        }),
+    ], ignore_index=True)
+    pred_df = df[["trade_date", "symbol"]].merge(
+        pred_parts, on=["trade_date", "symbol"], how="left"
+    )
 
     # 保存 OOF 预测（诊断用）
     oof_df = pd.DataFrame({
@@ -2013,7 +2642,7 @@ def main() -> int:
                 multi_result = train_stacking(
                     df, valid_features, cfg,
                     model_types=[str(t).strip().lower() for t in model_types_raw],
-                    n_folds=int(model_cfg.get("n_folds", 5)),
+                    n_folds=int(model_cfg.get("n_folds", 3)),
                     hardware=hardware,
                 )
             else:
@@ -2105,7 +2734,12 @@ def main() -> int:
             # 保存各基模型独立预测（parquet）
             for mt, res in multi_result["models"].items():
                 base_pred_path = workspace / f"pred_{mt}.parquet"
-                res["pred_df"].to_parquet(base_pred_path, engine="pyarrow", compression="zstd", index=False)
+                # stacking 模式为省内存已 pop 掉 base 的 pred_df（用 OOF 做元特征），这里跳过即可
+                base_pred = res.get("pred_df")
+                if base_pred is None:
+                    logger.info("Skip saving %s base pred (pred_df=None, stacking mode)", mt)
+                    continue
+                base_pred.to_parquet(base_pred_path, engine="pyarrow", compression="zstd", index=False)
 
             # 构造 metadata
             metadata = {
@@ -2147,6 +2781,7 @@ def main() -> int:
                     "train_ic": train_m["ic"], "train_rank_ic": train_m["rank_ic"], "train_rank_icir": train_m["rank_icir"],
                     "val_ic": val_m["ic"], "val_rank_ic": val_m["rank_ic"], "val_rank_icir": val_m["rank_icir"],
                     "test_ic": test_m["ic"], "test_rank_ic": test_m["rank_ic"], "test_rank_icir": test_m["rank_icir"],
+                    "score_direction": val_m.get("score_direction", "normal"),
                 },
                 "pred_coverage_start": str(pred_df["trade_date"].min().date()) if not pred_df.empty else "",
                 "pred_coverage_end": str(pred_df["trade_date"].max().date()) if not pred_df.empty else "",
@@ -2321,6 +2956,7 @@ def main() -> int:
                     "train_ic": train_m["ic"], "train_rank_ic": train_m["rank_ic"], "train_rank_icir": train_m["rank_icir"],
                     "val_ic": val_m["ic"], "val_rank_ic": val_m["rank_ic"], "val_rank_icir": val_m["rank_icir"],
                     "test_ic": test_m["ic"], "test_rank_ic": test_m["rank_ic"], "test_rank_icir": test_m["rank_icir"],
+                    "score_direction": val_m.get("score_direction", "normal"),
                 },
                 "pred_coverage_start": str(pred_df["trade_date"].min().date()) if not pred_df.empty else "",
                 "pred_coverage_end": str(pred_df["trade_date"].max().date()) if not pred_df.empty else "",
@@ -2583,8 +3219,10 @@ if __name__ == "__main__":
                 result["artifacts"].append({"name": "shap_summary.csv", "local": "/workspace/shap_summary.csv"})
 
     except Exception as e:
+        import traceback
+        tb = traceback.format_exc()
         logger.exception(f"Training failed: {e}")
-        result = {"status": "failed", "run_id": run_id, "error": str(e)}
+        result = {"status": "failed", "run_id": run_id, "error": str(e), "traceback": tb}
 
     finally:
         result_path.parent.mkdir(parents=True, exist_ok=True)
