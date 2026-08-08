@@ -47,6 +47,68 @@ const formatPanelDateTime = (raw?: string | null, fallback = '—') => {
   return fallback;
 };
 
+/** WFA 诊断解读：基于 IC 均值/标准差/正窗占比/ICIR 组合判断，输出可读结论 */
+export const WfaInterpretation: React.FC<{ wfa: any }> = ({ wfa }) => {
+  if (!wfa || !wfa.enabled) return null;
+  const icMean = Number(wfa.ic_mean);
+  const icStd = Number(wfa.ic_std);
+  const positiveRate = Number(wfa.positive_rate);
+  const icir = Number(wfa.overall_icir);
+  const hasIcir = Number.isFinite(icir) && !Number.isNaN(icir);
+
+  // 逐维度判断
+  const checks: Array<{ label: string; ok: boolean; text: string }> = [];
+  // 1. IC 方向与强度
+  if (icMean >= 0.05) checks.push({ label: 'IC 强度', ok: true, text: `IC均值 ${icMean.toFixed(4)} ≥ 0.05，信号强度良好` });
+  else if (icMean >= 0) checks.push({ label: 'IC 强度', ok: true, text: `IC均值 ${icMean.toFixed(4)} 为正，信号有效但偏弱（<0.05）` });
+  else checks.push({ label: 'IC 强度', ok: false, text: `IC均值 ${icMean.toFixed(4)} 为负，信号方向可能反了` });
+
+  // 2. IC 稳定性
+  if (icStd <= 0.02) checks.push({ label: 'IC 稳定性', ok: true, text: `标准差 ${icStd.toFixed(4)} ≤ 0.02，各窗口波动小` });
+  else checks.push({ label: 'IC 稳定性', ok: false, text: `标准差 ${icStd.toFixed(4)} > 0.02，各窗口波动偏大` });
+
+  // 3. 正向窗口占比
+  if (positiveRate >= 0.75) checks.push({ label: '正窗占比', ok: true, text: `${Math.round(positiveRate * 100)}% 窗口 IC 为正，跨期一致性好` });
+  else if (positiveRate >= 0.5) checks.push({ label: '正窗占比', ok: true, text: `${Math.round(positiveRate * 100)}% 窗口为正，存在少数走弱窗口` });
+  else checks.push({ label: '正窗占比', ok: false, text: `仅 ${Math.round(positiveRate * 100)}% 窗口为正，多数窗口失效` });
+
+  // 4. ICIR 综合
+  if (hasIcir) {
+    if (Math.abs(icir) >= 0.3) checks.push({ label: 'ICIR', ok: true, text: `ICIR ${icir.toFixed(3)}，收益/波动比合理` });
+    else checks.push({ label: 'ICIR', ok: false, text: `ICIR ${icir.toFixed(3)} < 0.3，信号相对波动偏弱` });
+  }
+
+  const okCount = checks.filter(c => c.ok).length;
+
+  return (
+    <div className="mt-3 rounded-xl bg-white/70 border border-slate-100/60 p-3">
+      <div className="flex items-center justify-between mb-2">
+        <Text className="text-[9px] font-black text-slate-500 uppercase tracking-wider">判断解读</Text>
+        <Text className={clsx('text-[9px] font-black', okCount === checks.length ? 'text-emerald-600' : okCount >= 2 ? 'text-amber-600' : 'text-rose-500')}>
+          {okCount}/{checks.length} 项达标
+        </Text>
+      </div>
+      <div className="space-y-1">
+        {checks.map((c, i) => (
+          <div key={i} className="flex items-start gap-1.5">
+            <span className={clsx('mt-0.5 text-[8px] font-black', c.ok ? 'text-emerald-500' : 'text-rose-400')}>{c.ok ? '✓' : '✗'}</span>
+            <Text className={clsx('text-[10px] leading-snug', c.ok ? 'text-slate-600' : 'text-rose-500/80')}>
+              <span className="font-bold text-slate-500">{c.label}：</span>{c.text}
+            </Text>
+          </div>
+        ))}
+      </div>
+      <Text className="block mt-2 text-[10px] text-slate-400 leading-relaxed">
+        {okCount === checks.length
+          ? '整体稳定可用，适合作为选股模型。'
+          : okCount >= 2
+            ? '多数维度达标，个别窗口波动可接受，建议关注 IC 表现最弱的区间。'
+            : '多个维度未达标，建议调整特征/参数后重新训练，或考虑融合其他模型。'}
+      </Text>
+    </div>
+  );
+};
+
 // ─── 左侧模型卡片 ────────────────────────────────────────────────────────────
 export const ModelCard: React.FC<{
   model: UserModelRecord;
@@ -339,6 +401,120 @@ export const ModelDetailPanel: React.FC<{ model: UserModelRecord }> = ({ model }
                   </div>
                 ))}
               </div>
+            </div>
+          )}
+
+          {meta.wfa?.enabled && meta.wfa.windows?.length > 0 && (
+            <div className="glass-panel rounded-3xl p-5 border border-violet-100/60 bg-gradient-to-br from-violet-50/30 to-white">
+              <div className="flex items-center justify-between mb-4">
+                <div className="flex items-center gap-2">
+                  <Activity size={13} className="text-violet-500" />
+                  <Text className="text-[10px] font-black text-slate-400 uppercase tracking-widest">WFA 稳定性诊断</Text>
+                </div>
+                <Tag className={clsx('m-0 rounded-full border-0 px-2 py-0.5 text-[9px] font-black', meta.wfa.stability === 'stable' ? 'bg-emerald-50 text-emerald-600' : 'bg-amber-50 text-amber-600')}>
+                  {meta.wfa.stability === 'stable' ? '稳定' : '不稳定'}
+                </Tag>
+              </div>
+
+              <div className="grid grid-cols-2 gap-2 mb-4">
+                <div className="flex flex-col items-center gap-0.5 p-2 bg-white/70 rounded-xl border border-slate-100/60">
+                  <Text className="text-[8px] text-slate-400 uppercase tracking-wider">IC 均值</Text>
+                  <Text className={clsx('text-base font-black font-mono', Number(meta.wfa.ic_mean) >= 0.05 ? 'text-emerald-600' : Number(meta.wfa.ic_mean) >= 0 ? 'text-amber-600' : 'text-rose-500')}>
+                    {Number(meta.wfa.ic_mean).toFixed(4)}
+                  </Text>
+                </div>
+                <div className="flex flex-col items-center gap-0.5 p-2 bg-white/70 rounded-xl border border-slate-100/60">
+                  <Text className="text-[8px] text-slate-400 uppercase tracking-wider">IC 标准差</Text>
+                  <Text className={clsx('text-base font-black font-mono', Number(meta.wfa.ic_std) <= 0.02 ? 'text-emerald-600' : 'text-amber-600')}>
+                    {Number(meta.wfa.ic_std).toFixed(4)}
+                  </Text>
+                </div>
+                <div className="flex flex-col items-center gap-0.5 p-2 bg-white/70 rounded-xl border border-slate-100/60">
+                  <Text className="text-[8px] text-slate-400 uppercase tracking-wider">ICIR</Text>
+                  <Text className="text-base font-black font-mono text-slate-700">
+                    {Number.isFinite(Number(meta.wfa.overall_icir)) ? Number(meta.wfa.overall_icir).toFixed(3) : '—'}
+                  </Text>
+                </div>
+                <div className="flex flex-col items-center gap-0.5 p-2 bg-white/70 rounded-xl border border-slate-100/60">
+                  <Text className="text-[8px] text-slate-400 uppercase tracking-wider">正窗占比</Text>
+                  <Text className="text-base font-black font-mono text-slate-700">{Math.round(Number(meta.wfa.positive_rate) * 100)}%</Text>
+                </div>
+              </div>
+
+              <div className="space-y-1.5 max-h-[240px] overflow-y-auto custom-scrollbar pr-1">
+                {meta.wfa.windows.map((w: any) => {
+                  const ic = Number(w.ic);
+                  return (
+                    <div key={w.window_idx} className="flex items-center gap-2 px-2 py-1.5 bg-white/60 rounded-lg border border-slate-100/50">
+                      <Text className="text-[9px] font-black text-slate-500 font-mono w-7">W{w.window_idx + 1}</Text>
+                      <div className="flex-1 min-w-0">
+                        <Text className="text-[9px] text-slate-400 font-mono block truncate">{w.val_start} → {w.val_end}</Text>
+                      </div>
+                      <Text className={clsx('text-[10px] font-black font-mono', ic >= 0.05 ? 'text-emerald-600' : ic >= 0 ? 'text-amber-600' : 'text-rose-500')}>
+                        {ic.toFixed(4)}
+                      </Text>
+                    </div>
+                  );
+                })}
+              </div>
+
+              <div className="mt-3 flex flex-wrap gap-1.5 text-[9px] text-slate-400">
+                <span className="px-1.5 py-0.5 rounded bg-white/60 border border-slate-100/50 font-mono">{meta.wfa.windows.length} 窗</span>
+                <span className="px-1.5 py-0.5 rounded bg-white/60 border border-slate-100/50">{meta.wfa.strategy === 'rolling' ? '滚动窗口' : '扩张窗口'}</span>
+                <span className="px-1.5 py-0.5 rounded bg-white/60 border border-slate-100/50">模型 {meta.wfa.model_type}</span>
+              </div>
+
+              {/* 判断解读 */}
+              <WfaInterpretation wfa={meta.wfa} />
+            </div>
+          )}
+
+          {meta.drift?.enabled && (
+            <div className="glass-panel rounded-3xl p-5 border border-sky-100/60 bg-gradient-to-br from-sky-50/30 to-white">
+              <div className="flex items-center justify-between mb-4">
+                <div className="flex items-center gap-2">
+                  <Activity size={13} className="text-sky-500" />
+                  <Text className="text-[10px] font-black text-slate-400 uppercase tracking-widest">数据漂移 (PSI)</Text>
+                </div>
+                <Tag className={clsx('m-0 rounded-full border-0 px-2 py-0.5 text-[9px] font-black', meta.drift.overall === 'stable' ? 'bg-emerald-50 text-emerald-600' : meta.drift.overall === 'warning' ? 'bg-amber-50 text-amber-600' : 'bg-rose-50 text-rose-600')}>
+                  {meta.drift.overall === 'stable' ? '稳定' : meta.drift.overall === 'warning' ? '预警' : '严重漂移'}
+                </Tag>
+              </div>
+
+              <div className="grid grid-cols-2 gap-2 mb-3">
+                <div className="flex flex-col items-center gap-0.5 p-2 bg-white/70 rounded-xl border border-slate-100/60">
+                  <Text className="text-[8px] text-slate-400 uppercase tracking-wider">最大 PSI</Text>
+                  <Text className={clsx('text-base font-black font-mono', Number(meta.drift.max_psi) < 0.1 ? 'text-emerald-600' : Number(meta.drift.max_psi) < 0.25 ? 'text-amber-600' : 'text-rose-500')}>
+                    {Number(meta.drift.max_psi).toFixed(4)}
+                  </Text>
+                </div>
+                <div className="flex flex-col items-center gap-0.5 p-2 bg-white/70 rounded-xl border border-slate-100/60">
+                  <Text className="text-[8px] text-slate-400 uppercase tracking-wider">漂移特征</Text>
+                  <Text className="text-base font-black font-mono text-slate-700">
+                    稳 {meta.drift.drift?.stable ?? 0} / 中 {meta.drift.drift?.medium ?? 0} / 重 {meta.drift.drift?.severe ?? 0}
+                  </Text>
+                </div>
+              </div>
+
+              {meta.drift.top_drift_features?.length > 0 && (
+                <div className="space-y-1 max-h-[200px] overflow-y-auto custom-scrollbar pr-1">
+                  {meta.drift.top_drift_features.slice(0, 6).map((f: any, i: number) => (
+                    <div key={i} className="flex items-center gap-2 px-2 py-1 bg-white/60 rounded-lg border border-slate-100/50">
+                      <Text className="text-[9px] font-mono text-slate-500 flex-1 truncate">{f.feature}</Text>
+                      <Text className={clsx('text-[10px] font-black font-mono', f.level === 'stable' ? 'text-emerald-600' : f.level === 'medium' ? 'text-amber-600' : 'text-rose-500')}>
+                        {Number(f.psi).toFixed(3)}
+                      </Text>
+                      <Tag className={clsx('m-0 rounded-md border-0 px-1.5 py-0 text-[8px] font-black', f.level === 'stable' ? 'bg-emerald-50 text-emerald-600' : f.level === 'medium' ? 'bg-amber-50 text-amber-600' : 'bg-rose-50 text-rose-600')}>
+                        {f.level === 'stable' ? '稳定' : f.level === 'medium' ? '中' : '重'}
+                      </Tag>
+                    </div>
+                  ))}
+                </div>
+              )}
+
+              <Text className="block mt-3 text-[10px] text-slate-400 leading-relaxed">
+                训练 {meta.drift.train_start}~{meta.drift.train_end} vs 实盘 {meta.drift.recent_start}~{meta.drift.recent_end}。严重漂移建议重训。
+              </Text>
             </div>
           )}
         </div>

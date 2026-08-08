@@ -22,6 +22,7 @@ import gc
 import json
 import logging
 import os
+import random
 import sys
 import time
 from datetime import datetime
@@ -244,6 +245,122 @@ def _compute_metrics(df: pd.DataFrame, y_true: np.ndarray, y_pred: np.ndarray) -
     # 方向检测：IC < 0 说明模型预测与标签方向相反
     score_direction = "normal" if np.isnan(ic) or ic >= 0 else "reversed"
     return {"ic": ic, "rank_ic": rank_ic, "rank_icir": rank_icir, "rmse": rmse, "auc": auc, "score_direction": score_direction}
+
+
+def _psi_single(a: np.ndarray, b: np.ndarray, n_bins: int = 10) -> float:
+    """单个特征的 PSI（Population Stability Index）。
+
+    PSI = Σ (actual% - expected%) * ln(actual% / expected%)
+    以 a 为基准分布（expected），b 为待检分布（actual）。
+    <0.1 无显著漂移；0.1~0.25 中等漂移；>0.25 显著漂移。
+    """
+    a = np.asarray(a, dtype=np.float64)
+    b = np.asarray(b, dtype=np.float64)
+    a = a[np.isfinite(a)]
+    b = b[np.isfinite(b)]
+    if len(a) < 20 or len(b) < 20:
+        return float("nan")
+    # 分位数分箱（基准分布）
+    edges = np.quantile(a, np.linspace(0, 1, n_bins + 1))
+    edges[0], edges[-1] = -np.inf, np.inf
+    # 去重相邻边界
+    unique_edges = []
+    for e in edges:
+        if not unique_edges or e != unique_edges[-1]:
+            unique_edges.append(e)
+    if len(unique_edges) < 3:
+        return 0.0
+    bin_a = np.histogram(a, bins=unique_edges)[0].astype(np.float64)
+    bin_b = np.histogram(b, bins=unique_edges)[0].astype(np.float64)
+    # 防止除零/对数零
+    pct_a = bin_a / max(len(a), 1)
+    pct_b = bin_b / max(len(b), 1)
+    pct_a = np.clip(pct_a, 1e-6, None)
+    pct_b = np.clip(pct_b, 1e-6, None)
+    return float(np.sum((pct_b - pct_a) * np.log(pct_b / pct_a)))
+
+
+def compute_psi_drift(
+    df: pd.DataFrame,
+    features: list[str],
+    train_start: str,
+    train_end: str,
+    n_recent_days: int = 60,
+    top_n: int = 20,
+) -> dict:
+    """数据漂移检测：对比训练区间 vs 最近 n 个交易日的特征分布（PSI）。
+
+    返回:
+        {
+          "enabled": True,
+          "train_start": ..., "train_end": ...,
+          "recent_start": ..., "recent_end": ...,
+          "drift": {"stable": N, "medium": N, "severe": N},
+          "top_drift_features": [ {feature, psi, level}, ... ],
+          "max_psi": float,
+          "overall": "stable" | "warning" | "severe"
+        }
+    """
+    if df is None or df.empty or not features:
+        return {"enabled": False, "reason": "no data"}
+
+    train_mask = (df["trade_date"] >= pd.Timestamp(train_start)) & (df["trade_date"] <= pd.Timestamp(train_end))
+    train_df = df[train_mask]
+    # 最近 n 个交易日
+    recent_dates = sorted(df["trade_date"].unique())[-n_recent_days:]
+    if not recent_dates:
+        return {"enabled": False, "reason": "no recent dates"}
+    recent_df = df[df["trade_date"].isin(recent_dates)]
+    if train_df.empty or recent_df.empty:
+        return {"enabled": False, "reason": "empty train or recent frame"}
+
+    # 只取可用特征
+    usable = [f for f in features if f in df.columns]
+    # 采样控制计算量：每边最多 5 万行
+    train_sample = train_df[usable].dropna(how="all").sample(min(50000, len(train_df)), random_state=42)
+    recent_sample = recent_df[usable].dropna(how="all").sample(min(50000, len(recent_df)), random_state=42)
+    if train_sample.empty or recent_sample.empty:
+        return {"enabled": False, "reason": "empty sample"}
+
+    results = []
+    for f in usable:
+        a = train_sample[f].to_numpy()
+        b = recent_sample[f].to_numpy()
+        psi = _psi_single(a, b)
+        if not np.isfinite(psi):
+            continue
+        level = "stable" if psi < 0.1 else ("medium" if psi < 0.25 else "severe")
+        results.append({"feature": f, "psi": round(psi, 4), "level": level})
+
+    if not results:
+        return {"enabled": False, "reason": "no computable features"}
+
+    results.sort(key=lambda r: r["psi"], reverse=True)
+    drift_counts = {"stable": 0, "medium": 0, "severe": 0}
+    for r in results:
+        drift_counts[r["level"]] += 1
+
+    severe_count = drift_counts["severe"]
+    medium_count = drift_counts["medium"]
+    if severe_count >= 3 or (severe_count + medium_count) >= max(5, len(results) * 0.3):
+        overall = "severe"
+    elif severe_count >= 1 or medium_count >= 3:
+        overall = "warning"
+    else:
+        overall = "stable"
+
+    return {
+        "enabled": True,
+        "train_start": train_start,
+        "train_end": train_end,
+        "recent_start": str(recent_dates[0]),
+        "recent_end": str(recent_dates[-1]),
+        "drift": drift_counts,
+        "top_drift_features": results[:top_n],
+        "max_psi": round(max(r["psi"] for r in results), 4),
+        "overall": overall,
+    }
+
 
 
 def _normalize_explain_cfg(raw: Any) -> dict[str, Any]:
@@ -817,6 +934,242 @@ def _split_data(df: pd.DataFrame, cfg: dict) -> tuple:
     return train_df, val_df, test_df
 
 
+def _wfa_parse_cfg(wfa_cfg: dict | None) -> dict:
+    """解析并规范化 WFA 诊断配置。
+
+    返回:
+        {
+          "enabled": bool,
+          "strategy": "rolling" | "expanding",
+          "n_windows": int,
+          "train_years": int,   # 每窗训练长度（年，仅 rolling 用）
+          "val_months": int,    # 每窗验证长度（月）
+          "step_months": int,   # 窗口推进步长（月）
+          "start": str,         # 首个窗口训练起点（可选，默认用数据起点）
+          "max_train_end": str  # 诊断窗口的最晚训练终点（可选）
+        }
+    """
+    if not isinstance(wfa_cfg, dict) or not wfa_cfg.get("enabled"):
+        return {"enabled": False}
+
+    strategy = str(wfa_cfg.get("strategy") or "rolling").strip().lower()
+    if strategy not in ("rolling", "expanding"):
+        logger.warning("Invalid wfa.strategy=%s, fallback to 'rolling'", strategy)
+        strategy = "rolling"
+
+    def _to_int(v, default: int, lo: int, hi: int) -> int:
+        try:
+            n = int(v)
+        except Exception:
+            n = default
+        return max(lo, min(hi, n))
+
+    return {
+        "enabled": True,
+        "strategy": strategy,
+        "n_windows": _to_int(wfa_cfg.get("n_windows"), 4, 1, 12),
+        "train_years": _to_int(wfa_cfg.get("train_years"), 3, 1, 8),
+        "val_months": _to_int(wfa_cfg.get("val_months"), 12, 1, 36),
+        "step_months": _to_int(wfa_cfg.get("step_months"), 12, 1, 36),
+        "start": str(wfa_cfg.get("start") or "").strip(),
+        "max_train_end": str(wfa_cfg.get("max_train_end") or "").strip(),
+    }
+
+
+def _wfa_split_window(
+    df: pd.DataFrame,
+    wfa: dict,
+    idx: int,
+) -> tuple[pd.DataFrame, pd.DataFrame]:
+    """构造第 idx 个 WFA 窗口的 (train_df, val_df)。
+
+    基于 df 中的实际交易日历（trade_date）推进，避免节假日/停牌导致窗口稀疏。
+    rolling:  训练起点 = 验证起点 - train_years 年（按交易日回退），训练集长度固定。
+    expanding:训练起点 = 数据最早日期，训练集随 idx 扩张。
+    """
+    all_dates = sorted(df["trade_date"].unique())
+    if not all_dates:
+        return pd.DataFrame(), pd.DataFrame()
+
+    import datetime as _dt
+
+    step_days = wfa["step_months"] * 30
+    train_years_days = wfa["train_years"] * 365
+    val_days = wfa["val_months"] * 30
+
+    # 首个验证起点：rolling 需先留出 train_years 训练段 + val_days 验证段，
+    # 保证首窗训练集完整；expanding 首窗即可从数据起点开始。
+    start_str = wfa.get("start")
+    base = pd.Timestamp(start_str) if start_str else pd.Timestamp(all_dates[0])
+    if wfa["strategy"] == "rolling":
+        first_anchor_offset = pd.Timedelta(days=train_years_days + val_days)
+    else:
+        first_anchor_offset = pd.Timedelta(days=val_days)
+    anchor = base + first_anchor_offset + pd.Timedelta(days=idx * step_days)
+
+    # 取 anchor 之前最近的交易日作为验证起点
+    anchor_ts = pd.Timestamp(anchor.date())
+    val_start = max((d for d in all_dates if d <= anchor_ts), default=None)
+    if val_start is None:
+        return pd.DataFrame(), pd.DataFrame()
+    val_end = max((d for d in all_dates if d <= anchor_ts + pd.Timedelta(days=val_days)), default=val_start)
+
+    if wfa["strategy"] == "expanding":
+        train_start = all_dates[0]
+    else:
+        # rolling：训练起点 = 验证起点往前推 train_years 年（取最近交易日），长度固定。
+        # 数据不足（如首个窗口往前推超过数据起点）时回退到数据最早日，保证窗口可运行。
+        train_start = max(
+            (d for d in all_dates if d <= val_start - pd.Timedelta(days=train_years_days)),
+            default=all_dates[0],
+        )
+
+    train_df = df[
+        (df["trade_date"] >= train_start) &
+        (df["trade_date"] < val_start)
+    ].copy()
+    val_df = df[
+        (df["trade_date"] >= val_start) &
+        (df["trade_date"] <= val_end)
+    ].copy()
+
+    if train_df.empty or val_df.empty:
+        return pd.DataFrame(), pd.DataFrame()
+    return train_df, val_df
+
+
+def _train_wfa_single(
+    cfg: dict,
+    features: list[str],
+    train_df: pd.DataFrame,
+    val_df: pd.DataFrame,
+    wfa: dict,
+    idx: int,
+) -> dict | None:
+    """训练单个 WFA 窗口，返回该窗口的指标。支持树模型 + linear。"""
+    model_cfg = cfg.get("model", {})
+    model_type = str(model_cfg.get("type", "lightgbm")).strip().lower()
+
+    if model_type in _DL_MODEL_TYPES:
+        logger.warning("[WFA] window %d: skip DL model '%s' (too slow for WFA)", idx, model_type)
+        return None
+
+    try:
+        fill_values, X_train, y_train, X_val, y_val, _fill = _prepare_arrays(
+            train_df, val_df, features
+        )
+        if X_train.shape[0] < 100 or X_val.shape[0] < 10:
+            logger.warning("[WFA] window %d: too few samples train=%d val=%d", idx, X_train.shape[0], X_val.shape[0])
+            return None
+
+        if model_type == "lightgbm":
+            model = _train_lgb(cfg, features, X_train, y_train, X_val, y_val)
+        elif model_type == "xgboost":
+            model = _train_xgb(cfg, features, X_train, y_train, X_val, y_val)
+        elif model_type == "catboost":
+            model = _train_catboost(cfg, features, X_train, y_train, X_val, y_val)
+        elif model_type == "linear":
+            model = _train_linear(cfg, features, X_train, y_train, X_val, y_val)
+        else:
+            logger.warning("[WFA] window %d: unsupported model '%s'", idx, model_type)
+            return None
+
+        y_val_pred = _predict_with_model(model, _fill(val_df), model_type, features)
+        y_val_true = val_df["label"].astype("float32").to_numpy()
+        m = _compute_metrics(val_df, y_val_true, y_val_pred)
+
+        return {
+            "window_idx": idx,
+            "strategy": wfa["strategy"],
+            "train_start": str(train_df["trade_date"].min().date()),
+            "train_end": str(train_df["trade_date"].max().date()),
+            "val_start": str(val_df["trade_date"].min().date()),
+            "val_end": str(val_df["trade_date"].max().date()),
+            "train_rows": int(len(train_df)),
+            "val_rows": int(len(val_df)),
+            "ic": m["ic"],
+            "rank_ic": m["rank_ic"],
+            "rank_icir": m["rank_icir"],
+            "rmse": m["rmse"],
+            "auc": m["auc"],
+        }
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("[WFA] window %d failed: %s", idx, exc)
+        return None
+
+
+def train_wfa(df: pd.DataFrame, features: list[str], cfg: dict) -> dict:
+    """Walk-Forward 稳定性诊断：滚动/扩张窗口训练并汇总 IC 稳定性。
+
+    返回诊断报告（dict），不含正式模型产物。诊断不产出模型，仅用于评估
+    模型在多个历史区间上的 IC 稳定性与参数漂移。
+    """
+    wfa = _wfa_parse_cfg(cfg.get("wfa"))
+    if not wfa["enabled"]:
+        return {"enabled": False}
+
+    logger.info(
+        "=== WFA Diagnosis: strategy=%s windows=%d train_years=%d val_months=%d step_months=%d ===",
+        wfa["strategy"], wfa["n_windows"], wfa["train_years"], wfa["val_months"], wfa["step_months"],
+    )
+
+    model_cfg = cfg.get("model", {})
+    model_type = str(model_cfg.get("type", "lightgbm")).strip().lower()
+
+    # 训练时长预算：WFA 窗口间检查剩余时间，超时则停止后续窗口
+    budget_min = int((cfg.get("max_time_minutes") or 120))
+    budget_deadline = time.time() + budget_min * 60
+    # 为正式训练预留至少 40% 时长，WFA 最多用 60%
+    wfa_budget_deadline = time.time() + max(1, budget_min * 60 * 0.6)
+
+    windows: list[dict] = []
+    for idx in range(wfa["n_windows"]):
+        if time.time() >= wfa_budget_deadline:
+            logger.warning("[WFA] time budget (%.0f%% of %dmin) reached, stop at window %d", 60, budget_min, idx)
+            break
+        train_df, val_df = _wfa_split_window(df, wfa, idx)
+        if train_df.empty or val_df.empty:
+            logger.warning("[WFA] window %d skipped: empty split", idx)
+            continue
+        res = _train_wfa_single(cfg, features, train_df, val_df, wfa, idx)
+        if res:
+            windows.append(res)
+
+    if not windows:
+        return {"enabled": True, "strategy": wfa["strategy"], "windows": [], "error": "no windows completed"}
+
+    ic_vals = [w["ic"] for w in windows if w["ic"] is not None and np.isfinite(w["ic"])]
+    ric_vals = [w["rank_ic"] for w in windows if w["rank_ic"] is not None and np.isfinite(w["rank_ic"])]
+
+    def _safe_mean(xs: list[float]) -> float:
+        return float(np.mean(xs)) if xs else float("nan")
+
+    def _safe_std(xs: list[float]) -> float:
+        return float(np.std(xs)) if len(xs) > 1 else 0.0
+
+    summary = {
+        "strategy": wfa["strategy"],
+        "n_windows": len(windows),
+        "ic_mean": _safe_mean(ic_vals),
+        "ic_std": _safe_std(ic_vals),
+        "ic_min": float(min(ic_vals)) if ic_vals else float("nan"),
+        "ic_max": float(max(ic_vals)) if ic_vals else float("nan"),
+        "rank_ic_mean": _safe_mean(ric_vals),
+        "rank_ic_std": _safe_std(ric_vals),
+        "positive_rate": float(np.mean([v > 0 for v in ic_vals])) if ic_vals else float("nan"),
+        # IC 稳定性：std 越小越稳；ICIR 综合收益/波动
+        "stability": "stable" if (len(ic_vals) >= 2 and abs(_safe_std(ic_vals)) <= 0.02) else "unstable",
+        "model_type": model_type,
+    }
+    # 综合 ICIR（跨窗口）
+    if ric_vals and abs(_safe_std(ric_vals)) > 1e-12:
+        summary["overall_icir"] = float(np.mean(ric_vals) / (np.std(ric_vals) + 1e-9))
+    else:
+        summary["overall_icir"] = float("nan")
+
+    return {"enabled": True, **summary, "windows": windows}
+
+
 def _prepare_arrays(train_df: pd.DataFrame, val_df: pd.DataFrame, features: list[str]) -> tuple:
     """计算 fill_values 并转换为 numpy 数组。返回 (fill_values, X_train, y_train, X_val, y_val, _fill_fn)。"""
     import math
@@ -836,6 +1189,26 @@ def _prepare_arrays(train_df: pd.DataFrame, val_df: pd.DataFrame, features: list
     return fill_values, X_train, y_train, X_val, y_val, _fill
 
 
+def _lgb_rank_ic_feval(preds: np.ndarray, dataset: lgb.Dataset) -> tuple[str, float, bool]:
+    """LightGBM 自定义评估：全局 Rank IC（Spearman），作为 l2 的补充监控指标。
+
+    不参与早停决策（early stopping 仍以 l2 为准），仅输出日志供观察
+    rank_ic 是否随迭代提升，防止模型只优化 l2 而 rank_ic 停滞。
+    """
+    label = dataset.get_label()
+    try:
+        from scipy.stats import spearmanr
+        valid = np.isfinite(preds) & np.isfinite(label)
+        if valid.sum() < 10:
+            return "rank_ic", 0.0, True
+        rho, _ = spearmanr(preds[valid], label[valid])
+        if not np.isfinite(rho):
+            rho = 0.0
+        return "rank_ic", float(rho), True  # higher is better
+    except Exception:
+        return "rank_ic", 0.0, True
+
+
 def _train_lgb(cfg: dict, features: list[str], X_train: np.ndarray, y_train: np.ndarray,
                X_val: np.ndarray, y_val: np.ndarray) -> Any:
     """LightGBM 训练。"""
@@ -843,6 +1216,10 @@ def _train_lgb(cfg: dict, features: list[str], X_train: np.ndarray, y_train: np.
     params = {**DEFAULT_LGB_PARAMS, **model_cfg.get("params", {})}
     # 限制线程：n_jobs=-1 用满所有核心，多模型/OOF 训练时内存叠加易 OOM
     params["n_jobs"] = _TRAIN_NTHREAD
+    # 可复现性：注入全局 seed（用户未显式覆盖时）
+    params.setdefault("seed", int((cfg.get("seed") or 42)))
+    params.setdefault("bagging_seed", int((cfg.get("seed") or 42)))
+    params.setdefault("feature_fraction_seed", int((cfg.get("seed") or 42)))
     num_boost_round = int(model_cfg.get("num_boost_round", 1000))
     early_stopping_rounds = max(1, int(model_cfg.get("early_stopping_rounds", 100) or 100))
 
@@ -853,11 +1230,15 @@ def _train_lgb(cfg: dict, features: list[str], X_train: np.ndarray, y_train: np.
         lgb.early_stopping(stopping_rounds=early_stopping_rounds, verbose=True),
         lgb.log_evaluation(100),
     ]
+    # 补充监控 rank_ic（不影响早停，仅日志），帮助判断是否只优化 l2 而 rank_ic 停滞
+    if str(model_cfg.get("monitor_rank_ic", "true")).lower() in ("1", "true", "yes", "on"):
+        callbacks.append(lgb.record_evaluation(ds_val))
     model = lgb.train(
         params, ds_train,
         num_boost_round=num_boost_round,
         valid_sets=[ds_train, ds_val],
         valid_names=["train", "valid"],
+        feval=_lgb_rank_ic_feval,
         callbacks=callbacks,
     )
     return model
@@ -871,6 +1252,8 @@ def _train_xgb(cfg: dict, features: list[str], X_train: np.ndarray, y_train: np.
     params = {**DEFAULT_XGB_PARAMS, **model_cfg.get("xgb_params", {})}
     # 限制线程：nthread=-1 用满所有核心，多模型/OOF 训练时内存叠加易 OOM
     params["nthread"] = _TRAIN_NTHREAD
+    # 可复现性：注入全局 seed
+    params.setdefault("seed", int((cfg.get("seed") or 42)))
     # LightGBM 用 max_depth=-1 表示不限深度，XGBoost 只接受 >=0，直接传会启动失败
     if int(params.get("max_depth") or 0) < 0:
         logger.warning(
@@ -904,6 +1287,8 @@ def _train_catboost(cfg: dict, features: list[str], X_train: np.ndarray, y_train
     params = {**DEFAULT_CATBOOST_PARAMS, **model_cfg.get("catboost_params", {})}
     # 限制线程：thread_count=-1 用满所有核心，多模型/OOF 训练时内存叠加易 OOM
     params["thread_count"] = _TRAIN_NTHREAD
+    # 可复现性：注入全局 seed
+    params.setdefault("random_seed", int((cfg.get("seed") or 42)))
     # iterations 覆盖 num_boost_round
     if "iterations" not in model_cfg.get("catboost_params", {}):
         params["iterations"] = int(model_cfg.get("num_boost_round", 1000))
@@ -936,7 +1321,7 @@ def _train_linear(cfg: dict, features: list[str], X_train: np.ndarray, y_train: 
     model_cfg = cfg.get("model", {})
     dl_params = model_cfg.get("dl_params", {})
     alpha = float(dl_params.get("alpha", 3.0))
-    model = Ridge(alpha=alpha)
+    model = Ridge(alpha=alpha, random_state=int((cfg.get("seed") or 42)))
     model.fit(X_train, y_train)
     return model
 
@@ -2585,6 +2970,16 @@ def main() -> int:
         logger.info("=== QuantMind Training Start ===")
         logger.info(f"run_id={run_id}  job={job_name}  config={cfg_path}")
 
+        # 全局随机种子：保证同一配置下训练可复现（种子可配置，默认 42）
+        _seed = int((cfg.get("seed") or 42))
+        random.seed(_seed)
+        np.random.seed(_seed)
+        try:
+            torch.manual_seed(_seed)
+        except Exception:
+            pass
+        logger.info("Global random seed set to %d", _seed)
+
         # 硬件环境检测
         hardware = detect_hardware()
 
@@ -2627,6 +3022,35 @@ def main() -> int:
                 icir_threshold=icir_thresh, correlation_threshold=corr_thresh,
             )
             logger.info("Selected %d features from auto selection", len(valid_features))
+
+        # ── 训练时长预算：主流程开始时记录起点，WFA/训练阶段检查剩余时间 ──
+        _budget_min = int((cfg.get("max_time_minutes") or 120))
+        _t0_budget = time.time()
+        _budget_deadline = _t0_budget + _budget_min * 60
+
+        def _budget_remaining_min() -> float:
+            return max(0.0, (_budget_deadline - time.time()) / 60.0)
+
+        # ── WFA 稳定性诊断（可选）：数据就绪后、正式训练前执行 ──
+        wfa_result = train_wfa(df, valid_features, cfg)
+
+        # ── 数据漂移检测（PSI）：训练区间 vs 最近交易日分布对比 ──
+        psi_result = compute_psi_drift(
+            df,
+            valid_features,
+            cfg["data"]["train_start"],
+            cfg["data"]["train_end"],
+            n_recent_days=int((cfg.get("drift", {}) or {}).get("n_recent_days", 60)),
+        )
+        if psi_result.get("enabled"):
+            logger.info(
+                "Data drift (PSI): overall=%s max_psi=%.4f stable=%d medium=%d severe=%d",
+                psi_result.get("overall"),
+                psi_result.get("max_psi", float("nan")),
+                psi_result.get("drift", {}).get("stable", 0),
+                psi_result.get("drift", {}).get("medium", 0),
+                psi_result.get("drift", {}).get("severe", 0),
+            )
 
         train_t0 = time.time()
 
@@ -2929,6 +3353,7 @@ def main() -> int:
                 "framework": _get_model_framework(actual_model_type),
                 "model_type": actual_model_type,
                 "model_file": model_filename,
+                "seed": int((cfg.get("seed") or 42)),
                 "hardware": hardware,
                 "feature_count": len(valid_features),
                 "requested_feature_count": len(submitted_features),
@@ -3217,6 +3642,24 @@ if __name__ == "__main__":
             }
             if shap_info.get("status") == "completed" and shap_summary_path.exists():
                 result["artifacts"].append({"name": "shap_summary.csv", "local": "/workspace/shap_summary.csv"})
+
+        # ── 注入 WFA 诊断结果到 result 与 metadata ──
+        if wfa_result.get("enabled"):
+            result["wfa"] = wfa_result
+            if isinstance(result.get("metadata"), dict):
+                result["metadata"]["wfa"] = wfa_result
+            logger.info(
+                "WFA diagnosis attached: %d windows, IC mean=%.4f std=%.4f",
+                len(wfa_result.get("windows", [])),
+                wfa_result.get("ic_mean", float("nan")),
+                wfa_result.get("ic_std", float("nan")),
+            )
+
+        # ── 注入数据漂移检测（PSI）结果 ──
+        if psi_result.get("enabled"):
+            result["drift"] = psi_result
+            if isinstance(result.get("metadata"), dict):
+                result["metadata"]["drift"] = psi_result
 
     except Exception as e:
         import traceback

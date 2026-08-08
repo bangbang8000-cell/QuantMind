@@ -1,19 +1,20 @@
 import React from 'react';
-import { Card, Divider, Select, Button, InputNumber, Alert, DatePicker, Tag, Typography, Tooltip } from 'antd';
-import { Target, ArrowRightLeft, Info, CalendarRange } from 'lucide-react';
+import { Card, Divider, Select, Button, InputNumber, Alert, DatePicker, Tag, Typography, Tooltip, Switch } from 'antd';
+import { Target, ArrowRightLeft, Info, CalendarRange, Activity } from 'lucide-react';
 import { clsx } from 'clsx';
 import { Dayjs } from 'dayjs';
 import dayjs from 'dayjs';
-import { 
-  TrainingTarget, 
-  TimePeriodMap, 
-  TargetMode, 
-  SplitKey, 
+import {
+  TrainingTarget,
+  TimePeriodMap,
+  TargetMode,
+  SplitKey,
   TARGET_PRESETS,
   buildLabelFormula,
   buildEffectiveTradeDate,
   daysBetween,
-  formatRange
+  formatRange,
+  WfaConfig,
 } from './trainingUtils';
 import { AdminModelFeatureDataCoverage } from '../../features/admin/types';
 
@@ -25,6 +26,8 @@ interface TrainingTargetConfigProps {
   onTargetChange: (target: TrainingTarget) => void;
   onTimeChange: (key: SplitKey, values: [Dayjs, Dayjs]) => void;
   dataCoverage?: AdminModelFeatureDataCoverage | null;
+  wfa?: WfaConfig;
+  onWfaChange?: (wfa: WfaConfig) => void;
 }
 
 const SectionHeader: React.FC<{ title: string; desc: string; icon?: React.ReactNode }> = ({ title, desc, icon }) => (
@@ -49,6 +52,8 @@ export const TrainingTargetConfig: React.FC<TrainingTargetConfigProps> = ({
   onTargetChange,
   onTimeChange,
   dataCoverage,
+  wfa,
+  onWfaChange,
 }) => {
   const labelFormula = buildLabelFormula(target);
   const effectiveTradeDate = buildEffectiveTradeDate(target, timePeriods.test[0]);
@@ -244,6 +249,104 @@ export const TrainingTargetConfig: React.FC<TrainingTargetConfigProps> = ({
           })}
         </div>
       </Card>
+
+      {/* ── WFA 稳定性诊断配置 ── */}
+      {onWfaChange && (
+        <Card className="rounded-3xl border-slate-200 shadow-sm" styles={{ body: { padding: 20 } }}>
+          <div className="flex items-start justify-between gap-4">
+            <div>
+              <div className="flex items-center gap-2">
+                <Activity size={18} className="text-violet-500" />
+                <Typography.Title level={4} className="!mb-0 !text-slate-900">
+                  Walk-Forward 稳定性诊断
+                </Typography.Title>
+              </div>
+              <Typography.Paragraph className="!mb-0 !mt-2 !text-xs !text-slate-500 leading-relaxed">
+                滚动窗口训练并输出每个窗口的 IC，用于评估模型在不同历史区间上的稳定性与参数漂移。诊断在正式训练前执行，不产生正式模型。
+              </Typography.Paragraph>
+            </div>
+            <Switch
+              checked={!!wfa?.enabled}
+              onChange={(checked) => onWfaChange({ ...(wfa || { enabled: false, strategy: 'rolling', nWindows: 4, trainYears: 3, valMonths: 12, stepMonths: 12 }), enabled: checked })}
+            />
+          </div>
+
+          {wfa?.enabled && (
+            <>
+              <Divider className="my-4" />
+              <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-5">
+                <div>
+                  <div className="mb-2 text-sm font-semibold text-slate-800">窗口策略</div>
+                  <Select
+                    value={wfa.strategy}
+                    onChange={(v) => onWfaChange({ ...wfa, strategy: v })}
+                    className="w-full"
+                    options={[
+                      { label: '滚动窗口（固定训练长度）', value: 'rolling' },
+                      { label: '扩张窗口（数据累积）', value: 'expanding' },
+                    ]}
+                  />
+                  <div className="mt-1 text-[11px] text-slate-500">
+                    {wfa.strategy === 'rolling' ? '每窗训练长度固定，避免老数据影响' : '训练集从起点累积，贴近实盘迭代'}
+                  </div>
+                </div>
+                <div>
+                  <div className="mb-2 text-sm font-semibold text-slate-800">窗口数</div>
+                  <InputNumber
+                    min={1}
+                    max={12}
+                    value={wfa.nWindows}
+                    onChange={(v) => onWfaChange({ ...wfa, nWindows: Number(v ?? 4) })}
+                    className="w-full"
+                  />
+                  <div className="mt-1 text-[11px] text-slate-500">验证段数量（个）</div>
+                </div>
+                <div>
+                  <div className="mb-2 text-sm font-semibold text-slate-800">训练长度</div>
+                  <InputNumber
+                    min={1}
+                    max={8}
+                    value={wfa.trainYears}
+                    onChange={(v) => onWfaChange({ ...wfa, trainYears: Number(v ?? 3) })}
+                    className="w-full"
+                    disabled={wfa.strategy === 'expanding'}
+                  />
+                  <div className="mt-1 text-[11px] text-slate-500">每窗训练长度（年）</div>
+                </div>
+                <div>
+                  <div className="mb-2 text-sm font-semibold text-slate-800">验证长度</div>
+                  <InputNumber
+                    min={1}
+                    max={36}
+                    value={wfa.valMonths}
+                    onChange={(v) => onWfaChange({ ...wfa, valMonths: Number(v ?? 12) })}
+                    className="w-full"
+                  />
+                  <div className="mt-1 text-[11px] text-slate-500">每窗验证长度（月）</div>
+                </div>
+                <div>
+                  <div className="mb-2 text-sm font-semibold text-slate-800">步长</div>
+                  <InputNumber
+                    min={1}
+                    max={36}
+                    value={wfa.stepMonths}
+                    onChange={(v) => onWfaChange({ ...wfa, stepMonths: Number(v ?? 12) })}
+                    className="w-full"
+                  />
+                  <div className="mt-1 text-[11px] text-slate-500">窗口推进步长（月）</div>
+                </div>
+              </div>
+              <Alert
+                className="mt-4 rounded-xl border-violet-100 bg-violet-50/50"
+                type="info"
+                showIcon
+                message="诊断说明"
+                description="WFA 会额外运行多个窗口的训练，耗时约为基础训练的 2-3 倍。支持树模型（LightGBM/XGBoost/CatBoost）和线性模型，深度学习模型因耗时过长不参与诊断。"
+              />
+            </>
+          )}
+        </Card>
+      )}
     </div>
   );
 };

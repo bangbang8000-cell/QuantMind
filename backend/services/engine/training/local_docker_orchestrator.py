@@ -408,6 +408,30 @@ class LocalDockerOrchestrator:
                 "test": [payload.get("test_start"), payload.get("test_end")],
             }
             config["model"]["val_ratio"] = None
+
+        # WFA 稳定性诊断配置（可选，透传给训练脚本）
+        if payload.get("wfa") and isinstance(payload.get("wfa"), dict):
+            config["wfa"] = payload["wfa"]
+
+        # 训练时长预算（分钟），透传给训练脚本供阶段级超时检查
+        try:
+            config["max_time_minutes"] = max(10, int(payload.get("max_time_minutes") or 120))
+        except Exception:
+            config["max_time_minutes"] = 120
+
+        # 特征准入自动化：默认启用 IC/ICIR 因子筛选（剔除无信号特征），
+        # 前端/请求显式指定 factor_selection 时以显式配置为准。
+        fs_cfg = payload.get("factor_selection")
+        if isinstance(fs_cfg, dict):
+            config["factor_selection"] = fs_cfg
+        elif str(payload.get("auto_feature_filter", "true")).lower() in ("1", "true", "yes", "on"):
+            config["factor_selection"] = {
+                "method": "ic_icir",
+                "n_top": 80,
+                "ic_threshold": 0.01,
+                "icir_threshold": 0.15,
+                "correlation_threshold": 0.9,
+            }
         return config
 
     # ── 启动训练任务 ─────────────────────────────────────────────────────────────
@@ -721,7 +745,13 @@ class LocalDockerOrchestrator:
             except Exception as exc:
                 logger.warning("[%s] resume others failed: %s", run_id, exc)
 
-        deadline = time.time() + 7200  # 最长 2h
+        # 训练时长预算：默认 120 分钟，可通过 payload.max_time_minutes 配置
+        max_time_minutes = 120
+        try:
+            max_time_minutes = max(10, int(payload.get("max_time_minutes") or 120))
+        except Exception:
+            max_time_minutes = 120
+        deadline = time.time() + max_time_minutes * 60
         log_cursor_ts = max(0.0, time.time() - 2)
         last_log_sig = ""
         current_progress = 12
@@ -941,19 +971,19 @@ class LocalDockerOrchestrator:
             except Exception as e:
                 logger.warning("[%s] poll error: %s", run_id, e)
 
-        # 超出 2h 限制
+        # 超出时长预算
         async with get_session() as db:
             r = await db.get(TrainingJobRecord, run_id)
             if r and r.status not in ("completed", "failed"):
                 r.status = "failed"
-                r.logs = (r.logs or "") + "[TIMEOUT] 2h limit exceeded\n"
+                r.logs = (r.logs or "") + f"[TIMEOUT] {max_time_minutes}min limit exceeded\n"
                 r.progress = 100
                 await db.commit()
                 self.log_stream.append_log(
                     run_id=run_id,
                     tenant_id=tenant_id,
                     user_id=user_id,
-                    line="[TIMEOUT] 2h limit exceeded",
+                    line=f"[TIMEOUT] {max_time_minutes}min limit exceeded",
                     status="failed",
                     progress=100,
                     container_id=container_id[:12],

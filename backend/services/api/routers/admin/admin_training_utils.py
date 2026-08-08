@@ -39,6 +39,15 @@ _DL_MODEL_TYPES = {"gru", "lstm", "alstm", "transformer", "tabnet", "tcn", "nati
 _MARKET_TO_XCAL = {"CN": "XSHG", "US": "XNYS", "HK": "XHKG"}
 
 
+def _clamp_int(value: Any, default: int, lo: int, hi: int) -> int:
+    """安全地把输入转成 int 并 clamp 到 [lo, hi]。"""
+    try:
+        n = int(value)
+    except Exception:
+        n = default
+    return max(lo, min(hi, n))
+
+
 def _shift_trading_days_back(anchor: datetime, n_days: int, market: str) -> tuple[datetime, bool]:
     """从 anchor 往前数 n_days 个交易日，返回 (结果日期, 是否用了交易日历)。
 
@@ -262,6 +271,27 @@ def _normalize_payload(payload: dict[str, Any], allowed_features: list[str]) -> 
     if ensemble_method not in ("none", "stacking", "blending", "voting"):
         ensemble_method = "none"
 
+    # ── WFA 稳定性诊断配置（可选） ──
+    wfa_config = None
+    raw_wfa = payload.get("wfa")
+    if raw_wfa:
+        if not isinstance(raw_wfa, dict):
+            raise HTTPException(status_code=422, detail="wfa must be an object")
+        wfa_strategy = str(raw_wfa.get("strategy", "rolling")).strip().lower()
+        if wfa_strategy not in ("rolling", "expanding"):
+            raise HTTPException(status_code=422, detail="wfa.strategy must be one of: rolling, expanding")
+        wfa_enabled = bool(raw_wfa.get("enabled", True))
+        wfa_config = {
+            "enabled": wfa_enabled,
+            "strategy": wfa_strategy,
+            "n_windows": _clamp_int(raw_wfa.get("n_windows"), 4, 1, 12),
+            "train_years": _clamp_int(raw_wfa.get("train_years"), 3, 1, 8),
+            "val_months": _clamp_int(raw_wfa.get("val_months"), 12, 1, 36),
+            "step_months": _clamp_int(raw_wfa.get("step_months"), 12, 1, 36),
+            "start": str(raw_wfa.get("start") or "").strip(),
+            "max_train_end": str(raw_wfa.get("max_train_end") or "").strip(),
+        }
+
     display_name = str(payload.get("display_name") or payload.get("job_name") or "unnamed").strip() or "unnamed"
     if len(display_name) > 128:
         raise HTTPException(status_code=422, detail="display_name must be at most 128 characters")
@@ -375,6 +405,10 @@ def _normalize_payload(payload: dict[str, Any], allowed_features: list[str]) -> 
         "dl_params": dl_params,
         "ensemble": ensemble_method,
     }
+    # 训练时长预算（分钟），默认 120
+    normalized["max_time_minutes"] = _clamp_int(payload.get("max_time_minutes"), 120, 10, 1440)
+    if wfa_config:
+        normalized["wfa"] = wfa_config
     if model_types and len(model_types) > 1:
         normalized["model_types"] = model_types
 
@@ -618,6 +652,21 @@ def _normalize_training_result_payload(
         "error": error_text or None,
         "logs": str(raw.get("logs") or ""),
     }
+
+    # WFA 稳定性诊断：透传到顶层，供训练结果页展示
+    raw_wfa = raw.get("wfa")
+    if isinstance(raw_wfa, dict) and raw_wfa.get("enabled"):
+        normalized["wfa"] = raw_wfa
+    # 若顶层缺失但 metadata 里存在（兼容旧回调），补到顶层
+    elif isinstance(metadata.get("wfa"), dict):
+        normalized["wfa"] = metadata["wfa"]
+
+    # 数据漂移检测（PSI）：透传到顶层，供训练结果页展示
+    raw_drift = raw.get("drift")
+    if isinstance(raw_drift, dict) and raw_drift.get("enabled"):
+        normalized["drift"] = raw_drift
+    elif isinstance(metadata.get("drift"), dict):
+        normalized["drift"] = metadata["drift"]
 
     return normalized, validation_error
 

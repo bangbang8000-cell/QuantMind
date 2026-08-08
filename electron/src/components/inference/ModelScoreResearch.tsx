@@ -49,12 +49,12 @@ export const ModelScoreResearch: React.FC<Props> = ({ modelId }) => {
 
   const loadHistory = useCallback(async () => {
     try {
-      const h = await getCalibrationHistory(20);
+      const h = await getCalibrationHistory(20, modelId);
       if (h.status === 'success') setHistory(h.items || []);
     } catch (err: any) {
       console.error('[ScoreCalibration] load history failed:', err);
     }
-  }, []);
+  }, [modelId]);
 
   /** 点击历史记录：加载该次校准的完整结果 */
   /** 把后端 result 包装成前端渲染结构（补 status + 合并 total_samples/latest_trade_date 到 meta） */
@@ -142,11 +142,11 @@ export const ModelScoreResearch: React.FC<Props> = ({ modelId }) => {
   }, [clearPoll]);
 
   useEffect(() => {
-    // 进入页面只加载历史，不自动开始校准
+    // 进入页面只加载历史，不自动开始校准；模型切换时重载该模型的历史
     void loadHistory();
     return () => clearPoll();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  }, [modelId]);
 
   const summaryColumns = [
     {
@@ -356,9 +356,11 @@ export const ModelScoreResearch: React.FC<Props> = ({ modelId }) => {
                 )}
                 <div className="grid grid-cols-1 lg:grid-cols-2 gap-3">
                   <div>
-                    <div className="mb-1 text-[9px] font-bold text-emerald-600">买入区间（胜率最高）</div>
-                    <div className="space-y-0.5">
-                      {(((data as any).condition_zones.buy_zones || [])).slice(0, 6).map((z: any, i: number) => (
+                    <div className="mb-1 text-[9px] font-bold text-emerald-600">
+                      买入区间（胜率最高）共 {((data as any).condition_zones.buy_zones || []).length} 段
+                    </div>
+                    <div className="space-y-0.5 max-h-72 overflow-y-auto pr-1 custom-scrollbar">
+                      {(((data as any).condition_zones.buy_zones || [])).slice(0, 15).map((z: any, i: number) => (
                         <div key={i} className="flex items-center justify-between text-[10px] py-0.5">
                           <span className="font-bold text-slate-700">
                             {z.regime === '大盘多' ? '📈' : z.regime === '大盘空' ? '📉' : ''}{z.regime}·{z.cap}·{z.board}
@@ -374,9 +376,11 @@ export const ModelScoreResearch: React.FC<Props> = ({ modelId }) => {
                     </div>
                   </div>
                   <div>
-                    <div className="mb-1 text-[9px] font-bold text-rose-600">卖出/回避区间（下跌最高）</div>
-                    <div className="space-y-0.5">
-                      {(((data as any).condition_zones.sell_zones || [])).slice(0, 6).map((z: any, i: number) => (
+                    <div className="mb-1 text-[9px] font-bold text-rose-600">
+                      卖出/回避区间（下跌最高）共 {((data as any).condition_zones.sell_zones || []).length} 段
+                    </div>
+                    <div className="space-y-0.5 max-h-72 overflow-y-auto pr-1 custom-scrollbar">
+                      {(((data as any).condition_zones.sell_zones || [])).slice(0, 15).map((z: any, i: number) => (
                         <div key={i} className="flex items-center justify-between text-[10px] py-0.5">
                           <span className="font-bold text-slate-700">
                             {z.regime === '大盘多' ? '📈' : z.regime === '大盘空' ? '📉' : ''}{z.regime}·{z.cap}·{z.board}
@@ -408,6 +412,42 @@ export const ModelScoreResearch: React.FC<Props> = ({ modelId }) => {
                   scroll={{ x: 600 }}
                   rowKey="score_band"
                 />
+              </div>
+            )}
+
+            {/* 多维度 × 分数 涨跌概率（地区/概念/风格） */}
+            {(data as any).dimension_zones && (data as any).dimension_zones.status === 'success' && (
+              <div className="rounded-2xl border border-violet-100 bg-violet-50/30 p-4 shadow-sm">
+                <div className="mb-2 text-[10px] font-black uppercase tracking-widest text-violet-600">
+                  多维度 × 分数 涨跌概率（地区/概念/风格）
+                </div>
+                <div className="grid grid-cols-1 lg:grid-cols-3 gap-3">
+                  {[
+                    { label: '地区板块', key: 'region', color: 'text-amber-600' },
+                    { label: '概念板块', key: 'concept', color: 'text-sky-600' },
+                    { label: '风格板块', key: 'style', color: 'text-fuchsia-600' },
+                  ].map(sec => {
+                    const items = ((data as any).dimension_zones[sec.key] || []);
+                    if (!items.length) return null;
+                    return (
+                      <div key={sec.key}>
+                        <div className={`mb-1 text-[9px] font-bold ${sec.color}`}>{sec.label}</div>
+                        <div className="space-y-0.5 max-h-56 overflow-y-auto pr-1 custom-scrollbar">
+                          {items.slice(0, 8).map((x: any, i: number) => (
+                            <div key={i} className="py-0.5 text-[9px]">
+                              <div className="font-bold text-slate-700 truncate">{x.name}</div>
+                              <div className="font-mono text-[9px]">
+                                <span className="text-emerald-600">买{x.buy.score_min.toFixed(2)}~{x.buy.score_max.toFixed(2)}胜{x.buy.win_rate}%均{x.buy.avg_ret > 0 ? '+' : ''}{x.buy.avg_ret}%</span>
+                                <span className="text-slate-300"> | </span>
+                                <span className="text-rose-600">避{x.sell.score_min.toFixed(2)}~{x.sell.score_max.toFixed(2)}跌{x.sell.down_prob}%</span>
+                              </div>
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
               </div>
             )}
 
@@ -537,6 +577,7 @@ export const ModelScoreResearch: React.FC<Props> = ({ modelId }) => {
                   <span className="font-mono text-slate-600 truncate">{h.task_id.slice(0, 20)}...</span>
                   <span className="text-slate-400">
                     {h.params?.days ?? '-'}天 / T{String(h.params?.horizons ?? '')} / 样本{h.total_samples?.toLocaleString() ?? '-'}
+                    {h.params?.model_id ? ` / ${String(h.params.model_id).slice(0, 12)}...` : ''}
                   </span>
                 </div>
                 <div className="flex items-center gap-2 flex-shrink-0">

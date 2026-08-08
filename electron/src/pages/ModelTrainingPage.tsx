@@ -15,7 +15,7 @@ import { modelTrainingService } from '../services/modelTrainingService';
 import { useAppSelector } from '../store';
 import { selectCurrentMarket } from '../store/slices/uiSlice';
 import { getMarketConfig } from '../config/marketConfig';
-import { TrainingTarget, TrainingParams, TrainingContext, TrainingStatus, TrainingDraft, SplitKey, TimePeriodMap, FeatureCategory, STORAGE_KEY, DEFAULT_FEATURE_CATEGORIES, PRESET_DEFAULT_FEATURES, MARKET_DEFAULT_FEATURES, getDefaultFeaturesForMarket, resolveDefaultSelectedFeatures, DEFAULT_TIME_PERIODS, DEFAULT_TARGET, DEFAULT_PARAMS, DEFAULT_CONTEXT, buildAutoDisplayName, buildLabelFormula, buildEffectiveTradeDate, daysBetween, toISOStringRange, restoreRange, shouldMigrateLegacyDraftPeriods, buildTrainingRequest, formatRange, toDynamicCategories, TrainingResult, buildBackendTrainingPayload, parseTrainingResult, parseSuggestedTimePeriods, MODEL_DL_DEFAULTS } from './training/trainingUtils';
+import { TrainingTarget, TrainingParams, TrainingContext, TrainingStatus, TrainingDraft, SplitKey, TimePeriodMap, FeatureCategory, STORAGE_KEY, DEFAULT_FEATURE_CATEGORIES, PRESET_DEFAULT_FEATURES, MARKET_DEFAULT_FEATURES, getDefaultFeaturesForMarket, resolveDefaultSelectedFeatures, DEFAULT_TIME_PERIODS, DEFAULT_TARGET, DEFAULT_PARAMS, DEFAULT_CONTEXT, buildAutoDisplayName, buildLabelFormula, buildEffectiveTradeDate, daysBetween, toISOStringRange, restoreRange, shouldMigrateLegacyDraftPeriods, buildTrainingRequest, formatRange, toDynamicCategories, TrainingResult, buildBackendTrainingPayload, parseTrainingResult, parseSuggestedTimePeriods, MODEL_DL_DEFAULTS, WfaConfig } from './training/trainingUtils';
 import { AdminModelFeatureDataCoverage } from '../features/admin/types';
 import { FeatureSelector } from './training/FeatureSelector';
 import { TrainingTargetConfig } from './training/TrainingTargetConfig';
@@ -58,6 +58,7 @@ export const ModelTrainingPage: React.FC = () => {
   const [dataCoverage, setDataCoverage] = useState<AdminModelFeatureDataCoverage | null>(null);
   const [selectedFeatures, setSelectedFeatures] = useState<string[]>(() => getDefaultFeaturesForMarket(currentMarket));
   const [timePeriods, setTimePeriods] = useState<TimePeriodMap>(DEFAULT_TIME_PERIODS);
+  const [wfaConfig, setWfaConfig] = useState<WfaConfig>({ enabled: false, strategy: 'rolling', nWindows: 4, trainYears: 3, valMonths: 12, stepMonths: 12 });
   const [target, setTarget] = useState<TrainingTarget>(DEFAULT_TARGET);
   const [params, setParams] = useState<TrainingParams>(DEFAULT_PARAMS);
   const [context, setContext] = useState<TrainingContext>(DEFAULT_CONTEXT);
@@ -103,8 +104,8 @@ export const ModelTrainingPage: React.FC = () => {
   const testDays = useMemo(() => daysBetween(timePeriods.test), [timePeriods.test]);
   const totalDays = trainDays + valDays + testDays;
   const requestPreview = useMemo(
-    () => buildTrainingRequest(selectedFeatures, featureCategories, timePeriods, target, params, context, displayName, currentMarket),
-    [selectedFeatures, featureCategories, timePeriods, target, params, context, displayName, currentMarket]
+    () => buildTrainingRequest(selectedFeatures, featureCategories, timePeriods, target, params, context, displayName, currentMarket, wfaConfig),
+    [selectedFeatures, featureCategories, timePeriods, target, params, context, displayName, currentMarket, wfaConfig]
   );
   const isReadyToTrain = selectedFeatures.length > 0 && target.horizonDays >= 1 && totalDays > 0;
   const isTrainingInProgress =
@@ -433,7 +434,7 @@ export const ModelTrainingPage: React.FC = () => {
                 <AnimatePresence mode="wait">
                   <motion.div key={currentStep} initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -10 }} transition={{ duration: 0.2 }}>
                     {currentStep === 0 && <FeatureSelector categories={featureCategories} selectedFeatures={selectedFeatures} onChange={setSelectedFeatures} loading={featureCatalogLoading} />}
-                    {currentStep === 1 && <TrainingTargetConfig target={target} timePeriods={timePeriods} onTargetChange={setTarget} onTimeChange={(k, v) => setTimePeriods({...timePeriods, [k]: v})} dataCoverage={dataCoverage} />}
+                    {currentStep === 1 && <TrainingTargetConfig target={target} timePeriods={timePeriods} onTargetChange={setTarget} onTimeChange={(k, v) => setTimePeriods({...timePeriods, [k]: v})} dataCoverage={dataCoverage} wfa={wfaConfig} onWfaChange={setWfaConfig} />}
                     {currentStep === 2 && <ParameterConfig params={params} context={context} onParamsChange={setParams} onContextChange={setContext} displayName={displayName} onDisplayNameChange={(n, m) => { setDisplayName(n); setDisplayNameMode(m); }} autoDisplayName={autoDisplayName} market={currentMarket} />}
                     {currentStep === 3 && <TrainingConsole trainingStatus={trainingStatus} executionStage={executionStage} progress={progress} logs={logs} backendRunStatus={backendRunStatus} result={result} requestPreview={requestPreview} totalDays={totalDays} trainDays={trainDays} valDays={valDays} testDays={testDays} target={target} />}
                     {currentStep === 4 && <TrainingResultView result={result} resultError={resultError} settingDefaultModel={settingDefaultModel} onSetDefaultModel={handleSetDefaultModel} trainingStatus={trainingStatus} />}

@@ -115,8 +115,10 @@ async function fetchShanghaiIndex(days: number): Promise<{
 } | null> {
   try {
     const token = authService.getAccessToken();
+    // 后端接口 days 上限 500，clamp 避免 422
+    const cappedDays = Math.min(500, Math.max(20, days));
     const resp = await axios.get(`${baseURL}/market/index-kline`, {
-      params: { symbol: '000001.SH', days },
+      params: { symbol: '000001.SH', days: cappedDays },
       headers: token ? { Authorization: `Bearer ${token}` } : {},
       timeout: 15000,
     });
@@ -754,7 +756,7 @@ export const StockScoreChart: React.FC<Props> = ({ symbol, name, stockInfo, mark
         ] : []),
       ],
     };
-  }, [visibleKline, visibleScores, trades, replayEnabled, strategyAlerts, strategyAlertsByDate, defaultZoom, refLines, indexData, dates]);
+  }, [visibleKline, visibleScores, trades, replayEnabled, strategyAlerts, strategyAlertsByDate, defaultZoom, refLines, indexData]);
 
   // 打开回放时：点击逻辑绑定到 visibleKline 的索引
   const onEvents = useMemo(() => ({ click: onChartClick }), [clickableDates]);

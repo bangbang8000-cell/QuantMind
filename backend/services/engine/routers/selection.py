@@ -945,6 +945,33 @@ async def _run_score_calibration(
 
         logger.info("index_above_ma20 loaded %d days (signals %d days)", len(index_above_ma20), len(all_dates))
 
+        # 3.6 加载 QuantDB sector_concept 多维度归属：地区/概念/风格/行业
+        #     symbol(suffix) → {regions:[], concepts:[], styles:[]}
+        symbol_dims: dict[str, dict[str, list[str]]] = {}
+        try:
+            _hub = QuantDBDataHub()
+            _sector_df = _hub.fetch_sector_members()
+            if _sector_df is not None and not _sector_df.empty and "Symbol" in _sector_df.columns:
+                for _row in _sector_df.itertuples(index=False):
+                    _sym = str(_row.Symbol).strip().upper()
+                    _name = str(getattr(_row, "SectorName", "") or "").strip()
+                    _type = str(getattr(_row, "SectorType", "") or "").strip()
+                    if not _sym or not _name:
+                        continue
+                    dims = symbol_dims.setdefault(_sym, {"regions": [], "concepts": [], "styles": []})
+                    if "地区" in _type:
+                        if _name not in dims["regions"]:
+                            dims["regions"].append(_name)
+                    elif "概念" in _type:
+                        if len(dims["concepts"]) < 15:  # 限制每只股票概念数，避免过载
+                            dims["concepts"].append(_name)
+                    elif "风格" in _type:
+                        if _name not in dims["styles"]:
+                            dims["styles"].append(_name)
+            logger.info("sector_concept loaded: %d stocks with dimensions", len(symbol_dims))
+        except Exception as _exc:
+            logger.warning("load sector_concept failed: %s", _exc)
+
         # 4. 逐日计算多周期收益
         _calib_update(task_id, progress=55)
         _calib_update(task_id, message="回测多周期收益...")
@@ -986,10 +1013,14 @@ async def _run_score_calibration(
                     continue
                 cap = _cap_bucket(caps_snapshot.get(prefix))
                 board = _board_type(suffix)
+                _dims = symbol_dims.get(suffix, {})
                 records.append({
                     "score": it["score"], "rets": rets, "cap": cap, "board": board,
                     "rank_pct": (rank_i + 1) / total, "rank": rank_i + 1, "total": total,
                     "regime": day_regime,  # True=大盘>MA20, False=大盘<MA20, None=无数据
+                    "regions": _dims.get("regions", []),
+                    "concepts": _dims.get("concepts", []),
+                    "styles": _dims.get("styles", []),
                 })
             if idx % 20 == 0:
                 _calib_update(task_id, progress=55 + int(40 * (idx + 1) / total_days))
@@ -1293,39 +1324,40 @@ def _compute_condition_zones(
             if len(bins) < 3:
                 continue
 
-            # 胜率最高段（买入区间）
-            best = max(bins, key=lambda b: b["win_rate"])
-            # 下跌概率最高段（卖出/回避区间）
-            worst = max(bins, key=lambda b: b["down_prob"])
-
-            results.append({
-                "type": "buy",
-                "horizon": h,
-                "regime": regime,
-                "cap": cap,
-                "board": board,
-                "score_min": round(best["score_min"], 4),
-                "score_max": round(best["score_max"], 4),
-                "n": best["n"],
-                "win_rate": round(best["win_rate"] * 100.0, 1),
-                "down_prob": round(best["down_prob"] * 100.0, 1),
-                "avg_ret": round(best["avg_ret"], 3),
-                "label": "买入区间",
-            })
-            results.append({
-                "type": "sell",
-                "horizon": h,
-                "regime": regime,
-                "cap": cap,
-                "board": board,
-                "score_min": round(worst["score_min"], 4),
-                "score_max": round(worst["score_max"], 4),
-                "n": worst["n"],
-                "win_rate": round(worst["win_rate"] * 100.0, 1),
-                "down_prob": round(worst["down_prob"] * 100.0, 1),
-                "avg_ret": round(worst["avg_ret"], 3),
-                "label": "卖出/回避区间",
-            })
+            # 胜率最高段（买入区间）：输出 Top2，避免只看最佳一段
+            best_bins = sorted(bins, key=lambda b: -b["win_rate"])[:2]
+            for best in best_bins:
+                results.append({
+                    "type": "buy",
+                    "horizon": h,
+                    "regime": regime,
+                    "cap": cap,
+                    "board": board,
+                    "score_min": round(best["score_min"], 4),
+                    "score_max": round(best["score_max"], 4),
+                    "n": best["n"],
+                    "win_rate": round(best["win_rate"] * 100.0, 1),
+                    "down_prob": round(best["down_prob"] * 100.0, 1),
+                    "avg_ret": round(best["avg_ret"], 3),
+                    "label": "买入区间",
+                })
+            # 下跌概率最高段（卖出/回避区间）：输出 Top2
+            worst_bins = sorted(bins, key=lambda b: -b["down_prob"])[:2]
+            for worst in worst_bins:
+                results.append({
+                    "type": "sell",
+                    "horizon": h,
+                    "regime": regime,
+                    "cap": cap,
+                    "board": board,
+                    "score_min": round(worst["score_min"], 4),
+                    "score_max": round(worst["score_max"], 4),
+                    "n": worst["n"],
+                    "win_rate": round(worst["win_rate"] * 100.0, 1),
+                    "down_prob": round(worst["down_prob"] * 100.0, 1),
+                    "avg_ret": round(worst["avg_ret"], 3),
+                    "label": "卖出/回避区间",
+                })
 
     if not results:
         return {"status": "none", "detail": "无有效样本"}
@@ -1339,6 +1371,103 @@ def _compute_condition_zones(
         "metric_note": "大盘状态 = 上证指数(000001.SH)收盘价 vs 20日均线(MA20)：指数>=MA20为「大盘多」(趋势向上)，<MA20为「大盘空」(趋势向下/系统性风险)",
         "buy_zones": buy[:20],
         "sell_zones": sell[:20],
+    }
+
+
+def _compute_dimension_zones(
+    records: list[dict[str, Any]],
+    horizon_list: list[int],
+) -> dict[str, Any]:
+    """多维度分数校准：地区/概念/风格 × 分数 → 涨跌概率。
+
+    利用 QuantDB sector_concept：每只股票归属地区板块/概念板块/风格板块。
+    对每个地区/概念/风格，统计该维度下不同分数段的胜率/下跌概率/均收，
+    输出「胜率最高的分数段（买入）」和「下跌概率最高的分数段（回避）」。
+    """
+    if not records:
+        return {"status": "empty", "detail": "无样本"}
+
+    main_h = horizon_list[0] if horizon_list else 5
+    # 记录里每个 symbol 的维度（去重后收集）
+    # 先收集所有维度下足够样本的组合
+    dim_items: dict[str, dict[str, list[dict[str, Any]]]] = {
+        "region": {}, "concept": {}, "style": {},
+    }
+    for r in records:
+        for dim_key, field in (("region", "regions"), ("concept", "concepts"), ("style", "styles")):
+            for name in (r.get(field) or []):
+                if not name:
+                    continue
+                # 只统计样本多的热门维度
+                dim_items[dim_key].setdefault(name, []).append(r)
+
+    def _dim_zones(items: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        if len(items) < 3000:
+            return []
+        items_sorted = sorted(items, key=lambda x: x["score"])
+        n = len(items_sorted)
+        # 分 8 档
+        bin_size = max(200, n // 8)
+        bins = []
+        for i in range(0, n, bin_size):
+            seg = items_sorted[i:i + bin_size]
+            if len(seg) < 150:
+                continue
+            rets_h = [x["rets"].get(main_h) for x in seg]
+            rets_h = [x for x in rets_h if x is not None]
+            if len(rets_h) < 100:
+                continue
+            wins = sum(1 for x in rets_h if x > 0)
+            downs = sum(1 for x in rets_h if x < 0)
+            bins.append({
+                "score_min": seg[0]["score"],
+                "score_max": seg[-1]["score"],
+                "n": len(rets_h),
+                "win_rate": wins / len(rets_h),
+                "down_prob": downs / len(rets_h),
+                "avg_ret": sum(rets_h) / len(rets_h),
+            })
+        if len(bins) < 3:
+            return []
+        best = max(bins, key=lambda b: b["win_rate"])
+        worst = max(bins, key=lambda b: b["down_prob"])
+        return [{
+            "buy": {
+                "score_min": round(best["score_min"], 3),
+                "score_max": round(best["score_max"], 3),
+                "n": best["n"],
+                "win_rate": round(best["win_rate"] * 100.0, 1),
+                "down_prob": round(best["down_prob"] * 100.0, 1),
+                "avg_ret": round(best["avg_ret"], 3),
+            },
+            "sell": {
+                "score_min": round(worst["score_min"], 3),
+                "score_max": round(worst["score_max"], 3),
+                "n": worst["n"],
+                "win_rate": round(worst["win_rate"] * 100.0, 1),
+                "down_prob": round(worst["down_prob"] * 100.0, 1),
+                "avg_ret": round(worst["avg_ret"], 3),
+            },
+        }]
+
+    result: dict[str, list[dict[str, Any]]] = {"region": [], "concept": [], "style": []}
+    for dim_key, items_map in dim_items.items():
+        for name, items in items_map.items():
+            zones = _dim_zones(items)
+            if zones:
+                result[dim_key].append({"name": name, "total_n": len(items), **zones[0]})
+
+    # 按买入胜率排序
+    for k in result:
+        result[k].sort(key=lambda x: -x["buy"]["win_rate"])
+
+    # 只保留热门维度
+    return {
+        "status": "success",
+        "region": result["region"][:15],
+        "concept": result["concept"][:20],
+        "style": result["style"][:10],
+        "note": "多维度×分数：QuantDB sector_concept 地区/概念/风格板块，统计各维度下不同分数段的涨跌概率（主周期 T+N）",
     }
 
 
@@ -1495,6 +1624,8 @@ async def _aggregate_calibration(
     winrate_zones = _compute_winrate_zones(records, horizon_list)
     # 多条件组合最优区间：大盘状态 × 市值 × 板块
     condition_zones = _compute_condition_zones(records, horizon_list)
+    # 多维度分数校准：地区/概念/风格 × 分数 → 涨跌概率
+    dimension_zones = _compute_dimension_zones(records, horizon_list)
 
     return {
         "matrix": matrix,
@@ -1506,6 +1637,7 @@ async def _aggregate_calibration(
         "market_signal": market_signal,
         "winrate_zones": winrate_zones,
         "condition_zones": condition_zones,
+        "dimension_zones": dimension_zones,
         "recommended_band": recommended,
         "total_samples": len(records),
         "latest_trade_date": latest_date,
@@ -1572,12 +1704,20 @@ _calib_load_all()
 async def list_score_calibration_history(
     request: Request,
     limit: int = Query(20, ge=1, le=100),
+    model_id: str = Query("", description="模型 ID，只返回该模型的校准历史"),
 ):
-    """校准历史：列出最近的校准任务（内存存储，重启后清空）。"""
+    """校准历史：列出最近的校准任务（内存存储，重启后清空）。
+
+    支持按 model_id 过滤 —— 只显示当前模型的校准历史，不同模型历史隔离。
+    """
     user_id, tenant_id = get_authenticated_identity(request)
     tasks = []
     for tid, t in _calib_tasks.items():
         if t.get("user_id") != user_id:
+            continue
+        # 按模型过滤：指定 model_id 时只返回该模型的校准任务
+        task_model = (t.get("params") or {}).get("model_id") or ""
+        if model_id and task_model != model_id:
             continue
         tasks.append({
             "task_id": tid,

@@ -1,6 +1,6 @@
 import React from 'react';
 import { Card, Divider, Alert, Descriptions, Tag, Space, Typography, Empty, Button } from 'antd';
-import { BarChart, MonitorPlay } from 'lucide-react';
+import { BarChart, MonitorPlay, Activity } from 'lucide-react';
 import { 
   BarChart as ReBarChart, 
   Bar, 
@@ -69,6 +69,63 @@ const renderMetaLabel = (zh: string, en: string): React.ReactNode => (
     <span className="mt-1 text-xs font-normal text-slate-500">{en}</span>
   </div>
 );
+
+/** WFA 诊断解读：基于 IC 均值/标准差/正窗占比/ICIR 组合判断，输出可读结论 */
+const WfaInterpretation: React.FC<{ wfa: any }> = ({ wfa }) => {
+  if (!wfa || !wfa.enabled) return null;
+  const icMean = Number(wfa.ic_mean);
+  const icStd = Number(wfa.ic_std);
+  const positiveRate = Number(wfa.positive_rate);
+  const icir = Number(wfa.overall_icir);
+  const hasIcir = Number.isFinite(icir) && !Number.isNaN(icir);
+
+  const checks: Array<{ label: string; ok: boolean; text: string }> = [];
+  if (icMean >= 0.05) checks.push({ label: 'IC 强度', ok: true, text: `IC均值 ${icMean.toFixed(4)} ≥ 0.05，信号强度良好` });
+  else if (icMean >= 0) checks.push({ label: 'IC 强度', ok: true, text: `IC均值 ${icMean.toFixed(4)} 为正，信号有效但偏弱（<0.05）` });
+  else checks.push({ label: 'IC 强度', ok: false, text: `IC均值 ${icMean.toFixed(4)} 为负，信号方向可能反了` });
+
+  if (icStd <= 0.02) checks.push({ label: 'IC 稳定性', ok: true, text: `标准差 ${icStd.toFixed(4)} ≤ 0.02，各窗口波动小` });
+  else checks.push({ label: 'IC 稳定性', ok: false, text: `标准差 ${icStd.toFixed(4)} > 0.02，各窗口波动偏大` });
+
+  if (positiveRate >= 0.75) checks.push({ label: '正窗占比', ok: true, text: `${Math.round(positiveRate * 100)}% 窗口 IC 为正，跨期一致性好` });
+  else if (positiveRate >= 0.5) checks.push({ label: '正窗占比', ok: true, text: `${Math.round(positiveRate * 100)}% 窗口为正，存在少数走弱窗口` });
+  else checks.push({ label: '正窗占比', ok: false, text: `仅 ${Math.round(positiveRate * 100)}% 窗口为正，多数窗口失效` });
+
+  if (hasIcir) {
+    if (Math.abs(icir) >= 0.3) checks.push({ label: 'ICIR', ok: true, text: `ICIR ${icir.toFixed(3)}，收益/波动比合理` });
+    else checks.push({ label: 'ICIR', ok: false, text: `ICIR ${icir.toFixed(3)} < 0.3，信号相对波动偏弱` });
+  }
+
+  const okCount = checks.filter(c => c.ok).length;
+
+  return (
+    <div className="mt-3 rounded-xl bg-slate-50/70 border border-slate-100 p-3">
+      <div className="flex items-center justify-between mb-2">
+        <div className="text-[9px] font-black uppercase tracking-wider text-slate-500">判断解读</div>
+        <Text className={clsx('text-[9px] font-black', okCount === checks.length ? 'text-emerald-600' : okCount >= 2 ? 'text-amber-600' : 'text-rose-500')}>
+          {okCount}/{checks.length} 项达标
+        </Text>
+      </div>
+      <div className="space-y-1">
+        {checks.map((c, i) => (
+          <div key={i} className="flex items-start gap-1.5">
+            <span className={clsx('mt-0.5 text-[8px] font-black', c.ok ? 'text-emerald-500' : 'text-rose-400')}>{c.ok ? '✓' : '✗'}</span>
+            <Text className={clsx('text-[10px] leading-snug', c.ok ? 'text-slate-600' : 'text-rose-500/80')}>
+              <span className="font-bold text-slate-500">{c.label}：</span>{c.text}
+            </Text>
+          </div>
+        ))}
+      </div>
+      <Text className="block mt-2 text-[10px] text-slate-400 leading-relaxed">
+        {okCount === checks.length
+          ? '整体稳定可用，适合作为选股模型。'
+          : okCount >= 2
+            ? '多数维度达标，个别窗口波动可接受，建议关注 IC 表现最弱的区间。'
+            : '多个维度未达标，建议调整特征/参数后重新训练，或考虑融合其他模型。'}
+      </Text>
+    </div>
+  );
+};
 
 export const TrainingResultView: React.FC<TrainingResultViewProps> = ({
   result,
@@ -269,7 +326,146 @@ export const TrainingResultView: React.FC<TrainingResultViewProps> = ({
                 </div>
               </div>
             )}
-            
+
+            {result.wfa?.enabled && result.wfa.windows?.length > 0 && (
+              <div className="rounded-2xl border border-violet-200 bg-white p-4">
+                <div className="mb-3 flex items-center justify-between">
+                  <div className="flex items-center gap-2">
+                    <Activity size={14} className="text-violet-500" />
+                    <div className="text-[10px] font-black uppercase tracking-[0.18em] text-slate-400">
+                      WFA 稳定性诊断
+                    </div>
+                  </div>
+                  <Tag
+                    className={clsx('m-0 rounded-full border-0 px-2.5 py-0.5', result.wfa.stability === 'stable' ? 'bg-emerald-50 text-emerald-600' : 'bg-amber-50 text-amber-600')}
+                  >
+                    {result.wfa.stability === 'stable' ? '稳定' : '不稳定'}
+                  </Tag>
+                </div>
+
+                <div className="mb-4 grid grid-cols-2 gap-2">
+                  <div className="rounded-xl bg-slate-50 px-3 py-2 text-center">
+                    <div className="text-[9px] font-semibold uppercase tracking-wider text-slate-400">IC 均值</div>
+                    <div className={`mt-0.5 text-sm font-bold ${result.wfa.ic_mean >= 0.05 ? 'text-emerald-600' : result.wfa.ic_mean >= 0 ? 'text-amber-600' : 'text-rose-500'}`}>
+                      {Number(result.wfa.ic_mean).toFixed(4)}
+                    </div>
+                  </div>
+                  <div className="rounded-xl bg-slate-50 px-3 py-2 text-center">
+                    <div className="text-[9px] font-semibold uppercase tracking-wider text-slate-400">IC 标准差</div>
+                    <div className={`mt-0.5 text-sm font-bold ${result.wfa.ic_std <= 0.02 ? 'text-emerald-600' : 'text-amber-600'}`}>
+                      {Number(result.wfa.ic_std).toFixed(4)}
+                    </div>
+                  </div>
+                  <div className="rounded-xl bg-slate-50 px-3 py-2 text-center">
+                    <div className="text-[9px] font-semibold uppercase tracking-wider text-slate-400">ICIR</div>
+                    <div className={`mt-0.5 text-sm font-bold ${Number(result.wfa.overall_icir) >= 0.3 ? 'text-emerald-600' : 'text-slate-700'}`}>
+                      {Number.isFinite(Number(result.wfa.overall_icir)) ? Number(result.wfa.overall_icir).toFixed(3) : '—'}
+                    </div>
+                  </div>
+                  <div className="rounded-xl bg-slate-50 px-3 py-2 text-center">
+                    <div className="text-[9px] font-semibold uppercase tracking-wider text-slate-400">正窗占比</div>
+                    <div className="mt-0.5 text-sm font-bold text-slate-700">{Math.round(Number(result.wfa.positive_rate) * 100)}%</div>
+                  </div>
+                </div>
+
+                <ResponsiveContainer width="100%" height={180}>
+                  <ReBarChart
+                    data={result.wfa.windows.map(w => ({
+                      name: `W${w.window_idx + 1}`,
+                      IC: Number(w.ic),
+                      RankIC: Number(w.rank_ic),
+                    }))}
+                    barCategoryGap="25%"
+                    margin={{ top: 10, right: 10, left: -10, bottom: 0 }}
+                  >
+                    <CartesianGrid strokeDasharray="3 3" stroke="#f1f5f9" />
+                    <XAxis dataKey="name" tick={{ fontSize: 10, fill: '#64748b' }} axisLine={false} tickLine={false} />
+                    <YAxis tick={{ fontSize: 10, fill: '#94a3b8' }} axisLine={false} tickLine={false} tickFormatter={(v: number) => v.toFixed(2)} />
+                    <Tooltip
+                      contentStyle={{ borderRadius: 12, fontSize: 11 }}
+                      formatter={(value: any, name: string, props: any) => {
+                        const w = result.wfa?.windows?.[props?.payload?.payloadIndex ?? 0];
+                        if (w && name === 'IC') {
+                          return [`${Number(value).toFixed(4)}`, `${w.val_start} ~ ${w.val_end}`];
+                        }
+                        return [value, name];
+                      }}
+                    />
+                    <Legend wrapperStyle={{ fontSize: 10 }} />
+                    <ReferenceLine y={0} stroke="#cbd5e1" />
+                    <Bar dataKey="IC" fill="#8b5cf6" radius={[4, 4, 0, 0]} />
+                    <Bar dataKey="RankIC" fill="#a78bfa" radius={[4, 4, 0, 0]} />
+                  </ReBarChart>
+                </ResponsiveContainer>
+
+                <div className="mt-2 flex flex-wrap items-center gap-2 text-[10px] text-slate-400">
+                  <span className="font-mono">{result.wfa.windows.length} 个窗口</span>
+                  <span>·</span>
+                  <span>{result.wfa.strategy === 'rolling' ? '滚动窗口' : '扩张窗口'}</span>
+                  <span>·</span>
+                  <span>模型: {result.wfa.model_type}</span>
+                  <span>·</span>
+                  <span>IC 区间 [{Number(result.wfa.ic_min).toFixed(4)}, {Number(result.wfa.ic_max).toFixed(4)}]</span>
+                </div>
+
+                {/* 判断解读 */}
+                <WfaInterpretation wfa={result.wfa} />
+              </div>
+            )}
+
+            {result.drift?.enabled && (
+              <div className="rounded-2xl border border-sky-200 bg-white p-4">
+                <div className="mb-3 flex items-center justify-between">
+                  <div className="flex items-center gap-2">
+                    <Activity size={14} className="text-sky-500" />
+                    <div className="text-[10px] font-black uppercase tracking-[0.18em] text-slate-400">
+                      数据漂移检测 (PSI)
+                    </div>
+                  </div>
+                  <Tag
+                    className={clsx('m-0 rounded-full border-0 px-2.5 py-0.5', result.drift.overall === 'stable' ? 'bg-emerald-50 text-emerald-600' : result.drift.overall === 'warning' ? 'bg-amber-50 text-amber-600' : 'bg-rose-50 text-rose-600')}
+                  >
+                    {result.drift.overall === 'stable' ? '稳定' : result.drift.overall === 'warning' ? '预警' : '严重漂移'}
+                  </Tag>
+                </div>
+
+                <div className="mb-3 grid grid-cols-2 gap-2">
+                  <div className="rounded-xl bg-slate-50 px-3 py-2 text-center">
+                    <div className="text-[9px] font-semibold uppercase tracking-wider text-slate-400">最大 PSI</div>
+                    <div className={`mt-0.5 text-sm font-bold ${Number(result.drift.max_psi) < 0.1 ? 'text-emerald-600' : Number(result.drift.max_psi) < 0.25 ? 'text-amber-600' : 'text-rose-500'}`}>
+                      {Number(result.drift.max_psi).toFixed(4)}
+                    </div>
+                  </div>
+                  <div className="rounded-xl bg-slate-50 px-3 py-2 text-center">
+                    <div className="text-[9px] font-semibold uppercase tracking-wider text-slate-400">漂移特征</div>
+                    <div className="mt-0.5 text-sm font-bold text-slate-700">
+                      稳定 {result.drift.drift?.stable ?? 0} / 中 {result.drift.drift?.medium ?? 0} / 重 {result.drift.drift?.severe ?? 0}
+                    </div>
+                  </div>
+                </div>
+
+                {result.drift.top_drift_features?.length > 0 && (
+                  <div className="space-y-1">
+                    {result.drift.top_drift_features.slice(0, 8).map((f, i) => (
+                      <div key={i} className="flex items-center gap-2 px-2 py-1 bg-slate-50/60 rounded-lg border border-slate-100/50">
+                        <Text className="text-[9px] font-mono text-slate-500 flex-1 truncate">{f.feature}</Text>
+                        <Text className={`text-[10px] font-black font-mono ${f.level === 'stable' ? 'text-emerald-600' : f.level === 'medium' ? 'text-amber-600' : 'text-rose-500'}`}>
+                          {Number(f.psi).toFixed(3)}
+                        </Text>
+                        <Tag className={`m-0 rounded-md border-0 px-1.5 py-0 text-[8px] font-black ${f.level === 'stable' ? 'bg-emerald-50 text-emerald-600' : f.level === 'medium' ? 'bg-amber-50 text-amber-600' : 'bg-rose-50 text-rose-600'}`}>
+                          {f.level === 'stable' ? '稳定' : f.level === 'medium' ? '中' : '重'}
+                        </Tag>
+                      </div>
+                    ))}
+                  </div>
+                )}
+
+                <Text className="block mt-2 text-[10px] text-slate-400 leading-relaxed">
+                  对比 {result.drift.train_start} ~ {result.drift.train_end}（训练）与 {result.drift.recent_start} ~ {result.drift.recent_end}（最近实盘）的特征分布。PSI &lt; 0.1 无显著漂移，0.1~0.25 中等，&gt; 0.25 显著。若严重漂移，建议重新训练以适应市场结构变化。
+                </Text>
+              </div>
+            )}
+
             <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4">
               <div className="text-[10px] font-black uppercase tracking-[0.22em] text-slate-400">后续动作</div>
               <div className="mt-2 text-sm text-slate-700">

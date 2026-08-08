@@ -254,19 +254,22 @@ export interface CalibrationHistoryItem {
   status: string;
   progress: number;
   message?: string;
-  params?: { days?: number; horizons?: string; top_n?: number };
+  params?: { days?: number; horizons?: string; top_n?: number; model_id?: string };
   created_at?: string;
   total_samples?: number;
   recommended_band?: string | null;
   latest_trade_date?: string;
 }
 
-export async function getCalibrationHistory(limit = 20): Promise<{
+export async function getCalibrationHistory(limit = 20, modelId?: string): Promise<{
   status: string;
   items: CalibrationHistoryItem[];
   total: number;
 }> {
-  const res = await apiClient.get(`/selection/score-calibration-history?limit=${limit}`);
+  const qp = new URLSearchParams();
+  qp.set('limit', String(limit));
+  if (modelId) qp.set('model_id', modelId);
+  const res = await apiClient.get(`/selection/score-calibration-history?${qp.toString()}`);
   return res.data;
 }
 

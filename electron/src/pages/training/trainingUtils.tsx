@@ -118,6 +118,62 @@ export interface TrainingContext {
   industry_as_feature?: boolean;
 }
 
+export interface WfaConfig {
+  enabled: boolean;
+  strategy: 'rolling' | 'expanding';
+  nWindows: number;
+  trainYears: number;
+  valMonths: number;
+  stepMonths: number;
+}
+
+export interface WfaWindowResult {
+  window_idx: number;
+  strategy: string;
+  train_start: string;
+  train_end: string;
+  val_start: string;
+  val_end: string;
+  train_rows: number;
+  val_rows: number;
+  ic: number;
+  rank_ic: number;
+  rank_icir: number;
+  rmse: number;
+  auc: number;
+}
+
+export interface WfaDiagnosticResult {
+  enabled: boolean;
+  strategy: string;
+  n_windows: number;
+  ic_mean: number;
+  ic_std: number;
+  ic_min: number;
+  ic_max: number;
+  rank_ic_mean: number;
+  rank_ic_std: number;
+  positive_rate: number;
+  stability: string;
+  model_type: string;
+  overall_icir: number;
+  windows: WfaWindowResult[];
+  error?: string;
+}
+
+export interface PsiDriftResult {
+  enabled: boolean;
+  train_start?: string;
+  train_end?: string;
+  recent_start?: string;
+  recent_end?: string;
+  drift?: { stable: number; medium: number; severe: number };
+  top_drift_features?: Array<{ feature: string; psi: number; level: string }>;
+  max_psi?: number;
+  overall?: 'stable' | 'warning' | 'severe';
+  reason?: string;
+}
+
 export interface TrainingRequestPayload {
   displayName: string;
   selectedFeatures: string[];
@@ -134,6 +190,7 @@ export interface TrainingRequestPayload {
   labelFormula: string;
   effectiveTradeDate: string;
   trainingWindow: string;
+  wfa?: WfaConfig;
 }
 
 export interface TrainingResult {
@@ -175,6 +232,8 @@ export interface TrainingResult {
     storagePath: string;
     modelFile: string;
   };
+  wfa?: WfaDiagnosticResult;
+  drift?: PsiDriftResult;
   completedAt: string;
 }
 
@@ -697,6 +756,7 @@ export const buildTrainingRequest = (
   context: TrainingContext,
   displayName: string,
   market?: string,
+  wfa?: WfaConfig,
 ): TrainingRequestPayload => {
   const finalFeatures = Array.from(new Set(selectedFeatures));
   const labelFormula = buildLabelFormula(target);
@@ -719,6 +779,7 @@ export const buildTrainingRequest = (
     labelFormula,
     effectiveTradeDate,
     trainingWindow,
+    wfa: wfa?.enabled ? wfa : undefined,
   };
 };
 
@@ -815,6 +876,18 @@ export const buildBackendTrainingPayload = (
   if (modelTypes) {
     payload.model_types = modelTypes;
     payload.ensemble = ensembleMethod;
+  }
+
+  // WFA 稳定性诊断配置
+  if (request.wfa?.enabled) {
+    payload.wfa = {
+      enabled: true,
+      strategy: request.wfa.strategy,
+      n_windows: request.wfa.nWindows,
+      train_years: request.wfa.trainYears,
+      val_months: request.wfa.valMonths,
+      step_months: request.wfa.stepMonths,
+    };
   }
 
   return payload;
@@ -931,6 +1004,8 @@ export const parseTrainingResult = (
       storagePath: String(rawRegistration.storage_path || ''),
       modelFile: String(rawRegistration.model_file || ''),
     },
+    wfa: (rawResult.wfa as WfaDiagnosticResult) || undefined,
+    drift: (rawResult.drift as PsiDriftResult) || undefined,
     completedAt: new Date().toISOString(),
   };
 };
