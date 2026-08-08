@@ -53,6 +53,20 @@ export const ModelScoreResearch: React.FC = () => {
   }, []);
 
   /** 点击历史记录：加载该次校准的完整结果 */
+  /** 把后端 result 包装成前端渲染结构（补 status + 合并 total_samples/latest_trade_date 到 meta） */
+  const normalizeResult = useCallback((result: ScoreCalibrationResponse, taskMeta?: any): ScoreCalibrationResponse => {
+    return {
+      ...result,
+      status: 'success',
+      meta: {
+        ...(taskMeta || {}),
+        backtest_days: taskMeta?.backtest_days ?? result.total_samples ?? undefined,
+        total_samples: (result as any)?.total_samples ?? taskMeta?.total_samples,
+        latest_trade_date: (result as any)?.latest_trade_date ?? taskMeta?.latest_trade_date,
+      },
+    };
+  }, []);
+
   const viewHistoryTask = useCallback(async (tid: string) => {
     setLoading(true);
     setData(null);
@@ -61,7 +75,7 @@ export const ModelScoreResearch: React.FC = () => {
     try {
       const t = await getCalibrationTask(tid);
       if (t.status === 'completed' && t.result) {
-        setData({ ...t.result, status: 'success', meta: t.meta });
+        setData(normalizeResult(t.result, t.meta));
       } else if (t.status === 'not_found') {
         setData({ status: 'error', detail: '该历史记录已过期（服务重启后内存任务清空），请重新校准' });
       } else {
@@ -72,7 +86,7 @@ export const ModelScoreResearch: React.FC = () => {
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [normalizeResult]);
 
   const load = useCallback(async () => {
     clearPoll();
@@ -96,8 +110,7 @@ export const ModelScoreResearch: React.FC = () => {
           setProgressMsg(t.message || '');
           if (t.status === 'completed' && t.result) {
             clearPoll();
-            // 后端 result 无 status/meta 字段，补上满足渲染判断
-            setData({ ...t.result, status: 'success', meta: t.meta });
+            setData(normalizeResult(t.result, t.meta));
             setLoading(false);
             void loadHistory();
           } else if (t.status === 'failed' || t.status === 'error') {
@@ -118,7 +131,7 @@ export const ModelScoreResearch: React.FC = () => {
       setData({ status: 'error', detail: err?.message || '加载失败' });
       setLoading(false);
     }
-  }, [days, horizons, clearPoll]);
+  }, [days, horizons, clearPoll, normalizeResult]);
 
   useEffect(() => {
     return () => clearPoll();
@@ -228,7 +241,7 @@ export const ModelScoreResearch: React.FC = () => {
         </Button>
         {data?.meta && (
           <Tag className="border-0 bg-blue-50 text-blue-600 text-[9px] font-bold">
-            {data.meta.backtest_days}天 / {data.meta.total_samples.toLocaleString()}样本 / 最新{data.meta.latest_trade_date}
+            {data.meta?.backtest_days ?? '-'}天 / {(data as any)?.total_samples?.toLocaleString() ?? '-'}样本 / 最新{(data as any)?.latest_trade_date ?? '-'}
           </Tag>
         )}
         {data?.recommended_band && (
