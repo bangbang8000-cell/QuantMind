@@ -917,6 +917,31 @@ async def _run_score_calibration(
         _calib_update(task_id, message="加载市值快照...")
         caps_snapshot = await _load_cap_snapshot()
 
+        # 3.5 上证指数每日收盘 + MA20 状态（用于大盘多空条件）
+        index_above_ma20: dict[str, bool] = {}
+        try:
+            from backend.services.engine.data_platform.quantdb_hub import QuantDBDataHub
+
+            _hub = QuantDBDataHub()
+            # 扩大指数窗口：信号最早日往前推 40 天，确保 MA20 有足够前置数据
+            _start = date.fromisoformat(all_dates[0]) - timedelta(days=45)
+            _end = date.fromisoformat(all_dates[-1]) + timedelta(days=1)
+            _idx_df = _hub.fetch_index_kline("000001.SH", _start, _end)
+            if _idx_df is not None and not _idx_df.empty:
+                _idx_df = _idx_df.sort_values("trade_date").reset_index(drop=True)
+                _idx_close = _idx_df["close"].astype(float)
+                _idx_ma20 = _idx_close.rolling(20).mean()
+                for _i in range(len(_idx_df)):
+                    _d = str(_idx_df.loc[_i, "trade_date"])[:10]  # 转纯 YYYY-MM-DD
+                    _c = float(_idx_close.iloc[_i])
+                    _ma = _idx_ma20.iloc[_i]
+                    if _ma == _ma and _ma > 0:  # not NaN（前 19 天无 MA20）
+                        index_above_ma20[_d] = bool(_c >= _ma)  # 显式转 Python bool（_c>=_ma 可能是 numpy.bool_）
+        except Exception as _exc:
+            logger.warning("load index regime failed: %s", _exc)
+
+        logger.info("index_above_ma20 loaded %d days (signals %d days)", len(index_above_ma20), len(all_dates))
+
         # 4. 逐日计算多周期收益
         _calib_update(task_id, progress=55)
         _calib_update(task_id, message="回测多周期收益...")
@@ -929,6 +954,7 @@ async def _run_score_calibration(
             day_items = date_scores[d]
             if not day_items:
                 continue
+            day_regime = index_above_ma20.get(d)
             sorted_items = sorted(day_items, key=lambda x: -x["score"])
             total = len(sorted_items)
             for rank_i, it in enumerate(sorted_items):
@@ -960,6 +986,7 @@ async def _run_score_calibration(
                 records.append({
                     "score": it["score"], "rets": rets, "cap": cap, "board": board,
                     "rank_pct": (rank_i + 1) / total, "rank": rank_i + 1, "total": total,
+                    "regime": day_regime,  # True=大盘>MA20, False=大盘<MA20, None=无数据
                 })
             if idx % 20 == 0:
                 _calib_update(task_id, progress=55 + int(40 * (idx + 1) / total_days))
@@ -1205,6 +1232,112 @@ def _compute_winrate_zones(
     }
 
 
+def _compute_condition_zones(
+    records: list[dict[str, Any]],
+    horizon_list: list[int],
+) -> dict[str, Any]:
+    """多条件组合最优区间：大盘状态 × 市值 × 板块 × 分数 → 最优做多/做空段。
+
+    用户需求：结合行情板块筛选，找出「达到某分数就涨/跌」的区间。
+    条件维度：
+      - 大盘：上证>MA20（多）/ <MA20（空）
+      - 市值：微盘/小盘/中盘/大盘/超大盘
+      - 板块：沪深主板/创业板/科创板/北交所
+    对每个条件组合，把样本按分数分桶，统计胜率/均收，
+    输出每个条件下「胜率最高分数段（买入区间）」和「下跌概率最高分数段（卖出/回避区间）」。
+    """
+    if not records:
+        return {"status": "empty", "detail": "无样本"}
+
+    # 条件组合：只用样本量足够的组合
+    # 收集所有可能的组合键
+    combos: dict[tuple, list[dict[str, Any]]] = {}
+    for r in records:
+        regime = "大盘多" if r.get("regime") is True else ("大盘空" if r.get("regime") is False else "大盘未知")
+        cap = r.get("cap") or "未知"
+        board = r.get("board") or "其他"
+        key = (regime, cap, board)
+        combos.setdefault(key, []).append(r)
+
+    results = []
+    for h in horizon_list:
+        for (regime, cap, board), items in combos.items():
+            if len(items) < 2000:
+                continue
+            # 该组合下按分数分桶（8 桶）
+            items_sorted = sorted(items, key=lambda x: x["score"])
+            n = len(items_sorted)
+            bin_size = max(200, n // 8)
+            bins = []
+            for i in range(0, n, bin_size):
+                seg = items_sorted[i:i + bin_size]
+                if len(seg) < 150:
+                    continue
+                rets_h = [x["rets"].get(h) for x in seg]
+                rets_h = [x for x in rets_h if x is not None]
+                if len(rets_h) < 100:
+                    continue
+                wins = sum(1 for x in rets_h if x > 0)
+                downs = sum(1 for x in rets_h if x < 0)
+                bins.append({
+                    "score_min": seg[0]["score"],
+                    "score_max": seg[-1]["score"],
+                    "n": len(rets_h),
+                    "win_rate": wins / len(rets_h),
+                    "down_prob": downs / len(rets_h),
+                    "avg_ret": sum(rets_h) / len(rets_h),
+                })
+            if len(bins) < 3:
+                continue
+
+            # 胜率最高段（买入区间）
+            best = max(bins, key=lambda b: b["win_rate"])
+            # 下跌概率最高段（卖出/回避区间）
+            worst = max(bins, key=lambda b: b["down_prob"])
+
+            results.append({
+                "type": "buy",
+                "horizon": h,
+                "regime": regime,
+                "cap": cap,
+                "board": board,
+                "score_min": round(best["score_min"], 4),
+                "score_max": round(best["score_max"], 4),
+                "n": best["n"],
+                "win_rate": round(best["win_rate"] * 100.0, 1),
+                "down_prob": round(best["down_prob"] * 100.0, 1),
+                "avg_ret": round(best["avg_ret"], 3),
+                "label": "买入区间",
+            })
+            results.append({
+                "type": "sell",
+                "horizon": h,
+                "regime": regime,
+                "cap": cap,
+                "board": board,
+                "score_min": round(worst["score_min"], 4),
+                "score_max": round(worst["score_max"], 4),
+                "n": worst["n"],
+                "win_rate": round(worst["win_rate"] * 100.0, 1),
+                "down_prob": round(worst["down_prob"] * 100.0, 1),
+                "avg_ret": round(worst["avg_ret"], 3),
+                "label": "卖出/回避区间",
+            })
+
+    if not results:
+        return {"status": "none", "detail": "无有效样本"}
+
+    # 排序：买入按胜率降序，卖出按下跌概率降序
+    buy = sorted([r for r in results if r["type"] == "buy"], key=lambda x: -x["win_rate"])
+    sell = sorted([r for r in results if r["type"] == "sell"], key=lambda x: -x["down_prob"])
+    return {
+        "status": "success",
+        "note": "多条件组合：大盘状态×市值×板块，找出胜率最高的买入分数段与下跌概率最高的卖出/回避分数段",
+        "buy_zones": buy[:20],
+        "sell_zones": sell[:20],
+    }
+
+
 async def _aggregate_calibration(
     records: list[dict[str, Any]],
     all_dates: list[str],
@@ -1356,6 +1489,8 @@ async def _aggregate_calibration(
     # 胜率聚类：按分数排序，滑动找出高胜率分数区间
     # 核心思路：先统计每个分数附近的胜率，再反推"胜率≥阈值"的分数段
     winrate_zones = _compute_winrate_zones(records, horizon_list)
+    # 多条件组合最优区间：大盘状态 × 市值 × 板块
+    condition_zones = _compute_condition_zones(records, horizon_list)
 
     return {
         "matrix": matrix,
@@ -1366,6 +1501,7 @@ async def _aggregate_calibration(
         "pos_board_avg": pos_board_avg,
         "market_signal": market_signal,
         "winrate_zones": winrate_zones,
+        "condition_zones": condition_zones,
         "recommended_band": recommended,
         "total_samples": len(records),
         "latest_trade_date": latest_date,

@@ -343,6 +343,53 @@ export const ModelScoreResearch: React.FC<Props> = ({ modelId }) => {
               </div>
             )}
 
+            {/* 多条件组合最优区间（大盘×市值×板块） */}
+            {(data as any).condition_zones && (data as any).condition_zones.status === 'success' && (
+              <div className="rounded-2xl border border-blue-100 bg-blue-50/30 p-4 shadow-sm">
+                <div className="mb-2 text-[10px] font-black uppercase tracking-widest text-blue-600">
+                  多条件组合最优区间（大盘状态 × 市值 × 板块）
+                </div>
+                <div className="grid grid-cols-1 lg:grid-cols-2 gap-3">
+                  <div>
+                    <div className="mb-1 text-[9px] font-bold text-emerald-600">买入区间（胜率最高）</div>
+                    <div className="space-y-0.5">
+                      {(((data as any).condition_zones.buy_zones || [])).slice(0, 6).map((z: any, i: number) => (
+                        <div key={i} className="flex items-center justify-between text-[10px] py-0.5">
+                          <span className="font-bold text-slate-700">
+                            {z.regime === '大盘多' ? '📈' : z.regime === '大盘空' ? '📉' : ''}{z.regime}·{z.cap}·{z.board}
+                          </span>
+                          <span className="font-mono text-[10px]">
+                            T+{z.horizon} {z.score_min.toFixed(3)}~{z.score_max.toFixed(3)}
+                            <span style={{ color: numColor(z.win_rate - 50) }}> 胜率{z.win_rate}%</span>
+                            <span className="text-slate-400"> 均收</span>
+                            <span style={{ color: numColor(z.avg_ret) }}>{z.avg_ret > 0 ? '+' : ''}{z.avg_ret}%</span>
+                          </span>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                  <div>
+                    <div className="mb-1 text-[9px] font-bold text-rose-600">卖出/回避区间（下跌最高）</div>
+                    <div className="space-y-0.5">
+                      {(((data as any).condition_zones.sell_zones || [])).slice(0, 6).map((z: any, i: number) => (
+                        <div key={i} className="flex items-center justify-between text-[10px] py-0.5">
+                          <span className="font-bold text-slate-700">
+                            {z.regime === '大盘多' ? '📈' : z.regime === '大盘空' ? '📉' : ''}{z.regime}·{z.cap}·{z.board}
+                          </span>
+                          <span className="font-mono text-[10px]">
+                            T+{z.horizon} {z.score_min.toFixed(3)}~{z.score_max.toFixed(3)}
+                            <span style={{ color: numColor(-z.down_prob + 50) }}> 下跌{z.down_prob}%</span>
+                            <span className="text-slate-400"> 均收</span>
+                            <span style={{ color: numColor(z.avg_ret) }}>{z.avg_ret > 0 ? '+' : ''}{z.avg_ret}%</span>
+                          </span>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                </div>
+              </div>
+            )}
+
             {data.matrix && data.matrix.length > 0 && (
               <div className="rounded-2xl border border-slate-100 bg-white p-4 shadow-sm">
                 <div className="mb-2 text-[10px] font-black uppercase tracking-widest text-slate-500">
