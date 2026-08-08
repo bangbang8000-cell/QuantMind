@@ -201,7 +201,7 @@ export const AdminDashboard: React.FC = () => {
                         <Row gutter={[20, 20]}>
                             {[
                                 { title: "总用户数", value: metrics.users.total, sub: `今日新增 ${metrics.users.new_today} 人`, icon: <UserOutlined /> },
-                                { title: "实盘策略", value: metrics.strategies.live, sub: `共 ${metrics.strategies.total} 个策略`, icon: <LineChartOutlined /> },
+                                { title: "模拟策略", value: metrics.strategies.live, sub: `共 ${metrics.strategies.total} 个策略`, icon: <LineChartOutlined /> },
                                 { title: "数据记录", value: metrics.content.posts, sub: "社区互动数据", icon: <DatabaseOutlined /> },
                                 { title: "系统运行", value: metrics.system.uptime_days, suffix: "天", sub: `健康度: ${metrics.system.health_score}%`, icon: <HeartOutlined /> }
                             ].map((item, idx) => (

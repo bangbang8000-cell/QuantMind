@@ -16,11 +16,11 @@ export const TradingPlaceholder: React.FC = () => {
                 </div>
 
                 <h1 className="text-4xl font-bold text-gray-900 mb-4 tracking-tight">
-                    实盘交易系统升级中
+                    模拟交易系统升级中
                 </h1>
 
                 <p className="text-lg text-gray-500 mb-12 leading-relaxed">
-                    我们正在重构分布式实盘交易架构，采用 Redis 中间件与 K8s 执行环境，
+                    我们正在重构模拟交易架构，采用 Redis 中间件与 K8s 执行环境，
                     为您提供更隔离、更高效、更安全的交易体验。
                 </p>
 

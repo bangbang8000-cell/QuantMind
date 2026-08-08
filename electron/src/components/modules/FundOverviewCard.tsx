@@ -25,7 +25,7 @@ export const FundOverviewCard: React.FC = () => {
   });
 
   const marketLabel = MARKET_LABELS[currentMarket] || '';
-  const modeLabel = tradingMode === 'real' ? '实盘' : '模拟';
+  const modeLabel = tradingMode === 'real' ? '模拟' : '模拟';
   const cardTitle = `资金概览 (${marketLabel}/${modeLabel})`;
 
   if (loading && !data) {

@@ -321,19 +321,20 @@ const SmartStrategyStudioV2: React.FC = () => {
           <Steps
             current={currentStep}
             size="small"
-            style={{ width: 500 }}
+            style={{ width: 'min(500px, 100%)', flexShrink: 1, minWidth: 0 }}
             items={steps.map(s => ({ title: s.title }))}
           />
         </Header>
 
-        <Layout style={{ flex: 1, overflow: 'hidden' }}>
+        <Layout style={{ flex: 1, overflow: 'hidden', minHeight: 0 }}>
           {/* 左侧导航栏 - 模拟 Sidebar */}
           <Sider
             width={280}
             theme="light"
             style={{
               borderRight: '1px solid #e2e8f0',
-              background: '#fff'
+              background: '#fff',
+              flexShrink: 0
             }}
           >
             <div 
@@ -384,7 +385,7 @@ const SmartStrategyStudioV2: React.FC = () => {
             </div>
           </Sider>
 
-          <Layout style={{ background: '#f8fafc', padding: '0', display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
+          <Layout style={{ background: '#f8fafc', padding: '0', display: 'flex', flexDirection: 'column', overflow: 'hidden', minHeight: 0, minWidth: 0 }}>
             <div className="px-8 py-6 flex items-center justify-between bg-white border-b border-slate-50">
               <div className="flex flex-col">
                 <Breadcrumb 
@@ -435,7 +436,8 @@ const SmartStrategyStudioV2: React.FC = () => {
                 padding: 0,
                 overflowY: 'auto',
                 position: 'relative',
-                flex: 1
+                flex: 1,
+                minHeight: 0
               }}
             >
                 <div 

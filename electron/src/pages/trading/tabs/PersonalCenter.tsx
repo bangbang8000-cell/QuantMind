@@ -240,7 +240,7 @@ const PersonalCenter: React.FC<PersonalCenterProps> = ({ tenantId, userId, statu
                             <User size={24} />
                         </div>
                         <div>
-                            <h2 className="text-lg font-bold text-gray-800">实盘账户中心</h2>
+                            <h2 className="text-lg font-bold text-gray-800">模拟账户中心</h2>
                             <p className="text-gray-500 font-mono text-sm">{tenantId}:{userId}</p>
                             <button 
                                 onClick={handleSyncTemplates}
@@ -357,7 +357,7 @@ const PersonalCenter: React.FC<PersonalCenterProps> = ({ tenantId, userId, statu
                     <div className="grid grid-cols-2 gap-3 p-2.5 rounded-xl bg-gray-50 border border-gray-100">
                         <div>
                             <div className="text-[10px] text-gray-500 mb-0.5">
-                                {tradingMode === 'simulation' ? '当前模拟盘总资产' : '当前实盘总资产'}
+                                {tradingMode === 'simulation' ? '当前模拟盘总资产' : '当前模拟总资产'}
                             </div>
                             <div className="text-base font-bold text-gray-800">
                                 ¥{(modeAccount?.total_asset || 0).toLocaleString()}
@@ -365,7 +365,7 @@ const PersonalCenter: React.FC<PersonalCenterProps> = ({ tenantId, userId, statu
                         </div>
                         <div>
                             <div className="text-[10px] text-gray-500 mb-0.5">
-                                {tradingMode === 'simulation' ? '当前现金（模拟账户）' : '当前现金（实盘账户）'}
+                                {tradingMode === 'simulation' ? '当前现金（模拟账户）' : '当前现金（模拟账户）'}
                             </div>
                             <div className="text-base font-bold text-gray-800">
                                 {independentCash === null ? '账户未上报' : `¥${independentCash.toLocaleString()}`}
@@ -417,7 +417,7 @@ const PersonalCenter: React.FC<PersonalCenterProps> = ({ tenantId, userId, statu
                                             value={draftInitialCash}
                                             onChange={(e) => setDraftInitialCash(Number(e.target.value || 0))}
                                             className="flex-1 px-3 py-2 rounded-xl border border-gray-300 focus:outline-none focus:ring-2 focus:ring-blue-500 text-sm font-mono"
-                                            placeholder="请输入实盘初始资金基准"
+                                            placeholder="请输入模拟初始资金基准"
                                         />
                                         <button
                                             onClick={handleSaveInitialCash}

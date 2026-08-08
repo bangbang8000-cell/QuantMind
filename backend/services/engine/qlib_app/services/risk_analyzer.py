@@ -13,7 +13,6 @@ from backend.services.engine.qlib_app.schemas.backtest import (
     QlibBacktestResult,
     QlibPortfolioMetrics,
 )
-from backend.services.engine.qlib_app.utils.benchmark_symbol import benchmark_candidates
 from backend.services.engine.qlib_app.utils.qlib_utils import D
 from backend.services.engine.qlib_app.utils.structured_logger import StructuredTaskLogger
 from backend.shared.redis_sentinel_client import get_redis_sentinel_client
@@ -276,27 +275,13 @@ class RiskAnalyzer:
     @staticmethod
     def _compute_benchmark_return(benchmark: str, start_date: str, end_date: str) -> float | None:
         try:
-            df = None
-            matched_candidate = None
-            for candidate in benchmark_candidates(benchmark):
-                df = D.features(
-                    [candidate],
-                    ["$close"],
-                    start_time=start_date,
-                    end_time=end_date,
-                )
-                if df is not None and not df.empty:
-                    matched_candidate = candidate
-                    break
+            df = D.features(
+                [benchmark],
+                ["$close"],
+                start_time=start_date,
+                end_time=end_date,
+            )
             if df is None or df.empty:
-                task_logger.warning(
-                    "benchmark_data_not_found",
-                    "基准数据未找到",
-                    benchmark=benchmark,
-                    candidates=benchmark_candidates(benchmark),
-                    start_date=start_date,
-                    end_date=end_date,
-                )
                 return None
             df = df.droplevel(level="instrument")
             series = df["$close"].dropna()
@@ -326,36 +311,19 @@ class RiskAnalyzer:
         annual_return: float | None,
         risk_free_rate: float = 0.02,
     ) -> dict[str, float | None]:
-        _empty = {"alpha": None, "beta": None, "information_ratio": None, "benchmark_return": None}
         try:
-            bm_df = None
-            for candidate in benchmark_candidates(benchmark):
-                bm_df = D.features([candidate], ["$close"], start_time=start_date, end_time=end_date)
-                if bm_df is not None and not bm_df.empty:
-                    break
+            bm_df = D.features([benchmark], ["$close"], start_time=start_date, end_time=end_date)
             if bm_df is None or bm_df.empty:
-                return _empty
+                return {"alpha": None, "beta": None, "information_ratio": None}
 
             bm_df = bm_df.droplevel(level="instrument")
             bm_prices = bm_df["$close"].dropna()
             bm_daily_returns = bm_prices.pct_change().dropna()
 
-            # 同时计算基准收益率（复用已查到的数据，避免二次查询）
-            benchmark_return = None
-            if len(bm_prices) >= 2:
-                first = float(bm_prices.iloc[0])
-                last = float(bm_prices.iloc[-1])
-                if first > 0:
-                    benchmark_return = cls._clamp_unreasonable_metric(
-                        (last / first) - 1,
-                        abs_limit=10.0,
-                        metric_name="benchmark_return",
-                    )
-
             aligned = pd.concat([daily_returns, bm_daily_returns], axis=1, join="inner")
             aligned.columns = ["portfolio", "benchmark"]
             if len(aligned) < 5:
-                return {**_empty, "benchmark_return": cls._clean_nan(benchmark_return)}
+                return {"alpha": None, "beta": None, "information_ratio": None}
 
             port_r = aligned["portfolio"]
             bm_r = aligned["benchmark"]
@@ -393,11 +361,10 @@ class RiskAnalyzer:
                 "alpha": cls._clean_nan(alpha),
                 "beta": cls._clean_nan(beta),
                 "information_ratio": cls._clean_nan(ir),
-                "benchmark_return": cls._clean_nan(benchmark_return),
             }
         except Exception as exc:
             task_logger.warning("compute_risk_metrics_failed", "Risk metrics calculation failed", error=str(exc))
-            return _empty
+            return {"alpha": None, "beta": None, "information_ratio": None}
 
     @staticmethod
     def _extract_report_from_portfolio(portfolio_dict: dict[str, Any]) -> pd.DataFrame | None:
@@ -737,8 +704,10 @@ class RiskAnalyzer:
                             item = item.decode("utf-8")
                         trades.append(json.loads(item))
                     return cls.normalize_trades_for_display(trades)
+                else:
+                    task_logger.info("read_trades_from_redis_empty", "No trades found in Redis, falling back to portfolio_dict", backtest_id=backtest_id)
             except Exception as e:
-                task_logger.warning("read_trades_from_redis_failed", "Failed to read trades from Redis", error=str(e))
+                task_logger.warning("read_trades_from_redis_failed", "Failed to read trades from Redis, falling back", error=str(e))
 
         sys_analyser = portfolio_dict.get("sys_analyser")
         if isinstance(sys_analyser, dict):
@@ -1070,8 +1039,12 @@ class RiskAnalyzer:
             task_logger.warning("empty_or_invalid_report", "Empty or invalid report")
 
         await report_progress(0.89, "正在对比基准指数收益...")
+        task_logger.info("compute_benchmark_start", "开始计算基准收益", benchmark=request.benchmark)
+        benchmark_return = cls._compute_benchmark_return(request.benchmark, request.start_date, request.end_date)
+        benchmark_return = cls._clean_nan(benchmark_return)
+        task_logger.info("compute_benchmark_done", "基准收益计算完成", benchmark_return=benchmark_return)
 
-        risk_metrics = {"alpha": None, "beta": None, "information_ratio": None, "benchmark_return": None}
+        risk_metrics = {"alpha": None, "beta": None, "information_ratio": None}
         if daily_returns is not None and annual_return is not None:
             risk_metrics = cls._compute_risk_metrics(
                 daily_returns=daily_returns,
@@ -1081,12 +1054,6 @@ class RiskAnalyzer:
                 annual_return=annual_return,
                 risk_free_rate=float(getattr(request, "risk_free_rate", 0.02)),
             )
-
-        # 基准收益：优先使用 _compute_risk_metrics 中已查到的数据（避免二次查询时序不一致）
-        benchmark_return = risk_metrics.pop("benchmark_return", None)
-        if benchmark_return is None:
-            benchmark_return = cls._compute_benchmark_return(request.benchmark, request.start_date, request.end_date)
-        benchmark_return = cls._clean_nan(benchmark_return)
 
         portfolio_metrics = None
         final_total_assets = request.initial_capital
@@ -1106,11 +1073,17 @@ class RiskAnalyzer:
         )
         drawdown_curve = cls._build_drawdown_curve(equity_curve)
 
-        await report_progress(0.93, "正在深度解析交易明细与高级统计指标...")
+        await report_progress(0.92, "正在解析交易记录...")
         trades = cls._build_trades_list(portfolio_dict, backtest_id=backtest_id)
+
+        await report_progress(0.93, "正在深度解析交易明细与高级统计指标...")
         trades = cls.normalize_trades_for_display(trades)
         positions = cls._build_positions_list(portfolio_dict)
+
+        await report_progress(0.94, "正在计算交易统计指标...")
         trade_stats = cls._calculate_trade_stats(trades, daily_returns=daily_returns)
+
+        await report_progress(0.95, "正在计算高级统计指标...")
         advanced_stats = cls._calculate_advanced_trade_stats(trades, daily_returns=daily_returns)
 
         factor_metrics = None
@@ -1135,7 +1108,7 @@ class RiskAnalyzer:
                 pred_df = signal_data
 
             if pred_df is not None and not pred_df.empty:
-                await report_progress(0.95, "正在执行因子有效性分析...")
+                await report_progress(0.96, "正在执行因子有效性分析...")
                 instruments = pred_df.index.get_level_values("instrument").unique().tolist()
                 label_df = D.features(
                     instruments,
@@ -1218,9 +1191,6 @@ class RiskAnalyzer:
             profit_factor=trade_stats["profit_factor"],
             avg_win=trade_stats["avg_win"],
             avg_loss=trade_stats["avg_loss"],
-            long_short_is_theoretical=request.strategy_params.short_topk > 0,
-            signal_lag_days=request.signal_lag_days,
-            deal_price=request.deal_price,
             factor_metrics=factor_metrics,
             stratified_returns=stratified_returns,
             style_attribution=style_attribution,

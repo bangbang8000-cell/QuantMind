@@ -84,8 +84,8 @@ export const resolveTradingAccountMode = (
   runtimeMode?: string | null,
   preferredMode: TradingAccountMode = 'real',
 ): TradingAccountMode => {
-  // 核心逻辑变更：优先尊重用户在界面上的手动选择，从而实现实盘/模拟账户数据的独立切换预览。
-  // 不再因为后端正在运行实盘策略而强制锁定前端视图口径。
+  // 核心逻辑变更：优先尊重用户在界面上的手动选择，从而实现模拟账户数据的独立切换预览。
+  // 不再因为后端正在运行模拟策略而强制锁定前端视图口径。
   return preferredMode;
 };
 

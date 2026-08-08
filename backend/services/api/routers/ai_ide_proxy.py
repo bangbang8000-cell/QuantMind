@@ -164,6 +164,8 @@ async def proxy_ai_ide(subpath: str, request: Request, user: dict | None = Depen
         is_streaming = True
     elif subpath.startswith("execute/logs/"):
         is_streaming = True
+    elif subpath.startswith("strategy-lab/run/") and subpath.endswith("/status"):
+        is_streaming = True
 
     if is_streaming:
         return await _forward_stream(request, upstream_path, user)

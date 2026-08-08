@@ -3,12 +3,15 @@
 import logging
 import os
 import re
+import time
 from datetime import date
 from typing import Any, Dict, List, Optional
 
 import pandas as pd
 from fastapi import HTTPException, Request, status
 from sqlalchemy import text
+
+from backend.shared.stock_utils import StockCodeUtil
 
 from ..api.schemas.stock_pool import PoolItem, QueryPoolResponse
 
@@ -64,6 +67,61 @@ COMPATIBLE_COLUMN_CANDIDATES = {
     "idx_hs300": ["idx_hs300", "is_hs300", "is_csi300"],
     "idx_zz1000": ["idx_zz1000", "is_csi1000"],
 }
+
+_QUANTDB_NAMES_CACHE: dict[str, dict[str, str]] = {}
+_QUANTDB_NAMES_TTL_SECONDS = 600
+
+
+def _load_quantdb_stock_names() -> dict[str, str]:
+    """加载 QuantDB instrument_detail 的股票简称映射（suffix symbol -> name）。
+
+    结果带缓存，避免每次查询都读 parquet。
+    """
+    now = time.monotonic()
+    cached = _QUANTDB_NAMES_CACHE.get("names")
+    if cached and cached[0] > now - _QUANTDB_NAMES_TTL_SECONDS:
+        return cached[1]
+    try:
+        from backend.services.engine.data_platform.quantdb_hub import QuantDBDataHub
+
+        hub = QuantDBDataHub.get_instance()
+        if not hub.available:
+            return {}
+        df = hub.fetch_stock_list()
+        if df is None or df.empty:
+            return {}
+        symbol_col = "Symbol" if "Symbol" in df.columns else "symbol"
+        name_col = "Name" if "Name" in df.columns else ("stock_name" if "stock_name" in df.columns else None)
+        if symbol_col not in df.columns or name_col is None:
+            return {}
+        mapping: dict[str, str] = {}
+        for _, row in df[[symbol_col, name_col]].dropna().iterrows():
+            sym = str(row[symbol_col]).strip()
+            nm = str(row[name_col]).strip()
+            if sym and nm:
+                mapping[sym] = nm
+        _QUANTDB_NAMES_CACHE["names"] = (now, mapping)
+        return mapping
+    except Exception as exc:  # noqa: BLE001
+        logger.debug("QuantDB stock names load failed: %s", exc)
+        return {}
+
+
+def _resolve_stock_name(
+    row_dict: dict[str, Any] | None,
+    raw_symbol: str,
+    fallback: Any = None,
+) -> Any:
+    """解析股票简称：优先 SQL 查询出的 name，其次 QuantDB 权威简称，最后回退代码/None。"""
+    name = row_dict.get("name") if row_dict else fallback
+    if name:
+        return name
+    try:
+        suffix = StockCodeUtil.to_suffix(raw_symbol)
+    except Exception:  # noqa: BLE001
+        suffix = raw_symbol
+    quantdb_names = _load_quantdb_stock_names()
+    return quantdb_names.get(suffix) or quantdb_names.get(raw_symbol) or name or raw_symbol
 
 
 def _get_table_columns(session, table_name: str) -> set[str]:
@@ -330,7 +388,7 @@ def _execute_raw_selection_sql(sql: str, table_name: str | None = None) -> tuple
 
                 if row_dict:
                     symbol = str(row_dict.get("symbol") or row_dict.get("code") or "")
-                    name = row_dict.get("name") or row_dict.get("code") or symbol
+                    name = _resolve_stock_name(row_dict, symbol)
 
                     market_cap = row_dict.get("market_cap")
                     if market_cap is None:
@@ -357,10 +415,101 @@ def _execute_raw_selection_sql(sql: str, table_name: str | None = None) -> tuple
                     metrics = {"close": float(row[2]) if len(row) > 2 else 0.0}
 
                 items.append(PoolItem(symbol=symbol, name=name, metrics=metrics))
+
+            # LLM 生成的 SQL 可能只选了 symbol/name，缺失市值/PE/收盘价等指标。
+            # 若大部分行 metrics 全为 0，则用标准字段 SQL 对这批股票批量补全。
+            _enrich_raw_selection_metrics(items, market_table)
             return items, as_of_date
     except Exception as e:
         logger.error(f"Error in _execute_raw_selection_sql: {e}")
         raise
+
+
+def _enrich_raw_selection_metrics(items: list[PoolItem], market_table: str) -> None:
+    """为 metrics 全为 0 的选股结果批量补全市值/PE/收盘价等核心字段。"""
+    if not items:
+        return
+    missing = [it for it in items if not it.metrics.get("market_cap") and not it.metrics.get("pe") and not it.metrics.get("close")]
+    if not missing or len(missing) < max(1, len(items) * 0.3):
+        return
+    symbols = list({str(it.symbol) for it in missing if it.symbol})
+    if not symbols:
+        return
+    try:
+        sym_list = ", ".join(f"('{s}')" for s in symbols)
+        sql = f"""
+            WITH sym_list(raw_symbol) AS (VALUES {sym_list}),
+            joined AS (
+                SELECT
+                    sdl.trade_date,
+                    sdl.symbol AS raw_symbol,
+                    sdl.stock_name,
+                    sdl.close,
+                    sdl.total_mv,
+                    sdl.pe_ttm,
+                    sdl.pb,
+                    sdl.roe
+                FROM {market_table} sdl
+                JOIN sym_list ON sdl.symbol = sym_list.raw_symbol
+            ),
+            latest_price AS (
+                SELECT DISTINCT ON (raw_symbol) raw_symbol, close
+                FROM joined
+                WHERE close IS NOT NULL AND close > 0
+                ORDER BY raw_symbol, trade_date DESC
+            ),
+            latest_name AS (
+                SELECT DISTINCT ON (raw_symbol) raw_symbol, stock_name
+                FROM joined
+                WHERE stock_name IS NOT NULL AND stock_name <> ''
+                ORDER BY raw_symbol, trade_date DESC
+            ),
+            latest_mv AS (
+                SELECT DISTINCT ON (raw_symbol) raw_symbol, total_mv, pe_ttm, pb, roe
+                FROM joined
+                WHERE total_mv IS NOT NULL AND total_mv > 0
+                ORDER BY raw_symbol, trade_date DESC
+            )
+            SELECT
+                l.raw_symbol,
+                COALESCE(n.stock_name, '') AS stock_name,
+                COALESCE(p.close, 0) AS close,
+                COALESCE(mv.total_mv, 0) AS total_mv,
+                COALESCE(mv.pe_ttm, 0) AS pe_ttm,
+                COALESCE(mv.pb, 0) AS pb,
+                COALESCE(mv.roe, 0) AS roe
+            FROM (SELECT DISTINCT raw_symbol FROM joined) l
+            LEFT JOIN latest_name n ON n.raw_symbol = l.raw_symbol
+            LEFT JOIN latest_mv mv ON mv.raw_symbol = l.raw_symbol
+            LEFT JOIN latest_price p ON p.raw_symbol = l.raw_symbol
+        """
+        with get_db() as session:
+            rows = session.execute(text(sql)).mappings().fetchall()
+        enriched: dict[str, dict[str, Any]] = {}
+        for r in rows:
+            mv = float(r.get("total_mv") or 0)
+            enriched[str(r.get("raw_symbol"))] = {
+                "name": r.get("stock_name"),
+                "market_cap": mv / 1e8 if mv else 0,
+                "pe": float(r.get("pe_ttm") or 0),
+                "pb": float(r.get("pb") or 0),
+                "roe": float(r.get("roe") or 0),
+                "close": float(r.get("close") or 0),
+            }
+        for it in missing:
+            data = enriched.get(str(it.symbol))
+            if not data:
+                continue
+            it.name = data["name"] or it.name
+            it.metrics = {
+                "market_cap": data["market_cap"],
+                "pe": data["pe"],
+                "pb": data["pb"],
+                "roe": data["roe"],
+                "close": data["close"],
+            }
+    except Exception as exc:  # noqa: BLE001
+        logger.debug("Metrics enrichment for raw selection failed: %s", exc)
 
 
 def _query_stock_pool(
@@ -372,12 +521,23 @@ def _query_stock_pool(
             target_columns = _get_table_columns(session, market_table)
             compat_table_sql = _build_compat_table_sql(market_table, target_columns)
             # 1. 确定一个能覆盖绝大多数股票的有效"最新日期"
-            # 而不是简单的 MAX，因为有些股票可能在最新一天停牌或未更新
+            # 优先选择有财务数据（total_mv 非空）的最新日期，确保市值/PE/PB 能正常显示
             date_res = session.execute(
                 text(
-                    f"SELECT trade_date, COUNT(*) as cnt FROM {market_table} GROUP BY trade_date ORDER BY cnt DESC LIMIT 1"
+                    f"SELECT trade_date, COUNT(*) as cnt, COUNT(total_mv) as mv_cnt "
+                    f"FROM {market_table} "
+                    f"GROUP BY trade_date "
+                    f"HAVING COUNT(total_mv) > 0 "
+                    f"ORDER BY trade_date DESC LIMIT 1"
                 )
             ).fetchone()
+            if not date_res:
+                # 回退：没有任何日期有财务数据，用最多人数的日期
+                date_res = session.execute(
+                    text(
+                        f"SELECT trade_date, COUNT(*) as cnt FROM {market_table} GROUP BY trade_date ORDER BY cnt DESC LIMIT 1"
+                    )
+                ).fetchone()
 
             if not date_res:
                 return [], None
@@ -449,20 +609,20 @@ def _query_stock_pool(
             for row in result:
                 # 使用 row_dict 确保字段取值稳健，不受列顺序影响
                 row_dict = row._asdict() if hasattr(row, "_asdict") else None
-                
+
                 if row_dict:
                     symbol = str(row_dict.get("symbol") or "")
-                    name = row_dict.get("name")
-                    
+                    name = _resolve_stock_name(row_dict, symbol)
+
                     # 兼容不同可能的字段名
                     market_cap = row_dict.get("market_cap")
                     if market_cap is None:
                         market_cap = row_dict.get("total_mv")
-                        
+
                     pe = row_dict.get("pe_ratio")
                     if pe is None:
                         pe = row_dict.get("pe_ttm")
-                        
+
                     pb = row_dict.get("pb_ratio")
                     if pb is None:
                         pb = row_dict.get("pb")
@@ -485,7 +645,7 @@ def _query_stock_pool(
                         "pb": float(row[4] or 0) if len(row) > 4 else 0,
                         "close": float(row[5] or 0) if len(row) > 5 else 0,
                     }
-                    
+
                 items.append(PoolItem(symbol=symbol, name=name, metrics=metrics))
             return items, as_of_date
     except Exception as e:
@@ -500,7 +660,7 @@ def _build_pool_summary(
 ) -> tuple[dict[str, Any], dict[str, Any]]:
     total = len(items)
     caps = [x.metrics.get("market_cap", 0) for x in items]
-    # market_cap 已经是“亿元”口径
+    # market_cap 已经是"亿元"口径
     bucket_lt_100 = sum(1 for v in caps if v < 100)
     bucket_100_200 = sum(1 for v in caps if 100 <= v < 200)
     bucket_gte_200 = sum(1 for v in caps if v >= 200)
@@ -713,7 +873,7 @@ def _enrich_with_quantdb_data(symbols: list[str]) -> dict[str, dict]:
     return result
 
 
-async def query_pool(dsl: str, user_id: str, market: str | None = None) -> QueryPoolResponse:
+async def query_pool(dsl: str, user_id: str, market: str | None = None, exchange: str | None = None) -> QueryPoolResponse:
     """执行 DSL/SQL 查询并返回股票池"""
     from .step1_stock_selection import get_latest_table
 
@@ -732,6 +892,14 @@ async def query_pool(dsl: str, user_id: str, market: str | None = None) -> Query
 
         conditions, combiners = _parse_dsl(dsl)
         items, as_of_date = _query_stock_pool(conditions, combiners, user_id, market_table)
+
+    # 交易所过滤：A 股 symbol 为前缀格式（SH600000 / SZ000001 / BJ920000）
+    if exchange and market in (None, "", "A", "CN"):
+        exch = str(exchange).upper()
+        if exch in ("SH", "SZ", "BJ"):
+            prefix_map = {"SH": "SH", "SZ": "SZ", "BJ": "BJ"}
+            wanted = prefix_map[exch]
+            items = [it for it in items if str(it.symbol or "").upper().startswith(wanted)]
 
     universe_total = _get_universe_total(user_id, market_table)
 

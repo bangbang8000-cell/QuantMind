@@ -64,7 +64,7 @@ export interface UserProfileUpdate {
 export type StrategyStatus =
   | 'draft'          // 草稿（AI刚生成，未回测）
   | 'repository'     // 仓库（回测通过，已保存）
-  | 'live_trading'   // 实盘交易中
+  | 'live_trading'   // 模拟交易中
   | 'active'
   | 'inactive'
   | 'archived'
@@ -100,7 +100,7 @@ export interface UserStrategy {
   file_size?: number;                 // 文件大小
   validated_backtest_id?: number;     // 验证回测ID
   promoted_at?: string;               // 晋升到仓库的时间
-  live_trading_started_at?: string;   // 实盘启动时间
+  live_trading_started_at?: string;   // 模拟交易启动时间
 }
 
 export interface PerformanceSummary {

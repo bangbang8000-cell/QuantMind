@@ -42,7 +42,6 @@ const AIIDEPage = lazy(() => import('./pages/AIIDEPage'));
 const ModelTrainingPage = lazy(() => import('./pages/ModelTrainingPage'));
 const ModelRegistryPage = lazy(() => import('./pages/ModelRegistryPage'));
 const ResearchPlatformPage = lazy(() => import('./pages/ResearchPlatformPage').then(m => ({ default: m.default || m.ResearchPlatformPage })));
-const StrategyLabPage = lazy(() => import('./features/strategy-lab/pages/StrategyLabPage'));
 const RealTradingPage = lazy(() => import('./pages/trading/RealTradingPage'));
 const AdminPage = lazy(() => import('./features/admin/AdminPage'));
 const AdminDashboard = lazy(() => import('./features/admin/components/AdminDashboard').then(m => ({ default: m.AdminDashboard })));
@@ -77,12 +76,7 @@ interface DashboardModule {
 
 // 默认模块配置
 const defaultModules: DashboardModule[] = [
-  { id: 'market', title: '市场概览', component: 'market', size: 'medium', position: { x: 0, y: 0 }, isVisible: true },
-  { id: 'fund', title: '资金概览', component: 'fund', size: 'medium', position: { x: 1, y: 0 }, isVisible: true },
-  { id: 'trade', title: '交易记录', component: 'trade', size: 'medium', position: { x: 2, y: 0 }, isVisible: true },
-  { id: 'strategy', title: '策略监控', component: 'strategy', size: 'medium', position: { x: 0, y: 1 }, isVisible: true },
-  { id: 'charts', title: '智能图表', component: 'charts', size: 'medium', position: { x: 1, y: 1 }, isVisible: true },
-  { id: 'ai-quick', title: '信息通知', component: 'ai-quick', size: 'medium', position: { x: 2, y: 1 }, isVisible: true }
+  { id: 'all-markets', title: '大盘概览', component: 'all-markets', size: 'medium', position: { x: 0, y: 0 }, isVisible: true }
 ];
 
 export default function App() {
@@ -129,7 +123,6 @@ export default function App() {
       'rss-news': '/rss-news',
       'alpha-research': '/alpha-research',
       'trading-agents': '/trading-agents',
-      'strategy-lab': '/strategy-lab',
       'profile': '/user-center',
       'admin': '/admin',
     };
@@ -174,7 +167,9 @@ export default function App() {
     } else if (location.pathname.startsWith('/alpha-research')) {
       dispatch(setCurrentTab('alpha-research' as DashboardTab));
     } else if (location.pathname.startsWith('/strategy-lab')) {
-      dispatch(setCurrentTab('strategy-lab' as DashboardTab));
+      // 策略实验室已合并到 AI-IDE
+      navigate('/ai-ide', { replace: true });
+      return;
     } else if (location.pathname.startsWith('/admin')) {
       dispatch(setCurrentTab('admin' as DashboardTab));
     } else if (location.pathname === '/') {
@@ -350,7 +345,20 @@ export default function App() {
         </div>
       );
     }
-    return <DashboardSkeleton />;
+    return (
+      <div style={{
+        minHeight: '100vh',
+        display: 'flex',
+        alignItems: 'center',
+        justifyContent: 'center',
+        background: 'var(--bg-gradient)',
+        flexDirection: 'column',
+        gap: 16,
+      }}>
+        <Spin size="large" />
+        <span style={{ color: 'var(--text-secondary)', fontSize: 13 }}>正在验证身份...</span>
+      </div>
+    );
   }
 
   if (isLoading) {
@@ -372,7 +380,7 @@ export default function App() {
                 QuantMind
               </div>
               <div style={{ fontSize: 12, color: 'rgba(255,255,255,0.7)' }}>
-                企业级量化交易平台
+                正在验证身份...
               </div>
             </div>
             <div style={{ height: 20 }} />
@@ -381,7 +389,20 @@ export default function App() {
         </div>
       );
     }
-    return <DashboardSkeleton />;
+    return (
+      <div style={{
+        minHeight: '100vh',
+        display: 'flex',
+        alignItems: 'center',
+        justifyContent: 'center',
+        background: 'var(--bg-gradient)',
+        flexDirection: 'column',
+        gap: 16,
+      }}>
+        <Spin size="large" />
+        <span style={{ color: 'var(--text-secondary)', fontSize: 13 }}>正在验证身份...</span>
+      </div>
+    );
   }
 
   // 🔐 认证守卫：未登录且访问受保护路由，重定向到登录页
@@ -412,7 +433,18 @@ export default function App() {
             <ErrorBoundary>
               <div className="app-main">
               <Suspense
-                fallback={<DashboardSkeleton />}
+                fallback={<div style={{
+                  minHeight: '100vh',
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  background: 'var(--bg-gradient)',
+                  flexDirection: 'column',
+                  gap: 16,
+                }}>
+                  <Spin size="large" />
+                  <span style={{ color: 'var(--text-secondary)', fontSize: 13 }}>加载中...</span>
+                </div>}
               >
                 {/* 使用路由系统，包含认证守卫 */}
                 <Routes>
@@ -468,11 +500,7 @@ export default function App() {
                   />
                   <Route
                     path="/strategy-lab"
-                    element={
-                      <ProtectedRoute>
-                        <StrategyLabPage />
-                      </ProtectedRoute>
-                    }
+                    element={<Navigate to="/ai-ide" replace />}
                   />
                   <Route
                     path="/model-training"

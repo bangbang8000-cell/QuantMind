@@ -13,8 +13,7 @@ apiClient.interceptors.request.use((config) => {
   config.baseURL = SERVICE_ENDPOINTS.USER_SERVICE;
   const token = authService.getAccessToken();
   if (token) {
-    config.headers = config.headers || {};
-    (config.headers as any).Authorization = `Bearer ${token}`;
+    (config.headers as Record<string, string>).Authorization = `Bearer ${token}`;
   }
   return config;
 });
@@ -119,9 +118,11 @@ class NewsService {
 
   async listArticles(params: {
     source_id?: number;
+    source_ids?: string;
     folder_id?: number;
     keyword?: string;
     only_financial_event?: boolean;
+    starred?: boolean;
     tickers?: string;
     industries?: string;
     sentiment?: 'bullish' | 'bearish' | 'neutral';
@@ -136,6 +137,7 @@ class NewsService {
     visits?: string;
     departments?: string;
     strong_only?: boolean;
+    sort?: string;
     since?: string;
     until?: string;
     page?: number;

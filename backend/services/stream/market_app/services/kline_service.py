@@ -13,6 +13,8 @@ from ..market_config import settings
 from ..models import KLine
 from ..schemas import KLineCreate, KLineResponse
 from .data_source import SinaDataSource, TencentDataSource
+from .eltdx_source import EltdxDataSource
+from .opentdx_source import OpentdxDataSource
 from .remote_redis_source import RemoteRedisDataSource
 
 logger = logging.getLogger(__name__)
@@ -24,8 +26,9 @@ class KLineService:
     def __init__(self, db: AsyncSession, redis: Redis | None = None):
         self.db = db
         self.redis = redis
-        self.primary_source = TencentDataSource()
-        self.fallback_source = SinaDataSource()
+        self.primary_source = EltdxDataSource()
+        self.secondary_source = OpentdxDataSource()
+        self.fallback_source = TencentDataSource()
         self.remote_snapshot_source = RemoteRedisDataSource()
 
     async def get_klines(
@@ -53,6 +56,9 @@ class KLineService:
         if not klines:
             logger.info(f"Fetching klines from data source for {symbol} {interval}")
             kline_data = await self.primary_source.fetch_kline(symbol, interval, start_time, end_time, limit)
+            if not kline_data:
+                logger.info("Primary source empty, trying opentdx secondary source")
+                kline_data = await self.secondary_source.fetch_kline(symbol, interval, start_time, end_time, limit)
             if not kline_data:
                 kline_data = await self.fallback_source.fetch_kline(symbol, interval, start_time, end_time, limit)
 

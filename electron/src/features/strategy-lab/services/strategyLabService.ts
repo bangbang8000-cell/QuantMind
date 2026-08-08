@@ -18,7 +18,7 @@ import type {
 } from '../types';
 
 const resolveBaseUrl = () =>
-  `${String(SERVICE_URLS.ENGINE_SERVICE || '').replace(/\/+$/, '')}/api/v1/strategy-lab`;
+  `${String(SERVICE_URLS.ENGINE_SERVICE || '').replace(/\/+$/, '')}/api/v1/ai-ide/strategy-lab`;
 
 const client: AxiosInstance = axios.create({
   timeout: 120_000,

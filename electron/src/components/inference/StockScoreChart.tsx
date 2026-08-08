@@ -12,7 +12,7 @@
 import React, { useEffect, useMemo, useState, useRef } from 'react';
 import * as echarts from 'echarts';
 import ReactECharts from 'echarts-for-react';
-import { Empty, Spin, Tag, Typography, Table, Button, InputNumber, Modal, Slider, Select } from 'antd';
+import { Empty, Spin, Tag, Typography, Table, Button, InputNumber, Modal, Slider, Select, Input, Space, Switch } from 'antd';
 import clsx from 'clsx';
 import axios from 'axios';
 import { modelTrainingService, StockScoreHistoryItem } from '../../services/modelTrainingService';
@@ -48,6 +48,8 @@ interface Props {
   height?: number;
   /** 融合模型分数为 [-1,1] 时置 true，用自适应区间标注 */
   wideScale?: boolean;
+  /** 当前推理的模型 ID：默认只加载该模型的分数，不显示全部模型 */
+  modelId?: string;
 }
 
 interface Trade {
@@ -56,6 +58,16 @@ interface Trade {
   side: 'buy' | 'sell';
   price: number;
   shares: number;
+}
+
+/** 自定义参考线：在分数轴上画虚线，标注分数含义（可买/热门/危险等） */
+interface RefLine {
+  id: string;
+  value: number;        // 分数值（分数轴 yAxis 1）
+  label: string;        // 显示名称，如 "可买"、"热门"
+  color: string;        // 虚线颜色
+  /** 是否显示（可单独开关） */
+  visible?: boolean;
 }
 
 interface Position {
@@ -114,14 +126,48 @@ function annotateScore(score: number, wideScale = false): { label: string; color
   return { label: '轻负分', color: '#94a3b8' };
 }
 
-export const StockScoreChart: React.FC<Props> = ({ symbol, name, stockInfo, market = 'A', days = 3650, height = 420, wideScale = false }) => {
+export const StockScoreChart: React.FC<Props> = ({ symbol, name, stockInfo, market = 'A', days = 3650, height = 420, wideScale = false, modelId }) => {
   const [loading, setLoading] = useState(true);
   const [klineItems, setKlineItems] = useState<KlineItem[]>([]);
   const [scoreItems, setScoreItems] = useState<StockScoreHistoryItem[]>([]);
-  const [availableModels, setAvailableModels] = useState<Array<{ model_id: string }>>([]);
-  const [selectedModel, setSelectedModel] = useState<string>('all');
+  const [availableModels, setAvailableModels] = useState<Array<{ model_id: string; display_name?: string }>>([]);
+  // 默认加载当前模型的分数（而非全部模型）；可手动切换其他模型查看
+  const [selectedModel, setSelectedModel] = useState<string>(modelId ?? 'all');
   const [error, setError] = useState<string | null>(null);
   const chartRef = useRef<any>(null);
+
+  // ── 自定义参考线：按模型持久化（同一模型所有股票共用） ──
+  // 每条线 = { id, value(分数), label(如"可买"), color }
+  const [refLines, setRefLines] = useState<RefLine[]>([]);
+  const [showRefLineModal, setShowRefLineModal] = useState(false);
+
+  const refLineStorageKey = useMemo(() => {
+    const m = selectedModel && selectedModel !== 'all' ? selectedModel : modelId;
+    return `qm:ref-lines:${m || 'default'}`;
+  }, [selectedModel, modelId]);
+
+  // 加载参考线（localStorage，按模型隔离）
+  useEffect(() => {
+    try {
+      const raw = localStorage.getItem(refLineStorageKey);
+      if (raw) {
+        const parsed = JSON.parse(raw);
+        if (Array.isArray(parsed)) setRefLines(parsed.filter((l: any) => l && typeof l.value === 'number'));
+      } else if (selectedModel === 'all' && modelId) {
+        // 未选择具体模型时也尝试加载当前模型配置
+        const raw2 = localStorage.getItem(`qm:ref-lines:${modelId}`);
+        if (raw2) {
+          const parsed = JSON.parse(raw2);
+          if (Array.isArray(parsed)) setRefLines(parsed.filter((l: any) => l && typeof l.value === 'number'));
+        }
+      }
+    } catch { /* ignore */ }
+  }, [refLineStorageKey, selectedModel, modelId]);
+
+  const saveRefLines = (lines: RefLine[]) => {
+    setRefLines(lines);
+    try { localStorage.setItem(refLineStorageKey, JSON.stringify(lines)); } catch { /* ignore */ }
+  };
 
   // 回放：默认关闭(全量)。开启后从开始日期显示到当前推进日
   const [replayEnabled, setReplayEnabled] = useState(false);
@@ -147,7 +193,7 @@ export const StockScoreChart: React.FC<Props> = ({ symbol, name, stockInfo, mark
   }, [symbol]);
 
   /* ---- 拉数据 ---- */
-  // K 线固定加载一次；分数按 selectedModel 变化重新加载
+  // K 线固定加载一次；分数默认加载当前模型（modelId），不带则全部模型
   useEffect(() => {
     let cancelled = false;
     async function load() {
@@ -156,7 +202,7 @@ export const StockScoreChart: React.FC<Props> = ({ symbol, name, stockInfo, mark
       try {
         const [kresp, sresp] = await Promise.all([
           fetchQuantdbKline(suffixSymbol, days),
-          modelTrainingService.getStockInferenceHistory(symbol, days),
+          modelTrainingService.getStockInferenceHistory(symbol, days, modelId),
         ]);
         if (cancelled) return;
         setKlineItems(kresp ?? []);
@@ -170,7 +216,7 @@ export const StockScoreChart: React.FC<Props> = ({ symbol, name, stockInfo, mark
     }
     void load();
     return () => { cancelled = true; };
-  }, [suffixSymbol, symbol, market, days]);
+  }, [suffixSymbol, symbol, market, days, modelId]);
 
   // 切换模型时重新加载该模型的分数
   useEffect(() => {
@@ -193,6 +239,11 @@ export const StockScoreChart: React.FC<Props> = ({ symbol, name, stockInfo, mark
     return () => { cancelled = true; };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selectedModel, symbol, days]);
+
+  // 外部传入的 modelId 变化时同步选中（例如切换到另一个模型的推理详情）
+  useEffect(() => {
+    if (modelId) setSelectedModel(modelId);
+  }, [modelId]);
 
   // 回放索引默认到最新
   useEffect(() => {
@@ -539,8 +590,10 @@ export const StockScoreChart: React.FC<Props> = ({ symbol, name, stockInfo, mark
         { type: 'value', scale: true, axisLabel: { fontSize: 10, color: '#64748b' }, splitLine: { lineStyle: { color: '#f1f5f9' } } },
         {
           type: 'value', position: 'right',
-          // 分数轴固定范围，保证折线比例稳定、不随数据跳变
-          min: -0.3, max: 0.3,
+          // 分数轴范围：普通模型固定 [-0.3, 0.3] 保证折线比例稳定；
+          // 融合模型分数为 [-1,1]，固定范围会截断高分，动态扩展
+          min: wideScale ? -1.0 : -0.3,
+          max: wideScale ? 1.0 : 0.3,
           axisLabel: { fontSize: 9, color: '#94a3b8', formatter: (v: number) => v.toFixed(1) },
           splitLine: { show: false },
         },
@@ -574,10 +627,22 @@ export const StockScoreChart: React.FC<Props> = ({ symbol, name, stockInfo, mark
           emphasis: { scale: 1.5 },
           markLine: {
             silent: true, symbol: 'none',
-            data: [
-              { yAxis: 0.10, lineStyle: { color: '#10b981', type: 'dashed', width: 1.5 }, label: { formatter: '黄金线 0.10', fontSize: 9, position: 'insideEndTop' } },
-              { yAxis: -0.15, lineStyle: { color: '#f43f5e', type: 'dashed', width: 1.5 }, label: { formatter: '做空线 -0.15', fontSize: 9, position: 'insideEndBottom' } },
-            ],
+            // 自定义参考线优先；无配置时回退到默认线（只显示开启的线）
+            data: refLines.length > 0
+              ? refLines.filter(l => l.visible !== false).map(l => ({
+                  yAxis: l.value,
+                  lineStyle: { color: l.color, type: 'dashed', width: 1.5 },
+                  label: { formatter: `${l.label} ${l.value >= 0 ? '+' : ''}${l.value.toFixed(2)}`, fontSize: 9, position: 'insideEndTop', color: l.color },
+                }))
+              : wideScale
+                ? [
+                    { yAxis: 0.50, lineStyle: { color: '#f43f5e', type: 'dashed', width: 1.5 }, label: { formatter: '高分线 0.50', fontSize: 9, position: 'insideEndTop' } },
+                    { yAxis: -0.50, lineStyle: { color: '#10b981', type: 'dashed', width: 1.5 }, label: { formatter: '低分线 -0.50', fontSize: 9, position: 'insideEndBottom' } },
+                  ]
+                : [
+                    { yAxis: 0.10, lineStyle: { color: '#10b981', type: 'dashed', width: 1.5 }, label: { formatter: '黄金线 0.10', fontSize: 9, position: 'insideEndTop' } },
+                    { yAxis: -0.15, lineStyle: { color: '#f43f5e', type: 'dashed', width: 1.5 }, label: { formatter: '做空线 -0.15', fontSize: 9, position: 'insideEndBottom' } },
+                  ],
           },
         },
         {
@@ -606,7 +671,7 @@ export const StockScoreChart: React.FC<Props> = ({ symbol, name, stockInfo, mark
         },
       ],
     };
-  }, [visibleKline, visibleScores, trades, replayEnabled, strategyAlerts, strategyAlertsByDate, defaultZoom]);
+  }, [visibleKline, visibleScores, trades, replayEnabled, strategyAlerts, strategyAlertsByDate, defaultZoom, refLines]);
 
   // 打开回放时：点击逻辑绑定到 visibleKline 的索引
   const onEvents = useMemo(() => ({ click: onChartClick }), [clickableDates]);
@@ -647,7 +712,7 @@ export const StockScoreChart: React.FC<Props> = ({ symbol, name, stockInfo, mark
         </div>
       </div>
 
-      {/* 策略汇总条 */}
+      {/* 策略汇总条 + 模型选择器（合并一行：策略靠左，模型选择器靠右） */}
       <div className="flex flex-wrap items-center gap-2 rounded-xl border border-slate-100 bg-white px-3 py-2">
         <Text className="text-[9px] text-slate-400 font-black uppercase flex-shrink-0">策略</Text>
         {strategySummary.total > 0 ? (
@@ -666,27 +731,32 @@ export const StockScoreChart: React.FC<Props> = ({ symbol, name, stockInfo, mark
             ⚠ {strategySummary.staticWarnings.join(' · ')}
           </Tag>
         )}
-      </div>
 
-      {/* 模型选择器：不同模型推理分数可能不同 */}
-      {availableModels.length > 1 && (
-        <div className="flex items-center gap-2 rounded-xl border border-slate-100 bg-white px-3 py-2">
-          <Text className="text-[10px] font-black text-slate-400 uppercase tracking-wide flex-shrink-0">推理模型</Text>
-          <Select
-            value={selectedModel}
-            onChange={setSelectedModel}
-            size="small"
-            className="min-w-[260px]"
-            options={[
-              { value: 'all', label: '全部模型（混合）' },
-              ...availableModels.map((m, i) => ({ value: m.model_id, label: `模型 ${i + 1} · ${m.model_id.slice(0, 30)}…` })),
-            ]}
-          />
-          {selectedModel !== 'all' && (
-            <Tag className="m-0 border-0 bg-indigo-50 text-indigo-600 text-[9px] font-black rounded-md px-2">已按模型过滤</Tag>
-          )}
-        </div>
-      )}
+        {/* 模型选择器：靠右，切换不同模型推理分数 */}
+        {availableModels.length > 1 && (
+          <div className="flex items-center gap-1.5 ml-auto flex-shrink-0">
+            <Text className="text-[9px] font-black text-slate-400 uppercase tracking-wide">模型</Text>
+            <Select
+              value={selectedModel}
+              onChange={setSelectedModel}
+              size="small"
+              variant="borderless"
+              className="w-[150px]"
+              popupMatchSelectWidth={false}
+              options={[
+                { value: 'all', label: '全部模型' },
+                ...availableModels.map((m) => ({
+                  value: m.model_id,
+                  label: m.display_name || m.model_id,
+                })),
+              ]}
+            />
+            {selectedModel !== 'all' && (
+              <Tag className="m-0 border-0 bg-indigo-50 text-indigo-600 text-[8px] font-black rounded px-1.5">已过滤</Tag>
+            )}
+          </div>
+        )}
+      </div>
 
       {/* 回放 + 收益工具条 */}
       <div className="flex flex-wrap items-center gap-3 rounded-xl border border-slate-100 bg-white px-3 py-2">
@@ -778,7 +848,7 @@ export const StockScoreChart: React.FC<Props> = ({ symbol, name, stockInfo, mark
       </div>
 
       {/* 分数区间图例 */}
-      <div className="flex flex-wrap gap-1.5 text-[9px]">
+      <div className="flex flex-wrap items-center gap-1.5 text-[9px]">
         <span className="rounded-md bg-emerald-50 text-emerald-600 px-1.5 py-0.5 font-bold">黄金 0.10-0.12</span>
         <span className="rounded-md bg-amber-50 text-amber-600 px-1.5 py-0.5 font-bold">可选 0.12-0.15</span>
         <span className="rounded-md bg-orange-50 text-orange-600 px-1.5 py-0.5 font-bold">谨慎 0.15-0.20</span>
@@ -786,7 +856,13 @@ export const StockScoreChart: React.FC<Props> = ({ symbol, name, stockInfo, mark
         <span className="rounded-md bg-violet-50 text-violet-600 px-1.5 py-0.5 font-bold">▲买入 ▼卖出</span>
         <span className="rounded-md bg-emerald-50 text-emerald-600 px-1.5 py-0.5 font-bold">📌买点提示</span>
         <span className="rounded-md bg-amber-50 text-amber-600 px-1.5 py-0.5 font-bold">◆风险提示</span>
-        <Text className="text-[9px] text-slate-400 ml-auto">点击 K 线日期可模拟买卖（买=开盘价 卖=收盘价）</Text>
+        <Button
+          size="small"
+          className="rounded-lg text-[9px] font-bold h-6 px-2 ml-auto"
+          onClick={() => setShowRefLineModal(true)}
+        >
+          参考线 {refLines.length > 0 ? `(${refLines.length})` : ''}
+        </Button>
       </div>
 
       {/* 历史分数日历视图 */}
@@ -826,6 +902,113 @@ export const StockScoreChart: React.FC<Props> = ({ symbol, name, stockInfo, mark
             <Text className="block text-[9px] text-slate-400">买入按当日开盘价成交，卖出按当日收盘价成交。交易需按时间顺序进行。</Text>
           </div>
         )}
+      </Modal>
+
+      {/* 自定义参考线编辑弹窗 */}
+      <Modal
+        open={showRefLineModal}
+        onCancel={() => setShowRefLineModal(false)}
+        footer={null}
+        width={520}
+        centered
+        title={<span className="text-sm font-black text-slate-800">自定义参考线 · {selectedModel !== 'all' ? '当前模型' : '全部'}</span>}
+      >
+        <div className="space-y-3">
+          <Text className="block text-[10px] text-slate-400">
+            在分数轴上画虚线，标注不同分数对应的含义（可买 / 热门 / 危险等）。同一模型的股票共用此配置。每行左侧开关可单独控制该线的显示/隐藏。
+          </Text>
+          {refLines.length === 0 && (
+            <div className="rounded-xl border border-dashed border-slate-200 bg-slate-50/60 px-4 py-6 text-center">
+              <Text className="text-[11px] text-slate-400">暂无参考线，点击下方按钮添加</Text>
+            </div>
+          )}
+          {refLines.map((l, idx) => (
+            <div key={l.id} className="flex items-center gap-2 rounded-xl border border-slate-100 bg-white px-3 py-2">
+              <Switch
+                size="small"
+                checked={l.visible !== false}
+                onChange={(checked) => {
+                  const next = refLines.map((x, i) => i === idx ? { ...x, visible: checked } : x);
+                  saveRefLines(next);
+                }}
+              />
+              <span className="w-3 h-0.5 rounded-full flex-shrink-0" style={{ background: l.color }} />
+              <Input
+                size="small"
+                value={l.label}
+                placeholder="名称（如 可买/热门/危险）"
+                className="w-28 text-[11px]"
+                onChange={e => {
+                  const next = refLines.map((x, i) => i === idx ? { ...x, label: e.target.value } : x);
+                  saveRefLines(next);
+                }}
+              />
+              <InputNumber
+                size="small"
+                value={l.value}
+                step={0.05}
+                className="w-24 text-[11px]"
+                onChange={v => {
+                  if (v === null) return;
+                  const next = refLines.map((x, i) => i === idx ? { ...x, value: Number(v) } : x);
+                  saveRefLines(next);
+                }}
+              />
+              <Select
+                size="small"
+                value={l.color}
+                className="w-20"
+                onChange={c => {
+                  const next = refLines.map((x, i) => i === idx ? { ...x, color: c } : x);
+                  saveRefLines(next);
+                }}
+                options={[
+                  { value: '#ef4444', label: '红' },
+                  { value: '#10b981', label: '绿' },
+                  { value: '#6366f1', label: '紫' },
+                  { value: '#f59e0b', label: '橙' },
+                  { value: '#f43f5e', label: '玫红' },
+                  { value: '#0ea5e9', label: '蓝' },
+                ]}
+              />
+              <Button
+                size="small"
+                type="text"
+                danger
+                className="ml-auto flex-shrink-0"
+                onClick={() => saveRefLines(refLines.filter(x => x.id !== l.id))}
+              >
+                删除
+              </Button>
+            </div>
+          ))}
+          <div className="flex items-center gap-2 pt-1">
+            <Button
+              size="small"
+              type="dashed"
+              className="rounded-lg text-[10px] font-bold"
+              onClick={() => saveRefLines([...refLines, { id: `rl_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`, value: 0.1, label: '', color: '#6366f1' }])}
+            >
+              + 添加参考线
+            </Button>
+            <Button
+              size="small"
+              type="text"
+              className="ml-auto rounded-lg text-[10px] font-bold"
+              onClick={() => saveRefLines([])}
+            >
+              清空
+            </Button>
+            <Button
+              size="small"
+              type="primary"
+              className="rounded-lg text-[10px] font-bold bg-blue-600"
+              onClick={() => setShowRefLineModal(false)}
+            >
+              完成
+            </Button>
+          </div>
+        </div>
       </Modal>
     </div>
   );

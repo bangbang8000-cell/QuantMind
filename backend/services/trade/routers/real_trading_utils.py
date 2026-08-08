@@ -3,11 +3,12 @@ import json
 import logging
 import os
 import time
-from datetime import datetime, timezone
+from datetime import datetime
 from functools import lru_cache
 from pathlib import Path
 from typing import Any, Optional
 
+import httpx
 from fastapi import (
     APIRouter,
     Depends,
@@ -25,6 +26,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 from starlette.concurrency import run_in_threadpool
 
+import redis as redis_lib
 from backend.services.trade.deps import AuthContext, get_auth_context, get_db
 from backend.services.trade.models.order import Order
 from backend.services.trade.models.preflight_snapshot import PreflightSnapshot
@@ -37,6 +39,7 @@ from backend.services.trade.schemas.live_trade_config import (
     ExecutionConfigSchema,
     LiveTradeConfigSchema,
 )
+from backend.services.trade.services.k8s_manager import k8s_manager
 from backend.services.trade.services.real_account_snapshot_guard import (
     is_effectively_empty_snapshot,
     is_inconsistent_zero_total_snapshot,
@@ -891,6 +894,46 @@ def _normalize_live_trade_config(user_live_cfg: dict, base_live_cfg: dict) -> di
     return normalized
 
 
+def _parse_bridge_report_ts(report: dict) -> float | None:
+    """
+    从柜台桥接上报中提取时间戳（秒）:
+    兼容常见字段: timestamp/ts/last_seen/updated_at/report_ts/report_time
+    """
+    candidates = (
+        "timestamp",
+        "ts",
+        "last_seen",
+        "updated_at",
+        "report_ts",
+        "report_time",
+    )
+    for key in candidates:
+        raw = report.get(key)
+        if raw is None:
+            continue
+        # 数字时间戳
+        if isinstance(raw, (int, float)):
+            ts = float(raw)
+            # 兼容毫秒时间戳
+            return ts / 1000.0 if ts > 1e12 else ts
+        # 字符串时间戳 / ISO8601
+        if isinstance(raw, str):
+            text_raw = raw.strip()
+            if not text_raw:
+                continue
+            try:
+                ts = float(text_raw)
+                return ts / 1000.0 if ts > 1e12 else ts
+            except Exception:
+                pass
+            try:
+                iso = text_raw.replace("Z", "+00:00")
+                return datetime.fromisoformat(iso).timestamp()
+            except Exception:
+                continue
+    return None
+
+
 def _resolve_preflight_symbols() -> list[str]:
     raw = str(os.getenv("PREFLIGHT_STREAM_SYMBOLS", "SZ000001,SH600000")).strip()
     symbols = [item.strip() for item in raw.split(",") if item.strip()]
@@ -926,6 +969,143 @@ def _get_env_with_root_fallback(key: str, default: str = "") -> str:
     if value is not None and str(value).strip() != "":
         return str(value).strip()
     return _load_root_env_map().get(key, default)
+
+
+def _resolve_runner_image_for_mode() -> tuple[str, str]:
+    configured = str(os.getenv("STRATEGY_RUNNER_IMAGE", "")).strip()
+    if configured:
+        return configured, "configured"
+    default_image = (
+        "quantmind-ml-runtime:latest"
+        if k8s_manager.mode == "docker"
+        else "asia-east1-docker.pkg.dev/gen-lang-client-0953736716/quantmind-repo/quantmind-qlib-runner:latest"
+    )
+    return default_image, "default"
+
+
+def _get_stream_series_redis_client():
+    """
+    Stream 行情时序 Redis（quote->series）客户端。
+    OSS 版本使用统一 Redis 实例 (REDIS_DB_MARKET)。
+    """
+    host = _get_env_with_root_fallback("REDIS_HOST", "localhost")
+    port = int(_get_env_with_root_fallback("REDIS_PORT", "6379") or "6379")
+    password = _get_env_with_root_fallback("REDIS_PASSWORD", "") or None
+    db = int(_get_env_with_root_fallback("REDIS_DB_MARKET", "3"))
+    client = redis_lib.Redis(
+        host=host,
+        port=port,
+        password=password,
+        db=db,
+        decode_responses=True,
+        socket_timeout=3.0,
+        socket_connect_timeout=3.0,
+    )
+    return client, host, port
+
+
+def check_stream_series_freshness(redis_client=None) -> dict[str, Any]:
+    """
+    统一的 Stream 行情时序新鲜度检测逻辑。
+    返回 {ok, message, details}
+    """
+    stream_symbols = _resolve_preflight_symbols()
+    stream_redis, stream_redis_host, stream_redis_port = _get_stream_series_redis_client()
+    threshold_sec = int(os.getenv("PREFLIGHT_SERIES_STALE_THRESHOLD_SEC", "300"))
+
+    matched_symbol = None
+    latest_age_sec = None
+    try:
+        stream_redis.ping()
+        for symbol in stream_symbols:
+            normalized = StockCodeUtil.to_prefix(symbol)
+            key = f"market:series:{normalized}"
+            latest = stream_redis.zrevrange(key, 0, 0, withscores=True)
+            if latest:
+                _, score = latest[0]
+                age = max(0, int(time.time() - float(score)))
+                if latest_age_sec is None or age < latest_age_sec:
+                    matched_symbol = normalized
+                    latest_age_sec = age
+    except Exception:
+        # 降级：尝试本地/交易 Redis
+        if redis_client:
+            try:
+                for symbol in stream_symbols:
+                    normalized = StockCodeUtil.to_prefix(symbol)
+                    key = f"market:series:{normalized}"
+                    latest = redis_client.zrevrange(key, 0, 0, withscores=True)
+                    if latest:
+                        _, score = latest[0]
+                        age = max(0, int(time.time() - float(score)))
+                        if latest_age_sec is None or age < latest_age_sec:
+                            matched_symbol = normalized
+                            latest_age_sec = age
+            except Exception:
+                pass
+
+    ok = latest_age_sec is not None and latest_age_sec < threshold_sec
+    message = (
+        f"行情新鲜（{matched_symbol} 延迟 {latest_age_sec}s）"
+        if ok
+        else (
+            f"行情延迟过高（{matched_symbol} 延迟 {latest_age_sec}s > {threshold_sec}s）"
+            if matched_symbol
+            else "未发现可用行情序列"
+        )
+    )
+
+    return {
+        "ok": ok,
+        "message": message,
+        "details": {
+            "matched_symbol": matched_symbol,
+            "age_seconds": latest_age_sec,
+            "threshold_seconds": threshold_sec,
+            "series_redis": f"{stream_redis_host}:{stream_redis_port}",
+        },
+    }
+
+
+def check_stream_quote_persist_rate(redis_client=None) -> dict[str, Any]:
+    """
+    统一的 Stream 行情落库速率检测逻辑。
+    """
+    try:
+        # 获取落库监控 Key (由 stream 服务定时写入)
+        key = "market:stream:persist_stats"
+        stats_raw = None
+        if redis_client:
+            stats_raw = redis_client.get(key)
+
+        if not stats_raw:
+            # 尝试从行情 Redis 获取
+            stream_redis, _, _ = _get_stream_series_redis_client()
+            stats_raw = stream_redis.get(key)
+
+        if not stats_raw:
+            return {"ok": False, "message": "未检测到行情落库统计信息", "details": {}}
+
+        stats = json.loads(stats_raw)
+        rps = float(stats.get("quotes_per_sec", 0))
+        last_update = float(stats.get("ts", 0))
+        age = max(0, int(time.time() - last_update))
+
+        ok = rps > 0 and age < 60
+        message = (
+            f"行情落库正常 ({rps:.1f} qps)"
+            if ok
+            else f"行情落库异常 (qps={rps:.1f}, age={age}s)"
+        )
+
+        return {
+            "ok": ok,
+            "message": message,
+            "details": stats,
+        }
+    except Exception as e:
+        return {"ok": False, "message": f"行情落库检测异常: {e}", "details": {}}
+
 
 
 def _local_today_for_preflight():

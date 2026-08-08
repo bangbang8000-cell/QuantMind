@@ -22,6 +22,7 @@ _BUILTIN_CLASS_MODULE_MAP: dict[str, str] = {
     "RedisStopLossStrategy": "backend.services.engine.qlib_app.utils.extended_strategies",
     "RedisVolatilityWeightedStrategy": "backend.services.engine.qlib_app.utils.extended_strategies",
     "RedisFullAlphaStrategy": "backend.services.engine.qlib_app.utils.extended_strategies",
+    "RedisCrashBuyDipStrategy": "backend.services.engine.qlib_app.utils.extended_strategies",
     "SimpleWeightStrategy": "backend.services.engine.qlib_app.utils.recording_strategy",
 }
 
@@ -817,6 +818,45 @@ class FullAlphaCrossSectionBuilder(StrategyBuilder):
         return self._sanitize_module_path_config(strategy)
 
 
+class CrashBuyDipBuilder(StrategyBuilder):
+    """大盘暴跌抄底策略 Builder"""
+
+    def build(
+        self,
+        request: QlibBacktestRequest,
+        market_state_kwargs: dict[str, Any],
+        signal_data: Any,
+        backtest_id: str,
+    ) -> dict[str, Any]:
+        logger.info(
+            "build_crash_buy_dip",
+            "Building CrashBuyDip strategy",
+            top_k=request.strategy_params.topk,
+            hold_days=request.strategy_params.rebalance_days,
+            stop_loss=request.strategy_params.stop_loss,
+            take_profit=request.strategy_params.take_profit,
+        )
+        strategy = {
+            "class": "RedisCrashBuyDipStrategy",
+            "module_path": "backend.services.engine.qlib_app.utils.extended_strategies",
+            "kwargs": {
+                "top_k": request.strategy_params.topk,
+                "hold_days": request.strategy_params.rebalance_days,
+                "stop_loss": request.strategy_params.stop_loss,
+                "take_profit": request.strategy_params.take_profit,
+                "crash_threshold_points": 100,
+                "crash_threshold_pct": 0.025,
+                "max_wait_days": 3,
+                "benchmark": request.benchmark or "SH000300",
+                "account_stop_loss": request.strategy_params.account_stop_loss,
+                "max_leverage": request.strategy_params.max_leverage,
+                **market_state_kwargs,
+                **self._get_redis_config(backtest_id),
+            },
+        }
+        return self._sanitize_module_path_config(strategy)
+
+
 class StrategyFactory:
     _builders = {
         # Native IDs
@@ -837,10 +877,12 @@ class StrategyFactory:
         "stop_loss": StopLossBuilder(),
         "volatility_weighted": VolatilityWeightedBuilder(),
         "aggressive_topk_strategy": SimpleTopkBuilder(),
+        "crash_buy_dip": CrashBuyDipBuilder(),
         # Upper case fallbacks for compatibility
         "Momentum": TopkDropoutBuilder(),
         "StopLoss": StopLossBuilder(),
         "VolatilityWeighted": VolatilityWeightedBuilder(),
+        "CrashBuyDip": CrashBuyDipBuilder(),
     }
 
     _aliases = {
@@ -859,6 +901,8 @@ class StrategyFactory:
         "stoploss": "StopLoss",
         "volatilityweighted": "VolatilityWeighted",
         "momentum": "momentum",
+        "crash_buy_dip": "crash_buy_dip",
+        "crashbuydip": "CrashBuyDip",
     }
 
     @classmethod

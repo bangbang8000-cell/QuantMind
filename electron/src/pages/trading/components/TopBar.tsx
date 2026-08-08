@@ -46,10 +46,10 @@ const TopBar: React.FC<TopBarProps> = ({ accountInfo, isConnected, strategyStatu
     const getPnLColor = (val: number) => val > 0 ? 'text-red-600' : val < 0 ? 'text-green-600' : 'text-gray-700';
     const getPnLBg = (val: number) => val > 0 ? 'bg-red-50' : val < 0 ? 'bg-green-50' : 'bg-gray-50';
 
-    const modeLabel = tradingMode === 'real' ? ' (实盘)' : (tradingMode === 'simulation' ? ' (模拟)' : '');
+    const modeLabel = tradingMode === 'real' ? ' (模拟)' : (tradingMode === 'simulation' ? ' (模拟)' : '');
     const runModeLabel = runMode === 'SHADOW'
         ? '影子'
-        : (runMode === 'REAL' ? '实盘' : (runMode === 'SIMULATION' ? '模拟' : '未启动'));
+        : (runMode === 'REAL' ? '模拟' : (runMode === 'SIMULATION' ? '模拟' : '未启动'));
     const runModeTone = runMode === 'SHADOW' ? 'bg-violet-100 text-violet-700 border-violet-200'
         : (runMode === 'REAL' ? 'bg-blue-100 text-blue-700 border-blue-200'
             : (runMode === 'SIMULATION' ? 'bg-amber-100 text-amber-700 border-amber-200' : 'bg-gray-100 text-gray-500 border-gray-200'));

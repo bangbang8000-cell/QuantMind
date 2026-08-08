@@ -94,7 +94,7 @@ const LiveTradeConfigWizard: React.FC<Props> = ({
 
   const issues = useMemo(() => validateLiveTradeConfig(liveTradeConfig), [liveTradeConfig]);
   const tips = strategyDefaults?.live_config_tips || [];
-  const modeLabel = mode === 'SIMULATION' ? '模拟盘' : (mode === 'SHADOW' ? '影子模式' : '实盘');
+  const modeLabel = mode === 'SIMULATION' ? '模拟盘' : (mode === 'SHADOW' ? '影子模式' : '模拟');
   const orderTypeLabel = liveTradeConfig.order_type === 'LIMIT' ? '限价' : '市价';
 
   const summaryRows = useMemo(
@@ -156,7 +156,7 @@ const LiveTradeConfigWizard: React.FC<Props> = ({
 
   return (
     <Modal
-      title="实盘执行参数"
+      title="模拟执行参数"
       open={open}
       onCancel={onCancel}
       width={860}
@@ -190,7 +190,7 @@ const LiveTradeConfigWizard: React.FC<Props> = ({
               <Alert
                 type="info"
                 showIcon
-                message={`策略 ${strategyName || strategyId} 首次实盘前需要确认调仓节奏与买卖时点`}
+                message={`策略 ${strategyName || strategyId} 首次模拟交易前需要确认调仓节奏与买卖时点`}
               />
               {tips.length > 0 && (
                 <div className="rounded-2xl border border-blue-100 bg-blue-50 px-4 py-2.5 text-sm text-blue-900">

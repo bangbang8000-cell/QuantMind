@@ -332,7 +332,7 @@ STRATEGY_CONFIG = {
             </div>
 
             {/* 右侧：策略参数（表单输入）- 无滚动条 */}
-            <div className="w-80 flex flex-col overflow-hidden">
+            <div className="flex flex-col overflow-hidden" style={{ flex: '0 0 clamp(240px, 28vw, 320px)', minWidth: 0 }}>
                 <div className="mb-1 flex items-center gap-2">
                     <Text strong style={{ fontSize: '13px' }}>策略参数</Text>
                     <Tag color="blue" style={{ fontSize: 11, padding: '0 6px', borderRadius: 6, lineHeight: '18px' }}>
@@ -380,7 +380,7 @@ STRATEGY_CONFIG = {
                     </div>
 
                     {/* 参数表单区域 */}
-                    <div className="flex-1" style={{ overflow: 'hidden' }}>
+                    <div className="flex-1 min-h-0" style={{ overflowY: 'auto' }}>
                         <Form layout="vertical" size="small">
                             <Form.Item label={<span style={{ fontSize: '11px' }}>策略名称</span>} style={{ marginBottom: '6px' }}>
                                 <Input

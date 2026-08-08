@@ -88,7 +88,7 @@ const StrategiesPage: React.FC<StrategiesPageProps> = ({ userId }) => {
         },
       });
     } else if (strategy.status === 'live_trading') {
-      message.warning('实盘策略无法编辑，请先停止实盘');
+      message.warning('模拟策略无法编辑，请先停止模拟');
     } else {
       navigate(`/ai-ide?strategyId=${strategy.id}`);
     }
@@ -102,7 +102,7 @@ const StrategiesPage: React.FC<StrategiesPageProps> = ({ userId }) => {
     const statusMap: Record<StrategyStatus, { bg: string; text: string; color: string }> = {
       draft: { bg: 'bg-gray-50', color: 'text-gray-500', text: '草稿' },
       repository: { bg: 'bg-blue-50', color: 'text-blue-600', text: '仓库' },
-      live_trading: { bg: 'bg-green-50', color: 'text-green-600', text: '实盘中' },
+      live_trading: { bg: 'bg-green-50', color: 'text-green-600', text: '模拟中' },
       active: { bg: 'bg-emerald-50', color: 'text-emerald-600', text: '已激活' },
       inactive: { bg: 'bg-slate-50', color: 'text-slate-400', text: '未激活' },
       paused: { bg: 'bg-amber-50', color: 'text-amber-600', text: '已暂停' },
@@ -252,7 +252,7 @@ const StrategiesPage: React.FC<StrategiesPageProps> = ({ userId }) => {
           >
             <Select.Option value="draft">草稿</Select.Option>
             <Select.Option value="repository">仓库</Select.Option>
-            <Select.Option value="live_trading">实盘中</Select.Option>
+            <Select.Option value="live_trading">模拟中</Select.Option>
             <Select.Option value="active">已激活</Select.Option>
             <Select.Option value="inactive">未激活</Select.Option>
             <Select.Option value="paused">已暂停</Select.Option>

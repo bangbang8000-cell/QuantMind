@@ -18,9 +18,11 @@ from backend.services.api.routers.admin.admin_training import (
     submit_training_job,
 )
 from backend.services.api.routers.admin.model_management import (
-    _enrich_feature_catalog_with_data_coverage,
     _load_feature_catalog_from_db,
     _load_feature_catalog_from_file,
+)
+from backend.services.api.routers.admin.model_management_utils import (
+    _enrich_feature_catalog_with_data_coverage_async,
 )
 from backend.services.api.training_shap_summary import read_shap_summary_rows, to_int_or
 from backend.services.api.user_app.middleware.auth import get_current_user
@@ -502,7 +504,7 @@ async def get_model_feature_catalog(
         raise HTTPException(status_code=404, detail="未找到可用的特征字典（DB/文件均不可用）")
 
     if include_coverage:
-        return _enrich_feature_catalog_with_data_coverage(catalog, market=market)
+        return await _enrich_feature_catalog_with_data_coverage_async(catalog, market=market)
     return catalog
 
 

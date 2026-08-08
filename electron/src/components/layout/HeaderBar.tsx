@@ -113,13 +113,13 @@ export const HeaderBar: React.FC = () => {
             type="button"
             role="switch"
             aria-checked={tradingMode === 'simulation'}
-            aria-label={`当前交易模式：${tradingMode === 'real' ? '实盘' : '模拟盘'}，点击切换`}
+            aria-label={`当前交易模式：${tradingMode === 'real' ? '模拟盘' : '模拟盘'}，点击切换`}
             onClick={() => handleModeSwitch(tradingMode === 'real' ? 'simulation' : 'real')}
             className={`relative flex h-8 w-[72px] shrink-0 items-center rounded-full border px-1 transition-all focus:outline-none shadow-sm ${tradingMode === 'simulation'
               ? 'border-emerald-200 bg-emerald-50/50'
               : 'border-blue-200 bg-blue-50/50'
               }`}
-            title="切换仪表盘数据源：实盘/模拟盘"
+            title="切换仪表盘数据源：模拟盘"
           >
             <span
               className={`absolute top-0.5 bottom-0.5 w-[32px] rounded-full shadow-sm transition-transform duration-200 ${tradingMode === 'simulation'

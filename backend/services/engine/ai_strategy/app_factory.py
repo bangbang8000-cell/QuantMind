@@ -4,7 +4,6 @@ AI策略服务应用工厂模块
 负责创建和配置FastAPI应用
 """
 
-import asyncio
 import logging
 import sys
 import time
@@ -253,16 +252,6 @@ def _register_events(app: FastAPI):
             "Warmup completed for vector parser and schema retriever in %.2fs",
             time.monotonic() - warmup_start,
         )
-
-        # 预热 QuantDB DuckDB 连接（消除首次查询 28s 延迟）
-        try:
-            from backend.services.engine.data_platform.quantdb_hub import QuantDBDataHub
-
-            hub = QuantDBDataHub.get_instance()
-            await asyncio.to_thread(hub.warm_up)
-            logger.info("QuantDB warm-up initiated in background")
-        except Exception as e:
-            logger.warning(f"QuantDB warm-up failed (non-fatal): {e}")
 
         yield
 

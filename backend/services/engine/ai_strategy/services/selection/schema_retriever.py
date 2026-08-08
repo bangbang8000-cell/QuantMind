@@ -196,146 +196,11 @@ STOCK_DAILY_LATEST_SCHEMA: list[SchemaColumn] = [
     SchemaColumn("stock_daily_latest", "profit_growth", "净利润同比增长率"),
 ]
 
-QUANTDB_TABLE_DESCRIPTIONS: dict[str, str] = {
-    "quantdb_valuation": "QuantDB 估值指标日频数据（PS/股息率/静态PE/净资产等），从本地 parquet 实时读取。",
-    "quantdb_sentiment": "QuantDB 市场情绪数据（流动性/买卖压力/动量/跳空/K线形态等），从本地 parquet 实时读取。",
-    "quantdb_factors": "QuantDB L1 因子数据（筹码/行业/风格/技术/概念等 101 列），从本地 parquet 实时读取。",
-    "quantdb_margin": "QuantDB 融资融券数据，从本地 parquet 实时读取。",
-    "quantdb_technical": "QuantDB 技术指标数据（量比等扩展字段），从本地 parquet 实时读取。",
-    "quantdb_financial": "QuantDB 财务报表核心筛选字段（利润表/资产负债表/现金流），从本地 parquet 实时读取。",
-}
-
-# Merge QuantDB descriptions into the main dict
-TABLE_DESCRIPTIONS.update(QUANTDB_TABLE_DESCRIPTIONS)
-
-QUANTDB_SCHEMA: list[SchemaColumn] = [
-    # === 估值扩展 (8个) ===
-    SchemaColumn("quantdb_valuation", "ps_ttm", "市销率PS(TTM)"),
-    SchemaColumn("quantdb_valuation", "dividend_rate", "股息率(%)"),
-    SchemaColumn("quantdb_valuation", "pe_static", "静态市盈率"),
-    SchemaColumn("quantdb_valuation", "equity", "净资产(元)"),
-    SchemaColumn("quantdb_valuation", "annual_net_profit", "年度净利润(元)"),
-    SchemaColumn("quantdb_valuation", "revenue_ttm", "TTM营业收入(元)"),
-    SchemaColumn("quantdb_valuation", "net_profit_ttm", "TTM净利润(元)"),
-    SchemaColumn("quantdb_valuation", "total_capital", "总股本"),
-
-    # === 市场情绪 (14个) ===
-    SchemaColumn("quantdb_sentiment", "liquidity_score", "流动性评分(0-1)"),
-    SchemaColumn("quantdb_sentiment", "buy_pressure", "买入压力"),
-    SchemaColumn("quantdb_sentiment", "sell_pressure", "卖出压力"),
-    SchemaColumn("quantdb_sentiment", "body_ratio", "K线实体比例"),
-    SchemaColumn("quantdb_sentiment", "upper_shadow", "上影线长度"),
-    SchemaColumn("quantdb_sentiment", "lower_shadow", "下影线长度"),
-    SchemaColumn("quantdb_sentiment", "gap_up_down", "跳空幅度"),
-    SchemaColumn("quantdb_sentiment", "momentum_1d", "1日动量"),
-    SchemaColumn("quantdb_sentiment", "momentum_3d", "3日动量"),
-    SchemaColumn("quantdb_sentiment", "price_range", "振幅(%)"),
-    SchemaColumn("quantdb_sentiment", "intraday_vol", "日内波动率"),
-    SchemaColumn("quantdb_sentiment", "volume_concentration", "成交量集中度"),
-    SchemaColumn("quantdb_sentiment", "amount_per_trade", "每笔成交额(元)"),
-    SchemaColumn("quantdb_sentiment", "am_pm_trend", "早盘/尾盘趋势"),
-
-    # === 筹码分析 (8个) ===
-    SchemaColumn("quantdb_factors", "chip_profit_ratio_20", "20日获利盘比例(%)"),
-    SchemaColumn("quantdb_factors", "chip_profit_ratio_60", "60日获利盘比例(%)"),
-    SchemaColumn("quantdb_factors", "chip_profit_ratio_120", "120日获利盘比例(%)"),
-    SchemaColumn("quantdb_factors", "chip_floating_ratio", "浮动筹码比例(%)"),
-    SchemaColumn("quantdb_factors", "chip_concentration_20", "20日筹码集中度"),
-    SchemaColumn("quantdb_factors", "chip_cost_90_width", "90%成本带宽"),
-    SchemaColumn("quantdb_factors", "chip_peak_distance", "筹码峰距"),
-    SchemaColumn("quantdb_factors", "chip_profit_delta_5", "5日获利变化"),
-
-    # === 行业因子 (11个) ===
-    SchemaColumn("quantdb_factors", "ind_strength_20", "行业强度20日"),
-    SchemaColumn("quantdb_factors", "ind_strength_60", "行业强度60日"),
-    SchemaColumn("quantdb_factors", "ind_relative_momentum_20", "行业相对动量"),
-    SchemaColumn("quantdb_factors", "ind_relative_pe", "行业相对PE"),
-    SchemaColumn("quantdb_factors", "ind_netflow_rank_20", "行业资金流排名"),
-    SchemaColumn("quantdb_factors", "ind_breadth_up_20", "行业广度(上涨比例)"),
-    SchemaColumn("quantdb_factors", "ind_rotation_speed_20", "行业轮动速度"),
-    SchemaColumn("quantdb_factors", "ind_crowding_20", "行业拥挤度"),
-    SchemaColumn("quantdb_factors", "ind_dispersion_20", "行业离散度"),
-    SchemaColumn("quantdb_factors", "ind_concentration", "行业集中度"),
-    SchemaColumn("quantdb_factors", "ind_momentum_decay", "行业动量衰减"),
-
-    # === 风格因子 (7个) ===
-    SchemaColumn("quantdb_factors", "style_beta_20", "20日Beta系数"),
-    SchemaColumn("quantdb_factors", "style_beta_60", "60日Beta系数"),
-    SchemaColumn("quantdb_factors", "style_value_20", "价值因子暴露"),
-    SchemaColumn("quantdb_factors", "style_size_20", "规模因子暴露"),
-    SchemaColumn("quantdb_factors", "style_idio_vol_20", "20日特质波动率"),
-    SchemaColumn("quantdb_factors", "style_idio_vol_60", "60日特质波动率"),
-    SchemaColumn("quantdb_factors", "style_residual_ret_20", "20日残差收益"),
-
-    # === 扩展技术 (5个) ===
-    SchemaColumn("quantdb_factors", "tech_adx_14", "ADX趋势强度(14日)"),
-    SchemaColumn("quantdb_factors", "tech_bb_pos", "布林带位置(0-1)"),
-    SchemaColumn("quantdb_factors", "tech_bb_width", "布林带宽度"),
-    SchemaColumn("quantdb_factors", "tech_cci_20", "CCI商品通道指数(20日)"),
-    SchemaColumn("quantdb_factors", "tech_vol_price_corr_20", "20日量价相关性"),
-
-    # === 概念因子 (10个) ===
-    SchemaColumn("quantdb_factors", "concept_hot_score", "概念热度评分"),
-    SchemaColumn("quantdb_factors", "concept_momentum_top3", "TOP3概念动量"),
-    SchemaColumn("quantdb_factors", "concept_leader_score", "概念领导力评分"),
-    SchemaColumn("quantdb_factors", "concept_rotation_score", "概念轮动评分"),
-    SchemaColumn("quantdb_factors", "concept_crowding_max", "概念拥挤度"),
-    SchemaColumn("quantdb_factors", "concept_diversity", "概念分散度"),
-    SchemaColumn("quantdb_factors", "concept_flow_rank", "概念资金流排名"),
-    SchemaColumn("quantdb_factors", "concept_exposure_top1", "TOP1概念暴露"),
-    SchemaColumn("quantdb_factors", "concept_cross_sector", "跨板块概念"),
-    SchemaColumn("quantdb_factors", "concept_volume_ratio", "概念量比"),
-
-    # === 量能扩展 (4个) ===
-    SchemaColumn("quantdb_factors", "liq_mfi_14", "MFI资金流量指数(14日)"),
-    SchemaColumn("quantdb_factors", "liq_obv_20", "OBV能量潮(20日)"),
-    SchemaColumn("quantdb_technical", "vol_to_ma5", "5日量比(相对均线)"),
-    SchemaColumn("quantdb_technical", "vol_to_ma20", "20日量比(相对均线)"),
-
-    # === 融资融券 (8个) ===
-    SchemaColumn("quantdb_margin", "finance_balance", "融资余额(元)"),
-    SchemaColumn("quantdb_margin", "slo_volume", "融券余量(股)"),
-    SchemaColumn("quantdb_margin", "finance_buy", "融资买入额(元)"),
-    SchemaColumn("quantdb_margin", "slo_sell_amount", "融券卖出额(元)"),
-    SchemaColumn("quantdb_margin", "finance_repay", "融资偿还额(元)"),
-    SchemaColumn("quantdb_margin", "slo_repay", "融券偿还额(元)"),
-    SchemaColumn("quantdb_margin", "finance_net", "融资净买入(元)"),
-    SchemaColumn("quantdb_margin", "slo_net", "融券净卖出(元)"),
-
-    # === 财务指标(核心筛选字段) (20个) ===
-    SchemaColumn("quantdb_financial", "revenue", "营业收入(元)"),
-    SchemaColumn("quantdb_financial", "operating_revenue", "营业总收入(元)"),
-    SchemaColumn("quantdb_financial", "net_profit_incl_min_int_inc", "净利润(元)"),
-    SchemaColumn("quantdb_financial", "oper_profit", "营业利润(元)"),
-    SchemaColumn("quantdb_financial", "research_expenses", "研发费用(元)"),
-    SchemaColumn("quantdb_financial", "sale_expense", "销售费用(元)"),
-    SchemaColumn("quantdb_financial", "s_fa_eps_basic", "基本每股收益"),
-    SchemaColumn("quantdb_financial", "s_fa_eps_diluted", "稀释每股收益"),
-    SchemaColumn("quantdb_financial", "tot_assets", "总资产(元)"),
-    SchemaColumn("quantdb_financial", "tot_liab", "总负债(元)"),
-    SchemaColumn("quantdb_financial", "total_equity", "所有者权益(元)"),
-    SchemaColumn("quantdb_financial", "net_cash_flows_oper_act", "经营现金流净额(元)"),
-    SchemaColumn("quantdb_financial", "goodwill", "商誉(元)"),
-    SchemaColumn("quantdb_financial", "inventories", "存货(元)"),
-    SchemaColumn("quantdb_financial", "account_receivable", "应收账款(元)"),
-    SchemaColumn("quantdb_financial", "shortterm_loan", "短期借款(元)"),
-    SchemaColumn("quantdb_financial", "long_term_loans", "长期借款(元)"),
-    SchemaColumn("quantdb_financial", "inc_revenue_rate", "营收同比增长率(%)"),
-    SchemaColumn("quantdb_financial", "inc_net_profit_rate", "净利润同比增长率(%)"),
-    SchemaColumn("quantdb_financial", "sales_gross_profit", "销售毛利率(%)"),
-]
-
 
 SCHEMAS: dict[str, list[SchemaColumn]] = {
     "stock_selection": STOCK_SELECTION_SCHEMA,
     "stock_daily": STOCK_DAILY_SCHEMA,
     "stock_daily_latest": STOCK_DAILY_LATEST_SCHEMA,
-    "quantdb_valuation": [c for c in QUANTDB_SCHEMA if c.table == "quantdb_valuation"],
-    "quantdb_sentiment": [c for c in QUANTDB_SCHEMA if c.table == "quantdb_sentiment"],
-    "quantdb_factors": [c for c in QUANTDB_SCHEMA if c.table == "quantdb_factors"],
-    "quantdb_margin": [c for c in QUANTDB_SCHEMA if c.table == "quantdb_margin"],
-    "quantdb_technical": [c for c in QUANTDB_SCHEMA if c.table == "quantdb_technical"],
-    "quantdb_financial": [c for c in QUANTDB_SCHEMA if c.table == "quantdb_financial"],
 }
 
 
@@ -372,17 +237,7 @@ class SchemaRetriever:
 
     def _heuristic_table_bias(self, query: str) -> dict[str, float]:
         q = query.lower()
-        bias: dict[str, float] = {
-            "stock_selection": 0.0,
-            "stock_daily": 0.0,
-            "stock_daily_latest": 0.0,
-            "quantdb_valuation": 0.0,
-            "quantdb_sentiment": 0.0,
-            "quantdb_factors": 0.0,
-            "quantdb_margin": 0.0,
-            "quantdb_technical": 0.0,
-            "quantdb_financial": 0.0,
-        }
+        bias = {"stock_selection": 0.0, "stock_daily": 0.0, "stock_daily_latest": 0.0}
         if any(k in q for k in ["近30", "近期", "最近", "短期", "当日", "今日", "最新"]):
             bias["stock_daily_latest"] += 0.2
         if any(
@@ -402,19 +257,6 @@ class SchemaRetriever:
             bias["stock_daily"] += 0.15
         if any(k in q for k in ["全市场", "全量", "全部", "快照"]):
             bias["stock_daily_latest"] += 0.2
-        # QuantDB heuristic biases
-        if any(k in q for k in ["估值", "ps", "股息", "分红", "净资产", "市销"]):
-            bias["quantdb_valuation"] += 0.25
-        if any(k in q for k in ["情绪", "流动性", "买卖压力", "动量", "跳空", "k线形态", "日内"]):
-            bias["quantdb_sentiment"] += 0.25
-        if any(k in q for k in ["筹码", "因子", "行业强度", "风格", "概念", "布林", "adx", "cci"]):
-            bias["quantdb_factors"] += 0.25
-        if any(k in q for k in ["融资", "融券", "两融", "融资余额"]):
-            bias["quantdb_margin"] += 0.25
-        if any(k in q for k in ["量比", "技术指标", "obv", "mfi"]):
-            bias["quantdb_technical"] += 0.25
-        if any(k in q for k in ["财务", "利润", "营收", "现金流", "商誉", "每股收益", "毛利率"]):
-            bias["quantdb_financial"] += 0.25
         return bias
 
     async def retrieve(self, query: str, top_k: int = 12) -> dict[str, object]:
@@ -424,16 +266,14 @@ class SchemaRetriever:
         query_vec = self._embed(query)
         if query_vec is None:
             return {
-                "target_table": "quantdb_valuation",
+                "target_table": "stock_daily_latest",
                 "table_scores": {
-                    "quantdb_valuation": 0.0,
-                    "quantdb_technical": 0.0,
-                    "quantdb_sentiment": 0.0,
-                    "quantdb_factors": 0.0,
-                    "quantdb_margin": 0.0,
+                    "stock_selection": 0.0,
+                    "stock_daily": 0.0,
+                    "stock_daily_latest": 0.0,
                 },
                 "candidate_fields": [],
-                "allowed_fields": [c.name for c in QUANTDB_SCHEMA if c.table == "quantdb_valuation"],
+                "allowed_fields": [c.name for c in STOCK_DAILY_LATEST_SCHEMA],
             }
 
         table_scores: dict[str, float] = {}
@@ -451,16 +291,8 @@ class SchemaRetriever:
         for table, score in table_scores.items():
             table_scores[table] = score + bias.get(table, 0.0)
 
-        # 根据查询内容选择最优表，默认优先使用 QuantDB valuation（最常用）
-        best_table = None
-        best_score = -1.0
-        for table, score in table_scores.items():
-            if score > best_score and table in SCHEMAS:
-                best_score = score
-                best_table = table
-
-        # Default to quantdb_valuation if no table scores well or bias didn't help
-        target_table = best_table if best_table and best_score > 0.1 else "quantdb_valuation"
+        # 强制使用 stock_daily_latest 表，因为 stock_selection 表不存在
+        target_table = "stock_daily_latest"
         top_candidates = candidates.get(target_table, [])[:top_k]
 
         return {
@@ -471,11 +303,10 @@ class SchemaRetriever:
                     "name": col.name,
                     "description": col.description,
                     "score": round(score, 4),
-                    "table": col.table,
                 }
                 for col, score in top_candidates
             ],
-            "allowed_fields": [c.name for c in SCHEMAS.get(target_table, [])],
+            "allowed_fields": [c.name for c in SCHEMAS[target_table]],
         }
 
 

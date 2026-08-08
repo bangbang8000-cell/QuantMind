@@ -251,7 +251,7 @@ export const ModelDetailPanel: React.FC<{ model: UserModelRecord }> = ({ model }
             <Info size={14} className="text-slate-400 mt-1" />
             <Text className="text-[11px] text-slate-500 leading-relaxed">
               <span className="font-bold text-slate-700">指标解读：</span>
-              训练集反映拟合能力，验证集用于参数选择，测试集代表实盘泛化。IC 衰减控制在 10% 以内视为模型鲁棒性良好。
+              训练集反映拟合能力，验证集用于参数选择，测试集代表模拟泛化。IC 衰减控制在 10% 以内视为模型鲁棒性良好。
             </Text>
           </div>
 
@@ -674,7 +674,7 @@ export const AttributionAnalysisPanel: React.FC<{
                   <div className="flex items-start gap-2">
                     <Zap size={12} className="text-amber-500 mt-0.5 shrink-0" />
                     <Text className="text-[10px] text-slate-600 leading-normal italic">
-                      选股建议仅供参考，实盘请结合市场环境判断。
+                      选股建议仅供参考，模拟盘请结合市场环境判断。
                     </Text>
                   </div>
                 </div>
@@ -872,7 +872,7 @@ export const InferenceCenterPanel: React.FC<{
                <Info size={14} className="text-blue-400 mt-0.5 shrink-0" />
                <Text className="text-[10px] text-blue-600/80 leading-relaxed">
                  <span className="font-black mr-1">温馨提示：</span>
-                 手动运行的结果会记录为“手动任务”。如果你点亮星星设为“默认”，实盘交易将直接使用本次推理的结果。
+                 手动运行的结果会记录为”手动任务”。如果你点亮星星设为”默认”，模拟交易将直接使用本次推理的结果。
                </Text>
             </div>
           </div>
@@ -882,7 +882,7 @@ export const InferenceCenterPanel: React.FC<{
         <div className="col-span-4 space-y-4 flex flex-col h-full">
            <div className="glass-panel rounded-2xl p-4 border border-slate-100/50 bg-gradient-to-br from-white to-emerald-50/10">
               <div className="flex items-center justify-between mb-3">
-                 <Text className="text-[9px] font-black text-slate-400 uppercase tracking-widest">当前实盘生效</Text>
+                 <Text className="text-[9px] font-black text-slate-400 uppercase tracking-widest">当前模拟生效</Text>
                  {(() => {
                     const todayStr = dayjs().format('YYYY-MM-DD');
                     const isEffective = latestInferenceRun?.run_id && 

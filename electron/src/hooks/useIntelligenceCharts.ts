@@ -431,7 +431,7 @@ export const useIntelligenceCharts = (userId: string = 'current', options?: { au
                         
                         let returnValue = Number.NaN;
                         if (isLive) {
-                            // 实盘逻辑：使用百分比字段
+                            // 模拟逻辑：使用百分比字段
                             const pctValue = Number(row.daily_return_pct);
                             const ratioValue = Number(row.daily_return_ratio);
                             const legacyPctValue = Number(row.daily_return);
@@ -453,7 +453,7 @@ export const useIntelligenceCharts = (userId: string = 'current', options?: { au
                         return {
                             timestamp: `${date.split('T')[0]}T00:00:00Z`,
                             value: returnValue,
-                            label: isLive ? '实盘收益率' : '模拟收益率',
+                            label: isLive ? '模拟收益率' : '模拟收益率',
                         } as ChartDataPoint;
                     })
                     .filter((item): item is ChartDataPoint => item !== null)

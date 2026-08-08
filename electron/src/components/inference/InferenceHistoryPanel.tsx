@@ -1,10 +1,9 @@
 import React, { useEffect, useState, useCallback } from 'react';
 import {
-  Button, Tag, Typography, Empty, Spin, Table, Select, Input, DatePicker,
+  Button, Tag, Typography, Empty, Spin, Table,
 } from 'antd';
 import { clsx } from 'clsx';
-import dayjs from 'dayjs';
-import { History, RefreshCw, Trash2 } from 'lucide-react';
+import { Trash2 } from 'lucide-react';
 import { modelTrainingService, InferenceRunRecord, InferenceRankingResult } from '../../services/modelTrainingService';
 import { InferenceRunDetailView } from './InferenceRunDetailView';
 
@@ -37,9 +36,6 @@ export const InferenceHistoryPanel: React.FC<Props> = ({ modelId, onDelete }) =>
   const [page, setPage] = useState(1);
   const [pageSize, setPageSize] = useState(20);
   const [loading, setLoading] = useState(false);
-  const [runIdFilter, setRunIdFilter] = useState('');
-  const [statusFilter, setStatusFilter] = useState<'all' | 'completed' | 'running' | 'failed'>('all');
-  const [dateRange, setDateRange] = useState<[dayjs.Dayjs | null, dayjs.Dayjs | null]>([null, null]);
   // 详情视图状态：null = 列表，非 null = 正在查看该 run 的详情
   const [viewingRunId, setViewingRunId] = useState<string | null>(null);
   const [detailResult, setDetailResult] = useState<InferenceRankingResult | null>(null);
@@ -49,9 +45,6 @@ export const InferenceHistoryPanel: React.FC<Props> = ({ modelId, onDelete }) =>
     setLoading(true);
     try {
       const resp = await modelTrainingService.listInferenceHistory(modelId, {
-        runId: runIdFilter || undefined,
-        status: statusFilter === 'all' ? undefined : statusFilter,
-        inferenceDate: dateRange[0] ? dateRange[0].format('YYYY-MM-DD') : undefined,
         page,
         pageSize,
       });
@@ -63,7 +56,7 @@ export const InferenceHistoryPanel: React.FC<Props> = ({ modelId, onDelete }) =>
     } finally {
       setLoading(false);
     }
-  }, [modelId, runIdFilter, statusFilter, dateRange, page, pageSize]);
+  }, [modelId, page, pageSize]);
 
   useEffect(() => {
     void load();
@@ -82,6 +75,31 @@ export const InferenceHistoryPanel: React.FC<Props> = ({ modelId, onDelete }) =>
       setDetailLoading(false);
     }
   }, []);
+
+  // 按推理日期导航：用该日期的 run 加载详情（±1 天切换 / 指定日期）
+  const navigateToDate = useCallback(async (inferenceDate: string) => {
+    if (viewingRunId === null) return;
+    setDetailLoading(true);
+    try {
+      const resp = await modelTrainingService.listInferenceHistory(modelId, {
+        inferenceDate,
+        page: 1,
+        pageSize: 1,
+      });
+      const target = resp.items?.[0];
+      if (target?.run_id) {
+        setViewingRunId(target.run_id);
+        const r = await modelTrainingService.getInferenceResult(target.run_id);
+        setDetailResult(r);
+      } else {
+        setDetailResult(null);
+      }
+    } catch {
+      setDetailResult(null);
+    } finally {
+      setDetailLoading(false);
+    }
+  }, [modelId, viewingRunId]);
 
   const handleBackToList = useCallback(() => {
     setViewingRunId(null);
@@ -193,42 +211,6 @@ export const InferenceHistoryPanel: React.FC<Props> = ({ modelId, onDelete }) =>
 
   return (
     <div className="space-y-4">
-      {/* 筛选区 */}
-      <div className="glass-panel rounded-3xl p-5 border border-slate-100/50">
-        <div className="flex items-center gap-3 mb-4">
-          <div className="bg-indigo-500/10 p-2 rounded-xl text-indigo-600">
-            <History size={18} />
-          </div>
-          <Text className="text-sm font-black text-slate-800 uppercase tracking-tight leading-none">推理历史</Text>
-          <Tag className="m-0 ml-2 border-0 bg-slate-100 text-slate-500 text-[9px] font-bold rounded-md px-2">共 {total} 条</Tag>
-        </div>
-
-        <div className="flex flex-wrap items-center gap-3">
-          <Input
-            placeholder="筛选 run_id"
-            value={runIdFilter}
-            onChange={e => { setRunIdFilter(e.target.value); setPage(1); }}
-            allowClear
-            className="w-52 rounded-xl h-9 border-slate-100 text-xs"
-          />
-          <Select value={statusFilter} onChange={v => { setStatusFilter(v); setPage(1); }} className="w-28 h-9 text-[10px]">
-            <Select.Option value="all">全部状态</Select.Option>
-            <Select.Option value="completed">成功</Select.Option>
-            <Select.Option value="running">运行中</Select.Option>
-            <Select.Option value="failed">失败</Select.Option>
-          </Select>
-          <DatePicker.RangePicker
-            value={[dateRange[0], dateRange[1]]}
-            onChange={d => { setDateRange(d && d[0] && d[1] ? [d[0], d[1]] : [null, null]); setPage(1); }}
-            disabledDate={d => d.isAfter(dayjs())}
-            className="rounded-xl h-9 border-slate-100"
-          />
-          <Button size="small" icon={<RefreshCw size={12} />} onClick={() => void load()} className="rounded-lg text-[10px] font-bold h-8 px-3">
-            刷新
-          </Button>
-        </div>
-      </div>
-
       {/* 表格 / 详情 */}
       {viewingRunId ? (
         <InferenceRunDetailView
@@ -237,6 +219,7 @@ export const InferenceHistoryPanel: React.FC<Props> = ({ modelId, onDelete }) =>
           loading={detailLoading}
           onBack={handleBackToList}
           onRetry={() => void loadDetail(viewingRunId)}
+          onNavigateDate={(date) => void navigateToDate(date)}
         />
       ) : (
         <div className="glass-panel rounded-3xl p-5 border border-slate-100/50">

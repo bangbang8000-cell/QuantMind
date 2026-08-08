@@ -773,7 +773,7 @@ export const realTradingService = {
             if (status === 404) {
                 return buildUnavailableRealAccount(
                     'unbound',
-                    '当前账户未绑定实盘交易账号',
+                    '当前账户未绑定模拟交易账号',
                 );
             }
             throw error;

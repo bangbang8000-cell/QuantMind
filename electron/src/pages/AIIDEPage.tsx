@@ -11,6 +11,7 @@ import 'prismjs/components/prism-bash';
 import 'prismjs/components/prism-json';
 import {
     FolderTree,
+    FlaskRound,
     Terminal,
     Play,
     Save,
@@ -48,6 +49,9 @@ import { PAGE_LAYOUT } from '../config/pageLayout';
 import { useAppSelector } from '../store';
 import { selectCurrentMarket } from '../store/slices/uiSlice';
 import { getMarketConfig } from '../config/marketConfig';
+import { strategyLabService } from '../features/strategy-lab/services/strategyLabService';
+import type { StrategyLabRunResult, StrategyLabProgressEvent } from '../features/strategy-lab/types';
+import { StrategyLabResultPanel } from '../features/strategy-lab/components/StrategyLabResultPanel';
 
 /**
  * AI-IDE Page Implementation
@@ -133,7 +137,7 @@ const AIIDEPage: React.FC = () => {
 
     // UI State
     const [activeTab, setActiveTab] = React.useState<'local' | 'remote'>('local');
-    const [logTab, setLogTab] = React.useState<'result' | 'error' | 'metrics'>('result');
+    const [logTab, setLogTab] = React.useState<'result' | 'error' | 'metrics' | 'backtest'>('result');
     const [chatInput, setChatInput] = React.useState('');
 
     // Data State
@@ -165,6 +169,47 @@ const AIIDEPage: React.FC = () => {
     const [isLoadingRemote, setIsLoadingRemote] = React.useState(false);
     const [isLoadingConfig, setIsLoadingConfig] = React.useState(false);
     const [isLoadingFiles, setIsLoadingFiles] = React.useState(false);
+
+    // Strategy Lab / 策略回测 state
+    const [strategyLabRunId, setStrategyLabRunId] = React.useState<string | null>(null);
+    const [strategyLabResult, setStrategyLabResult] = React.useState<StrategyLabRunResult | null>(null);
+    const [strategyLabLoading, setStrategyLabLoading] = React.useState(false);
+    const [strategyLabProgress, setStrategyLabProgress] = React.useState<StrategyLabProgressEvent | null>(null);
+    const strategyLabPollRef = React.useRef<ReturnType<typeof setInterval> | null>(null);
+
+    const clearStrategyLabPoll = React.useCallback(() => {
+        if (strategyLabPollRef.current) {
+            clearInterval(strategyLabPollRef.current);
+            strategyLabPollRef.current = null;
+        }
+    }, []);
+
+    const handleStrategyLabRun = React.useCallback(async () => {
+        if (isRunning || !editorContent.trim()) return;
+        setLogTab('backtest');
+        setStrategyLabLoading(true);
+        setStrategyLabResult(null);
+        setStrategyLabProgress(null);
+        clearStrategyLabPoll();
+        try {
+            const { run_id } = await strategyLabService.submit({ code: editorContent });
+            setStrategyLabRunId(run_id);
+            const cancel = strategyLabService.pollProgress(
+                run_id,
+                (evt) => setStrategyLabProgress(evt),
+                (result) => {
+                    setStrategyLabResult(result);
+                    setStrategyLabLoading(false);
+                    clearStrategyLabPoll();
+                },
+                1000,
+            );
+            strategyLabPollRef.current = cancel;
+        } catch (e: any) {
+            message.error(`策略回测启动失败: ${e?.message || e}`);
+            setStrategyLabLoading(false);
+        }
+    }, [isRunning, editorContent, clearStrategyLabPoll]);
 
 
     const logEndRef = React.useRef<HTMLDivElement>(null);
@@ -2432,6 +2477,20 @@ const AIIDEPage: React.FC = () => {
                             {isRunning ? '正在运行...' : '运行'}
                         </button>
                         <button
+                            onClick={handleStrategyLabRun}
+                            disabled={isRunning || !editorContent.trim()}
+                            className={clsx(
+                                "flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded-lg transition-all hover:scale-105 shadow-sm",
+                                isRunning || !editorContent.trim()
+                                    ? "bg-gray-100 text-gray-400 cursor-not-allowed opacity-60"
+                                    : "bg-amber-600 text-white hover:bg-amber-700 active:scale-95"
+                            )}
+                            title="使用策略实验室SDK运行回测，查看KPI、收益曲线、热力图等完整结果"
+                        >
+                            {strategyLabLoading ? <RefreshCw className="h-3.5 w-3.5 animate-spin" /> : <FlaskRound className="h-3.5 w-3.5" />}
+                            {strategyLabLoading ? '回测中...' : '回测'}
+                        </button>
+                        <button
                             onClick={handleSave}
                             disabled={isSaving || activeTab !== 'local' || !selectedFile}
                             className={clsx(
@@ -2577,7 +2636,7 @@ const AIIDEPage: React.FC = () => {
                                 </button>
                             )}
                             <button
-                                onClick={() => { setLogs([]); setErrors([]); setFinalResultSummary(null); }}
+                                onClick={() => { setLogs([]); setErrors([]); setFinalResultSummary(null); setStrategyLabResult(null); setStrategyLabProgress(null); }}
                                 className="p-1 hover:bg-gray-100 rounded text-gray-400 transition-all hover:scale-110"
                                 title="清除日志"
                             >
@@ -2615,6 +2674,23 @@ const AIIDEPage: React.FC = () => {
                             <div className="space-y-3">
                                 {renderKeyMetricsPanel()}
                                 <div ref={logEndRef} />
+                            </div>
+                        ) : logTab === 'backtest' ? (
+                            <div className="flex-1 overflow-auto">
+                                {strategyLabLoading && !strategyLabResult ? (
+                                    <div className="flex items-center justify-center h-40 text-gray-400">
+                                        <RefreshCw className="w-5 h-5 animate-spin mr-2" />
+                                        {strategyLabProgress?.message || '正在运行策略回测...'}
+                                    </div>
+                                ) : (
+                                    <StrategyLabResultPanel
+                                        result={strategyLabResult}
+                                        loading={strategyLabLoading}
+                                        code={editorContent}
+                                        strategyId={null}
+                                        strategyName={selectedRemote?.name || selectedFile?.name}
+                                    />
+                                )}
                             </div>
                         ) : (
                             <div className="space-y-1 text-red-500">

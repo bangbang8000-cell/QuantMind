@@ -79,7 +79,7 @@ services:
       - SERVICE_MODE=all
       - TZ=Asia/Shanghai
       - PYTHONPATH=/app
-      - HOST_PROJECT_PATH=${PROJECT_ROOT:-.}
+      - HOST_PROJECT_PATH=${HOST_PROJECT_PATH:-/opt/quantmind}
 
       # 安全配置
       - SECRET_KEY=${SECRET_KEY:-changeme-generate-a-random-secret}
@@ -156,7 +156,7 @@ services:
       - INTERNAL_CALL_SECRET=${INTERNAL_CALL_SECRET:-changeme-internal-secret}
       - TRAINING_IMAGE=${TRAINING_IMAGE:-quantmind-oss:latest}
       - TRAINING_DOCKER_NETWORK=${TRAINING_DOCKER_NETWORK:-quantmind_quantmind-net}
-      - HOST_PROJECT_PATH=${PROJECT_ROOT:-.}
+      - HOST_PROJECT_PATH=${HOST_PROJECT_PATH:-/opt/quantmind}
       - QUANTMIND_API_BASE_URL=${QUANTMIND_API_BASE_URL:-http://quantmind:8000}
 
       # Qwen/DashScope API (用于 AI 策略功能)
@@ -239,10 +239,15 @@ services:
       - ./backend:/app/backend
       - ./config:/app/config
       - ./scripts:/app/scripts
+<<<<<<< Updated upstream
       # AlphaAgent 包源码（容器内 Python 通过 PYTHONPATH=/app 直接 import）
       - ./alphaagent:/app/alphaagent
       # TradingAgents-Astock 多Agent投研框架
       - ./TradingAgents-astock:/app/TradingAgents-astock
+=======
+      # 训练脚本（用于 Docker-in-Docker 启动训练容器）
+      - ./docker/training:/app/docker/training
+>>>>>>> Stashed changes
       # 策略模板
       - ./strategy_templates:/app/strategy_templates
       # 用户股票池文件 (AI策略生成)
@@ -316,7 +321,7 @@ services:
       - INTERNAL_CALL_SECRET=${INTERNAL_CALL_SECRET:-changeme-internal-secret}
       - TRAINING_IMAGE=${TRAINING_IMAGE:-quantmind-oss:latest}
       - TRAINING_DOCKER_NETWORK=${TRAINING_DOCKER_NETWORK:-quantmind_quantmind-net}
-      - HOST_PROJECT_PATH=${PROJECT_ROOT:-.}
+      - HOST_PROJECT_PATH=${HOST_PROJECT_PATH:-/opt/quantmind}
       - QUANTMIND_API_BASE_URL=${QUANTMIND_API_BASE_URL:-http://quantmind:8000}
 
       # 回测进度回调地址（OSS 模式使用 quantmind 容器名）

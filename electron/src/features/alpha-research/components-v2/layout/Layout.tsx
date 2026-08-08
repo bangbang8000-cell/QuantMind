@@ -92,8 +92,8 @@ export const Layout: React.FC<LayoutProps> = ({
         </div>
       </header>
 
-      {/* Main Content — pb-48 ensures content is never hidden behind the fixed ChatInput */}
-      <main className="pt-24 pb-48">
+      {/* Main Content — pb-64 ensures content scrolls past the fixed ChatInput with its gradient scrim */}
+      <main className="pt-24 pb-64">
         <div className="container mx-auto px-6">{children}</div>
       </main>
     </div>

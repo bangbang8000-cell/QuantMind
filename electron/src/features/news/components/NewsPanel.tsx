@@ -1,11 +1,13 @@
 /**
- * NewsPage — 后台管理 → 资讯源 / 财务事件
+ * NewsPanel — 资讯监控
+ *
  * 三栏自适应布局：
- *   左：Huntly 文件夹 / 订阅源树（可折叠）
+ *   左：订阅源树（可多选、可折叠）
  *   中：文章流（弹性宽度）
- *   右：正文（弹性宽度，最小 420，最大 600）
- * 轮询：10s 抓最新一页，HeaderBar 显示 "上次同步：X 秒前"
- * 数据来源: QuantMind 后端 /api/v1/news/* (代理 Huntly)
+ *   右：正文（弹性宽度）
+ *
+ * 筛选：单排工具栏 + 可展开高级筛选面板
+ * 轮询：10s 文章列表 / 60s 来源和统计
  */
 
 import React, { useEffect, useMemo, useRef, useState, useCallback } from 'react';
@@ -27,23 +29,30 @@ import {
   Typography,
   Tree,
   message,
+  Space,
+  Collapse,
+  Avatar,
 } from 'antd';
 import {
   ArrowDownOutlined,
   ArrowUpOutlined,
   BellOutlined,
+  FilterOutlined,
   FireOutlined,
   GlobalOutlined,
-  LeftOutlined,
   LinkOutlined,
   MinusOutlined,
   ReloadOutlined,
-  RightOutlined,
   RiseOutlined,
+  SearchOutlined,
+  SortAscendingOutlined,
+  SortDescendingOutlined,
   StarFilled,
   StarOutlined,
   SyncOutlined,
   ThunderboltOutlined,
+  ClearOutlined,
+  ClockCircleOutlined,
 } from '@ant-design/icons';
 import type { DataNode } from 'antd/es/tree';
 import dayjs, { type Dayjs } from 'dayjs';
@@ -62,19 +71,81 @@ import { sanitizeHtml } from '../../../utils/sanitizeHtml';
 const { Text, Title, Paragraph } = Typography;
 const { RangePicker } = DatePicker;
 
-const POLL_ARTICLES_MS = 10_000;  // 文章列表 10s 轮询
-const POLL_SOURCES_MS = 60_000;  // 来源/未读数 60s 轮询（不需要高频）
+const POLL_ARTICLES_MS = 10_000;
+const POLL_SOURCES_MS = 60_000;
 
 type FeedMode = 'all' | 'events' | 'starred';
 type SentimentFilter = 'any' | 'bullish' | 'bearish' | 'neutral';
-type SelectionKey = 'all' | `folder-${number}` | `source-${number}`;
+type SortMode = 'time_desc' | 'time_asc' | 'sentiment_bullish' | 'sentiment_bearish';
 
-// A股配色：利好=红, 利空=绿
-const COLOR_BULLISH = '#dc2626';   // 红
-const COLOR_BEARISH = '#16a34a';   // 绿
-const COLOR_NEUTRAL = '#64748b';   // 灰
+const COLOR_BULLISH = '#dc2626';
+const COLOR_BEARISH = '#16a34a';
+const COLOR_NEUTRAL = '#64748b';
 
-// 常用市场类型快捷标签 (event_tag)
+const LS_KEY = 'news_panel_filters';
+
+interface FilterState {
+  feedMode: FeedMode;
+  sentiment: SentimentFilter;
+  strongOnly: boolean;
+  sort: SortMode;
+  keyword: string;
+  datePreset: string;
+  dateRange: [string | null, string | null];
+  selectedSourceIds: number[];
+  selectedIndustries: string[];
+  selectedTickers: string[];
+  selectedEventTags: string[];
+  selectedCountries: string[];
+  selectedRegions: string[];
+  selectedProvinces: string[];
+  selectedCities: string[];
+  selectedPoliticians: string[];
+  selectedVisits: string[];
+  selectedDepartments: string[];
+  selectedKeyTerms: string[];
+  selectedDateEnts: string[];
+  advancedOpen: boolean;
+}
+
+const defaultFilters: FilterState = {
+  feedMode: 'all',
+  sentiment: 'any',
+  strongOnly: false,
+  sort: 'time_desc',
+  keyword: '',
+  datePreset: 'all',
+  dateRange: [null, null],
+  selectedSourceIds: [],
+  selectedIndustries: [],
+  selectedTickers: [],
+  selectedEventTags: [],
+  selectedCountries: [],
+  selectedRegions: [],
+  selectedProvinces: [],
+  selectedCities: [],
+  selectedPoliticians: [],
+  selectedVisits: [],
+  selectedDepartments: [],
+  selectedKeyTerms: [],
+  selectedDateEnts: [],
+  advancedOpen: false,
+};
+
+function loadFilters(): FilterState {
+  try {
+    const raw = localStorage.getItem(LS_KEY);
+    if (raw) return { ...defaultFilters, ...JSON.parse(raw) };
+  } catch { /* ignore */ }
+  return { ...defaultFilters };
+}
+
+function saveFilters(state: FilterState) {
+  try {
+    localStorage.setItem(LS_KEY, JSON.stringify(state));
+  } catch { /* ignore */ }
+}
+
 const QUICK_EVENT_CHIPS = [
   { label: 'A股', value: '市场' },
   { label: '财报', value: '财报' },
@@ -97,29 +168,70 @@ const formatRelative = (iso?: string | null) => {
   return d.toLocaleDateString('zh-CN');
 };
 
+const SORT_OPTIONS: { label: React.ReactNode; value: SortMode }[] = [
+  { label: <span><SortDescendingOutlined /> 最新</span>, value: 'time_desc' },
+  { label: <span><SortAscendingOutlined /> 最早</span>, value: 'time_asc' },
+  { label: <span style={{ color: COLOR_BULLISH }}><RiseOutlined /> 利好强度</span>, value: 'sentiment_bullish' },
+  { label: <span style={{ color: COLOR_BEARISH }}><ArrowDownOutlined /> 利空强度</span>, value: 'sentiment_bearish' },
+];
+
+// —— helper to count active filters ——
+function countActiveFilters(f: FilterState): number {
+  let n = 0;
+  if (f.sentiment !== 'any') n++;
+  if (f.strongOnly) n++;
+  if (f.keyword.trim()) n++;
+  if (f.dateRange[0] || f.dateRange[1]) n++;
+  if (f.selectedSourceIds.length) n++;
+  if (f.selectedIndustries.length) n++;
+  if (f.selectedTickers.length) n++;
+  if (f.selectedEventTags.length) n++;
+  if (f.selectedCountries.length) n++;
+  if (f.selectedRegions.length) n++;
+  if (f.selectedProvinces.length) n++;
+  if (f.selectedCities.length) n++;
+  if (f.selectedPoliticians.length) n++;
+  if (f.selectedVisits.length) n++;
+  if (f.selectedDepartments.length) n++;
+  if (f.selectedKeyTerms.length) n++;
+  if (f.selectedDateEnts.length) n++;
+  return n;
+}
+
 export const NewsPanel: React.FC = () => {
+  // —— persisted filter state ——
+  const [f, setF] = useState<FilterState>(loadFilters);
+  const [debouncedKeyword] = useDebounce(f.keyword, 300);
+
+  const updateF = useCallback((patch: Partial<FilterState>) => {
+    const next = { ...f, ...patch };
+    setF(next);
+    saveFilters(next);
+  }, [f]);
+
+  // —— data state ——
   const [health, setHealth] = useState<NewsHealthInfo | null>(null);
   const [sources, setSources] = useState<NewsSource[]>([]);
   const [folders, setFolders] = useState<NewsFolder[]>([]);
-  const [selection, setSelection] = useState<SelectionKey>('all');
-  const [feedMode, setFeedMode] = useState<FeedMode>('all');
-  const [keyword, setKeyword] = useState('');
-  const [debouncedKeyword] = useDebounce(keyword, 300);
+  const [articles, setArticles] = useState<NewsArticle[]>([]);
+  const [loading, setLoading] = useState(false);
+  const [latestPublishedAt, setLatestPublishedAt] = useState<string | null>(null);
+  const [lastSyncTick, setLastSyncTick] = useState<number>(Date.now());
+  const [stats, setStats] = useState<NewsEnrichmentStats | null>(null);
 
-  // enrichment 过滤
-  const [sentimentFilter, setSentimentFilter] = useState<SentimentFilter>('any');
-  const [industryFilter, setIndustryFilter] = useState<string[]>([]);
-  const [tickerFilter, setTickerFilter] = useState<string[]>([]);
-  const [eventTagFilter, setEventTagFilter] = useState<string[]>([]);
-  const [countryFilter, setCountryFilter] = useState<string[]>([]);
-  const [regionFilter, setRegionFilter] = useState<string[]>([]);
-  const [keyTermFilter, setKeyTermFilter] = useState<string[]>([]);
-  const [dateEntFilter, setDateEntFilter] = useState<string[]>([]);
-  const [provinceFilter, setProvinceFilter] = useState<string[]>([]);
-  const [cityFilter, setCityFilter] = useState<string[]>([]);
-  const [politicianFilter, setPoliticianFilter] = useState<string[]>([]);
-  const [visitFilter, setVisitFilter] = useState<string[]>([]);
-  const [departmentFilter, setDepartmentFilter] = useState<string[]>([]);
+  const [currentPage, setCurrentPage] = useState(1);
+  const [pageSize, setPageSize] = useState(50);
+  const [totalArticles, setTotalArticles] = useState(0);
+
+  const [selectedArticleId, setSelectedArticleId] = useState<number | null>(null);
+  const [articleDetail, setArticleDetail] = useState<NewsArticleDetail | null>(null);
+  const [detailLoading, setDetailLoading] = useState(false);
+
+  const [expandedKeys, setExpandedKeys] = useState<React.Key[]>([]);
+  const [checkedKeys, setCheckedKeys] = useState<React.Key[]>([]);
+  const [_, forceTick] = useState(0);
+
+  // —— rebuild state ——
   const [rebuilding, setRebuilding] = useState(false);
   const [rebuildingAll, setRebuildingAll] = useState(false);
   const [rebuildProgress, setRebuildProgress] = useState<{
@@ -132,35 +244,15 @@ export const NewsPanel: React.FC = () => {
     eta_seconds?: number | null;
   } | null>(null);
   const rebuildPollRef = useRef<number | null>(null);
-  const [strongOnly, setStrongOnly] = useState(false);
-  const [dateRange, setDateRange] = useState<[Dayjs | null, Dayjs | null] | null>(null);
-  const [stats, setStats] = useState<NewsEnrichmentStats | null>(null);
 
-  // 分页
-  const [currentPage, setCurrentPage] = useState(1);
-  const [pageSize, setPageSize] = useState(50);
-  const [totalArticles, setTotalArticles] = useState(0);
-
-  // 三栏可拖拽布局 (百分比)
-  const [leftWidth, setLeftWidth] = useState(20);
-  const [midWidth, setMidWidth] = useState(40);
+  // —— layout drag ——
+  const [leftWidth, setLeftWidth] = useState(18);
+  const [midWidth, setMidWidth] = useState(42);
   const dragRef = useRef<{ side: 'left' | 'right'; startX: number; startLeft: number; startMid: number } | null>(null);
   const containerRef = useRef<HTMLDivElement>(null);
-
-  const [articles, setArticles] = useState<NewsArticle[]>([]);
-  const [loading, setLoading] = useState(false);
-  const [latestPublishedAt, setLatestPublishedAt] = useState<string | null>(null);
-  const [lastSyncTick, setLastSyncTick] = useState<number>(Date.now());
-
-  const [selectedArticleId, setSelectedArticleId] = useState<number | null>(null);
-  const [articleDetail, setArticleDetail] = useState<NewsArticleDetail | null>(null);
-  const [detailLoading, setDetailLoading] = useState(false);
-
-  const [expandedKeys, setExpandedKeys] = useState<React.Key[]>(['all']);
-  const [_, forceTick] = useState(0); // 强制时间标签 1s 重渲染
   const pollTimer = useRef<number | null>(null);
 
-  // —— 数据拉取 ——
+  // —— data fetching ——
   const checkHealth = useCallback(async () => {
     try {
       setHealth(await newsService.health());
@@ -171,9 +263,9 @@ export const NewsPanel: React.FC = () => {
 
   const loadSources = useCallback(async () => {
     try {
-      const { sources, folders } = await newsService.listSources();
-      setSources(sources);
-      setFolders(folders);
+      const { sources: srcs, folders: flds } = await newsService.listSources();
+      setSources(srcs);
+      setFolders(flds);
     } catch {
       setSources([]);
       setFolders([]);
@@ -185,32 +277,34 @@ export const NewsPanel: React.FC = () => {
     try {
       const params: any = {
         keyword: debouncedKeyword || undefined,
-        only_financial_event: feedMode === 'events',
+        only_financial_event: f.feedMode === 'events',
         page: currentPage,
         page_size: pageSize,
+        sort: f.sort,
       };
-      if (feedMode === 'starred') params.starred = true;
-      if (selection.startsWith('source-')) {
-        params.source_id = Number(selection.slice('source-'.length));
-      } else if (selection.startsWith('folder-')) {
-        params.folder_id = Number(selection.slice('folder-'.length));
+      if (f.feedMode === 'starred') params.starred = true;
+      if (f.selectedSourceIds.length === 1) {
+        params.source_id = f.selectedSourceIds[0];
+      } else if (f.selectedSourceIds.length > 1) {
+        params.source_ids = f.selectedSourceIds.join(',');
       }
-      if (sentimentFilter !== 'any') params.sentiment = sentimentFilter;
-      if (industryFilter.length) params.industries = industryFilter.join(',');
-      if (tickerFilter.length) params.tickers = tickerFilter.join(',');
-      if (eventTagFilter.length) params.event_tags = eventTagFilter.join(',');
-      if (countryFilter.length) params.countries = countryFilter.join(',');
-      if (regionFilter.length) params.regions = regionFilter.join(',');
-      if (keyTermFilter.length) params.key_terms = keyTermFilter.join(',');
-      if (dateEntFilter.length) params.date_entities = dateEntFilter.join(',');
-      if (provinceFilter.length) params.provinces = provinceFilter.join(',');
-      if (cityFilter.length) params.cities = cityFilter.join(',');
-      if (politicianFilter.length) params.politicians = politicianFilter.join(',');
-      if (visitFilter.length) params.visits = visitFilter.join(',');
-      if (departmentFilter.length) params.departments = departmentFilter.join(',');
-      if (strongOnly) params.strong_only = true;
-      if (dateRange?.[0]) params.since = dateRange[0].startOf('day').toISOString();
-      if (dateRange?.[1]) params.until = dateRange[1].endOf('day').toISOString();
+      if (f.sentiment !== 'any') params.sentiment = f.sentiment;
+      if (f.selectedIndustries.length) params.industries = f.selectedIndustries.join(',');
+      if (f.selectedTickers.length) params.tickers = f.selectedTickers.join(',');
+      if (f.selectedEventTags.length) params.event_tags = f.selectedEventTags.join(',');
+      if (f.selectedCountries.length) params.countries = f.selectedCountries.join(',');
+      if (f.selectedRegions.length) params.regions = f.selectedRegions.join(',');
+      if (f.selectedKeyTerms.length) params.key_terms = f.selectedKeyTerms.join(',');
+      if (f.selectedDateEnts.length) params.date_entities = f.selectedDateEnts.join(',');
+      if (f.selectedProvinces.length) params.provinces = f.selectedProvinces.join(',');
+      if (f.selectedCities.length) params.cities = f.selectedCities.join(',');
+      if (f.selectedPoliticians.length) params.politicians = f.selectedPoliticians.join(',');
+      if (f.selectedVisits.length) params.visits = f.selectedVisits.join(',');
+      if (f.selectedDepartments.length) params.departments = f.selectedDepartments.join(',');
+      if (f.strongOnly) params.strong_only = true;
+      if (f.dateRange[0]) params.since = dayjs(f.dateRange[0]).startOf('day').toISOString();
+      if (f.dateRange[1]) params.until = dayjs(f.dateRange[1]).endOf('day').toISOString();
+
       const r = await newsService.listArticles(params);
       setArticles(r.articles ?? []);
       setTotalArticles(r.total ?? (r.articles?.length ?? 0));
@@ -221,62 +315,38 @@ export const NewsPanel: React.FC = () => {
     } finally {
       setLoading(false);
     }
-  }, [selection, debouncedKeyword, feedMode, sentimentFilter, industryFilter, tickerFilter, eventTagFilter, countryFilter, regionFilter, keyTermFilter, dateEntFilter, provinceFilter, cityFilter, politicianFilter, visitFilter, departmentFilter, strongOnly, dateRange, currentPage, pageSize]);
+  }, [f.feedMode, f.sort, f.sentiment, f.strongOnly, f.selectedSourceIds, f.selectedIndustries, f.selectedTickers, f.selectedEventTags, f.selectedCountries, f.selectedRegions, f.selectedKeyTerms, f.selectedDateEnts, f.selectedProvinces, f.selectedCities, f.selectedPoliticians, f.selectedVisits, f.selectedDepartments, f.dateRange, debouncedKeyword, currentPage, pageSize]);
 
   const loadStats = useCallback(async () => {
     try {
       const params: any = {};
-      if (sentimentFilter !== 'any') params.sentiment = sentimentFilter;
-      if (industryFilter.length) params.industries = industryFilter.join(',');
-      if (tickerFilter.length) params.tickers = tickerFilter.join(',');
-      if (eventTagFilter.length) params.event_tags = eventTagFilter.join(',');
-      if (countryFilter.length) params.countries = countryFilter.join(',');
-      if (regionFilter.length) params.regions = regionFilter.join(',');
-      if (keyTermFilter.length) params.key_terms = keyTermFilter.join(',');
-      if (dateEntFilter.length) params.date_entities = dateEntFilter.join(',');
-      if (provinceFilter.length) params.provinces = provinceFilter.join(',');
-      if (cityFilter.length) params.cities = cityFilter.join(',');
-      if (politicianFilter.length) params.politicians = politicianFilter.join(',');
-      if (visitFilter.length) params.visits = visitFilter.join(',');
-      if (departmentFilter.length) params.departments = departmentFilter.join(',');
-      if (strongOnly) params.strong_only = true;
-      if (keyword?.trim()) params.keyword = debouncedKeyword.trim();
-      if (dateRange?.[0]) params.since = dateRange[0].startOf('day').toISOString();
-      if (dateRange?.[1]) params.until = dateRange[1].endOf('day').toISOString();
+      if (f.sentiment !== 'any') params.sentiment = f.sentiment;
+      if (f.selectedIndustries.length) params.industries = f.selectedIndustries.join(',');
+      if (f.selectedTickers.length) params.tickers = f.selectedTickers.join(',');
+      if (f.selectedEventTags.length) params.event_tags = f.selectedEventTags.join(',');
+      if (f.selectedCountries.length) params.countries = f.selectedCountries.join(',');
+      if (f.selectedRegions.length) params.regions = f.selectedRegions.join(',');
+      if (f.selectedKeyTerms.length) params.key_terms = f.selectedKeyTerms.join(',');
+      if (f.selectedDateEnts.length) params.date_entities = f.selectedDateEnts.join(',');
+      if (f.selectedProvinces.length) params.provinces = f.selectedProvinces.join(',');
+      if (f.selectedCities.length) params.cities = f.selectedCities.join(',');
+      if (f.selectedPoliticians.length) params.politicians = f.selectedPoliticians.join(',');
+      if (f.selectedVisits.length) params.visits = f.selectedVisits.join(',');
+      if (f.selectedDepartments.length) params.departments = f.selectedDepartments.join(',');
+      if (f.strongOnly) params.strong_only = true;
+      if (f.keyword?.trim()) params.keyword = debouncedKeyword.trim();
+      if (f.dateRange[0]) params.since = dayjs(f.dateRange[0]).startOf('day').toISOString();
+      if (f.dateRange[1]) params.until = dayjs(f.dateRange[1]).endOf('day').toISOString();
       const s = await newsService.enrichmentStats(params);
       setStats(s);
     } catch {
       setStats(null);
     }
-  }, [sentimentFilter, industryFilter, tickerFilter, eventTagFilter, countryFilter, regionFilter, keyTermFilter, dateEntFilter, provinceFilter, cityFilter, politicianFilter, visitFilter, departmentFilter, strongOnly, debouncedKeyword, dateRange]);
+  }, [f.sentiment, f.strongOnly, f.selectedIndustries, f.selectedTickers, f.selectedEventTags, f.selectedCountries, f.selectedRegions, f.selectedKeyTerms, f.selectedDateEnts, f.selectedProvinces, f.selectedCities, f.selectedPoliticians, f.selectedVisits, f.selectedDepartments, debouncedKeyword, f.dateRange]);
 
-  const handleRebuildTags = useCallback(async () => {
-    Modal.confirm({
-      title: '重建标签',
-      content: '将对未 enrichment 的文章重新提取标签（股票/行业/情感/省份/城市/领导人/调研等），数据量大时可能需要较长时间。确认继续？',
-      okText: '开始重建',
-      cancelText: '取消',
-      onOk: async () => {
-        setRebuilding(true);
-        try {
-          const r = await newsService.runEnrichmentNow(2000);
-          message.success({ content: `标签重建完成: ${r.written} 篇已更新`, key: 'rebuild-tags', duration: 3 });
-          await loadArticles();
-          await loadStats();
-        } catch {
-          message.error({ content: '标签重建失败', key: 'rebuild-tags' });
-        } finally {
-          setRebuilding(false);
-        }
-      },
-    });
-  }, [loadArticles, loadStats]);
-
+  // —— rebuild handlers ——
   const stopRebuildPolling = useCallback(() => {
-    if (rebuildPollRef.current) {
-      window.clearInterval(rebuildPollRef.current);
-      rebuildPollRef.current = null;
-    }
+    if (rebuildPollRef.current) { window.clearInterval(rebuildPollRef.current); rebuildPollRef.current = null; }
   }, []);
 
   const startRebuildPolling = useCallback(() => {
@@ -289,18 +359,32 @@ export const NewsPanel: React.FC = () => {
           stopRebuildPolling();
           setRebuildingAll(false);
           message.success({
-            content: `全量重建完成: 共 ${p.total} 篇 / 成功 ${p.ok} / 失败 ${p.failed} (${(p.elapsed_seconds / 60).toFixed(1)} 分钟)`,
-            key: 'rebuild-all',
-            duration: 6,
+            content: `全量重建完成: ${(p.elapsed_seconds / 60).toFixed(1)} 分钟`,
+            key: 'rebuild-all', duration: 6,
           });
           await loadArticles();
           await loadStats();
         }
-      } catch {
-        // ignore single tick error
-      }
+      } catch { /* ignore */ }
     }, 3000);
   }, [stopRebuildPolling, loadArticles, loadStats]);
+
+  const handleRebuildTags = useCallback(async () => {
+    Modal.confirm({
+      title: '重建标签',
+      content: '对未 enrichment 的文章重新提取标签。确认继续？',
+      okText: '开始重建', cancelText: '取消',
+      onOk: async () => {
+        setRebuilding(true);
+        try {
+          const r = await newsService.runEnrichmentNow(2000);
+          message.success({ content: `完成: ${r.written} 篇`, key: 'rebuild-tags', duration: 3 });
+          await loadArticles(); await loadStats();
+        } catch { message.error({ content: '重建失败', key: 'rebuild-tags' }); }
+        finally { setRebuilding(false); }
+      },
+    });
+  }, [loadArticles, loadStats]);
 
   const handleRebuildAll = useCallback(() => {
     Modal.confirm({
@@ -308,84 +392,78 @@ export const NewsPanel: React.FC = () => {
       width: 480,
       content: (
         <div>
-          <p>将直接读取 Huntly 数据库, 对 <b>全部 8 万多篇</b> 文章<b style={{ color: '#ef4444' }}>强制重建</b>标签 (覆盖已有 enrichment)。</p>
-          <p style={{ color: '#94a3b8', fontSize: 12 }}>
-            后台异步运行, 可关闭此对话框。预计耗时 30 ~ 90 分钟, 期间可继续浏览/筛选 (新数据会陆续生效)。
-          </p>
-          <p style={{ color: '#94a3b8', fontSize: 12 }}>
-            适用场景: 词典/模型升级后想让所有历史文章按新规则重新打标签。
-          </p>
+          <p>对 <b>全部历史文章</b> 强制重建标签 (后台异步)。</p>
+          <p style={{ color: '#94a3b8', fontSize: 12 }}>预计 30-90 分钟，期间可继续浏览。</p>
         </div>
       ),
-      okText: '开始强制重建',
-      cancelText: '取消',
+      okText: '开始强制重建', cancelText: '取消',
       okButtonProps: { type: 'primary', danger: true },
       onOk: async () => {
         setRebuildingAll(true);
         try {
           const r = await newsService.rebuildAllEnrichment(true);
           if (r.started) {
-            message.success({ content: `已启动后台强制重建任务 (共 ${r.total || '?'} 篇)`, key: 'rebuild-all' });
+            message.success({ content: `已启动 (共 ${r.total || '?'} 篇)`, key: 'rebuild-all' });
           } else {
-            message.info({ content: `任务已在运行中 (${r.processed}/${r.total})`, key: 'rebuild-all' });
+            message.info({ content: `已在运行 (${r.processed}/${r.total})`, key: 'rebuild-all' });
           }
           setRebuildProgress(r as any);
           startRebuildPolling();
-        } catch {
-          setRebuildingAll(false);
-          message.error({ content: '启动全量重建失败', key: 'rebuild-all' });
-        }
+        } catch { setRebuildingAll(false); message.error({ content: '启动失败', key: 'rebuild-all' }); }
       },
     });
   }, [startRebuildPolling]);
 
+  // —— effects ——
+  useEffect(() => { checkHealth(); loadSources(); loadStats(); }, [checkHealth, loadSources, loadStats]);
+
+  // auto-resume rebuild progress
   useEffect(() => {
-    checkHealth();
-    loadSources();
-    loadStats();
-    // 页面打开时若后端还在跑全量重建, 自动接上进度
     (async () => {
       try {
         const p = await newsService.getRebuildProgress();
-        if (p.running) {
-          setRebuildProgress(p);
-          setRebuildingAll(true);
-          startRebuildPolling();
-        } else if (p.total > 0) {
-          setRebuildProgress(p);
-        }
+        if (p.running) { setRebuildProgress(p); setRebuildingAll(true); startRebuildPolling(); }
+        else if (p.total > 0) setRebuildProgress(p);
       } catch { /* ignore */ }
     })();
-    return () => {
-      if (rebuildPollRef.current) window.clearInterval(rebuildPollRef.current);
-    };
-  }, [checkHealth, loadSources, loadStats, startRebuildPolling]);
+    return () => { if (rebuildPollRef.current) window.clearInterval(rebuildPollRef.current); };
+  }, [startRebuildPolling]);
 
+  // articles polling
   useEffect(() => {
     loadArticles();
     if (pollTimer.current) window.clearInterval(pollTimer.current);
-    pollTimer.current = window.setInterval(() => {
-      loadArticles();
-    }, POLL_ARTICLES_MS);
+    pollTimer.current = window.setInterval(loadArticles, POLL_ARTICLES_MS);
     return () => {
       if (pollTimer.current) window.clearInterval(pollTimer.current);
       pollTimer.current = null;
     };
   }, [loadArticles]);
 
-  // 来源/未读数低频刷新 (60s)
+  // sources polling
   useEffect(() => {
     loadSources();
     const srcTimer = window.setInterval(loadSources, POLL_SOURCES_MS);
     return () => window.clearInterval(srcTimer);
   }, [loadSources]);
 
-  // 筛选条件变化时重置到第 1 页
+  // stats debounced refresh on filter change
   useEffect(() => {
-    setCurrentPage(1);
-  }, [selection, debouncedKeyword, feedMode, sentimentFilter, industryFilter, tickerFilter, eventTagFilter, countryFilter, regionFilter, keyTermFilter, dateEntFilter, provinceFilter, cityFilter, politicianFilter, visitFilter, departmentFilter, strongOnly, dateRange]);
+    const t = window.setTimeout(loadStats, 500);
+    return () => window.clearTimeout(t);
+  }, [loadStats]);
 
-  // 拖拽分隔条：mousemove / mouseup
+  // reset page on filter change
+  useEffect(() => { setCurrentPage(1); }, [
+    f.feedMode, f.sort, f.sentiment, f.strongOnly, f.keyword,
+    f.selectedSourceIds, f.selectedIndustries, f.selectedTickers,
+    f.selectedEventTags, f.selectedCountries, f.selectedRegions,
+    f.selectedKeyTerms, f.selectedDateEnts, f.selectedProvinces,
+    f.selectedCities, f.selectedPoliticians, f.selectedVisits,
+    f.selectedDepartments, f.dateRange,
+  ]);
+
+  // drag
   useEffect(() => {
     const onMouseMove = (e: MouseEvent) => {
       if (!dragRef.current || !containerRef.current) return;
@@ -394,12 +472,12 @@ export const NewsPanel: React.FC = () => {
       const totalW = rect.width;
       const dx = e.clientX - dragRef.current.startX;
       const dPct = (dx / totalW) * 100;
-      const minPct = 10; // 最小 10%
+      const minPct = 8;
       if (dragRef.current.side === 'left') {
-        const newLeft = Math.max(minPct, Math.min(50, dragRef.current.startLeft + dPct));
+        const newLeft = Math.max(minPct, Math.min(40, dragRef.current.startLeft + dPct));
         setLeftWidth(newLeft);
       } else {
-        const newMid = Math.max(20, Math.min(60, dragRef.current.startMid + dPct));
+        const newMid = Math.max(20, Math.min(65, dragRef.current.startMid + dPct));
         setMidWidth(newMid);
       }
     };
@@ -410,32 +488,20 @@ export const NewsPanel: React.FC = () => {
     };
     window.addEventListener('mousemove', onMouseMove);
     window.addEventListener('mouseup', onMouseUp);
-    return () => {
-      window.removeEventListener('mousemove', onMouseMove);
-      window.removeEventListener('mouseup', onMouseUp);
-    };
+    return () => { window.removeEventListener('mousemove', onMouseMove); window.removeEventListener('mouseup', onMouseUp); };
   }, []);
 
-  // 标签统计单独低频刷新（60s），避免拖累主轮询
+  // relative-time tick
   useEffect(() => {
-    const t = window.setInterval(loadStats, 60_000);
-    return () => window.clearInterval(t);
-  }, [loadStats]);
-
-  // 1s tick for relative-time labels
-  useEffect(() => {
-    const t = window.setInterval(() => forceTick((x) => x + 1), 1000);
+    const t = window.setInterval(() => { forceTick((x: number) => x + 1); }, 1000);
     return () => window.clearInterval(t);
   }, []);
 
+  // article detail
   useEffect(() => {
-    if (selectedArticleId == null) {
-      setArticleDetail(null);
-      return;
-    }
+    if (selectedArticleId == null) { setArticleDetail(null); return; }
     setDetailLoading(true);
-    newsService
-      .getArticle(selectedArticleId)
+    newsService.getArticle(selectedArticleId)
       .then((d) => {
         setArticleDetail(d);
         if (!d.read) newsService.markRead(selectedArticleId, true).catch(() => undefined);
@@ -444,272 +510,252 @@ export const NewsPanel: React.FC = () => {
       .finally(() => setDetailLoading(false));
   }, [selectedArticleId]);
 
-  // —— 派生数据 ——
-  const totalUnread = useMemo(
-    () => sources.reduce((acc, s) => acc + (s.unread_count || 0), 0),
-    [sources],
-  );
-
-  const treeData: DataNode[] = useMemo(() => {
-    const allUnread = totalUnread;
-    const folderMap = new Map<number, NewsSource[]>();
-    sources.forEach((s) => {
-      const fid = s.folder_id ?? 0;
-      if (!folderMap.has(fid)) folderMap.set(fid, []);
-      folderMap.get(fid)!.push(s);
-    });
-    const folderNodes: DataNode[] = folders.map((f) => {
-      const items = folderMap.get(f.folder_id) || [];
-      return {
-        key: `folder-${f.folder_id}`,
-        title: (
-          <div style={{ display: 'flex', alignItems: 'center', gap: 6, width: '100%' }}>
-            <span style={{ flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', fontWeight: 500 }}>
-              {f.folder_name || '未分组'}
-            </span>
-            <Text type="secondary" style={{ fontSize: 11 }}>{items.length}</Text>
-            {f.unread_count > 0 && <Badge count={f.unread_count} size="small" />}
-          </div>
-        ),
-        children: items.map((s) => ({
-          key: `source-${s.source_id}`,
-          title: (
-            <div style={{ display: 'flex', alignItems: 'center', gap: 6, width: '100%' }}>
-              <span style={{ flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', fontSize: 13 }}>
-                {s.source_name}
-              </span>
-              {(s.unread_count ?? 0) > 0 && <Badge count={s.unread_count} size="small" />}
-            </div>
-          ),
-          isLeaf: true,
-        })),
-      };
-    });
-    return [
-      {
-        key: 'all',
-        title: (
-          <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-            <span style={{ flex: 1, fontWeight: 600 }}>全部</span>
-            {allUnread > 0 && <Badge count={allUnread} size="small" style={{ backgroundColor: '#6366f1' }} />}
-          </div>
-        ),
-        isLeaf: true,
-      },
-      ...folderNodes,
-    ];
-  }, [sources, folders, totalUnread]);
-
-  // —— 默认展开所有 folder ——
-  useEffect(() => {
-    if (folders.length > 0 && expandedKeys.length <= 1) {
-      setExpandedKeys(['all', ...folders.map((f) => `folder-${f.folder_id}`)]);
-    }
-  }, [folders]);
-
+  // —— star ——
   const handleStar = useCallback(async (article: NewsArticle, ev: React.MouseEvent) => {
     ev.stopPropagation();
     const next = !article.starred;
     try {
       await newsService.toggleStar(article.id, next);
-      setArticles((prev) => prev.map((a) => (a.id === article.id ? { ...a, starred: next } : a)));
+      setArticles((prev: NewsArticle[]) => prev.map((a: NewsArticle) => (a.id === article.id ? { ...a, starred: next } : a)));
       if (selectedArticleId === article.id && articleDetail) {
         setArticleDetail({ ...articleDetail, starred: next });
       }
-    } catch {
-      message.error('操作失败');
-    }
+    } catch { message.error('操作失败'); }
   }, [selectedArticleId, articleDetail]);
 
-  const handleRefreshAll = useCallback(async () => {
-    message.loading({ content: '正在抓取最新资讯...', key: 'news-refresh', duration: 0 });
+  // —— clear all filters ——
+  const clearAllFilters = useCallback(() => {
+    updateF({
+      sentiment: 'any', strongOnly: false, keyword: '',
+      datePreset: 'all', dateRange: [null, null],
+      selectedSourceIds: [], selectedIndustries: [], selectedTickers: [],
+      selectedEventTags: [], selectedCountries: [], selectedRegions: [],
+      selectedProvinces: [], selectedCities: [],
+      selectedPoliticians: [], selectedVisits: [], selectedDepartments: [],
+      selectedKeyTerms: [], selectedDateEnts: [],
+    });
+  }, [updateF]);
+
+  const handleRefresh = useCallback(async () => {
+    message.loading({ content: '刷新中...', key: 'news-refresh', duration: 0 });
     try {
-      // 简单触发：刷新文章列表 + 来源列表
       await Promise.all([loadArticles(), loadSources()]);
       message.success({ content: '已刷新', key: 'news-refresh' });
-    } catch {
-      message.error({ content: '刷新失败', key: 'news-refresh' });
-    }
+    } catch { message.error({ content: '刷新失败', key: 'news-refresh' }); }
   }, [loadArticles, loadSources]);
 
-  // —— 渲染 ——
-  return (
-    <div
-      className="news-panel"
-      style={{
-        display: 'flex',
-        flexDirection: 'column',
-        width: '100%',
-        height: '100%',
-        minHeight: 0,
-        background: '#ffffff',
-        overflow: 'hidden',
-        paddingBottom: 12,
-        boxSizing: 'border-box',
-      }}
-    >
-      {/* 顶部工具栏 */}
-      <div
-        style={{
-          display: 'flex',
-          alignItems: 'center',
-          padding: '14px 20px',
-          gap: 14,
-          borderBottom: '1px solid #e2e8f0',
-          background: 'linear-gradient(180deg, #fafbff 0%, #f8fafc 100%)',
-          flexWrap: 'wrap',
-        }}
-      >
-        <BellOutlined style={{ color: '#6366f1', fontSize: 20 }} />
-        <Title level={5} style={{ margin: 0, fontSize: 16 }}>
-          资讯监控
-        </Title>
-        <Tag color={health?.huntly_status === 'up' ? 'green' : 'red'} style={{ margin: 0 }}>
-          {health?.huntly_status === 'up' ? 'Huntly 已连接' : '未连接'}
-        </Tag>
-        <Tooltip title={latestPublishedAt ? `最新一条发布于 ${new Date(latestPublishedAt).toLocaleString('zh-CN')}` : '暂无文章'}>
-          <Tag icon={<SyncOutlined spin={loading} />} color="processing" style={{ margin: 0 }}>
-            最新：{formatRelative(latestPublishedAt)}
+  // —— derived ——
+  const totalUnread = useMemo(() => sources.reduce((acc, s) => acc + (s.unread_count || 0), 0), [sources]);
+
+  // Build source tree — grouped by backend folders only
+  const treeData: DataNode[] = useMemo(() => {
+    const folderMap = new Map<number, NewsSource[]>();
+    const unassigned: NewsSource[] = [];
+    sources.forEach((s) => {
+      const fid = s.folder_id ?? 0;
+      if (!fid) { unassigned.push(s); return; }
+      if (!folderMap.has(fid)) folderMap.set(fid, []);
+      folderMap.get(fid)!.push(s);
+    });
+
+    const nodes: DataNode[] = folders
+      .filter((fld) => folderMap.has(fld.folder_id))
+      .map((fld) => {
+        const items = folderMap.get(fld.folder_id)!;
+        return {
+          key: `folder-${fld.folder_id}`,
+          title: (
+            <div className="news-tree-node">
+              <span className="news-tree-label">{fld.folder_name || '未分组'}</span>
+              <Text type="secondary" style={{ fontSize: 11 }}>{items.length}</Text>
+              {fld.unread_count > 0 && <Badge count={fld.unread_count} size="small" />}
+            </div>
+          ),
+          children: items.map((s) => ({
+            key: `source-${s.source_id}`,
+            title: (
+              <div className="news-tree-node">
+                <Avatar src={s.site_avatar_url} size={16} style={{ flexShrink: 0 }}>{(s.source_name || '?')[0]}</Avatar>
+                <span className="news-tree-label">{s.source_name}</span>
+                {(s.unread_count ?? 0) > 0 && <Badge count={s.unread_count} size="small" />}
+              </div>
+            ),
+            isLeaf: true,
+          })),
+        };
+      });
+
+    // sources without a folder
+    if (unassigned.length) {
+      nodes.push({
+        key: 'folder-0',
+        title: (
+          <div className="news-tree-node">
+            <span className="news-tree-label">未分组</span>
+            <Text type="secondary" style={{ fontSize: 11 }}>{unassigned.length}</Text>
+          </div>
+        ),
+        children: unassigned.map((s) => ({
+          key: `source-${s.source_id}`,
+          title: (
+            <div className="news-tree-node">
+              <Avatar src={s.site_avatar_url} size={16} style={{ flexShrink: 0 }}>{(s.source_name || '?')[0]}</Avatar>
+              <span className="news-tree-label">{s.source_name}</span>
+              {(s.unread_count ?? 0) > 0 && <Badge count={s.unread_count} size="small" />}
+            </div>
+          ),
+          isLeaf: true,
+        })),
+      });
+    }
+
+    return nodes;
+  }, [sources, folders]);
+
+  // Init expanded from persisted state
+  useEffect(() => {
+    if (folders.length > 0 && expandedKeys.length <= 1) {
+      setExpandedKeys(folders.map((fd) => `folder-${fd.folder_id}`));
+    }
+  }, [folders]);
+
+  // Sync tree checked keys from filter state
+  useEffect(() => {
+    setCheckedKeys(f.selectedSourceIds.map((id) => `source-${id}`));
+  }, [f.selectedSourceIds]);
+
+  const activeFilterCount = countActiveFilters(f);
+
+  // —— helper: add/remove filter ——
+  const addFilter = useCallback((key: keyof FilterState, value: string) => {
+    updateF({
+      [key]: (Array.isArray((f as any)[key])
+        ? [...new Set([...(f as any)[key] as string[], value])]
+        : value
+      ) as any,
+    } as any);
+  }, [f, updateF]);
+
+  const removeFilter = useCallback((key: keyof FilterState, value: string) => {
+    const arr = (f as any)[key] as string[];
+    updateF({ [key]: arr.filter((v: string) => v !== value) } as any);
+  }, [f, updateF]);
+
+  // —— render active filter chips ——
+  const renderChips = () => {
+    const chips: { label: string; key: keyof FilterState; value: string; color: string }[] = [];
+    if (f.sentiment !== 'any') chips.push({ label: f.sentiment === 'bullish' ? '利好' : f.sentiment === 'bearish' ? '利空' : '中性', key: 'sentiment' as any, value: f.sentiment, color: f.sentiment === 'bullish' ? COLOR_BULLISH : f.sentiment === 'bearish' ? COLOR_BEARISH : COLOR_NEUTRAL });
+    if (f.strongOnly) chips.push({ label: '强信号', key: 'strongOnly' as any, value: 'true', color: '#ef4444' });
+    if (f.feedMode !== 'all') chips.push({ label: f.feedMode === 'events' ? '财务事件' : '收藏', key: 'feedMode' as any, value: f.feedMode, color: '#6366f1' });
+    f.selectedSourceIds.forEach((id) => {
+      const src = sources.find((s) => s.source_id === id);
+      chips.push({ label: src?.source_name || `源#${id}`, key: 'selectedSourceIds', value: String(id), color: '#3b82f6' });
+    });
+    f.selectedIndustries.forEach((v) => chips.push({ label: v, key: 'selectedIndustries', value: v, color: '#6366f1' }));
+    f.selectedTickers.forEach((v) => chips.push({ label: v, key: 'selectedTickers', value: v, color: '#8b5cf6' }));
+    f.selectedEventTags.forEach((v) => chips.push({ label: v, key: 'selectedEventTags', value: v, color: '#f59e0b' }));
+    f.selectedCountries.forEach((v) => chips.push({ label: v, key: 'selectedCountries', value: v, color: '#a855f7' }));
+    f.selectedRegions.forEach((v) => chips.push({ label: v, key: 'selectedRegions', value: v, color: '#06b6d4' }));
+    f.selectedKeyTerms.forEach((v) => chips.push({ label: v, key: 'selectedKeyTerms', value: v, color: '#ec4899' }));
+    f.selectedProvinces.forEach((v) => chips.push({ label: v, key: 'selectedProvinces', value: v, color: '#f97316' }));
+    f.selectedCities.forEach((v) => chips.push({ label: v, key: 'selectedCities', value: v, color: '#eab308' }));
+    f.selectedPoliticians.forEach((v) => chips.push({ label: v, key: 'selectedPoliticians', value: v, color: '#ef4444' }));
+    f.selectedVisits.forEach((v) => chips.push({ label: v, key: 'selectedVisits', value: v, color: '#84cc16' }));
+    f.selectedDepartments.forEach((v) => chips.push({ label: v, key: 'selectedDepartments', value: v, color: '#3b82f6' }));
+    f.selectedDateEnts.forEach((v) => chips.push({ label: v, key: 'selectedDateEnts', value: v, color: '#64748b' }));
+
+    return (
+      <div className="news-active-chips">
+        {chips.slice(0, 12).map((c, i) => (
+          <Tag
+            key={`${c.key}-${c.value}-${i}`}
+            closable
+            color={c.color}
+            onClose={() => {
+              if (c.key === 'sentiment') updateF({ sentiment: 'any' });
+              else if (c.key === 'strongOnly') updateF({ strongOnly: false });
+              else if (c.key === 'feedMode') updateF({ feedMode: 'all' });
+              else removeFilter(c.key, c.value);
+            }}
+            style={{ marginBottom: 4 }}
+          >
+            {c.label}
           </Tag>
+        ))}
+        {chips.length > 12 && <Text type="secondary" style={{ fontSize: 12 }}>+{chips.length - 12} 更多</Text>}
+      </div>
+    );
+  };
+
+  // —— render ——
+  return (
+    <div className="news-panel" style={{ display: 'flex', flexDirection: 'column', width: '100%', height: '100%', minHeight: 0, background: '#ffffff', overflow: 'hidden', paddingBottom: 0, boxSizing: 'border-box' }}>
+      {/* ===== Toolbar (single row) ===== */}
+      <div className="news-toolbar">
+        <BellOutlined style={{ color: '#6366f1', fontSize: 18 }} />
+        <Title level={5} style={{ margin: 0, fontSize: 15, whiteSpace: 'nowrap' }}>资讯监控</Title>
+        <Tag color={health?.huntly_status === 'up' ? 'green' : 'red'} style={{ margin: 0 }}>{health?.huntly_status === 'up' ? '已连接' : '未连接'}</Tag>
+        <Tooltip title={latestPublishedAt ? `最新发布于 ${new Date(latestPublishedAt).toLocaleString('zh-CN')}` : '暂无'}>
+          <Tag icon={<SyncOutlined spin={loading} />} color="processing" style={{ margin: 0 }}>最新：{formatRelative(latestPublishedAt)}</Tag>
         </Tooltip>
-        <Tooltip title={`上次轮询：${new Date(lastSyncTick).toLocaleTimeString('zh-CN')}（文章每 ${POLL_ARTICLES_MS / 1000}s / 来源每 ${POLL_SOURCES_MS / 1000}s）`}>
-          <Text type="secondary" style={{ fontSize: 12 }}>
-            同步 {formatRelative(new Date(lastSyncTick).toISOString())}
-          </Text>
-        </Tooltip>
-        <Badge count={totalUnread} overflowCount={9999} style={{ backgroundColor: '#6366f1' }} />
 
         <Segmented
           size="small"
-          value={feedMode}
-          onChange={(v) => setFeedMode(v as FeedMode)}
+          value={f.feedMode}
+          onChange={(v) => updateF({ feedMode: v as FeedMode })}
           options={[
             { label: <span><GlobalOutlined /> 全部</span>, value: 'all' },
-            { label: <span><ThunderboltOutlined /> 财务事件</span>, value: 'events' },
-            { label: <span><FireOutlined /> 收藏</span>, value: 'starred' },
+            { label: <span><ThunderboltOutlined /> 事件</span>, value: 'events' },
+            { label: <span><StarFilled style={{ color: '#fbbf24', fontSize: 12 }} /> 收藏</span>, value: 'starred' },
           ]}
-          style={{ marginLeft: 8 }}
+          style={{ flexShrink: 0 }}
         />
-        <Input.Search
+
+        <Input
           allowClear
           size="small"
-          placeholder="搜索: 标题/内容/股票代码/行业/标签..."
-          value={keyword}
-          onChange={(e) => setKeyword(e.target.value)}
-          style={{ width: 320 }}
+          prefix={<SearchOutlined style={{ color: '#94a3b8' }} />}
+          placeholder="搜索标题/内容/股票/标签..."
+          value={f.keyword}
+          onChange={(e) => updateF({ keyword: e.target.value })}
+          style={{ width: 220, flexShrink: 0 }}
         />
-        <div style={{ flex: 1 }} />
-        <Tooltip title="立即刷新">
-          <Button
-            size="small"
-            type="primary"
-            ghost
-            icon={<ReloadOutlined spin={loading} />}
-            onClick={handleRefreshAll}
-          >
-            刷新
-          </Button>
-        </Tooltip>
-        <Tooltip title="重新提取所有文章的标签（股票/行业/情感/省份/城市/领导人/调研等）">
-          <Button
-            size="small"
-            ghost
-            danger
-            icon={<SyncOutlined spin={rebuilding} />}
-            loading={rebuilding}
-            onClick={handleRebuildTags}
-          >
-            重建标签
-          </Button>
-        </Tooltip>
-        <Tooltip title="一键对全部 8 万多篇历史文章重建标签 (后台异步)">
-          <Button
-            size="small"
-            type="primary"
-            danger
-            ghost
-            icon={<SyncOutlined spin={rebuildingAll} />}
-            loading={rebuildingAll}
-            onClick={handleRebuildAll}
-          >
-            {rebuildingAll && rebuildProgress && rebuildProgress.total > 0
-              ? `重建中 ${rebuildProgress.processed}/${rebuildProgress.total}`
-              : '一键重建全部'}
-          </Button>
-        </Tooltip>
-        {health?.huntly_base_url && (
-          <Tooltip title="打开 Huntly 后台管理订阅源">
-            <a
-              href={health.huntly_base_url.replace('http://quantmind-huntly', `http://${window.location.hostname}:8090`)}
-              target="_blank"
-              rel="noreferrer"
-              style={{ fontSize: 12, color: '#6366f1', whiteSpace: 'nowrap' }}
-            >
-              <LinkOutlined /> Huntly 后台
-            </a>
-          </Tooltip>
-        )}
-      </div>
 
-      {/* 第二排：金融过滤器（情感 / 行业 / 股票 / 事件 / 时间 / 强信号） */}
-      <div
-        className="news-filter-bar"
-        style={{
-          display: 'flex',
-          alignItems: 'center',
-          padding: '10px 20px',
-          gap: 10,
-          borderBottom: '1px solid #e2e8f0',
-          background: '#ffffff',
-          flexWrap: 'wrap',
-          fontSize: 14,
-        }}
-      >
-        <Text type="secondary" style={{ fontSize: 14 }}>情感:</Text>
         <Segmented
           size="small"
-          value={sentimentFilter}
-          onChange={(v) => setSentimentFilter(v as SentimentFilter)}
+          value={f.sentiment}
+          onChange={(v) => updateF({ sentiment: v as SentimentFilter })}
           options={[
-            { label: <span>全部</span>, value: 'any' },
-            { label: <span style={{ color: COLOR_BULLISH }}><RiseOutlined /> 利好</span>, value: 'bullish' },
-            { label: <span style={{ color: COLOR_BEARISH }}><ArrowDownOutlined /> 利空</span>, value: 'bearish' },
-            { label: <span style={{ color: COLOR_NEUTRAL }}><MinusOutlined /> 中性</span>, value: 'neutral' },
+            { label: '全部', value: 'any' },
+            { label: <span style={{ color: COLOR_BULLISH }}>利好</span>, value: 'bullish' },
+            { label: <span style={{ color: COLOR_BEARISH }}>利空</span>, value: 'bearish' },
+            { label: <span style={{ color: COLOR_NEUTRAL }}>中性</span>, value: 'neutral' },
           ]}
+          style={{ flexShrink: 0 }}
         />
-        <Tooltip title="只显示强信号: |情感分|>=0.5">
-          <Button
-            size="small"
-            type={strongOnly ? 'primary' : 'default'}
-            danger={strongOnly}
-            icon={<FireOutlined />}
-            onClick={() => setStrongOnly((x) => !x)}
-          >
-            强信号
-          </Button>
+
+        <Tooltip title="仅显示强信号 (|情感分|>=0.5)">
+          <Button size="small" type={f.strongOnly ? 'primary' : 'default'} danger={f.strongOnly}
+            icon={<FireOutlined />} onClick={() => updateF({ strongOnly: !f.strongOnly })}>强信号</Button>
         </Tooltip>
-        <Text type="secondary" style={{ fontSize: 14, marginLeft: 4 }}>时间:</Text>
+
         <Segmented
           size="small"
-          value={(() => {
-            if (!dateRange?.[0]) return 'all';
-            const since = dateRange[0];
-            const today = dayjs().startOf('day');
-            if (since.isSame(today)) return '1d';
-            if (since.isSame(today.subtract(2, 'day'))) return '3d';
-            if (since.isSame(today.subtract(6, 'day'))) return '7d';
-            if (since.isSame(today.subtract(29, 'day'))) return '30d';
-            return 'custom';
-          })()}
+          value={f.datePreset}
           onChange={(v) => {
             const today = dayjs().endOf('day');
+            let range: [Dayjs | null, Dayjs | null] = null;
             switch (v) {
-              case 'all': setDateRange(null); break;
-              case '1d': setDateRange([dayjs().startOf('day'), today]); break;
-              case '3d': setDateRange([dayjs().subtract(2, 'day').startOf('day'), today]); break;
-              case '7d': setDateRange([dayjs().subtract(6, 'day').startOf('day'), today]); break;
-              case '30d': setDateRange([dayjs().subtract(29, 'day').startOf('day'), today]); break;
+              case 'all': range = null; break;
+              case '1d': range = [dayjs().startOf('day'), today]; break;
+              case '3d': range = [dayjs().subtract(2, 'day').startOf('day'), today]; break;
+              case '7d': range = [dayjs().subtract(6, 'day').startOf('day'), today]; break;
+              case '30d': range = [dayjs().subtract(29, 'day').startOf('day'), today]; break;
             }
+            updateF({
+              datePreset: v as string,
+              dateRange: range ? [range[0]!.toISOString(), range[1]!.toISOString()] : [null, null],
+            });
           }}
           options={[
             { label: '不限', value: 'all' },
@@ -718,945 +764,317 @@ export const NewsPanel: React.FC = () => {
             { label: '近7日', value: '7d' },
             { label: '近30日', value: '30d' },
           ]}
+          style={{ flexShrink: 0 }}
         />
-        <RangePicker
-          size="small"
-          value={dateRange as any}
-          onChange={(v) => setDateRange(v as any)}
-          allowClear
-          style={{ width: 240 }}
-        />
-        <Text type="secondary" style={{ fontSize: 14, marginLeft: 4 }}>行业:</Text>
+
         <Select
-          mode="multiple"
-          allowClear
           size="small"
-          placeholder="按行业筛选"
-          value={industryFilter}
-          onChange={setIndustryFilter}
-          options={(stats?.top_industries ?? []).map((i) => ({
-            value: i.name,
-            label: `${i.name} (${i.count})`,
-          }))}
-          style={{ minWidth: 200, maxWidth: 320 }}
-          maxTagCount="responsive"
+          value={f.sort}
+          onChange={(v) => updateF({ sort: v as SortMode })}
+          options={SORT_OPTIONS.map((o) => ({ value: o.value, label: o.label as any }))}
+          style={{ width: 130, flexShrink: 0 }}
         />
-        <Text type="secondary" style={{ fontSize: 14, marginLeft: 4 }}>股票:</Text>
-        <Select
-          mode="multiple"
-          allowClear
-          size="small"
-          placeholder="按股票筛选"
-          value={tickerFilter}
-          onChange={setTickerFilter}
-          options={(stats?.top_tickers ?? []).map((t) => ({
-            value: t.ticker,
-            label: `${t.name ? t.name + ' ' : ''}${t.ticker} (${t.count})`,
-          }))}
-          style={{ minWidth: 200, maxWidth: 320 }}
-          maxTagCount="responsive"
-          showSearch
-          filterOption={(input, opt) =>
-            String(opt?.label || '').toLowerCase().includes(input.toLowerCase())
-          }
-        />
-        {(sentimentFilter !== 'any' || industryFilter.length > 0 || tickerFilter.length > 0 || eventTagFilter.length > 0 || countryFilter.length > 0 || regionFilter.length > 0 || keyTermFilter.length > 0 || dateEntFilter.length > 0 || provinceFilter.length > 0 || cityFilter.length > 0 || politicianFilter.length > 0 || visitFilter.length > 0 || departmentFilter.length > 0 || strongOnly || dateRange) && (
-          <Button
-            type="link"
-            size="small"
-            onClick={() => {
-              setSentimentFilter('any');
-              setIndustryFilter([]);
-              setTickerFilter([]);
-              setEventTagFilter([]);
-              setCountryFilter([]);
-              setRegionFilter([]);
-              setKeyTermFilter([]);
-              setDateEntFilter([]);
-              setProvinceFilter([]);
-              setCityFilter([]);
-              setPoliticianFilter([]);
-              setVisitFilter([]);
-              setDepartmentFilter([]);
-              setStrongOnly(false);
-              setDateRange(null);
-            }}
-          >
-            清除筛选
+
+        <Tooltip title={`高级筛选${activeFilterCount > 0 ? ` (${activeFilterCount} 项激活)` : ''}`}>
+          <Button size="small" icon={<FilterOutlined />}
+            type={activeFilterCount > 0 ? 'primary' : 'default'}
+            ghost={activeFilterCount > 0}
+            onClick={() => updateF({ advancedOpen: !f.advancedOpen })}>
+            筛选{activeFilterCount > 0 ? `(${activeFilterCount})` : ''}
           </Button>
-        )}
+        </Tooltip>
+
         <div style={{ flex: 1 }} />
-        {stats?.sentiment_counts && (() => {
-          const filtered = (
-            sentimentFilter !== 'any' || industryFilter.length > 0 || tickerFilter.length > 0 ||
-            eventTagFilter.length > 0 || countryFilter.length > 0 || regionFilter.length > 0 ||
-            keyTermFilter.length > 0 || dateEntFilter.length > 0 ||
-            provinceFilter.length > 0 || cityFilter.length > 0 ||
-            politicianFilter.length > 0 || visitFilter.length > 0 ||
-            departmentFilter.length > 0 ||
-            strongOnly || !!keyword?.trim()
-          );
-          const total = (stats.sentiment_counts.bullish || 0) + (stats.sentiment_counts.bearish || 0) + (stats.sentiment_counts.neutral || 0);
-          return (
-            <Tooltip title={filtered ? `当前筛选条件下: 共 ${total} 篇文章 (红=利好 / 绿=利空 A股配色)` : '全部 enrich 文章的情感分布'}>
-              <Text type="secondary" className="news-stats-text" style={{ fontSize: 13 }}>
-                {filtered && <Text type="warning" style={{ fontSize: 13, marginRight: 4 }}>筛选后</Text>}
-                <span style={{ color: COLOR_BULLISH }}>利好 {stats.sentiment_counts.bullish || 0}</span>
-                {' · '}
-                <span style={{ color: COLOR_BEARISH }}>利空 {stats.sentiment_counts.bearish || 0}</span>
-                {' · '}
-                <span style={{ color: COLOR_NEUTRAL }}>中性 {stats.sentiment_counts.neutral || 0}</span>
-              </Text>
-            </Tooltip>
-          );
-        })()}
+
+        <Badge count={totalUnread} overflowCount={9999} style={{ backgroundColor: '#6366f1' }} />
+
+        <Tooltip title="立即刷新">
+          <Button size="small" type="primary" ghost icon={<ReloadOutlined spin={loading} />} onClick={handleRefresh}>刷新</Button>
+        </Tooltip>
+        <Tooltip title="重建标签">
+          <Button size="small" ghost danger icon={<SyncOutlined spin={rebuilding} />} loading={rebuilding} onClick={handleRebuildTags}>重建</Button>
+        </Tooltip>
+        <Tooltip title="一键重建全部">
+          <Button size="small" type="primary" danger ghost icon={<SyncOutlined spin={rebuildingAll} />} loading={rebuildingAll} onClick={handleRebuildAll}>
+            {rebuildingAll && rebuildProgress && rebuildProgress.total > 0 ? `${rebuildProgress.processed}/${rebuildProgress.total}` : '全量'}
+          </Button>
+        </Tooltip>
+        {health?.huntly_base_url && (
+          <Tooltip title="Huntly 后台">
+            <a href={health.huntly_base_url.replace('http://quantmind-huntly', `http://${window.location.hostname}:8090`)} target="_blank" rel="noreferrer" style={{ fontSize: 12, color: '#6366f1', whiteSpace: 'nowrap' }}>
+              <LinkOutlined /> 后台
+            </a>
+          </Tooltip>
+        )}
       </div>
 
-      {/* 第三排：常用市场快捷标签 (多选 toggle) */}
-      <div
-        className="news-chip-bar"
-        style={{
-          display: 'flex',
-          alignItems: 'center',
-          padding: '8px 20px',
-          gap: 8,
-          borderBottom: '1px solid #f1f5f9',
-          background: '#fafbff',
-          flexWrap: 'wrap',
-          fontSize: 13,
-        }}
-      >
-        <Text type="secondary" style={{ fontSize: 13 }}>板块:</Text>
-        {QUICK_EVENT_CHIPS.map((chip) => {
-          const active = eventTagFilter.includes(chip.value);
-          return (
-            <Tag.CheckableTag
-              key={chip.value}
-              checked={active}
-              onChange={(c) => {
-                setEventTagFilter((cur) =>
-                  c ? [...cur, chip.value] : cur.filter((x) => x !== chip.value),
-                );
-              }}
-              style={{ fontSize: 13, padding: '3px 12px', borderRadius: 12 }}
-            >
-              {chip.label}
-            </Tag.CheckableTag>
-          );
-        })}
-        {/* 来自 stats 的高频事件 (Top 8, 排除已在 QUICK_EVENT_CHIPS 里的) */}
-        {(stats?.top_events ?? []).slice(0, 12)
-          .filter((e) => !QUICK_EVENT_CHIPS.some((q) => q.value === e.name))
-          .slice(0, 8)
-          .map((e) => {
-            const active = eventTagFilter.includes(e.name);
-            return (
-              <Tag.CheckableTag
-                key={`auto-${e.name}`}
-                checked={active}
-                onChange={(c) => {
-                  setEventTagFilter((cur) =>
-                    c ? [...cur, e.name] : cur.filter((x) => x !== e.name),
+      {/* ===== Active filter chips ===== */}
+      {activeFilterCount > 0 && (
+        <div style={{ padding: '6px 20px', borderBottom: '1px solid #f1f5f9', background: '#fafbff' }}>
+          {renderChips()}
+          {activeFilterCount > 0 && (
+            <Button type="link" size="small" onClick={clearAllFilters} icon={<ClearOutlined />} style={{ padding: 0, marginLeft: 8, fontSize: 12 }}>
+              清除全部
+            </Button>
+          )}
+        </div>
+      )}
+
+      {/* ===== Advanced filter panel (collapsible) ===== */}
+      {f.advancedOpen && (
+        <div className="news-advanced-panel">
+          <div className="news-advanced-row">
+            <div className="news-filter-group">
+              <Text type="secondary" style={{ fontSize: 12 }}>板块:</Text>
+              <div style={{ display: 'flex', gap: 4, flexWrap: 'wrap' }}>
+                {QUICK_EVENT_CHIPS.map((chip) => {
+                  const active = f.selectedEventTags.includes(chip.value);
+                  return (
+                    <Tag.CheckableTag key={chip.value} checked={active}
+                      onChange={(c) => {
+                        if (c) addFilter('selectedEventTags', chip.value);
+                        else removeFilter('selectedEventTags', chip.value);
+                      }}
+                      style={{ fontSize: 12, padding: '2px 8px', borderRadius: 10, margin: 0 }}>
+                      {chip.label}
+                    </Tag.CheckableTag>
                   );
-                }}
-                style={{ fontSize: 13, padding: '3px 12px', borderRadius: 12 }}
-              >
-                {e.name} <span style={{ opacity: 0.6 }}>({e.count})</span>
-              </Tag.CheckableTag>
-            );
-          })}
-      </div>
+                })}
+                {(stats?.top_events ?? []).slice(0, 8).filter((e) => !QUICK_EVENT_CHIPS.some((q) => q.value === e.name)).map((e) => {
+                  const active = f.selectedEventTags.includes(e.name);
+                  return (
+                    <Tag.CheckableTag key={`ae-${e.name}`} checked={active}
+                      onChange={(c) => {
+                        if (c) addFilter('selectedEventTags', e.name);
+                        else removeFilter('selectedEventTags', e.name);
+                      }}
+                      style={{ fontSize: 12, padding: '2px 8px', borderRadius: 10, margin: 0 }}>
+                      {e.name} <span style={{ opacity: 0.5 }}>({e.count})</span>
+                    </Tag.CheckableTag>
+                  );
+                })}
+              </div>
+            </div>
+          </div>
+          <div className="news-advanced-row">
+            <FilterSelect label="行业" value={f.selectedIndustries} options={stats?.top_industries ?? []} onChange={(v) => updateF({ selectedIndustries: v })} showSearch />
+            <FilterSelect label="股票" value={f.selectedTickers} options={(stats?.top_tickers ?? []).map((t) => ({ name: `${t.name || ''} ${t.ticker}`, count: t.count }))} onChange={(v) => updateF({ selectedTickers: v })} showSearch />
+            <FilterSelect label="国家" value={f.selectedCountries} options={stats?.top_countries ?? []} onChange={(v) => updateF({ selectedCountries: v })} />
+            <FilterSelect label="地区" value={f.selectedRegions} options={stats?.top_regions ?? []} onChange={(v) => updateF({ selectedRegions: v })} />
+            <FilterSelect label="省份" value={f.selectedProvinces} options={stats?.top_provinces ?? []} onChange={(v) => updateF({ selectedProvinces: v })} showSearch />
+            <FilterSelect label="城市" value={f.selectedCities} options={stats?.top_cities ?? []} onChange={(v) => updateF({ selectedCities: v })} showSearch />
+            <FilterSelect label="关键词" value={f.selectedKeyTerms} options={stats?.top_key_terms ?? []} onChange={(v) => updateF({ selectedKeyTerms: v })} showSearch />
+            <FilterSelect label="领导人" value={f.selectedPoliticians} options={stats?.top_politicians ?? []} onChange={(v) => updateF({ selectedPoliticians: v })} showSearch />
+            <FilterSelect label="部门" value={f.selectedDepartments} options={stats?.top_departments ?? []} onChange={(v) => updateF({ selectedDepartments: v })} showSearch />
+            <FilterSelect label="调研" value={f.selectedVisits} options={stats?.top_visits ?? []} onChange={(v) => updateF({ selectedVisits: v })} />
+            <FilterSelect label="日期" value={f.selectedDateEnts} options={stats?.top_dates ?? []} onChange={(v) => updateF({ selectedDateEnts: v })} showSearch />
+            <RangePicker size="small" value={f.dateRange[0] ? [dayjs(f.dateRange[0]), dayjs(f.dateRange[1])] as any : null}
+              onChange={(v) => updateF({ dateRange: v ? [v[0]!.toISOString(), v[1]!.toISOString()] : [null, null] })}
+              allowClear style={{ width: 230 }} />
+          </div>
+        </div>
+      )}
 
-      {/* 第四排：地理 / 政情 / 关键词 / 部门 筛选（合并为一行） */}
-      <div
-        className="news-geo-bar"
-        style={{
-          display: 'flex',
-          alignItems: 'center',
-          padding: '8px 20px',
-          gap: 8,
-          borderBottom: '1px solid #f1f5f9',
-          background: '#fafbff',
-          flexWrap: 'wrap',
-          fontSize: 13,
-        }}
-      >
-        <Text type="secondary" style={{ fontSize: 13 }}>国家:</Text>
-        <Select
-          mode="multiple"
-          allowClear
-          size="small"
-          placeholder="国家"
-          value={countryFilter}
-          onChange={setCountryFilter}
-          options={(stats?.top_countries ?? []).map((c) => ({
-            value: c.name,
-            label: `${c.name} (${c.count})`,
-          }))}
-          style={{ minWidth: 120, maxWidth: 200 }}
-          maxTagCount="responsive"
-        />
-        <Text type="secondary" style={{ fontSize: 13 }}>地区:</Text>
-        <Select
-          mode="multiple"
-          allowClear
-          size="small"
-          placeholder="地区"
-          value={regionFilter}
-          onChange={setRegionFilter}
-          options={(stats?.top_regions ?? []).map((c) => ({
-            value: c.name,
-            label: `${c.name} (${c.count})`,
-          }))}
-          style={{ minWidth: 120, maxWidth: 200 }}
-          maxTagCount="responsive"
-        />
-        <Text type="secondary" style={{ fontSize: 13 }}>省份:</Text>
-        <Select
-          mode="multiple"
-          allowClear
-          size="small"
-          placeholder="省份"
-          value={provinceFilter}
-          onChange={setProvinceFilter}
-          options={(stats?.top_provinces ?? []).map((c) => ({
-            value: c.name,
-            label: `${c.name} (${c.count})`,
-          }))}
-          style={{ minWidth: 120, maxWidth: 200 }}
-          maxTagCount="responsive"
-          showSearch
-          filterOption={(input, opt) =>
-            String(opt?.label || '').toLowerCase().includes(input.toLowerCase())
-          }
-        />
-        <Text type="secondary" style={{ fontSize: 13 }}>城市:</Text>
-        <Select
-          mode="multiple"
-          allowClear
-          size="small"
-          placeholder="城市"
-          value={cityFilter}
-          onChange={setCityFilter}
-          options={(stats?.top_cities ?? []).map((c) => ({
-            value: c.name,
-            label: `${c.name} (${c.count})`,
-          }))}
-          style={{ minWidth: 120, maxWidth: 200 }}
-          maxTagCount="responsive"
-          showSearch
-          filterOption={(input, opt) =>
-            String(opt?.label || '').toLowerCase().includes(input.toLowerCase())
-          }
-        />
-        <Text type="secondary" style={{ fontSize: 13 }}>领导人:</Text>
-        <Select
-          mode="multiple"
-          allowClear
-          size="small"
-          placeholder="政治人物"
-          value={politicianFilter}
-          onChange={setPoliticianFilter}
-          options={(stats?.top_politicians ?? []).map((c) => ({
-            value: c.name,
-            label: `${c.name} (${c.count})`,
-          }))}
-          style={{ minWidth: 120, maxWidth: 200 }}
-          maxTagCount="responsive"
-          showSearch
-          filterOption={(input, opt) =>
-            String(opt?.label || '').toLowerCase().includes(input.toLowerCase())
-          }
-        />
-        <Text type="secondary" style={{ fontSize: 13 }}>调研:</Text>
-        <Select
-          mode="multiple"
-          allowClear
-          size="small"
-          placeholder="调研/视察"
-          value={visitFilter}
-          onChange={setVisitFilter}
-          options={(stats?.top_visits ?? []).map((c) => ({
-            value: c.name,
-            label: `${c.name} (${c.count})`,
-          }))}
-          style={{ minWidth: 120, maxWidth: 200 }}
-          maxTagCount="responsive"
-        />
-        <Text type="secondary" style={{ fontSize: 13 }}>部门:</Text>
-        <Select
-          mode="multiple"
-          allowClear
-          size="small"
-          placeholder="国家部门"
-          value={departmentFilter}
-          onChange={setDepartmentFilter}
-          options={(stats?.top_departments ?? []).map((c) => ({
-            value: c.name,
-            label: `${c.name} (${c.count})`,
-          }))}
-          style={{ minWidth: 120, maxWidth: 200 }}
-          maxTagCount="responsive"
-        />
-        <Text type="secondary" style={{ fontSize: 13 }}>关键词:</Text>
-        <Select
-          mode="multiple"
-          allowClear
-          size="small"
-          placeholder="产业/政策/外汇..."
-          value={keyTermFilter}
-          onChange={setKeyTermFilter}
-          options={(stats?.top_key_terms ?? []).map((c) => ({
-            value: c.name,
-            label: `${c.name} (${c.count})`,
-          }))}
-          style={{ minWidth: 160, maxWidth: 280 }}
-          maxTagCount="responsive"
-          showSearch
-          filterOption={(input, opt) =>
-            String(opt?.label || '').toLowerCase().includes(input.toLowerCase())
-          }
-        />
-        <Text type="secondary" style={{ fontSize: 13 }}>日期:</Text>
-        <Select
-          mode="multiple"
-          allowClear
-          size="small"
-          placeholder="日期"
-          value={dateEntFilter}
-          onChange={setDateEntFilter}
-          options={(stats?.top_dates ?? []).map((c) => ({
-            value: c.name,
-            label: `${c.name} (${c.count})`,
-          }))}
-          style={{ minWidth: 140, maxWidth: 240 }}
-          maxTagCount="responsive"
-          showSearch
-          filterOption={(input, opt) =>
-            String(opt?.label || '').toLowerCase().includes(input.toLowerCase())
-          }
-        />
-      </div>
+      {/* ===== Sentiment stats bar ===== */}
+      {stats?.sentiment_counts && (() => {
+        const total = (stats.sentiment_counts.bullish || 0) + (stats.sentiment_counts.bearish || 0) + (stats.sentiment_counts.neutral || 0);
+        if (total === 0) return null;
+        return (
+          <div style={{ padding: '4px 20px', borderBottom: '1px solid #f1f5f9', background: '#fff', fontSize: 12, display: 'flex', gap: 16, color: '#64748b' }}>
+            {activeFilterCount > 0 && <Text type="warning" style={{ fontSize: 12 }}>筛选结果</Text>}
+            <span>共 <b style={{ color: '#6366f1' }}>{total.toLocaleString()}</b> 篇</span>
+            <span style={{ color: COLOR_BULLISH }}>利好 {stats.sentiment_counts.bullish || 0}</span>
+            <span style={{ color: COLOR_BEARISH }}>利空 {stats.sentiment_counts.bearish || 0}</span>
+            <span style={{ color: COLOR_NEUTRAL }}>中性 {stats.sentiment_counts.neutral || 0}</span>
+          </div>
+        );
+      })()}
 
-      {/* 主体三栏 - 可拖拽布局 */}
+      {/* ===== Main 3-panel body ===== */}
       <div ref={containerRef} style={{ flex: 1, display: 'flex', overflow: 'hidden', minHeight: 0 }}>
-        {/* 左：文件夹 / 订阅源树 */}
-        <div
-          style={{
-            flex: `0 0 ${leftWidth}%`,
-            overflowY: 'auto',
-            padding: '8px 6px',
-            background: '#fafafa',
-          }}
-        >
+        {/* Left: source tree */}
+        <div className="news-left-panel" style={{ flex: `0 0 ${leftWidth}%` }}>
           {treeData.length <= 1 ? (
-            <Empty
-              image={Empty.PRESENTED_IMAGE_SIMPLE}
-              description={<span style={{ color: '#64748b', fontSize: 12 }}>无订阅源</span>}
-              style={{ marginTop: 60 }}
-            />
+            <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description={<span style={{ fontSize: 12 }}>无订阅源</span>} style={{ marginTop: 60 }} />
           ) : (
             <Tree
+              checkable
               blockNode
               treeData={treeData}
-              selectedKeys={[selection]}
+              checkedKeys={checkedKeys}
               expandedKeys={expandedKeys}
-              expandAction="doubleClick"
               onExpand={(keys) => setExpandedKeys(keys)}
-              onSelect={(keys, info) => {
-                // 点击同一节点 antd 会清空 selectedKeys，这里取被点击节点的 key 保证选中
-                const clicked = (info?.node as any)?.key as SelectionKey | undefined;
-                const next = (keys[0] as SelectionKey) || clicked;
-                if (!next) return;
-                setSelection(next);
+              onCheck={(checked) => {
+                const keys = (checked as React.Key[]).filter((k) => String(k).startsWith('source-'));
+                const ids = keys.map((k) => Number(String(k).replace('source-', ''))).filter((n) => !Number.isNaN(n));
+                updateF({ selectedSourceIds: ids });
               }}
               style={{ background: 'transparent', fontSize: 13 }}
             />
           )}
         </div>
 
-        {/* 拖拽分隔条：左-中 */}
-        <div
-          style={{ flex: '0 0 6px', cursor: 'col-resize', background: '#f1f5f9', display: 'flex', alignItems: 'center', justifyContent: 'center' }}
-          onMouseDown={(e) => {
-            e.preventDefault();
-            dragRef.current = { side: 'left', startX: e.clientX, startLeft: leftWidth, startMid: midWidth };
-            document.body.style.cursor = 'col-resize';
-            document.body.style.userSelect = 'none';
-          }}
-        >
-          <div style={{ width: 2, height: 32, background: '#cbd5e1', borderRadius: 1 }} />
-        </div>
+        {/* Drag handle L-M */}
+        <div className="news-drag-handle" onMouseDown={(e) => {
+          e.preventDefault();
+          dragRef.current = { side: 'left', startX: e.clientX, startLeft: leftWidth, startMid: midWidth };
+          document.body.style.cursor = 'col-resize'; document.body.style.userSelect = 'none';
+        }}><div className="news-drag-bar" /></div>
 
-        {/* 中：文章流 */}
-        <div
-          style={{
-            flex: `0 0 ${midWidth}%`,
-            display: 'flex',
-            flexDirection: 'column',
-            overflow: 'hidden',
-          }}
-        >
+        {/* Center: article list */}
+        <div className="news-center-panel" style={{ flex: `0 0 ${midWidth}%` }}>
           {loading && articles.length === 0 ? (
             <div style={{ padding: 80, textAlign: 'center' }}><Spin /></div>
           ) : articles.length === 0 ? (
-            <Empty
-              image={Empty.PRESENTED_IMAGE_SIMPLE}
-              description={
-                <span style={{ color: '#64748b', fontSize: 13 }}>
-                  {health?.huntly_status === 'up'
-                    ? '当前筛选无文章 · 试试 "清除筛选" 或在 Huntly 后台添加 RSS / Twitter 订阅 (Twitter 可用 RSSHub: https://rsshub.app/twitter/user/<用户名>)'
-                    : `资讯服务未连接 (${health?.huntly_base_url || ''})`}
-                </span>
-              }
-              style={{ marginTop: 80 }}
-            />
+            <Empty image={Empty.PRESENTED_IMAGE_SIMPLE}
+              description={<span style={{ fontSize: 13 }}>{health?.huntly_status === 'up' ? '当前筛选无文章' : '资讯服务未连接'}</span>}
+              style={{ marginTop: 80 }} />
           ) : (
             <>
-            <div style={{ flex: 1, overflowY: 'auto' }}>
-            <List
-              size="small"
-              dataSource={articles}
-              renderItem={(a) => {
-                const active = selectedArticleId === a.id;
-                return (
-                  <List.Item
-                    style={{
-                      padding: '8px 12px',
-                      cursor: 'pointer',
-                      background: active ? 'rgba(99,102,241,0.08)' : 'transparent',
-                      borderBottom: '1px solid #f1f5f9',
-                      borderLeft: active ? '3px solid #6366f1' : '3px solid transparent',
-                      opacity: a.read && !active ? 0.7 : 1,
-                    }}
-                    onClick={() => setSelectedArticleId(a.id)}
-                  >
-                    <div style={{ width: '100%' }}>
-                      <div style={{ display: 'flex', alignItems: 'start', gap: 10 }}>
-                        <div style={{ flex: 1, minWidth: 0 }}>
-                          <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 4, flexWrap: 'wrap' }}>
-                            {a.is_financial_event && (
-                              <Tag color="gold" style={{ margin: 0, fontSize: 11, padding: '1px 6px', lineHeight: '17px' }}>
-                                <ThunderboltOutlined /> 事件
-                              </Tag>
-                            )}
-                            {a.enrichment?.sentiment_label === 'bullish' && (
-                              <Tag
-                                color="red"
-                                className="news-sentiment-tag"
-                                style={{
-                                  margin: 0,
-                                  fontSize: 12,
-                                  padding: '1px 6px',
-                                  lineHeight: '17px',
-                                  fontWeight: (a.enrichment.sentiment_score ?? 0) >= 0.5 ? 700 : 500,
-                                }}
-                              >
-                                {(a.enrichment.sentiment_score ?? 0) >= 0.5 ? <FireOutlined /> : <RiseOutlined />} 利好
-                                {a.enrichment.sentiment_score != null && ` ${a.enrichment.sentiment_score.toFixed(2)}`}
-                              </Tag>
-                            )}
-                            {a.enrichment?.sentiment_label === 'bearish' && (
-                              <Tag
-                                color="green"
-                                className="news-sentiment-tag"
-                                style={{
-                                  margin: 0,
-                                  fontSize: 12,
-                                  padding: '1px 6px',
-                                  lineHeight: '17px',
-                                  fontWeight: (a.enrichment.sentiment_score ?? 0) <= -0.5 ? 700 : 500,
-                                }}
-                              >
-                                {(a.enrichment.sentiment_score ?? 0) <= -0.5 ? <FireOutlined /> : <ArrowDownOutlined />} 利空
-                                {a.enrichment.sentiment_score != null && ` ${a.enrichment.sentiment_score.toFixed(2)}`}
-                              </Tag>
-                            )}
-                            <Text className="news-article-title" style={{ fontSize: 15, fontWeight: a.read ? 400 : 600, lineHeight: 1.5 }}>
-                              {a.title}
-                            </Text>
-                          </div>
-                          {a.summary && (
-                            <Text className="news-article-summary" style={{ color: '#64748b', fontSize: 13, display: 'block', lineHeight: 1.6 }}>
-                              {a.summary.length > 120 ? `${a.summary.slice(0, 120)}...` : a.summary}
-                            </Text>
-                          )}
-                          {/* 标签行：股票 + 行业 + 事件 + 国家 + 地区 + 关键词 + 省份 + 城市 + 领导人 + 调研 */}
-                          {(a.enrichment && (
-                            a.enrichment.tickers.length > 0 ||
-                            a.enrichment.industries.length > 0 ||
-                            a.enrichment.event_tags.length > 0 ||
-                            (a.enrichment.countries?.length ?? 0) > 0 ||
-                            (a.enrichment.regions?.length ?? 0) > 0 ||
-                            (a.enrichment.key_terms?.length ?? 0) > 0 ||
-                            (a.enrichment.provinces?.length ?? 0) > 0 ||
-                            (a.enrichment.cities?.length ?? 0) > 0 ||
-                            (a.enrichment.politicians?.length ?? 0) > 0 ||
-                            (a.enrichment.visits?.length ?? 0) > 0 ||
-                            (a.enrichment.departments?.length ?? 0) > 0
-                          )) && (
-                            <div style={{ display: 'flex', flexWrap: 'wrap', gap: 3, marginTop: 4 }}>
-                              {a.enrichment.tickers.slice(0, 5).map((t) => (
-                                <Tag
-                                  key={`tk-${t}`}
-                                  color="blue"
-                                  style={{ margin: 0, fontSize: 11, padding: '1px 6px', lineHeight: '17px', cursor: 'pointer' }}
-                                  onClick={(e) => {
-                                    e.stopPropagation();
-                                    setTickerFilter((cur) => cur.includes(t) ? cur : [...cur, t]);
-                                  }}
-                                >
-                                  {t}
+              <div style={{ flex: 1, overflowY: 'auto' }}>
+                <List size="small" dataSource={articles} renderItem={(a) => {
+                  const active = selectedArticleId === a.id;
+                  return (
+                    <List.Item className={`news-article-item ${active ? 'news-article-active' : ''} ${a.read ? 'news-article-read' : ''}`}
+                      onClick={() => setSelectedArticleId(a.id)}>
+                      <div style={{ width: '100%' }}>
+                        <div style={{ display: 'flex', alignItems: 'flex-start', gap: 10 }}>
+                          <Avatar src={a.thumbnail} size={28} style={{ flexShrink: 0, marginTop: 2 }}>{(a.source_name || '?')[0]}</Avatar>
+                          <div style={{ flex: 1, minWidth: 0 }}>
+                            <div style={{ display: 'flex', alignItems: 'center', gap: 4, marginBottom: 3, flexWrap: 'wrap' }}>
+                              {a.is_financial_event && <Tag color="gold" style={{ margin: 0, fontSize: 10, padding: '0 4px', lineHeight: '16px' }}><ThunderboltOutlined /></Tag>}
+                              {a.enrichment?.sentiment_label === 'bullish' && (
+                                <Tag color="red" style={{ margin: 0, fontSize: 10, padding: '0 4px', lineHeight: '16px', fontWeight: (a.enrichment.sentiment_score ?? 0) >= 0.5 ? 700 : 500 }}>
+                                  {(a.enrichment.sentiment_score ?? 0) >= 0.5 ? <FireOutlined /> : <RiseOutlined />} 利好
                                 </Tag>
-                              ))}
-                              {a.enrichment.industries.slice(0, 3).map((ind) => (
-                                <Tag
-                                  key={`ind-${ind}`}
-                                  color="geekblue"
-                                  style={{ margin: 0, fontSize: 11, padding: '1px 6px', lineHeight: '17px', cursor: 'pointer' }}
-                                  onClick={(e) => {
-                                    e.stopPropagation();
-                                    setIndustryFilter((cur) => cur.includes(ind) ? cur : [...cur, ind]);
-                                  }}
-                                >
-                                  {ind.length > 10 ? `${ind.slice(0, 10)}...` : ind}
+                              )}
+                              {a.enrichment?.sentiment_label === 'bearish' && (
+                                <Tag color="green" style={{ margin: 0, fontSize: 10, padding: '0 4px', lineHeight: '16px', fontWeight: (a.enrichment.sentiment_score ?? 0) <= -0.5 ? 700 : 500 }}>
+                                  {(a.enrichment.sentiment_score ?? 0) <= -0.5 ? <FireOutlined /> : <ArrowDownOutlined />} 利空
                                 </Tag>
-                              ))}
-                              {(a.enrichment.countries ?? []).slice(0, 3).map((co) => (
-                                <Tag
-                                  key={`co-${co}`}
-                                  color="purple"
-                                  style={{ margin: 0, fontSize: 11, padding: '1px 6px', lineHeight: '17px', cursor: 'pointer' }}
-                                  onClick={(e) => {
-                                    e.stopPropagation();
-                                    setCountryFilter((cur) => cur.includes(co) ? cur : [...cur, co]);
-                                  }}
-                                >
-                                  {co}
-                                </Tag>
-                              ))}
-                              {(a.enrichment.regions ?? []).slice(0, 2).map((rg) => (
-                                <Tag
-                                  key={`rg-${rg}`}
-                                  color="cyan"
-                                  style={{ margin: 0, fontSize: 11, padding: '1px 6px', lineHeight: '17px', cursor: 'pointer' }}
-                                  onClick={(e) => {
-                                    e.stopPropagation();
-                                    setRegionFilter((cur) => cur.includes(rg) ? cur : [...cur, rg]);
-                                  }}
-                                >
-                                  {rg}
-                                </Tag>
-                              ))}
-                              {a.enrichment.event_tags.slice(0, 3).map((ev) => (
-                                <Tag
-                                  key={`ev-${ev}`}
-                                  color="orange"
-                                  style={{ margin: 0, fontSize: 11, padding: '1px 6px', lineHeight: '17px', cursor: 'pointer' }}
-                                  onClick={(e) => {
-                                    e.stopPropagation();
-                                    setEventTagFilter((cur) => cur.includes(ev) ? cur : [...cur, ev]);
-                                  }}
-                                >
-                                  {ev}
-                                </Tag>
-                              ))}
-                              {(a.enrichment.key_terms ?? []).slice(0, 4).map((kt) => (
-                                <Tag
-                                  key={`kt-${kt}`}
-                                  color="magenta"
-                                  style={{ margin: 0, fontSize: 11, padding: '1px 6px', lineHeight: '17px', cursor: 'pointer' }}
-                                  onClick={(e) => {
-                                    e.stopPropagation();
-                                    setKeyTermFilter((cur) => cur.includes(kt) ? cur : [...cur, kt]);
-                                  }}
-                                >
-                                  {kt}
-                                </Tag>
-                              ))}
-                              {(a.enrichment.provinces ?? []).slice(0, 2).map((pv) => (
-                                <Tag
-                                  key={`pv-${pv}`}
-                                  color="volcano"
-                                  style={{ margin: 0, fontSize: 11, padding: '1px 6px', lineHeight: '17px', cursor: 'pointer' }}
-                                  onClick={(e) => {
-                                    e.stopPropagation();
-                                    setProvinceFilter((cur) => cur.includes(pv) ? cur : [...cur, pv]);
-                                  }}
-                                >
-                                  {pv}
-                                </Tag>
-                              ))}
-                              {(a.enrichment.cities ?? []).slice(0, 2).map((ct) => (
-                                <Tag
-                                  key={`ct-${ct}`}
-                                  color="gold"
-                                  style={{ margin: 0, fontSize: 11, padding: '1px 6px', lineHeight: '17px', cursor: 'pointer' }}
-                                  onClick={(e) => {
-                                    e.stopPropagation();
-                                    setCityFilter((cur) => cur.includes(ct) ? cur : [...cur, ct]);
-                                  }}
-                                >
-                                  {ct}
-                                </Tag>
-                              ))}
-                              {(a.enrichment.politicians ?? []).slice(0, 2).map((pl) => (
-                                <Tag
-                                  key={`pl-${pl}`}
-                                  color="red"
-                                  style={{ margin: 0, fontSize: 11, padding: '1px 6px', lineHeight: '17px', cursor: 'pointer' }}
-                                  onClick={(e) => {
-                                    e.stopPropagation();
-                                    setPoliticianFilter((cur) => cur.includes(pl) ? cur : [...cur, pl]);
-                                  }}
-                                >
-                                  {pl}
-                                </Tag>
-                              ))}
-                              {(a.enrichment.visits ?? []).slice(0, 1).map((vs) => (
-                                <Tag
-                                  key={`vs-${vs}`}
-                                  color="lime"
-                                  style={{ margin: 0, fontSize: 11, padding: '1px 6px', lineHeight: '17px', cursor: 'pointer' }}
-                                  onClick={(e) => {
-                                    e.stopPropagation();
-                                    setVisitFilter((cur) => cur.includes(vs) ? cur : [...cur, vs]);
-                                  }}
-                                >
-                                  {vs}
-                                </Tag>
-                              ))}
-                              {(a.enrichment.departments ?? []).slice(0, 2).map((dp) => (
-                                <Tag
-                                  key={`dp-${dp}`}
-                                  color="geekblue"
-                                  style={{ margin: 0, fontSize: 11, padding: '1px 6px', lineHeight: '17px', cursor: 'pointer' }}
-                                  onClick={(e) => {
-                                    e.stopPropagation();
-                                    setDepartmentFilter((cur) => cur.includes(dp) ? cur : [...cur, dp]);
-                                  }}
-                                >
-                                  {dp}
-                                </Tag>
-                              ))}
+                              )}
+                              <Text className="news-article-title" style={{ fontSize: 14, fontWeight: a.read ? 400 : 600, lineHeight: 1.5, flex: 1 }}>
+                                {a.title}
+                              </Text>
                             </div>
-                          )}
-                          <div className="news-article-meta" style={{ display: 'flex', alignItems: 'center', gap: 6, marginTop: 3, fontSize: 12, color: '#94a3b8' }}>
-                            <span>{a.source_name || '未知来源'}</span>
-                            <span>·</span>
-                            <span>{formatRelative(a.published_at)}</span>
+                            {a.summary && (
+                              <Text style={{ color: '#64748b', fontSize: 12, display: 'block', lineHeight: 1.5, marginBottom: 2 }}>
+                                {a.summary.length > 100 ? `${a.summary.slice(0, 100)}...` : a.summary}
+                              </Text>
+                            )}
+                            {/* Enrichment tags */}
+                            {(a.enrichment && (a.enrichment.tickers.length > 0 || a.enrichment.industries.length > 0 || a.enrichment.event_tags.length > 0)) && (
+                              <div style={{ display: 'flex', flexWrap: 'wrap', gap: 2, marginTop: 2 }}>
+                                {a.enrichment.tickers.slice(0, 3).map((t) => (
+                                  <Tag key={`tk-${t}`} color="blue" className="news-clickable-tag" onClick={(e) => { e.stopPropagation(); addFilter('selectedTickers', t); }}>{t}</Tag>
+                                ))}
+                                {a.enrichment.industries.slice(0, 2).map((ind) => (
+                                  <Tag key={`ind-${ind}`} color="geekblue" className="news-clickable-tag" onClick={(e) => { e.stopPropagation(); addFilter('selectedIndustries', ind); }}>{ind}</Tag>
+                                ))}
+                                {a.enrichment.event_tags.slice(0, 2).map((ev) => (
+                                  <Tag key={`ev-${ev}`} color="orange" className="news-clickable-tag" onClick={(e) => { e.stopPropagation(); addFilter('selectedEventTags', ev); }}>{ev}</Tag>
+                                ))}
+                              </div>
+                            )}
+                            <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginTop: 2, fontSize: 11, color: '#94a3b8' }}>
+                              <span>{a.source_name || '未知'}</span>
+                              <span>·</span>
+                              <ClockCircleOutlined style={{ fontSize: 10 }} />
+                              <span>{formatRelative(a.published_at)}</span>
+                            </div>
                           </div>
+                          <Button type="text" size="small"
+                            icon={a.starred ? <StarFilled style={{ color: '#fbbf24' }} /> : <StarOutlined style={{ color: '#cbd5e1' }} />}
+                            onClick={(e) => handleStar(a, e)} />
                         </div>
-                        <Button
-                          type="text"
-                          size="small"
-                          icon={a.starred ? <StarFilled style={{ color: '#fbbf24' }} /> : <StarOutlined style={{ color: '#94a3b8' }} />}
-                          onClick={(e) => handleStar(a, e)}
-                        />
                       </div>
-                    </div>
-                  </List.Item>
-                );
-              }}
-            />
-            </div>
-            <div style={{ flex: '0 0 auto', padding: '8px 12px', borderTop: '1px solid #e2e8f0', background: '#fff', display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12 }}>
-              {/* 左下角：上页 / 下页 / 文章数量 — 方便对几万条文章逐页重建标签 */}
-              <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                <Tooltip title="上一页">
-                  <Button
-                    size="small"
-                    icon={<LeftOutlined />}
-                    disabled={currentPage <= 1 || loading}
-                    onClick={() => setCurrentPage(Math.max(1, currentPage - 1))}
-                  >
-                    上页
-                  </Button>
-                </Tooltip>
-                <Tooltip title="下一页">
-                  <Button
-                    size="small"
-                    icon={<RightOutlined />}
-                    disabled={currentPage >= Math.max(1, Math.ceil(totalArticles / pageSize)) || loading}
-                    onClick={() => setCurrentPage(currentPage + 1)}
-                  >
-                    下页
-                  </Button>
-                </Tooltip>
-                <Text type="secondary" className="news-pagination-bar" style={{ fontSize: 13, whiteSpace: 'nowrap' }}>
-                  第 <Text strong>{currentPage}</Text> / {Math.max(1, Math.ceil(totalArticles / pageSize))} 页
-                  <span style={{ marginLeft: 8, color: '#94a3b8' }}>·</span>
-                  <span style={{ marginLeft: 8 }}>共 <Text strong style={{ color: '#6366f1' }}>{totalArticles.toLocaleString()}</Text> 条</span>
-                </Text>
+                    </List.Item>
+                  );
+                }} />
               </div>
-              <Pagination
-                size="small"
-                current={currentPage}
-                pageSize={pageSize}
-                total={totalArticles}
-                showSizeChanger
-                showQuickJumper
-                showLessItems
-                pageSizeOptions={['20', '50', '100', '200']}
-                onChange={(page, size) => {
-                  setCurrentPage(page);
-                  setPageSize(size);
-                }}
-                onShowSizeChange={(_current, size) => {
-                  setCurrentPage(1);
-                  setPageSize(size);
-                }}
-              />
-            </div>
+              <div className="news-pagination-bar">
+                <Space size="small">
+                  <Tooltip title="上一页"><Button size="small" icon={<ArrowUpOutlined />} disabled={currentPage <= 1 || loading} onClick={() => setCurrentPage(Math.max(1, currentPage - 1))} /></Tooltip>
+                  <Tooltip title="下一页"><Button size="small" icon={<ArrowDownOutlined />} disabled={currentPage >= Math.max(1, Math.ceil(totalArticles / pageSize)) || loading} onClick={() => setCurrentPage(currentPage + 1)} /></Tooltip>
+                  <Text type="secondary" style={{ fontSize: 12, whiteSpace: 'nowrap' }}>
+                    第 <Text strong>{currentPage}</Text>/{Math.max(1, Math.ceil(totalArticles / pageSize))} 页 · 共 <Text strong style={{ color: '#6366f1' }}>{totalArticles.toLocaleString()}</Text> 条
+                  </Text>
+                </Space>
+                <Pagination size="small" current={currentPage} pageSize={pageSize} total={totalArticles}
+                  showSizeChanger showQuickJumper showLessItems
+                  pageSizeOptions={['20', '50', '100', '200']}
+                  onChange={(page, size) => { setCurrentPage(page); setPageSize(size); }}
+                  onShowSizeChange={(_current, size) => { setCurrentPage(1); setPageSize(size); }} />
+              </div>
             </>
           )}
         </div>
 
-        {/* 拖拽分隔条：中-右 */}
-        <div
-          style={{ flex: '0 0 6px', cursor: 'col-resize', background: '#f1f5f9', display: 'flex', alignItems: 'center', justifyContent: 'center' }}
-          onMouseDown={(e) => {
-            e.preventDefault();
-            dragRef.current = { side: 'right', startX: e.clientX, startLeft: leftWidth, startMid: midWidth };
-            document.body.style.cursor = 'col-resize';
-            document.body.style.userSelect = 'none';
-          }}
-        >
-          <div style={{ width: 2, height: 32, background: '#cbd5e1', borderRadius: 1 }} />
-        </div>
+        {/* Drag handle M-R */}
+        <div className="news-drag-handle" onMouseDown={(e) => {
+          e.preventDefault();
+          dragRef.current = { side: 'right', startX: e.clientX, startLeft: leftWidth, startMid: midWidth };
+          document.body.style.cursor = 'col-resize'; document.body.style.userSelect = 'none';
+        }}><div className="news-drag-bar" /></div>
 
-        {/* 右：正文 */}
-        <div
-          style={{
-            flex: 1,
-            overflowY: 'auto',
-            padding: '16px 20px',
-            background: '#fcfcfd',
-          }}
-        >
+        {/* Right: article detail */}
+        <div className="news-right-panel">
           {detailLoading ? (
             <div style={{ padding: 80, textAlign: 'center' }}><Spin /></div>
           ) : !articleDetail ? (
-            <Empty
-              image={Empty.PRESENTED_IMAGE_SIMPLE}
-              description={<span style={{ color: '#64748b', fontSize: 12 }}>选择左侧文章查看正文</span>}
-              style={{ marginTop: 80 }}
-            />
+            <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description={<span style={{ fontSize: 12 }}>选择文章查看正文</span>} style={{ marginTop: 80 }} />
           ) : (
             <div>
-              <Title className="news-detail-title" level={4} style={{ marginTop: 0, lineHeight: 1.4, fontSize: 20 }}>
-                {articleDetail.title}
-              </Title>
-              <div className="news-detail-meta" style={{ marginBottom: 14, fontSize: 13, color: '#64748b' }}>
+              <Title level={4} style={{ marginTop: 0, lineHeight: 1.4, fontSize: 18 }}>{articleDetail.title}</Title>
+              <div style={{ marginBottom: 14, fontSize: 13, color: '#64748b' }}>
                 {articleDetail.source_name} · {formatRelative(articleDetail.published_at)}
-                {articleDetail.url && (
-                  <a
-                    href={articleDetail.url}
-                    target="_blank"
-                    rel="noreferrer"
-                    style={{ marginLeft: 10, color: '#6366f1' }}
-                  >
-                    <LinkOutlined /> 原文
-                  </a>
-                )}
+                {articleDetail.url && <a href={articleDetail.url} target="_blank" rel="noreferrer" style={{ marginLeft: 10, color: '#6366f1' }}><LinkOutlined /> 原文</a>}
               </div>
-              {articleDetail.is_financial_event && (
-                <Tag color="gold" icon={<ThunderboltOutlined />} style={{ marginBottom: 14 }}>
-                  财务事件
-                </Tag>
-              )}
-              {/* Enrichment 区块：股票 + 行业 + 事件 + 情感 + 国家 + 地区 + 关键词 + 日期 */}
-              {articleDetail.enrichment && (
-                articleDetail.enrichment.tickers.length > 0 ||
-                articleDetail.enrichment.industries.length > 0 ||
-                articleDetail.enrichment.event_tags.length > 0 ||
-                (articleDetail.enrichment.countries?.length ?? 0) > 0 ||
-                (articleDetail.enrichment.regions?.length ?? 0) > 0 ||
-                (articleDetail.enrichment.key_terms?.length ?? 0) > 0 ||
-                (articleDetail.enrichment.date_entities?.length ?? 0) > 0 ||
-                (articleDetail.enrichment.provinces?.length ?? 0) > 0 ||
-                (articleDetail.enrichment.cities?.length ?? 0) > 0 ||
-                (articleDetail.enrichment.politicians?.length ?? 0) > 0 ||
-                (articleDetail.enrichment.visits?.length ?? 0) > 0 ||
-                (articleDetail.enrichment.departments?.length ?? 0) > 0 ||
-                articleDetail.enrichment.sentiment_label
-              ) && (
-                <div
-                  style={{
-                    marginBottom: 16,
-                    padding: 14,
-                    background: '#f8fafc',
-                    border: '1px solid #e2e8f0',
-                    borderRadius: 6,
-                    fontSize: 13,
-                  }}
-                >
+              {articleDetail.is_financial_event && <Tag color="gold" icon={<ThunderboltOutlined />} style={{ marginBottom: 14 }}>财务事件</Tag>}
+
+              {/* Enrichment block */}
+              {articleDetail.enrichment && (articleDetail.enrichment.tickers.length > 0 || articleDetail.enrichment.industries.length > 0 || articleDetail.enrichment.sentiment_label) && (
+                <div style={{ marginBottom: 16, padding: 12, background: '#f8fafc', border: '1px solid #e2e8f0', borderRadius: 6, fontSize: 12 }}>
                   {articleDetail.enrichment.sentiment_label && (
                     <div style={{ marginBottom: 8 }}>
-                      <Text type="secondary" style={{ fontSize: 13, marginRight: 8 }}>情感:</Text>
-                      <Tag
-                        color={
-                          articleDetail.enrichment.sentiment_label === 'bullish' ? 'red'
-                          : articleDetail.enrichment.sentiment_label === 'bearish' ? 'green'
-                          : 'default'
-                        }
-                        style={{
-                          margin: 0,
-                          fontWeight: Math.abs(articleDetail.enrichment.sentiment_score ?? 0) >= 0.5 ? 700 : 500,
-                        }}
-                      >
-                        {articleDetail.enrichment.sentiment_label === 'bullish' && <>
-                          {(articleDetail.enrichment.sentiment_score ?? 0) >= 0.5 ? <FireOutlined /> : <RiseOutlined />} 利好
-                        </>}
-                        {articleDetail.enrichment.sentiment_label === 'bearish' && <>
-                          {(articleDetail.enrichment.sentiment_score ?? 0) <= -0.5 ? <FireOutlined /> : <ArrowDownOutlined />} 利空
-                        </>}
+                      <Text type="secondary" style={{ fontSize: 12, marginRight: 8 }}>情感:</Text>
+                      <Tag color={articleDetail.enrichment.sentiment_label === 'bullish' ? 'red' : articleDetail.enrichment.sentiment_label === 'bearish' ? 'green' : 'default'}
+                        style={{ margin: 0, fontWeight: Math.abs(articleDetail.enrichment.sentiment_score ?? 0) >= 0.5 ? 700 : 500 }}>
+                        {articleDetail.enrichment.sentiment_label === 'bullish' && <><RiseOutlined /> 利好</>}
+                        {articleDetail.enrichment.sentiment_label === 'bearish' && <><ArrowDownOutlined /> 利空</>}
                         {articleDetail.enrichment.sentiment_label === 'neutral' && <><MinusOutlined /> 中性</>}
                         {articleDetail.enrichment.sentiment_score != null && ` ${articleDetail.enrichment.sentiment_score.toFixed(3)}`}
-                        {articleDetail.enrichment.sentiment_confidence != null && ` · 置信度 ${(articleDetail.enrichment.sentiment_confidence * 100).toFixed(0)}%`}
                       </Tag>
                     </div>
                   )}
-                  {articleDetail.enrichment.tickers.length > 0 && (
-                    <div style={{ marginBottom: 8 }}>
-                      <Text type="secondary" style={{ fontSize: 13, marginRight: 8 }}>相关股票:</Text>
-                      {articleDetail.enrichment.tickers.map((t) => (
-                        <Tag key={`d-tk-${t}`} color="blue" style={{ marginBottom: 4, fontSize: 12 }}>{t}</Tag>
-                      ))}
-                    </div>
-                  )}
-                  {articleDetail.enrichment.industries.length > 0 && (
-                    <div style={{ marginBottom: 8 }}>
-                      <Text type="secondary" style={{ fontSize: 13, marginRight: 8 }}>行业:</Text>
-                      {articleDetail.enrichment.industries.map((ind) => (
-                        <Tag key={`d-ind-${ind}`} color="geekblue" style={{ marginBottom: 4, fontSize: 12 }}>{ind}</Tag>
-                      ))}
-                    </div>
-                  )}
-                  {articleDetail.enrichment.event_tags.length > 0 && (
-                    <div style={{ marginBottom: 8 }}>
-                      <Text type="secondary" style={{ fontSize: 13, marginRight: 8 }}>事件:</Text>
-                      {articleDetail.enrichment.event_tags.map((ev) => (
-                        <Tag key={`d-ev-${ev}`} color="orange" style={{ marginBottom: 4, fontSize: 12 }}>{ev}</Tag>
-                      ))}
-                    </div>
-                  )}
-                  {(articleDetail.enrichment.countries?.length ?? 0) > 0 && (
-                    <div style={{ marginBottom: 8 }}>
-                      <Text type="secondary" style={{ fontSize: 13, marginRight: 8 }}>国家:</Text>
-                      {(articleDetail.enrichment.countries ?? []).map((co) => (
-                        <Tag key={`d-co-${co}`} color="purple" style={{ marginBottom: 4, fontSize: 12 }}>{co}</Tag>
-                      ))}
-                    </div>
-                  )}
-                  {(articleDetail.enrichment.regions?.length ?? 0) > 0 && (
-                    <div style={{ marginBottom: 8 }}>
-                      <Text type="secondary" style={{ fontSize: 13, marginRight: 8 }}>地区:</Text>
-                      {(articleDetail.enrichment.regions ?? []).map((rg) => (
-                        <Tag key={`d-rg-${rg}`} color="cyan" style={{ marginBottom: 4, fontSize: 12 }}>{rg}</Tag>
-                      ))}
-                    </div>
-                  )}
-                  {(articleDetail.enrichment.key_terms?.length ?? 0) > 0 && (
-                    <div style={{ marginBottom: 8 }}>
-                      <Text type="secondary" style={{ fontSize: 13, marginRight: 8 }}>关键词:</Text>
-                      {(articleDetail.enrichment.key_terms ?? []).map((kt) => (
-                        <Tag key={`d-kt-${kt}`} color="magenta" style={{ marginBottom: 4, fontSize: 12 }}>{kt}</Tag>
-                      ))}
-                    </div>
-                  )}
-                  {(articleDetail.enrichment.date_entities?.length ?? 0) > 0 && (
-                    <div style={{ marginBottom: 8 }}>
-                      <Text type="secondary" style={{ fontSize: 13, marginRight: 8 }}>提及日期:</Text>
-                      {(articleDetail.enrichment.date_entities ?? []).map((dt) => (
-                        <Tag key={`d-dt-${dt}`} color="default" style={{ marginBottom: 4, fontSize: 12 }}>{dt}</Tag>
-                      ))}
-                    </div>
-                  )}
-                  {(articleDetail.enrichment.provinces?.length ?? 0) > 0 && (
-                    <div style={{ marginBottom: 8 }}>
-                      <Text type="secondary" style={{ fontSize: 13, marginRight: 8 }}>省份:</Text>
-                      {(articleDetail.enrichment.provinces ?? []).map((pv) => (
-                        <Tag key={`d-pv-${pv}`} color="volcano" style={{ marginBottom: 4, fontSize: 12 }}>{pv}</Tag>
-                      ))}
-                    </div>
-                  )}
-                  {(articleDetail.enrichment.cities?.length ?? 0) > 0 && (
-                    <div style={{ marginBottom: 8 }}>
-                      <Text type="secondary" style={{ fontSize: 13, marginRight: 8 }}>城市:</Text>
-                      {(articleDetail.enrichment.cities ?? []).map((ct) => (
-                        <Tag key={`d-ct-${ct}`} color="gold" style={{ marginBottom: 4, fontSize: 12 }}>{ct}</Tag>
-                      ))}
-                    </div>
-                  )}
-                  {(articleDetail.enrichment.politicians?.length ?? 0) > 0 && (
-                    <div style={{ marginBottom: 8 }}>
-                      <Text type="secondary" style={{ fontSize: 13, marginRight: 8 }}>领导人:</Text>
-                      {(articleDetail.enrichment.politicians ?? []).map((pl) => (
-                        <Tag key={`d-pl-${pl}`} color="red" style={{ marginBottom: 4, fontSize: 12 }}>{pl}</Tag>
-                      ))}
-                    </div>
-                  )}
-                  {(articleDetail.enrichment.visits?.length ?? 0) > 0 && (
-                    <div style={{ marginBottom: 8 }}>
-                      <Text type="secondary" style={{ fontSize: 13, marginRight: 8 }}>调研:</Text>
-                      {(articleDetail.enrichment.visits ?? []).map((vs) => (
-                        <Tag key={`d-vs-${vs}`} color="lime" style={{ marginBottom: 4, fontSize: 12 }}>{vs}</Tag>
-                      ))}
-                    </div>
-                  )}
-                  {(articleDetail.enrichment.departments?.length ?? 0) > 0 && (
-                    <div style={{ marginBottom: 8 }}>
-                      <Text type="secondary" style={{ fontSize: 13, marginRight: 8 }}>部门:</Text>
-                      {(articleDetail.enrichment.departments ?? []).map((dp) => (
-                        <Tag key={`d-dp-${dp}`} color="geekblue" style={{ marginBottom: 4, fontSize: 12 }}>{dp}</Tag>
-                      ))}
-                    </div>
-                  )}
+                  {articleDetail.enrichment.tickers.length > 0 && <TagRow label="股票" items={articleDetail.enrichment.tickers} color="blue" />}
+                  {articleDetail.enrichment.industries.length > 0 && <TagRow label="行业" items={articleDetail.enrichment.industries} color="geekblue" />}
+                  {articleDetail.enrichment.event_tags.length > 0 && <TagRow label="事件" items={articleDetail.enrichment.event_tags} color="orange" />}
+                  {(articleDetail.enrichment.countries?.length ?? 0) > 0 && <TagRow label="国家" items={articleDetail.enrichment.countries!} color="purple" />}
+                  {(articleDetail.enrichment.regions?.length ?? 0) > 0 && <TagRow label="地区" items={articleDetail.enrichment.regions!} color="cyan" />}
+                  {(articleDetail.enrichment.key_terms?.length ?? 0) > 0 && <TagRow label="关键词" items={articleDetail.enrichment.key_terms!} color="magenta" />}
+                  {(articleDetail.enrichment.provinces?.length ?? 0) > 0 && <TagRow label="省份" items={articleDetail.enrichment.provinces!} color="volcano" />}
+                  {(articleDetail.enrichment.cities?.length ?? 0) > 0 && <TagRow label="城市" items={articleDetail.enrichment.cities!} color="gold" />}
+                  {(articleDetail.enrichment.politicians?.length ?? 0) > 0 && <TagRow label="领导人" items={articleDetail.enrichment.politicians!} color="red" />}
+                  {(articleDetail.enrichment.visits?.length ?? 0) > 0 && <TagRow label="调研" items={articleDetail.enrichment.visits!} color="lime" />}
+                  {(articleDetail.enrichment.departments?.length ?? 0) > 0 && <TagRow label="部门" items={articleDetail.enrichment.departments!} color="geekblue" />}
+                  {/* Entity sentiments */}
                   {articleDetail.enrichment.entity_sentiments && Object.keys(articleDetail.enrichment.entity_sentiments).length > 0 && (
-                    <div>
-                      <Text type="secondary" style={{ fontSize: 13, marginRight: 8 }}>实体级情感:</Text>
-                      {Object.entries(articleDetail.enrichment.entity_sentiments)
-                        .sort(([, a], [, b]) => Math.abs(b) - Math.abs(a))
-                        .map(([key, score]) => {
-                          const [kind, name] = key.split(':', 2);
-                          const isPos = score > 0;
-                          const strong = Math.abs(score) >= 0.5;
-                          const label = ({
-                            ticker: '股',
-                            country: '国',
-                            region: '区',
-                            key_term: '词',
-                            province: '省',
-                            city: '市',
-                            politician: '人',
-                            department: '部',
-                          } as any)[kind] ?? kind;
-                          return (
-                            <Tag
-                              key={`es-${key}`}
-                              color={isPos ? 'red' : 'green'}
-                              style={{ marginBottom: 4, fontWeight: strong ? 700 : 400 }}
-                            >
-                              <span style={{ opacity: 0.6, marginRight: 4 }}>{label}</span>
-                              {name} {score > 0 ? '+' : ''}{score.toFixed(2)}
-                            </Tag>
-                          );
-                        })}
+                    <div style={{ marginTop: 8 }}>
+                      <Text type="secondary" style={{ fontSize: 12, marginRight: 8 }}>实体级情感:</Text>
+                      {Object.entries(articleDetail.enrichment.entity_sentiments).sort(([, a], [, b]) => Math.abs(b) - Math.abs(a)).slice(0, 8).map(([key, score]) => {
+                        const [, name] = key.split(':', 2);
+                        const isPos = score > 0;
+                        return <Tag key={`es-${key}`} color={isPos ? 'red' : 'green'} style={{ marginBottom: 4, fontSize: 11 }}>{name} {score > 0 ? '+' : ''}{score.toFixed(2)}</Tag>;
+                      })}
                     </div>
                   )}
                 </div>
               )}
               {articleDetail.content_html ? (
-                <div
-                  className="news-content news-detail-content"
-                  style={{ fontSize: 15, lineHeight: 1.8 }}
-                  dangerouslySetInnerHTML={{ __html: sanitizeHtml(articleDetail.content_html) }}
-                />
+                <div className="news-detail-content" style={{ fontSize: 14, lineHeight: 1.8 }} dangerouslySetInnerHTML={{ __html: sanitizeHtml(articleDetail.content_html) }} />
               ) : (
-                <Paragraph className="news-detail-content" style={{ fontSize: 15, lineHeight: 1.8, whiteSpace: 'pre-wrap' }}>
-                  {articleDetail.content || articleDetail.summary || '(正文为空)'}
-                </Paragraph>
+                <Paragraph style={{ fontSize: 14, lineHeight: 1.8, whiteSpace: 'pre-wrap' }}>{articleDetail.content || articleDetail.summary || '(正文为空)'}</Paragraph>
               )}
             </div>
           )}
@@ -1665,5 +1083,33 @@ export const NewsPanel: React.FC = () => {
     </div>
   );
 };
+
+// —— Tiny helper components ——
+
+const FilterSelect: React.FC<{
+  label: string;
+  value: string[];
+  options: { name: string; count: number }[];
+  onChange: (v: string[]) => void;
+  showSearch?: boolean;
+}> = ({ label, value, options, onChange, showSearch }) => (
+  <div style={{ display: 'flex', alignItems: 'center', gap: 4, flexShrink: 0 }}>
+    <Text type="secondary" style={{ fontSize: 12, whiteSpace: 'nowrap' }}>{label}:</Text>
+    <Select mode="multiple" allowClear size="small" placeholder={label}
+      value={value} onChange={onChange}
+      options={options.map((o) => ({ value: o.name, label: `${o.name} (${o.count})` }))}
+      style={{ minWidth: 120, maxWidth: 200 }} maxTagCount="responsive"
+      showSearch={showSearch}
+      filterOption={showSearch ? (input, opt) => String(opt?.label || '').toLowerCase().includes(input.toLowerCase()) : undefined}
+    />
+  </div>
+);
+
+const TagRow: React.FC<{ label: string; items: string[]; color: string }> = ({ label, items, color }) => (
+  <div style={{ marginBottom: 6 }}>
+    <Text type="secondary" style={{ fontSize: 12, marginRight: 8 }}>{label}:</Text>
+    {items.map((it) => <Tag key={it} color={color} style={{ marginBottom: 4, fontSize: 11 }}>{it}</Tag>)}
+  </div>
+);
 
 export default NewsPanel;

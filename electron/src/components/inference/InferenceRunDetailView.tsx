@@ -1,12 +1,13 @@
-import React, { useState, useMemo } from 'react';
+import React, { useState, useMemo, useCallback } from 'react';
+import dayjs from 'dayjs';
 import {
-  Button, Tag, Typography, Empty, Spin, Table, Collapse, Input, Tooltip, Select, Modal,
+  Button, Tag, Typography, Empty, Spin, Table, Collapse, Input, Tooltip, Select, Modal, DatePicker,
 } from 'antd';
 import { clsx } from 'clsx';
 import {
   ArrowLeft, TrendingUp, Download, Search, CheckCircle2, XCircle,
 } from 'lucide-react';
-import type { InferenceRankingResult } from '../../services/modelTrainingService';
+import type { InferenceRankingResult, InferenceRankingItem } from '../../services/modelTrainingService';
 import { ScoreDistributionPanel } from './ScoreDistributionPanel';
 import { StrategyDashboard } from './StrategyDashboard';
 import { StockScoreChart } from './StockScoreChart';
@@ -20,9 +21,11 @@ interface Props {
   loading: boolean;
   onBack: () => void;
   onRetry?: () => void;
+  /** 切换到指定推理日期的 run（±1 天导航 / 日期选择） */
+  onNavigateDate?: (inferenceDate: string) => void;
 }
 
-export const InferenceRunDetailView: React.FC<Props> = ({ runId, result, loading, onBack, onRetry }) => {
+export const InferenceRunDetailView: React.FC<Props> = ({ runId, result, loading, onBack, onRetry, onNavigateDate }) => {
   const [rankingSearch, setRankingSearch] = useState('');
   const [boardFilter, setBoardFilter] = useState<string>('all');
   const [industryFilter, setIndustryFilter] = useState<string>('all');
@@ -30,6 +33,23 @@ export const InferenceRunDetailView: React.FC<Props> = ({ runId, result, loading
   const [trendFilter, setTrendFilter] = useState<string>('all');
   const [capFilter, setCapFilter] = useState<string>('all');
   const [exporting, setExporting] = useState(false);
+  // 日期导航：从 runId（run_YYYYMMDD_xxx）解析当前推理日期
+  const [datePickerValue, setDatePickerValue] = useState<dayjs.Dayjs | null>(null);
+  const currentInferenceDate = useMemo(() => {
+    const m = runId.match(/run_(\d{4})(\d{2})(\d{2})/);
+    return m ? `${m[1]}-${m[2]}-${m[3]}` : null;
+  }, [runId]);
+  const handleShiftDate = useCallback((delta: number) => {
+    if (!currentInferenceDate || !onNavigateDate) return;
+    const d = dayjs(currentInferenceDate).add(delta, 'day');
+    onNavigateDate(d.format('YYYY-MM-DD'));
+  }, [currentInferenceDate, onNavigateDate]);
+  const handlePickDate = useCallback((d: dayjs.Dayjs | null) => {
+    if (d && onNavigateDate) {
+      setDatePickerValue(d);
+      onNavigateDate(d.format('YYYY-MM-DD'));
+    }
+  }, [onNavigateDate]);
   const [stockModal, setStockModal] = useState<{
     symbol: string;
     name: string;
@@ -50,6 +70,45 @@ export const InferenceRunDetailView: React.FC<Props> = ({ runId, result, loading
     } finally {
       setExporting(false);
     }
+  };
+
+  // K线弹窗内导航：按当前筛选后的排名列表切换上一只/下一只股票
+  const openStockModal = (item: InferenceRankingItem) => {
+    setStockModal({
+      symbol: item.code,
+      name: item.name,
+      rank: item.rank,
+      score: Number(item.score),
+      board: item.board,
+      industry: item.industry,
+      market_cap_tier: item.market_cap_tier,
+      market_cap_yi: item.market_cap_yi,
+      negative_tag: item.negative_tag,
+    });
+  };
+
+  const navPrevStock = () => {
+    if (!stockModal) return;
+    const idx = filteredRankings.findIndex(r => r.code === stockModal.symbol);
+    if (idx <= 0) return;
+    openStockModal(filteredRankings[idx - 1]);
+  };
+
+  const navNextStock = () => {
+    if (!stockModal) return;
+    const idx = filteredRankings.findIndex(r => r.code === stockModal.symbol);
+    if (idx < 0 || idx >= filteredRankings.length - 1) return;
+    openStockModal(filteredRankings[idx + 1]);
+  };
+
+  // 按代码/名称搜索后跳转（全市场，非筛选后）
+  const navSearchStock = (value: string) => {
+    const kw = value.trim().toLowerCase();
+    if (!kw) return;
+    const hit = (result?.rankings || []).find(r =>
+      r.code.toLowerCase().includes(kw) || r.name.toLowerCase().includes(kw)
+    );
+    if (hit) openStockModal(hit);
   };
 
   // 可用于筛选的行业列表（按出现次数降序）
@@ -179,6 +238,24 @@ export const InferenceRunDetailView: React.FC<Props> = ({ runId, result, loading
               {runId} · {result?.target_date ? `目标交易日 ${result.target_date}` : '加载中…'}
             </span>
           </div>
+          {onNavigateDate && (
+            <div className="flex items-center gap-1.5 flex-shrink-0">
+              <Tooltip title="前一天">
+                <Button size="small" icon={<ArrowLeft size={13} />} className="rounded-lg h-8 w-8 p-0 text-[10px] font-bold border-slate-200" onClick={() => handleShiftDate(-1)} />
+              </Tooltip>
+              <DatePicker
+                size="small"
+                value={datePickerValue}
+                onChange={handlePickDate}
+                allowClear={false}
+                placeholder="选日期"
+                className="rounded-lg !text-[10px] !w-28"
+              />
+              <Tooltip title="后一天">
+                <Button size="small" icon={<ArrowLeft size={13} className="rotate-180" />} className="rounded-lg h-8 w-8 p-0 text-[10px] font-bold border-slate-200" onClick={() => handleShiftDate(1)} />
+              </Tooltip>
+            </div>
+          )}
           {result?.summary?.status === 'failed' && onRetry && (
             <Tooltip title="重新加载">
               <Button size="small" icon={<Search size={13} />} onClick={onRetry} className="rounded-lg text-[10px] font-bold h-8 px-3">
@@ -521,17 +598,7 @@ export const InferenceRunDetailView: React.FC<Props> = ({ runId, result, loading
               pagination={{ pageSize: 20, showTotal: t => `共 ${t} 支` }}
               dataSource={filteredRankings}
               onRow={(record: any) => ({
-                onClick: () => setStockModal({
-                  symbol: record.code,
-                  name: record.name,
-                  rank: record.rank,
-                  score: Number(record.score),
-                  board: record.board,
-                  industry: record.industry,
-                  market_cap_tier: record.market_cap_tier,
-                  market_cap_yi: record.market_cap_yi,
-                  negative_tag: record.negative_tag,
-                }),
+                onClick: () => openStockModal(record),
                 className: 'cursor-pointer',
               })}
               rowClassName={(record: any) => clsx(
@@ -734,25 +801,78 @@ export const InferenceRunDetailView: React.FC<Props> = ({ runId, result, loading
           mask: { backdropFilter: 'blur(4px)', backgroundColor: 'rgba(0,0,0,0.2)' },
         }}
       >
-        {stockModal && (
-          <StockScoreChart
-            symbol={stockModal.symbol}
-            name={stockModal.name}
-            market="A"
-            days={3650}
-            height={380}
-            stockInfo={{
-              rank: stockModal.rank,
-              score: stockModal.score,
-              board: stockModal.board,
-              industry: stockModal.industry,
-              market_cap_tier: stockModal.market_cap_tier,
-              market_cap_yi: stockModal.market_cap_yi,
-              negative_tag: stockModal.negative_tag,
-            }}
-            wideScale={!!(result?.summary?.is_wide_scale || result?.summary?.market_signal?.score_scale === 'wide')}
-          />
-        )}
+        {stockModal && (() => {
+          const curIdx = filteredRankings.findIndex(r => r.code === stockModal.symbol);
+          const hasPrev = curIdx > 0;
+          const hasNext = curIdx >= 0 && curIdx < filteredRankings.length - 1;
+          return (
+            <div className="space-y-3">
+              {/* 导航工具栏：上一只/下一只 + 搜索 + 当前排名 */}
+              <div className="flex items-center gap-2 bg-slate-50 rounded-2xl border border-slate-100 px-3 py-2">
+                <Button
+                  size="small"
+                  disabled={!hasPrev}
+                  onClick={navPrevStock}
+                  className="rounded-lg text-[10px] font-bold h-8 px-3 flex-shrink-0"
+                >
+                  ‹ 上一只
+                </Button>
+                <Button
+                  size="small"
+                  disabled={!hasNext}
+                  onClick={navNextStock}
+                  className="rounded-lg text-[10px] font-bold h-8 px-3 flex-shrink-0"
+                >
+                  下一只 ›
+                </Button>
+                <div className="flex-1 min-w-0">
+                  <Select
+                    showSearch
+                    size="small"
+                    placeholder="搜索全市场股票代码或名称，回车跳转..."
+                    className="w-full"
+                    optionFilterProp="label"
+                    notFoundContent="无匹配股票"
+                    filterOption={(input, option) => {
+                      const kw = String(input || '').toLowerCase();
+                      const label = String((option as any)?.label || '');
+                      const value = String((option as any)?.value || '');
+                      return label.toLowerCase().includes(kw) || value.toLowerCase().includes(kw);
+                    }}
+                    onChange={(v) => navSearchStock(String(v))}
+                    options={(result?.rankings || []).map(r => ({
+                      value: r.code,
+                      label: `${r.code} · ${r.name || '—'} · 第${r.rank}名`,
+                    }))}
+                  />
+                </div>
+                <div className="text-[10px] text-slate-400 font-mono flex-shrink-0">
+                  {curIdx >= 0
+                    ? `第 ${stockModal.rank ?? curIdx + 1} 名 · ${curIdx + 1}/${filteredRankings.length}`
+                    : '不在当前筛选'}
+                </div>
+              </div>
+              <StockScoreChart
+                symbol={stockModal.symbol}
+                name={stockModal.name}
+                market="A"
+                days={3650}
+                height={380}
+                stockInfo={{
+                  rank: stockModal.rank,
+                  score: stockModal.score,
+                  board: stockModal.board,
+                  industry: stockModal.industry,
+                  market_cap_tier: stockModal.market_cap_tier,
+                  market_cap_yi: stockModal.market_cap_yi,
+                  negative_tag: stockModal.negative_tag,
+                }}
+                wideScale={!!(result?.summary?.is_wide_scale || result?.summary?.market_signal?.score_scale === 'wide')}
+                modelId={result?.summary?.model_id || result?.summary?.effective_model_id}
+              />
+            </div>
+          );
+        })()}
       </Modal>
     </div>
   );

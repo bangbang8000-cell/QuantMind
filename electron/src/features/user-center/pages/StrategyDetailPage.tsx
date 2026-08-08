@@ -115,7 +115,7 @@ const StrategyDetailPage: React.FC = () => {
     const statusMap: Record<StrategyStatus, { color: string; text: string }> = {
       draft: { color: 'default', text: '草稿' },
       repository: { color: 'blue', text: '仓库' },
-      live_trading: { color: 'green', text: '实盘中' },
+      live_trading: { color: 'green', text: '模拟中' },
       active: { color: 'green', text: '激活' },
       inactive: { color: 'default', text: '未激活' },
       paused: { color: 'orange', text: '暂停' },

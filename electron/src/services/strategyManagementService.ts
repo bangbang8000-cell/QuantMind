@@ -191,7 +191,7 @@ class StrategyManagementService {
   }
 
   /**
-   * 从代码中提取配置 (用于实盘验证)
+   * 从代码中提取配置 (用于模拟盘验证)
    */
   async extractConfig(code: string): Promise<any> {
     try {

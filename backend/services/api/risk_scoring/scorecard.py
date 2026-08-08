@@ -24,7 +24,6 @@ from typing import Any
 
 from sqlalchemy import text
 
-from backend.services.api.routers.research_service import _norm_symbol_sql
 from backend.shared.database_manager_v2 import get_session
 from backend.shared.stock_utils import StockCodeUtil
 
@@ -337,20 +336,20 @@ def _bucket(score: float) -> str:
 _FETCH_SQL = f"""
 WITH target_day AS (
     SELECT MAX(trade_date) AS d FROM stock_daily_latest
-    WHERE {_norm_symbol_sql("symbol")} = {_norm_symbol_sql(":s")}
+    WHERE symbol = :s
       AND (cast(:td as date) IS NULL OR trade_date <= cast(:td as date))
 ),
 amt_20d AS (
     SELECT AVG(amount) AS amount_20d_avg
     FROM stock_daily_latest s, target_day l
-    WHERE {_norm_symbol_sql("s.symbol")} = {_norm_symbol_sql(":s")}
+    WHERE s.symbol = :s
       AND s.trade_date BETWEEN l.d - INTERVAL '30 day' AND l.d
 ),
 amt_5d AS (
     -- 5 日均成交额：用过去 5 个交易日（不含当日），所以 BETWEEN d-8 AND d-1
     SELECT AVG(amount) AS amount_5d_avg
     FROM stock_daily_latest s, target_day l
-    WHERE {_norm_symbol_sql("s.symbol")} = {_norm_symbol_sql(":s")}
+    WHERE s.symbol = :s
       AND s.trade_date BETWEEN l.d - INTERVAL '8 day' AND l.d - INTERVAL '1 day'
 )
 SELECT s.trade_date, s.symbol, s.stock_name, s.industry,
@@ -366,7 +365,7 @@ SELECT s.trade_date, s.symbol, s.stock_name, s.industry,
        CASE WHEN a5.amount_5d_avg IS NOT NULL AND a5.amount_5d_avg > 0
             THEN s.amount / a5.amount_5d_avg ELSE NULL END AS amount_ratio_5d
 FROM stock_daily_latest s, target_day l, amt_20d a20, amt_5d a5
-WHERE {_norm_symbol_sql("s.symbol")} = {_norm_symbol_sql(":s")}
+WHERE s.symbol = :s
   AND s.trade_date = l.d
 LIMIT 1
 """

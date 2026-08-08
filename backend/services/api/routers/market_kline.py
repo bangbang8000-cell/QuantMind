@@ -27,6 +27,7 @@ GET /api/v1/market/kline/{symbol}?market=A&days=120
 from __future__ import annotations
 
 import logging
+import time as _time
 from datetime import date, datetime, timedelta
 from typing import Any, Optional
 
@@ -37,6 +38,34 @@ from backend.services.api.user_app.middleware.auth import get_current_user
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/v1/market", tags=["Market"])
+
+# K 线内存缓存：历史行情静态不变，按 (market, symbol, period, days 窗口) 缓存。
+# 命中即跳过 QuantDB parquet / DuckDB 读取，冷读 2s+ → 缓存命中 <5ms。
+_KLINE_CACHE: dict[str, tuple[float, list[dict[str, Any]]]] = {}
+_KLINE_CACHE_TTL = int(__import__("os").getenv("KLINE_CACHE_TTL_SECONDS", "300"))
+_KLINE_CACHE_MAX = 2048
+
+
+def _kline_cache_key(market: str, symbol: str, start: str, end: str) -> str:
+    return f"{market}:{symbol}:{start}:{end}"
+
+
+def _kline_cache_get(key: str) -> list[dict[str, Any]] | None:
+    entry = _KLINE_CACHE.get(key)
+    if not entry:
+        return None
+    ts, items = entry
+    if _time.time() - ts > _KLINE_CACHE_TTL:
+        _KLINE_CACHE.pop(key, None)
+        return None
+    return items
+
+
+def _kline_cache_set(key: str, items: list[dict[str, Any]]) -> None:
+    _KLINE_CACHE[key] = (_time.time(), items)
+    if len(_KLINE_CACHE) > _KLINE_CACHE_MAX:
+        oldest = min(_KLINE_CACHE, key=lambda k: _KLINE_CACHE[k][0])
+        _KLINE_CACHE.pop(oldest, None)
 
 
 def _parse_date(s: Optional[str]) -> Optional[date]:
@@ -262,11 +291,25 @@ async def get_kline(
         ed = ed or date.today()
         sd = sd or (ed - timedelta(days=days * 2))
 
+    # 历史行情静态不变：命中内存缓存直接返回（冷读 2s+ → 缓存命中 <5ms）
+    cache_key = _kline_cache_key(m, sym, sd.isoformat(), ed.isoformat())
+    cached = _kline_cache_get(cache_key)
+    if cached is not None:
+        return {
+            "success": True,
+            "data": {
+                "market": m, "symbol": sym, "period": period,
+                "source_used": "kline_cache",
+                "items": cached, "fallbacks_tried": [], "cleaning_report": {},
+            },
+        }
+
     # A 股优先走 QuantDB 本地 parquet（最快路径，无 DB 依赖）
     if m == "A":
         try:
             items = await _try_quantdb_parquet(sym, sd, ed, days)
             if items:
+                _kline_cache_set(cache_key, items)
                 return {
                     "success": True,
                     "data": {
@@ -283,6 +326,7 @@ async def get_kline(
         try:
             items = await _try_stock_daily_latest(sym, sd, ed, days)
             if items:
+                _kline_cache_set(cache_key, items)
                 return {
                     "success": True,
                     "data": {

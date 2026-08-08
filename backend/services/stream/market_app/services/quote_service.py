@@ -17,7 +17,9 @@ from .data_source import (
     SinaDataSource,
     TencentDataSource,
 )
+from .eltdx_source import EltdxDataSource
 from .ifind_source import IFindDataSource
+from .opentdx_source import OpentdxDataSource
 from .remote_redis_source import RemoteRedisDataSource
 
 logger = logging.getLogger(__name__)
@@ -38,6 +40,8 @@ class QuoteService:
 
         # 初始化数据源
         self.data_sources = {
+            "eltdx": EltdxDataSource(),
+            "opentdx": OpentdxDataSource(),
             "tencent": TencentDataSource(),
             "sina": SinaDataSource(),
             "ifind": IFindDataSource(),

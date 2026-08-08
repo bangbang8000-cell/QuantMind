@@ -373,7 +373,7 @@ class PortfolioService {
                 0,
             );
 
-            // 增强逻辑：如果实盘资产为 0 且非模拟盘，尝试从账本历史中拉取最后一次有效资产
+            // 增强逻辑：如果模拟资产为 0 且非模拟盘，尝试从账本历史中拉取最后一次有效资产
             if (!useSimulation && totalAsset <= 0) {
                 try {
                     const history = await realTradingService.getAccountLedgerDaily(1, userId, tenantId);
@@ -426,7 +426,7 @@ class PortfolioService {
                 if (useSimulation) {
                     initialCapital = DEFAULT_INITIAL_CAPITAL;
                 } else {
-                    // 实盘未知初始权益时，不再用当前总资产硬回退，避免总收益率长期假 0。
+                    // 模拟未知初始权益时，不再用当前总资产硬回退，避免总收益率长期假 0。
                     initialCapital = totalAsset;
                     initialCapitalEstimated = true;
                 }
@@ -550,8 +550,8 @@ class PortfolioService {
                 isSimulated: useSimulation,
             };
         } catch (error) {
-            console.warn(`获取${mode === 'real' ? '实盘' : '模拟'}账户数据失败:`, error);
-            // 降级：如果是模拟盘失败，返回默认数据；如果是实盘失败，抛出错误由上层处理或返回空数据
+            console.warn(`获取${mode === 'real' ? '模拟' : '模拟'}账户数据失败:`, error);
+            // 降级：如果是模拟盘失败，返回默认数据；如果是模拟失败，抛出错误由上层处理或返回空数据
             if (mode === 'simulation') {
                 return {
                     data: this.getDefaultFundData(),

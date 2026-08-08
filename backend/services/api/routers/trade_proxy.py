@@ -14,7 +14,6 @@ from fastapi import APIRouter, Depends, Request, Response
 
 from backend.services.api.routers.proxy_error_mapping import map_upstream_http_error
 from backend.services.api.user_app.middleware.auth import get_optional_user
-from backend.shared.auth import get_internal_call_secret
 
 logger = logging.getLogger(__name__)
 
@@ -22,15 +21,7 @@ TRADE_BASE_URL = os.getenv("TRADE_SERVICE_URL", "http://trade-core:8002").rstrip
 
 router = APIRouter(tags=["Trade-Proxy"])
 
-_SKIP_HEADERS = {
-    "host",
-    "content-length",
-    "transfer-encoding",
-    # 客户端绝不允许自带身份/内部调用 Header — 否则可冒充任意用户
-    "x-user-id",
-    "x-tenant-id",
-    "x-internal-call",
-}
+_SKIP_HEADERS = {"host", "content-length", "transfer-encoding"}
 
 
 async def _do_proxy(request: Request, user: dict | None = None) -> Response:
@@ -39,8 +30,7 @@ async def _do_proxy(request: Request, user: dict | None = None) -> Response:
     # 兼容旧版前端：重写路径到 /api/v1
     if path.startswith("/internal/strategy") or \
        path.startswith("/simulation") or \
-       path.startswith("/real-trading") or \
-       path.startswith("/replay"):
+       path.startswith("/real-trading"):
         if not path.startswith("/api/v1"):
             path = f"/api/v1{path}"
 
@@ -49,7 +39,6 @@ async def _do_proxy(request: Request, user: dict | None = None) -> Response:
         url = f"{url}?{request.url.query}"
 
     headers = {k: v for k, v in request.headers.items() if k.lower() not in _SKIP_HEADERS}
-    headers["X-Internal-Call"] = get_internal_call_secret()
 
     # 显式注入身份
     if user:
@@ -151,12 +140,6 @@ async def _do_proxy(request: Request, user: dict | None = None) -> Response:
 @router.api_route("/real-trading", methods=["GET", "POST", "OPTIONS"], include_in_schema=False)
 @router.api_route(
     "/real-trading/{p:path}",
-    methods=["GET", "POST", "PUT", "DELETE", "PATCH", "OPTIONS"],
-    include_in_schema=False,
-)
-@router.api_route("/replay", methods=["GET", "POST", "OPTIONS"], include_in_schema=False)
-@router.api_route(
-    "/replay/{p:path}",
     methods=["GET", "POST", "PUT", "DELETE", "PATCH", "OPTIONS"],
     include_in_schema=False,
 )

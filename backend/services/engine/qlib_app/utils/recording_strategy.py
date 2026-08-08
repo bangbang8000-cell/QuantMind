@@ -55,6 +55,16 @@ _OUR_KWARGS = {
     "account_stop_loss",
     # 调仓周期（各策略自行 pop 使用，不传给 BaseStrategy）
     "rebalance_days",
+    # 策略自定义参数（由上层策略类自行 pop 消费，不传给 Qlib BaseStrategy）
+    "momentum_period",
+    "vol_lookback",
+    "min_score",
+    "short_topk",
+    "long_exposure",
+    "short_exposure",
+    "enable_short_selling",
+    "stop_loss",
+    "take_profit",
 }
 
 

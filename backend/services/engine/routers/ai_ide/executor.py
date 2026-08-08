@@ -362,9 +362,18 @@ def _smoke_cache_key(
 async def _cleanup_job_artifacts(job_info: dict[str, Any]) -> None:
     for key in ("file", "runner", "smoke"):
         path = job_info.get(key)
-        if path and os.path.exists(path):
+        if not path:
+            continue
+        if os.path.isfile(path):
             try:
                 os.remove(path)
+            except Exception:
+                pass
+        elif os.path.isdir(path):
+            # Docker 有时会把挂载点创建为目录，需要清理
+            try:
+                import shutil
+                shutil.rmtree(path, ignore_errors=True)
             except Exception:
                 pass
 
@@ -1083,11 +1092,31 @@ async def run_process(job_id: str, file_path: str):
         # 假设 API 容器内的 /app 对应 宿主机的 {HOST_PROJECT_PATH}
         rel_path = os.path.relpath(file_path, "/app")
         host_script_path = os.path.join(HOST_PROJECT_PATH, rel_path)
+        host_runner_path = os.path.join(HOST_PROJECT_PATH, os.path.relpath(runner_path, "/app"))
+
+        # Docker 挂载文件时，如果宿主机文件不存在或是目录，会挂载空目录，
+        # 导致容器内 Python 报 "can't find '__main__' module"
+        # 需要确保挂载点存在且是普通文件
+        # 注意：由于我们在容器内运行，文件路径检查必须用容器路径（/app/...）
+        # 因为 HOST_PROJECT_PATH 路径（如 /opt/quantmind）在容器内不可见
+        for container_path, label in [(file_path, "strategy.py"), (runner_path, "runner.py")]:
+            if os.path.isdir(container_path):
+                logger.warning(
+                    "Volume mount target is a directory (expected file): %s, removing and recreating", container_path
+                )
+                import shutil
+                shutil.rmtree(container_path, ignore_errors=True)
+            if not os.path.exists(container_path):
+                # 清理可能残留的空目录
+                parent = os.path.dirname(container_path)
+                os.makedirs(parent, exist_ok=True)
+            elif not os.path.isfile(container_path):
+                logger.error("Unexpected mount target type (not file): %s type=%s", container_path, os.path.basename(container_path))
 
         # 准备挂载 (策略代码 + Qlib 数据)
         volumes = {
             host_script_path: {"bind": "/app/strategy.py", "mode": "ro"},
-            os.path.join(HOST_PROJECT_PATH, os.path.relpath(runner_path, "/app")): {
+            host_runner_path: {
                 "bind": "/app/runner.py",
                 "mode": "ro",
             },
@@ -1116,6 +1145,13 @@ async def run_process(job_id: str, file_path: str):
         container_name = f"qm-ide-run-{job_id}"
 
         # 启动容器
+        # 启动前验证: 确保 runner.py 和 strategy.py 文件存在
+        # 使用容器路径进行验证（文件通过 volume mount 同步）
+        if not os.path.isfile(file_path):
+            raise RuntimeError(f"策略文件不存在: {file_path}")
+        if not os.path.isfile(runner_path):
+            raise RuntimeError(f"Runner 文件不存在: {runner_path}")
+
         container = await asyncio.to_thread(
             client.containers.run,
             image_ref,

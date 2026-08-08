@@ -146,7 +146,7 @@ export const StrategyManagementModule: React.FC = () => {
         const configs: any = {
             draft: { bg: 'bg-gray-100', text: 'text-gray-600', label: '草稿' },
             repository: { bg: 'bg-blue-100', text: 'text-blue-600', label: '仓库' },
-            live_trading: { bg: 'bg-green-100', text: 'text-green-600', label: '实盘中' },
+            live_trading: { bg: 'bg-green-100', text: 'text-green-600', label: '模拟中' },
             inactive: { bg: 'bg-slate-100', text: 'text-slate-400', label: '未激活' },
             archived: { bg: 'bg-rose-100', text: 'text-rose-400', label: '已归档' },
         };
@@ -166,7 +166,7 @@ export const StrategyManagementModule: React.FC = () => {
                     <div>
                         <p className="text-[11px] font-semibold text-gray-500 uppercase tracking-wider mb-1">Strategy Library</p>
                         <h2 className="text-lg font-bold text-slate-800 tracking-tight">策略管理</h2>
-                        <p className="text-sm text-gray-500">管理策略生命周期：草稿 → 仓库 → 实盘</p>
+                        <p className="text-sm text-gray-500">管理策略生命周期：草稿 → 仓库 → 模拟盘</p>
                     </div>
                     <button onClick={loadStrategies} className="p-2 hover:bg-gray-100 rounded-xl transition-colors">
                         <RefreshCw className={`w-5 h-5 text-gray-600 ${loading ? 'animate-spin' : ''}`} />
@@ -190,7 +190,7 @@ export const StrategyManagementModule: React.FC = () => {
                                 onClick={() => setFilter(f)}
                                 className={`px-4 py-2 rounded-xl text-sm font-semibold transition-colors ${filter === f ? 'bg-gradient-to-br from-blue-500 to-purple-500 text-white shadow-sm' : 'bg-gray-100 text-gray-600 hover:bg-gray-200'}`}
                             >
-                                {f === 'all' ? '全部' : f === 'draft' ? '草稿' : f === 'repository' ? '仓库' : '实盘'}
+                                {f === 'all' ? '全部' : f === 'draft' ? '草稿' : f === 'repository' ? '仓库' : '模拟'}
                             </button>
                         ))}
                     </div>

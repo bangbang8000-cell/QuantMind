@@ -5,15 +5,15 @@ from __future__ import annotations
 from fastapi import APIRouter, Depends, Query
 
 import backend.services.api.routers.research_service as _research_service
-from backend.services.api.routers.research_features_service import (
-    get_batch_full_features as get_batch_full_features_service,
-    get_symbol_full_features as get_symbol_full_features_service,
-)
 from backend.services.api.routers.research_schemas import (
     BatchFeaturesRequest,
     PoolAddRequest,
     SymbolsFeaturesRequest,
     WatchlistAddRequest,
+)
+from backend.services.api.routers.research_features_service import (
+    get_batch_full_features as get_batch_full_features_service,
+    get_symbol_full_features as get_symbol_full_features_service,
 )
 from backend.services.api.routers.research_service import (
     add_to_research_pool as add_to_research_pool_service,
@@ -50,12 +50,9 @@ async def _do_get_overview(  # noqa: SLF001
 
 
 @router.get("/models")
-async def get_available_models(
-    market: str | None = Query(None),
-    current_user: dict = Depends(get_current_user),
-):
+async def get_available_models(current_user: dict = Depends(get_current_user)):
     tid, uid = str(current_user["tenant_id"]), str(current_user["user_id"])
-    return await get_available_models_service(tid, uid, market=market)
+    return await get_available_models_service(tid, uid)
 
 
 @router.get("/runs")
@@ -70,11 +67,10 @@ async def get_research_overview(
     run_id: str | None = Query(None),
     limit: int = Query(50),
     offset: int = Query(0),
-    market: str | None = Query(None),
     current_user: dict = Depends(get_current_user),
 ):
     tid, uid = str(current_user["tenant_id"]), str(current_user["user_id"])
-    return await get_research_overview_service(tid, uid, model_id, run_id, limit, offset, market=market)
+    return await get_research_overview_service(tid, uid, model_id, run_id, limit, offset)
 
 
 @router.get("/universe")
@@ -160,17 +156,20 @@ async def get_stock_kline(symbol: str, days: int = Query(60), current_user: dict
 
 
 @router.get("/features/{symbol}")
-async def get_symbol_full_features(symbol: str, current_user: dict = Depends(get_current_user)):
-    """单只股票的 QuantDB 全量特征（估值/技术/因子/微观结构，按类别分组）。"""
+async def get_symbol_features(
+    symbol: str,
+    current_user: dict = Depends(get_current_user),
+):
+    """单只股票的全量 QuantDB 分类特征（估值/技术/动量/波动/…/微观结构）。"""
     _ = current_user
     return await get_symbol_full_features_service(symbol)
 
 
 @router.post("/batch-features")
-async def get_batch_full_features(
+async def get_batch_features(
     req: BatchFeaturesRequest,
     current_user: dict = Depends(get_current_user),
 ):
-    """批量股票的 QuantDB 全量特征（用于投研表格增强）。"""
+    """批量 QuantDB 特征：fields 传入时走投影模式（仅返回指定字段），否则返回全量。"""
     _ = current_user
     return await get_batch_full_features_service(req.symbols, req.fields)

@@ -17,8 +17,12 @@ from .data_source import DataSourceAdapter
 logger = logging.getLogger(__name__)
 
 # 同步 eltdx 需要在线程池中执行
-from eltdx import TdxClient, KlinePeriod
-from eltdx.protocol.unit import is_a_share_entry
+from eltdx import TdxClient
+
+
+def _is_a_share_entry(full_code: str) -> bool:
+    """Check if a full_code (e.g. SH600036) is A-share (SH/SZ/BJ)."""
+    return full_code[:2].upper() in ("SH", "SZ", "BJ")
 
 
 class EltdxDataSource(DataSourceAdapter):
@@ -272,7 +276,7 @@ class EltdxDataSource(DataSourceAdapter):
                     None, lambda e=ex: client.get_codes_all(e)
                 )
                 for item in items:
-                    if is_a_share_entry(item.full_code):
+                    if __is_a_share_entry(item.full_code):
                         result.append({
                             "symbol": item.full_code,
                             "code": item.code,

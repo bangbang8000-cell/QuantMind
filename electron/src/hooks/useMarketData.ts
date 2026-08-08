@@ -20,7 +20,7 @@ export interface UseMarketDataReturn {
 export const useMarketData = (options: UseMarketDataOptions = {}): UseMarketDataReturn => {
   const {
     autoRefresh = true,
-    refreshInterval = 10000, // 10秒
+    refreshInterval = 5000, // 5秒
     mockData = false,
     market = 'CN',
   } = options;

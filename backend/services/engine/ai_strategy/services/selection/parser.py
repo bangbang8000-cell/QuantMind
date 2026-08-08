@@ -15,29 +15,12 @@ logger = logging.getLogger(__name__)
 
 class IntentParser:
     def __init__(self):
-        # 支持多种 LLM 配置（优先 DashScope，回退到 AI_IDE 通用配置）
-        api_key = (
-            os.getenv("DASHSCOPE_API_KEY")
-            or os.getenv("QWEN_API_KEY")
-            or os.getenv("AI_IDE_LLM_API_KEY")
-        )
-        base_url = (
-            os.getenv("DASHSCOPE_BASE_URL")
-            or os.getenv("AI_IDE_LLM_BASE_URL")
-            or "https://dashscope.aliyuncs.com/compatible-mode/v1"
-        )
-        model = (
-            os.getenv("AI_STRATEGY_LLM_MODEL")
-            or os.getenv("AI_IDE_LLM_MODEL")
-            or "qwen3.6-flash"
-        )
-
-        if not api_key:
-            logger.warning("No LLM API key configured for stock selection parser. "
-                           "Set DASHSCOPE_API_KEY, QWEN_API_KEY, or AI_IDE_LLM_API_KEY.")
+        # 兼容 ai_strategy 的配置读取方式
+        api_key = os.getenv("DASHSCOPE_API_KEY") or os.getenv("QWEN_API_KEY")
+        base_url = os.getenv("DASHSCOPE_BASE_URL") or "https://dashscope.aliyuncs.com/compatible-mode/v1"
 
         self.client = AsyncOpenAI(api_key=api_key, base_url=base_url)
-        self.model = model
+        self.model = "qwen3.6-flash"
 
     async def parse(self, query: str) -> dict[str, Any]:
         try:

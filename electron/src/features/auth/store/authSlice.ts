@@ -101,8 +101,18 @@ export const initializeAuth = createAsyncThunk(
           };
         } catch (error) {
           console.error('获取用户信息失败（含超时）:', error);
-          // 超时或请求失败时清除 token，避免进入 isAuthenticated=true 但 user=null 的卡死状态
-          authService.clearTokens();
+          // 仅 401/403 清除 token（已在 getCurrentUser 内部处理），网络错误/超时不丢失登录态
+          const status = (error as any)?.response?.status;
+          if (status === 401 || status === 403) {
+            authService.clearTokens();
+          } else {
+            // 网络故障/超时：保留令牌，让 ProtectedRoute 靠 hasToken 兜底
+            const token = authService.getAccessToken();
+            const user = authService.getStoredUser();
+            if (token && user) {
+              return { user, token };
+            }
+          }
           return { user: null, token: null };
         }
       }

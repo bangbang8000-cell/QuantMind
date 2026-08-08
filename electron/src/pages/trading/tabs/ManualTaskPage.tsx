@@ -563,7 +563,7 @@ const ManualTaskPage: React.FC<ManualTaskPageProps> = ({ tradingMode, onBack }) 
 
             {!isRealMode ? (
                 <div className="rounded-2xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-700">
-                    引导式手动任务首版仅支持实盘模式，请切换到实盘后继续。
+                    引导式手动任务首版仅支持模拟模式，请切换到模拟后继续。
                 </div>
             ) : null}
 

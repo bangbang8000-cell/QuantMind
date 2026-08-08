@@ -123,23 +123,6 @@ def get_strategy_config():
 3. `reset` 方法必须兼容可变参数：`def reset(self, *args, **kwargs)`
 4. 禁用：os, sys, subprocess, requests, socket 等危险模块
 """
-        multi_market_info = """
-## 多市场数据支持
-
-平台已支持以下市场的股票/资产数据，用户可通过仪表盘顶部的市场切换器选择：
-
-| 市场 | 代码 | 数据表 | 股票/资产数 | 交易日历 |
-|------|------|--------|------------|----------|
-| A股（沪深） | CN | stock_daily_latest | ~5000只 | SSE（上交所） |
-| 港股 | HK | stock_daily_latest_hk | ~137只 | HKEX（港交所） |
-| 美股 | US | stock_daily_latest_us | ~488只 | NYSE（纽交所） |
-| 加密货币 | CRYPTO | stock_daily_latest_crypto | ~20个主流币种 | 24/7（无休） |
-
-- 所有策略生成、回测、模型训练、推理均会根据当前选择的市场自动适配对应的数据源和交易日历。
-- 不同市场的股票代码格式不同：A股用 SH/SZ 前缀，港股用纯数字代码，美股用 ticker 符号。
-- 当用户询问关于美股、港股、加密货币的问题时，应确认当前市场选择并使用对应市场数据回答。
-"""
-
         return (
             "你是 QuantMind 的智能助手，用自然、友好的方式与用户交流。\n\n"
             "## 核心对话规则（必须严格遵守）\n"
@@ -154,7 +137,6 @@ def get_strategy_config():
             "- 用户说'你好'、'在吗'、'你是谁'等问候语时，只需简单问候回应\n"
             "- 只有当用户明确说'帮我写一个...策略'、'修改代码'、'回测'等技术指令时，才使用下面的技术规范\n"
             "- 下面的技术文档仅供参考，不要在用户未要求时主动使用\n\n"
-            f"{multi_market_info}\n"
             f"{strategy_classes}\n\n"
             "FORMATTING RULES:\n"
             "1. 使用标准 Markdown 输出。\n"
@@ -163,113 +145,10 @@ def get_strategy_config():
             "3. 新增代码使用 ```python ... ``` 代码块。"
         )
 
-    # Per-market strategy guidance notes (injected into system prompt for non-CN markets)
-    # provider_uri 通过 qlib_paths 动态解析，此处仅作提示文本
-    _MARKET_STRATEGY_NOTES = {
-        "HK": (
-            "## 港股策略注意事项\n"
-            "- Qlib init: provider_uri 通过 qlib_paths 解析（默认 /app/db/qlib_data/hk_data）, region='hk'\n"
-            "- 股票代码格式：纯数字（如 '00700'），不含前缀\n"
-            "- 基准指数：HSTECH（恒生科技指数）\n"
-            "- 无涨跌停限制，但有市场波动调节机制(VCM)\n"
-            "- 印花税：卖出 0.13%\n"
-            "- f_ 过滤字段与 A 股基本一致，但无 ST 概念\n"
-        ),
-        "US": (
-            "## 美股策略注意事项\n"
-            "- Qlib init: provider_uri 通过 qlib_paths 解析（默认 /app/db/qlib_data/us_data）, region='us'\n"
-            "- 股票代码格式：Ticker 符号（如 'AAPL', 'MSFT'）\n"
-            "- 基准指数：SPY（标普500 ETF）\n"
-            "- T+0 交易，无涨跌停限制\n"
-            "- 佣金结构不同，无印花税\n"
-            "- 部分 f_ 字段可能不适用（如 is_st, idx_hs300）\n"
-        ),
-        "CRYPTO": (
-            "## 加密货币策略注意事项\n"
-            "- Qlib init: provider_uri 通过 qlib_paths 解析（默认 /app/db/qlib_data/crypto_data）, region='crypto'\n"
-            "- 资产代码格式：如 'BTC', 'ETH'\n"
-            "- 基准：BTC\n"
-            "- 7x24 交易，无交易日历限制\n"
-            "- 波动率极高，建议调整止损阈值\n"
-            "- 无基本面数据（pe_ttm, pb, roe 等 f_ 字段不适用）\n"
-        ),
-    }
-
-    # Strategy Lab SDK 规则：当用户从策略实验室发起对话时注入
-    _STRATEGY_LAB_SDK_PROMPT = """\
-## 策略实验室 (Strategy Lab) SDK 规范
-
-用户当前在**策略实验室**编辑器中，不是在 AI-IDE 的 Qlib 策略页面。
-你生成的代码必须遵循 Strategy Lab SDK 格式，而非 Qlib 策略类格式。
-
-### 必需结构
-每个策略脚本**必须**包含以下结构：
-
-```python
-import pandas as pd
-import numpy as np
-
-def setup(ctx):
-    \"\"\"初始化策略 — 必须定义，否则 AST 检查会拒绝。\"\"\"
-    ctx.universe = "csi300"   # 股票池: csi300, csi500, all_a, 或 list[str]
-    ctx.start = "2024-01-01"
-    ctx.end = "2024-12-31"
-    ctx.cash = 1_000_000
-
-def on_bar(ctx):
-    \"\"\"每日回调 — 核心策略逻辑写在这里。\"\"\"
-    # 读取今日持仓和信号
-    positions = ctx.positions
-    score = ctx.score          # dict[str, float] — 模型预测分数
-    bar = ctx.bar              # 当日行情数据
-
-    # 买入信号最高的 N 只
-    if score:
-        top10 = sorted(score, key=score.get, reverse=True)[:10]
-        for sym in top10:
-            if sym not in positions:
-                ctx.buy(sym, ratio=0.1)
-
-        # 卖出不在 top10 的持仓
-        for sym in list(positions):
-            if sym not in top10:
-                ctx.sell(sym)
-
-def on_universe(ctx):
-    \"\"\"可选 — 每月调仓日重新选股。\"\"\"
-    pass
-
-def on_finish(ctx):
-    \"\"\"可选 — 回测结束回调。\"\"\"
-    pass
-```
-
-### 关键规则
-1. **必须定义 `def setup(ctx):`** — 这是 AST 检查的硬性要求，缺少会报 E_HOOK_MISSING 错误
-2. **必须定义 `def on_bar(ctx):`** — 策略核心逻辑
-3. **不要**使用 Qlib 策略类（RedisTopkStrategy 等），那不是 Strategy Lab 的格式
-4. **不要**定义 `get_strategy_config()` — 那是 AI-IDE 的格式
-5. **允许 import 的模块**: numpy, pandas, scipy, math, statistics, datetime, json, os, pathlib, logging, copy, hashlib, talib, qlib, collections, itertools, functools, re, typing, enum, dataclasses
-6. **禁止 import**: sys, subprocess, socket, requests, http, asyncio, threading, multiprocessing, importlib, ctypes
-7. **禁止调用**: exec, eval, compile, open(写模式), __import__
-
-### ctx 对象 API
-- `ctx.universe` — 股票池 (str 或 list[str])
-- `ctx.start / ctx.end` — 回测日期
-- `ctx.cash` — 初始资金
-- `ctx.positions` — 当前持仓 dict
-- `ctx.score` — 当日模型预测分数 dict[str, float]
-- `ctx.bar` — 当日行情 DataFrame
-- `ctx.buy(symbol, ratio=0.05)` — 买入
-- `ctx.sell(symbol, ratio=1.0)` — 卖出
-- `ctx.log(msg)` — 输出日志
-"""
-
     def _get_system_prompt(self, user_input: str, context: dict) -> str:
         """根据用户输入动态构建 system prompt
 
         仅在用户提出技术问题时才注入知识库文档。
-        非 CN 市场时追加市场特定策略指导。
         """
         # 判断是否是技术性问题
         is_technical = self._is_technical_query(user_input, context)
@@ -278,24 +157,10 @@ def on_finish(ctx):
             # 技术性问题：注入知识库
             if self._kb_context_cached is None:
                 self._kb_context_cached = self.kb.get_context_summary()
-            base = f"{self._system_prompt_base}\n\n## 技术参考文档\n{self._kb_context_cached}"
+            return f"{self._system_prompt_base}\n\n## 技术参考文档\n{self._kb_context_cached}"
         else:
             # 非技术性问题：不注入知识库
-            base = self._system_prompt_base
-
-        # 追加市场特定策略指导
-        market = str(context.get("market", "") or "").strip().upper()
-        if market and market != "CN":
-            notes = self._MARKET_STRATEGY_NOTES.get(market, "")
-            if notes:
-                base += f"\n\n{notes}"
-
-        # Strategy Lab SDK 规则：当用户来自策略实验室时，注入 SDK 规范
-        source = str(context.get("source", "") or "").strip().lower()
-        if source == "strategy_lab":
-            base += "\n\n" + self._STRATEGY_LAB_SDK_PROMPT
-
-        return base
+            return self._system_prompt_base
 
     def _is_technical_query(self, user_input: str, context: dict) -> bool:
         """判断用户输入是否是技术性查询"""
@@ -458,12 +323,7 @@ def on_finish(ctx):
         error_msg = context.get("error_msg", "")
         selection = context.get("selection", "")
         file_path = str(context.get("file_path", "") or "").strip()
-        market = str(context.get("market", "") or "").strip().upper()
-        market_name = str(context.get("market_name", "") or "").strip()
         prompt = f"User Request: {user_input}\n"
-        if market:
-            prompt += f"\n[当前市场]: {market}（{market_name}）\n"
-            prompt += f"请注意：用户当前选择了{market_name}市场，所有策略、回测、数据查询均应使用该市场的数据和交易日历。\n"
         if assistant_rules:
             prompt += f"\n[Development Rules]:\n{assistant_rules}\n"
         if file_path:
@@ -482,8 +342,7 @@ def on_finish(ctx):
 
         # 注入错误修复指导
         if error_msg:
-            market = str(context.get("market", "") or "CN").strip().upper()
-            error_injection = self.skill_engine.get_error_injection(error_msg, market=market)
+            error_injection = self.skill_engine.get_error_injection(error_msg)
             if error_injection:
                 prompt += error_injection
 
@@ -515,16 +374,16 @@ async def chat_completions(request: Request, item: ChatRequest):
         os.getenv("AI_IDE_LLM_BASE_URL")
         or os.getenv("AI_IDE_BASE_URL")
         or os.getenv("OPENAI_API_BASE")
-        or "https://dashscope.aliyuncs.com/compatible-mode/v1"
+        or "https://api.deepseek.com"
     )
-    model = os.getenv("AI_IDE_LLM_MODEL") or os.getenv("AI_IDE_MODEL") or "qwen-max"
+    model = os.getenv("AI_IDE_LLM_MODEL") or os.getenv("AI_IDE_MODEL") or "deepseek-v4-pro"
     api_key = (
         os.getenv("AI_IDE_LLM_API_KEY")
         or os.getenv("AI_IDE_API_KEY")
         or os.getenv("OPENAI_API_KEY", "")
     )
 
-    # 2. 尝试从数据库获取用户私有配置 (个人 Key/Model/BaseURL 优先级最高)
+    # 2. 尝试从数据库获取用户私有 API Key (个人 Key 优先级最高)
     user_context = getattr(request.state, "user", None)
     if user_context:
         user_id = user_context.get("user_id")
@@ -532,20 +391,15 @@ async def chat_completions(request: Request, item: ChatRequest):
             from sqlalchemy import text
             async with get_session(read_only=True) as session:
                 result = await session.execute(
-                    text("SELECT COALESCE(NULLIF(ai_ide_api_key, ''), api_key) AS key, ai_ide_model, ai_ide_base_url FROM user_profiles WHERE user_id = :user_id"),
+                    text("SELECT api_key FROM user_profiles WHERE user_id = :user_id"),
                     {"user_id": user_id}
                 )
                 row = result.fetchone()
-                if row:
-                    if row[0]:
-                        api_key = row[0]
-                    if row[1]:
-                        model = row[1]
-                    if row[2]:
-                        base_url = row[2]
+                if row and row[0]:
+                    api_key = row[0]
         except Exception as e:
             logger.warning(
-                f"Could not fetch individual config for user {user_id}: {e}"
+                f"Could not fetch individual API key for user {user_id}: {e}"
             )
 
     # 获取项目根目录，以便读取文档

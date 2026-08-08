@@ -113,7 +113,7 @@ const SettingsCenter: React.FC<SettingsCenterProps> = ({ userId, isActive }) => 
       <div className="mb-4 pb-3 border-b border-gray-200">
         <h3 className="text-xl font-bold text-gray-800 flex items-center">
           <Settings className="mr-3 text-blue-600" size={24} />
-          模拟实盘设置
+          模拟交易设置
         </h3>
         <p className="text-xs text-gray-500 mt-1">
           管理接入凭证与 API 密钥。

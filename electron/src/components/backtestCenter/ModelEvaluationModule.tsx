@@ -860,7 +860,7 @@ export const ModelEvaluationModule: React.FC<ModelEvaluationModuleProps> = ({ in
           </Card>
 
           {/* 交易成本 */}
-          <Card className="shadow-sm" size="small" title="交易成本影响（A股实盘摩擦）">
+          <Card className="shadow-sm" size="small" title="交易成本影响（A股模拟摩擦）">
             <div className="flex flex-wrap gap-6">
               <Statistic
                 title="单边换手率"
@@ -923,7 +923,7 @@ export const ModelEvaluationModule: React.FC<ModelEvaluationModuleProps> = ({ in
               type="info"
               showIcon
               className="mb-4"
-              message="以下多空指标为理论值，A股实盘不可直接复制"
+              message="以下多空指标为理论值，A股模拟盘不可直接复制"
               description="做空A股需融券，券源仅约 1000-1600 只且受限，融券成本约 8-10%/年。请以上方「多头超额(净)」作为决策依据。"
             />
             <div className="flex flex-wrap gap-6">

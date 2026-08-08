@@ -808,8 +808,10 @@ class AuthService {
       if (!(suppressUnauthorizedLog && status === 401)) {
         console.error('获取当前用户失败:', error);
       }
-      // 如果获取失败，可能令牌已过期，清除本地存储
-      this.clearTokens();
+      // Only clear tokens on auth errors (401/403), not network/timeout issues
+      if (status === 401 || status === 403) {
+        this.clearTokens();
+      }
       return null;
     }
   }

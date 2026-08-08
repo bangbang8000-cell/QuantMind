@@ -506,17 +506,17 @@ const FILTER_SECTIONS: FilterSectionConfig[] = [
     key: 'momentum',
     label: '动量与趋势',
     fields: [
-      { key: 'return1dRange', label: '1日收益 (%)', suffix: '%', step: 0.1 },
-      { key: 'return3dRange', label: '3日收益 (%)', suffix: '%', step: 0.1 },
-      { key: 'return5dRange', label: '5日收益 (%)', suffix: '%', step: 0.1 },
+      { key: 'return1dRange', label: '1日收益 (%)', suffix: '%', step: 0.1, quickTagGroup: 'return1d' },
+      { key: 'return3dRange', label: '3日收益 (%)', suffix: '%', step: 0.1, quickTagGroup: 'return3d' },
+      { key: 'return5dRange', label: '5日收益 (%)', suffix: '%', step: 0.1, quickTagGroup: 'return5d' },
       // 10/20/60 日收益无可用数据源：technical_indicators.return_* 自 2018 年起全为 NaN，
       // l1_factors.mom_ret_10d/20d/60d 约 35% 的值失真（|涨幅|>100%），不足以支撑筛选。
       // 中长期强弱改由本节末尾的”120日动量”表达。
-      { key: 'maGap5Range', label: '5日乖离率 (%)', suffix: '%', step: 0.1 },
+      { key: 'maGap5Range', label: '5日乖离率 (%)', suffix: '%', step: 0.1, quickTagGroup: 'maGap' },
       { key: 'maGap20Range', label: '20日乖离率 (%)', suffix: '%', step: 0.1 },
       { key: 'rsiRange', label: 'RSI (6日)', step: 1, quickTagGroup: 'rsi' },
-      { key: 'kdjKRange', label: 'KDJ-K', step: 1 },
-      { key: 'macdHistRange', label: 'MACD 柱', step: 0.01 },
+      { key: 'kdjKRange', label: 'KDJ-K', step: 1, quickTagGroup: 'kdjK' },
+      { key: 'macdHistRange', label: 'MACD 柱', step: 0.01, quickTagGroup: 'macdHist' },
       { key: 'breakout20dRange', label: '120日动量', step: 0.01 },
     ],
   },
@@ -525,9 +525,9 @@ const FILTER_SECTIONS: FilterSectionConfig[] = [
     label: '波动率',
     fields: [
       { key: 'volStd5Range', label: '5日波动率', step: 0.001 },
-      { key: 'volStd20Range', label: '20日波动率', step: 0.001 },
+      { key: 'volStd20Range', label: '20日波动率', step: 0.001, quickTagGroup: 'volStd20' },
       { key: 'volStd60Range', label: '60日波动率', step: 0.001 },
-      { key: 'atr14Range', label: 'ATR(14)', step: 0.01 },
+      { key: 'atr14Range', label: 'ATR(14)', step: 0.01, quickTagGroup: 'atr14' },
       { key: 'volDownside20Range', label: '涨跌波动比', step: 0.001 },
       { key: 'volUpside20Range', label: '波动偏度', step: 0.1 },
       { key: 'volRealizedRvRange', label: '已实现波动率', step: 0.001 },
@@ -548,8 +548,8 @@ const FILTER_SECTIONS: FilterSectionConfig[] = [
     key: 'fundFlow',
     label: '资金流',
     fields: [
-      { key: 'mainFlowRange', label: '主力净流入 (百万)', step: 10 },
-      { key: 'flowNetAmountRange', label: '净流入 (百万)', step: 10 },
+      { key: 'mainFlowRange', label: '主力净流入 (百万)', step: 10, quickTagGroup: 'mainFlow' },
+      { key: 'flowNetAmountRange', label: '净流入 (百万)', step: 10, quickTagGroup: 'mainFlow' },
       { key: 'flowLargeNetRange', label: '大单净额 (百万)', step: 10 },
       { key: 'flowImbalanceRange', label: '买卖失衡', step: 0.01 },
       { key: 'flowMfiRange', label: '资金 MFI', step: 1 },
@@ -559,7 +559,7 @@ const FILTER_SECTIONS: FilterSectionConfig[] = [
     key: 'style',
     label: '风格因子',
     fields: [
-      { key: 'beta20Range', label: 'Beta (20日)', step: 0.1 },
+      { key: 'beta20Range', label: 'Beta (20日)', step: 0.1, quickTagGroup: 'beta20' },
       { key: 'beta60Range', label: 'Beta (60日)', step: 0.1 },
       { key: 'idioVol20Range', label: '特质波动率', step: 0.001 },
     ],
@@ -588,8 +588,8 @@ const FILTER_SECTIONS: FilterSectionConfig[] = [
     fields: [
       { key: 'peRange', label: 'PE (TTM)', step: 1, quickTagGroup: 'pe' },
       { key: 'roeRange', label: 'ROE (%)', suffix: '%', step: 0.1, quickTagGroup: 'roe' },
-      { key: 'profitGrowthRange', label: '利润增速 (%)', suffix: '%', step: 0.1 },
-      { key: 'pbRange', label: 'PB', step: 0.1 },
+      { key: 'profitGrowthRange', label: '利润增速 (%)', suffix: '%', step: 0.1, quickTagGroup: 'profitGrowth' },
+      { key: 'pbRange', label: 'PB', step: 0.1, quickTagGroup: 'pb' },
       { key: 'psTtmRange', label: 'PS (TTM)', step: 0.1 },
       { key: 'instOwnershipRange', label: '机构持仓 (%)', suffix: '%', step: 0.1 },
       { key: 'listedDaysRange', label: '上市天数', suffix: '天' },
@@ -843,6 +843,66 @@ const QUICK_TAGS: Record<string, QuickTagConfig[]> = {
     { label: '中性', filterKey: 'rsiRange', range: [30, 70] },
     { label: '超买', filterKey: 'rsiRange', range: [70, 100] },
   ],
+  return1d: [
+    { label: '大涨', filterKey: 'return1dRange', range: [3, 100] },
+    { label: '小涨', filterKey: 'return1dRange', range: [1, 100] },
+    { label: '跌', filterKey: 'return1dRange', range: [-100, 0] },
+    { label: '大跌', filterKey: 'return1dRange', range: [-100, -3] },
+  ],
+  return3d: [
+    { label: '强势', filterKey: 'return3dRange', range: [5, 100] },
+    { label: '温和', filterKey: 'return3dRange', range: [2, 100] },
+    { label: '走弱', filterKey: 'return3dRange', range: [-100, 0] },
+  ],
+  return5d: [
+    { label: '强势', filterKey: 'return5dRange', range: [8, 100] },
+    { label: '温和', filterKey: 'return5dRange', range: [3, 100] },
+    { label: '走弱', filterKey: 'return5dRange', range: [-100, -2] },
+  ],
+  maGap: [
+    { label: '超跌', filterKey: 'maGap5Range', range: [-100, -5] },
+    { label: '贴线', filterKey: 'maGap5Range', range: [-3, 3] },
+    { label: '乖离放大', filterKey: 'maGap5Range', range: [5, 100] },
+  ],
+  volStd20: [
+    { label: '低波动', filterKey: 'volStd20Range', range: [0, 0.02] },
+    { label: '中波动', filterKey: 'volStd20Range', range: [0.02, 0.05] },
+    { label: '高波动', filterKey: 'volStd20Range', range: [0.05, 100] },
+  ],
+  mainFlow: [
+    { label: '资金净流入', filterKey: 'mainFlowRange', range: [500, 1000000] },
+    { label: '大幅流入', filterKey: 'mainFlowRange', range: [2000, 1000000] },
+    { label: '资金净流出', filterKey: 'mainFlowRange', range: [-1000000, -500] },
+  ],
+  profitGrowth: [
+    { label: '高增长', filterKey: 'profitGrowthRange', range: [30, 100000] },
+    { label: '正增长', filterKey: 'profitGrowthRange', range: [0, 100000] },
+    { label: '负增长', filterKey: 'profitGrowthRange', range: [-100000, 0] },
+  ],
+  beta20: [
+    { label: '防守(低Beta)', filterKey: 'beta20Range', range: [-3, 0.8] },
+    { label: '中性', filterKey: 'beta20Range', range: [0.8, 1.2] },
+    { label: '进攻(高Beta)', filterKey: 'beta20Range', range: [1.2, 3] },
+  ],
+  pb: [
+    { label: '低PB', filterKey: 'pbRange', range: [0, 1.5] },
+    { label: '中PB', filterKey: 'pbRange', range: [1.5, 3] },
+    { label: '高PB', filterKey: 'pbRange', range: [3, 100000] },
+  ],
+  atr14: [
+    { label: '低ATR', filterKey: 'atr14Range', range: [0, 0.5] },
+    { label: '中ATR', filterKey: 'atr14Range', range: [0.5, 1.5] },
+    { label: '高ATR', filterKey: 'atr14Range', range: [1.5, 1000] },
+  ],
+  kdjK: [
+    { label: '超卖', filterKey: 'kdjKRange', range: [0, 20] },
+    { label: '中性', filterKey: 'kdjKRange', range: [20, 80] },
+    { label: '超买', filterKey: 'kdjKRange', range: [80, 100] },
+  ],
+  macdHist: [
+    { label: '红柱(多头)', filterKey: 'macdHistRange', range: [0.01, 100] },
+    { label: '绿柱(空头)', filterKey: 'macdHistRange', range: [-100, -0.01] },
+  ],
 };
 
 /** 判断某个快捷标签是否处于激活状态（当前值与标签 range 完全一致） */
@@ -1046,6 +1106,11 @@ export const ResearchPlatformPage: React.FC = () => {
   const [selectedStockKey, setSelectedStockKey] = React.useState<string | null>(null);
   const [klineData, setKlineData] = React.useState<any[]>([]);
   const [klineLoading, setKlineLoading] = React.useState<boolean>(false);
+  // ---- K线参考线：模式 + 数值 ----
+  type RefLineMode = 'off' | 'above' | 'below' | 'range';
+  const [refLineMode, setRefLineMode] = React.useState<RefLineMode>('off');
+  const [refLineValue, setRefLineValue] = React.useState<number | null>(null);
+  const [refLineValue2, setRefLineValue2] = React.useState<number | null>(null);
   const [riskScore, setRiskScore] = React.useState<import('../services/researchService').RiskScoreData | null>(null);
   const [riskLoading, setRiskLoading] = React.useState<boolean>(false);
 
@@ -1938,6 +2003,22 @@ export const ResearchPlatformPage: React.FC = () => {
   }, [detailModalOpen, selectedStock?.code, inferenceDate]);
 
   // K 线图表配置
+  // 参考线过滤：根据模式决定每根 K 线是否命中条件（组件作用域，供 useMemo 与 JSX 复用）
+  const refActive = refLineMode !== 'off' && typeof refLineValue === 'number' && Number.isFinite(refLineValue);
+  const refMatches = React.useCallback((d: any): boolean => {
+    if (!refActive) return false;
+    const close = Number(d?.close);
+    if (!Number.isFinite(close)) return false;
+    if (refLineMode === 'above') return close >= refLineValue!;
+    if (refLineMode === 'below') return close <= refLineValue!;
+    if (refLineMode === 'range' && typeof refLineValue2 === 'number' && Number.isFinite(refLineValue2)) {
+      const lo = Math.min(refLineValue!, refLineValue2);
+      const hi = Math.max(refLineValue!, refLineValue2);
+      return close >= lo && close <= hi;
+    }
+    return false;
+  }, [refActive, refLineMode, refLineValue, refLineValue2]);
+
   const klineOption = React.useMemo(() => {
     if (!klineData.length) return null;
 
@@ -1992,6 +2073,60 @@ export const ResearchPlatformPage: React.FC = () => {
       if (totalPoints <= 0) return { start: 0, end: 100 };
       return { start: (startIdx / totalPoints) * 100, end: (endIdx / totalPoints) * 100 };
     })();
+
+    // 参考线 markLine 数据（水平价格线）
+    const refMarkLine = refActive
+      ? {
+          symbol: ['none', 'none'],
+          silent: true,
+          data: [
+            {
+              yAxis: refLineValue!,
+              label: {
+                show: true,
+                position: 'end',
+                formatter: `${refLineValue!.toFixed(2)}`,
+                backgroundColor: '#f59e0b',
+                color: '#fff',
+                padding: [2, 4],
+                borderRadius: 4,
+                fontSize: 10,
+                fontWeight: 'bold',
+              },
+              lineStyle: { color: '#f59e0b', type: 'dashed', width: 1.5, opacity: 0.8 },
+            },
+            ...(refLineMode === 'range' && typeof refLineValue2 === 'number' && Number.isFinite(refLineValue2)
+              ? [{
+                  yAxis: refLineValue2,
+                  label: {
+                    show: true,
+                    position: 'end',
+                    formatter: `${refLineValue2.toFixed(2)}`,
+                    backgroundColor: '#f59e0b',
+                    color: '#fff',
+                    padding: [2, 4],
+                    borderRadius: 4,
+                    fontSize: 10,
+                    fontWeight: 'bold',
+                  },
+                  lineStyle: { color: '#f59e0b', type: 'dashed', width: 1.5, opacity: 0.8 },
+                }]
+              : []),
+          ],
+        }
+      : undefined;
+
+    // 参考线 markArea 数据（区间高亮底色）
+    const refMarkArea =
+      refActive && refLineMode === 'range' && typeof refLineValue2 === 'number' && Number.isFinite(refLineValue2)
+        ? {
+            silent: true,
+            data: [[
+              { yAxis: Math.min(refLineValue!, refLineValue2), itemStyle: { color: 'rgba(245,158,11,0.08)' } },
+              { yAxis: Math.max(refLineValue!, refLineValue2) },
+            ]],
+          }
+        : undefined;
 
     return {
       animation: false,
@@ -2050,25 +2185,50 @@ export const ResearchPlatformPage: React.FC = () => {
           type: 'candlestick',
           data: ohlc,
           barMaxWidth: 20,
-          itemStyle: { color: '#ef4444', color0: '#22c55e', borderColor: '#ef4444', borderColor0: '#22c55e' },
-          markLine: predictionDate ? {
-            symbol: ['none', 'none'],
-            data: [{
-              xAxis: predictionDate,
-              label: {
-                show: true,
-                position: 'end',
-                formatter: '预测日期',
-                backgroundColor: '#3b82f6',
-                color: '#fff',
-                padding: [2, 4],
-                borderRadius: 4,
-                fontSize: 10,
-                fontWeight: 'bold',
-              },
-              lineStyle: { color: '#3b82f6', type: 'dashed', width: 2, opacity: 0.8 },
-            }],
-          } : undefined,
+          itemStyle: {
+            color: (params: any) => {
+              const d = klineData[params.dataIndex];
+              if (refMatches(d)) return '#f59e0b';
+              return d?.close >= d?.open ? '#ef4444' : '#22c55e';
+            },
+            color0: (params: any) => {
+              const d = klineData[params.dataIndex];
+              if (refMatches(d)) return '#f59e0b';
+              return d?.close >= d?.open ? '#ef4444' : '#22c55e';
+            },
+            borderColor: (params: any) => {
+              const d = klineData[params.dataIndex];
+              if (refMatches(d)) return '#f59e0b';
+              return d?.close >= d?.open ? '#ef4444' : '#22c55e';
+            },
+            borderColor0: (params: any) => {
+              const d = klineData[params.dataIndex];
+              if (refMatches(d)) return '#f59e0b';
+              return d?.close >= d?.open ? '#ef4444' : '#22c55e';
+            },
+          },
+          markLine: {
+            ...(predictionDate ? {
+              symbol: ['none', 'none'],
+              data: [{
+                xAxis: predictionDate,
+                label: {
+                  show: true,
+                  position: 'end',
+                  formatter: '预测日期',
+                  backgroundColor: '#3b82f6',
+                  color: '#fff',
+                  padding: [2, 4],
+                  borderRadius: 4,
+                  fontSize: 10,
+                  fontWeight: 'bold',
+                },
+                lineStyle: { color: '#3b82f6', type: 'dashed', width: 2, opacity: 0.8 },
+              }],
+            } : {}),
+            ...(refMarkLine ? { silent: refMarkLine.silent, symbol: refMarkLine.symbol, data: refMarkLine.data } : {}),
+          },
+          markArea: refMarkArea,
         },
         {
           name: 'MA5',
@@ -2104,7 +2264,7 @@ export const ResearchPlatformPage: React.FC = () => {
         },
       ],
     };
-  }, [klineData, selectedRunId]);
+  }, [klineData, selectedRunId, refActive, refMatches, refLineValue, refLineValue2, refLineMode]);
 
   /* ------------------------------ 概览统计 ------------------------------ */
 
@@ -3114,7 +3274,60 @@ export const ResearchPlatformPage: React.FC = () => {
             <RiskScoreCard data={riskScore} loading={riskLoading} requestedDate={inferenceDate} />
 
             <div className="mt-2 rounded-2xl border border-slate-100 bg-white p-4 shadow-sm">
-              <div className="mb-2 text-[10px] font-black uppercase tracking-wider text-slate-500">K 线走势 (近 120 日)</div>
+              <div className="mb-2 flex items-center justify-between gap-2">
+                <div className="text-[10px] font-black uppercase tracking-wider text-slate-500">K 线走势 (近 120 日)</div>
+                {/* 参考线控制 */}
+                <div className="flex items-center gap-2">
+                  <Segmented
+                    size="small"
+                    value={refLineMode}
+                    onChange={(v) => setRefLineMode(v as RefLineMode)}
+                    options={[
+                      { label: '关闭', value: 'off' },
+                      { label: '高于', value: 'above' },
+                      { label: '低于', value: 'below' },
+                      { label: '区间', value: 'range' },
+                    ]}
+                    className="!text-[10px]"
+                  />
+                  {(refLineMode === 'above' || refLineMode === 'below') && (
+                    <InputNumber
+                      size="small"
+                      placeholder="价格"
+                      value={refLineValue}
+                      onChange={(v) => setRefLineValue(typeof v === 'number' ? v : null)}
+                      className="!w-20 !text-[10px]"
+                      step={0.01}
+                    />
+                  )}
+                  {refLineMode === 'range' && (
+                    <>
+                      <InputNumber
+                        size="small"
+                        placeholder="低值"
+                        value={refLineValue}
+                        onChange={(v) => setRefLineValue(typeof v === 'number' ? v : null)}
+                        className="!w-20 !text-[10px]"
+                        step={0.01}
+                      />
+                      <span className="text-[10px] text-slate-400">~</span>
+                      <InputNumber
+                        size="small"
+                        placeholder="高值"
+                        value={refLineValue2}
+                        onChange={(v) => setRefLineValue2(typeof v === 'number' ? v : null)}
+                        className="!w-20 !text-[10px]"
+                        step={0.01}
+                      />
+                    </>
+                  )}
+                  {refLineMode !== 'off' && (
+                    <Tag className="m-0 border-0 bg-amber-50 text-amber-600 text-[9px] font-bold">
+                      命中 {refActive ? klineData.filter(refMatches).length : 0} 根
+                    </Tag>
+                  )}
+                </div>
+              </div>
               {klineLoading ? (
                 <div className="flex h-[240px] items-center justify-center text-slate-400">加载中...</div>
               ) : klineOption ? (

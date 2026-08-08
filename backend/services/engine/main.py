@@ -418,7 +418,7 @@ except ImportError as e:
 try:
     from backend.services.engine.strategy_lab.routers import router as strategy_lab_router
 
-    app.include_router(strategy_lab_router, prefix="/api/v1", tags=["Strategy Lab"])
+    app.include_router(strategy_lab_router, prefix="/api/v1/ai-ide", tags=["Strategy Lab"])
     logger.info("✅ Strategy Lab router loaded")
 except ImportError as e:
     logger.error(f"❌ Failed to load Strategy Lab router: {e}")

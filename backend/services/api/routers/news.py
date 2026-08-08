@@ -482,7 +482,11 @@ def _sqlite_keyword_ids(
     """
     where: list[str] = []
     params: list = []
-    if source_id is not None:
+    if source_ids:
+        placeholders = ",".join(["?"] * len(source_ids))
+        where.append(f"p.connector_id IN ({placeholders})")
+        params.extend(int(sid) for sid in source_ids)
+    elif source_id is not None:
         where.append("p.connector_id = ?"); params.append(int(source_id))
     if folder_id is not None and folder_id > 0:
         where.append("p.folder_id = ?"); params.append(int(folder_id))
@@ -533,6 +537,7 @@ def _list_articles_from_sqlite(
     *,
     source_id: int | None,
     folder_id: int | None,
+    source_ids: list[int] | None,
     keyword: str | None,
     only_financial_event: bool,
     starred: bool | None,
@@ -541,6 +546,7 @@ def _list_articles_from_sqlite(
     only_ids: list[int] | None,
     offset: int,
     limit: int,
+    sort: str = "time_desc",
 ) -> tuple[list[dict], int, str | None]:
     """直读 Huntly SQLite, 返回 (page_articles, total, latest_published_at_iso).
 
@@ -549,7 +555,11 @@ def _list_articles_from_sqlite(
     where: list[str] = []
     params: list = []
 
-    if source_id is not None:
+    if source_ids:
+        placeholders = ",".join(["?"] * len(source_ids))
+        where.append(f"p.connector_id IN ({placeholders})")
+        params.extend(int(sid) for sid in source_ids)
+    elif source_id is not None:
         where.append("p.connector_id = ?"); params.append(int(source_id))
     if folder_id is not None and folder_id > 0:
         where.append("p.folder_id = ?"); params.append(int(folder_id))
@@ -606,13 +616,23 @@ def _list_articles_from_sqlite(
 
     where_sql = (" WHERE " + " AND ".join(where)) if where else ""
     sql_count = f"SELECT COUNT(*) FROM page p{where_sql}"
+
+    # 排序: time_desc (默认) / time_asc / sentiment_bullish / sentiment_bearish
+    order = "p.connected_at DESC"
+    if sort == "time_asc":
+        order = "p.connected_at ASC"
+
+    if sort in ("sentiment_bullish", "sentiment_bearish") and only_ids:
+        # 按情感排序时, 需要 only_ids (来自 enrichment 过滤) 且需要在 PG 端排序
+        pass  # 排序在下方 Python 层处理
+
     sql_list = (
         "SELECT p.id, p.title, p.description, p.url, p.connector_id, p.source_id, "
         "       p.folder_id, p.connected_at, p.created_at, p.is_mark_read, p.is_starred, "
         "       p.thumb_url, c.name AS connector_name, c.icon_url AS connector_icon "
         "FROM page p LEFT JOIN connector c ON c.id = p.connector_id"
         f"{where_sql} "
-        "ORDER BY p.connected_at DESC "
+        f"ORDER BY {order} "
         "LIMIT ? OFFSET ?"
     )
 
@@ -984,7 +1004,8 @@ async def admin_get_source_setting(connector_id: int):
 
 @router.get("/articles")
 async def list_articles(
-    source_id: int | None = Query(None, description="按 connector(source) 过滤"),
+    source_id: int | None = Query(None, description="按 connector(source) 过滤 (向后兼容, 优先使用 source_ids)"),
+    source_ids: str | None = Query(None, description="按多个 connector ID 过滤, 逗号分隔 e.g. 1,3,5"),
     folder_id: int | None = Query(None, description="按 folder 过滤"),
     keyword: str | None = Query(None, description="标题关键词"),
     only_financial_event: bool = Query(False, description="仅返回财务事件"),
@@ -1003,6 +1024,7 @@ async def list_articles(
     departments: str | None = Query(None, description="国家部门, 逗号分隔 e.g. 央行,证监会"),
     starred: bool | None = Query(None, description="仅返回收藏"),
     strong_only: bool = Query(False, description="仅返回强信号 |score|>=0.5"),
+    sort: str = Query("time_desc", description="排序: time_desc (最新), time_asc (最早), sentiment_bullish (利好强度), sentiment_bearish (利空强度)"),
     since: str | None = Query(None, description="起始时间 ISO 8601, e.g. 2026-05-20T00:00:00Z"),
     until: str | None = Query(None, description="截止时间 ISO 8601"),
     page: int = Query(1, ge=1),
@@ -1036,6 +1058,21 @@ async def list_articles(
     if want_sentiment and want_sentiment not in ("bullish", "bearish", "neutral"):
         want_sentiment = None
 
+    # 多源过滤 (逗号分隔 source_ids)
+    source_id_list: list[int] | None = None
+    if source_ids and source_ids.strip():
+        source_id_list = [int(x) for x in source_ids.split(",") if x.strip().isdigit()]
+    elif source_id is not None:
+        source_id_list = [source_id]
+
+    # 排序
+    sort_clean = sort.strip().lower()
+    if sort_clean not in ("time_desc", "time_asc", "sentiment_bullish", "sentiment_bearish"):
+        sort_clean = "time_desc"
+
+    # 情感排序需要 enrichment 数据, 拉取时多拉一些再在内存中排序
+    sort_limit = page_size * 3 if sort_clean.startswith("sentiment_") else page_size
+
     has_enrichment_filter = bool(
         want_tickers or want_industries or want_event_tags or want_sentiment
         or strong_only or want_countries or want_regions or want_key_terms
@@ -1060,7 +1097,7 @@ async def list_articles(
                 or starred is True) and _huntly_sqlite_available():
             restrict_ids = await asyncio.to_thread(
                 _sqlite_page_ids_in_range,
-                source_id=source_id,
+                source_id=source_id_list[0] if source_id_list and len(source_id_list) == 1 else None,
                 folder_id=folder_id,
                 starred=starred,
                 since_iso=since,
@@ -1139,19 +1176,23 @@ async def list_articles(
             since=since, until=until,
         )
 
+    # 情感排序需要多拉数据再排, time 排序直接分页
+    fetch_limit = sort_limit if sort_clean.startswith("sentiment_") else page_size
     offset = (page - 1) * page_size
     articles, total, latest_at = await asyncio.to_thread(
         _list_articles_from_sqlite,
-        source_id=source_id,
+        source_id=source_id_list[0] if source_id_list and len(source_id_list) == 1 else None,
         folder_id=folder_id,
+        source_ids=source_id_list if source_id_list and len(source_id_list) > 1 else None,
         keyword=keyword,
         only_financial_event=only_financial_event,
         starred=starred,
         since_iso=since,
         until_iso=until,
         only_ids=only_ids,
-        offset=offset,
-        limit=page_size,
+        offset=0 if sort_clean.startswith("sentiment_") else offset,
+        limit=fetch_limit,
+        sort=sort_clean,
     )
 
     # 合并 enrichment (同步 psycopg2 调用放到线程池避免阻塞事件循环)
@@ -1159,6 +1200,21 @@ async def list_articles(
     enrich_map = await asyncio.to_thread(_load_enrichments, page_ids)
     for a in articles:
         a["enrichment"] = enrich_map.get(int(a["id"]), _empty_enrichment()) if a.get("id") else _empty_enrichment()
+
+    # 情感排序: enrichment 合并后按 sentiment_score 排序
+    if sort_clean == "sentiment_bullish":
+        articles.sort(
+            key=lambda a: (a.get("enrichment", {}).get("sentiment_score") or 0),
+            reverse=True,
+        )
+    elif sort_clean == "sentiment_bearish":
+        articles.sort(
+            key=lambda a: (a.get("enrichment", {}).get("sentiment_score") or 0),
+            reverse=False,
+        )
+    # 分页: 情感排序时在此切片
+    if sort_clean.startswith("sentiment_"):
+        articles = articles[offset:offset + page_size]
 
     return {
         "articles": articles,

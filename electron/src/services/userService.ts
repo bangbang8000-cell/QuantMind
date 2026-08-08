@@ -74,7 +74,7 @@ export interface FundData {
   metricsSource?: string;
   metricsMeta?: Record<string, unknown>;
   returnRate?: number;  // 收益率
-  accountOnline?: boolean; // 实盘账户是否在线上报
+  accountOnline?: boolean; // 模拟账户是否在线上报
   lastUpdate: string;
 }
 

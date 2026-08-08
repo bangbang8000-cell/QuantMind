@@ -17,6 +17,9 @@ from backend.services.stream.market_app.models import Quote
 from backend.services.stream.market_app.services.remote_redis_source import (
     RemoteRedisDataSource,
 )
+from backend.services.stream.market_app.services.opentdx_source import (
+    OpentdxDataSource,
+)
 
 from .manager import manager
 
@@ -24,6 +27,7 @@ logger = logging.getLogger(__name__)
 
 # 全局数据源实例（延迟初始化）
 _remote_redis_source: RemoteRedisDataSource | None = None
+_opentdx_source: OpentdxDataSource | None = None
 
 
 def get_remote_redis_source() -> RemoteRedisDataSource:
@@ -31,6 +35,13 @@ def get_remote_redis_source() -> RemoteRedisDataSource:
     if _remote_redis_source is None:
         _remote_redis_source = RemoteRedisDataSource()
     return _remote_redis_source
+
+
+def get_opentdx_source() -> OpentdxDataSource:
+    global _opentdx_source
+    if _opentdx_source is None:
+        _opentdx_source = OpentdxDataSource()
+    return _opentdx_source
 
 
 def _as_utc_aware(dt: datetime | None) -> datetime:
@@ -105,8 +116,10 @@ class QuotePusher:
         """
         中心化行情推送循环
         一次性抓取所有被订阅的代码，降低 Redis IO 压力
+        优先 RemoteRedis，缺失时回退 opentdx 直连
         """
-        source = get_remote_redis_source()
+        redis_source = get_remote_redis_source()
+        tdx_source = get_opentdx_source()
 
         while self.running:
             try:
@@ -115,16 +128,27 @@ class QuotePusher:
                     await asyncio.sleep(1.0)
                     continue
 
-                # 1. 批量抓取行情
+                # 1. 批量抓取行情（优先 Redis）
                 stock_list = list(self.subscribed_stocks) if self.subscribed_stocks else list(self.warmup_symbols)
-                results = await source.fetch_quotes(stock_list)
+                results = await redis_source.fetch_quotes(stock_list)
+
+                # 2. Redis 未覆盖的标的，用 opentdx 直连补充
+                fetched_symbols = {r["symbol"] for r in results}
+                missing = [s for s in stock_list if s not in fetched_symbols]
+                if missing:
+                    try:
+                        tdx_results = await tdx_source.fetch_quotes(missing)
+                        results.extend(tdx_results)
+                        logger.debug(f"[opentdx] 补充 {len(tdx_results)}/{len(missing)} 只行情")
+                    except Exception as e:
+                        logger.warning(f"[opentdx] 直连补充行情失败: {e}")
 
                 if self.write_series and results:
-                    await self._append_series_points(source, results)
+                    await self._append_series_points(redis_source, results)
                 if self.persist_to_db and results:
                     await self._persist_quotes(results)
 
-                # 2. 分发数据
+                # 3. 分发数据
                 for quote in results:
                     stock_code = quote["symbol"]
                     topic = f"stock.{stock_code}"

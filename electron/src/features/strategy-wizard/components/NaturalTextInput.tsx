@@ -1,5 +1,5 @@
 import React, { useState, useMemo } from 'react';
-import { Row, Col, Card, Typography, Input, Button, Space, Alert, Tabs, Tag, Divider, message } from 'antd';
+import { Typography, Input, Button, Space, Alert, Tabs, Tag, Divider, message } from 'antd';
 import {
   BulbOutlined,
   EditOutlined,
@@ -9,7 +9,6 @@ import {
   SendOutlined,
   SearchOutlined
 } from '@ant-design/icons';
-import { motion, AnimatePresence } from 'framer-motion';
 import { useWizardV2Store } from '../store/wizardV2Store';
 import { fetchWorkingPoolByDsl, syncWorkingPoolToBackend } from '../services/wizardV2Service';
 // 按需加载 wizardService 的网络与解析方法，避免静态与动态导入混用导致的打包警告
@@ -34,7 +33,6 @@ export const NaturalTextInput: React.FC<{ onNext: () => void }> = ({ onNext }) =
   const [text, setText] = useState('');
   const [loading, setLoading] = useState(false);
   const [preview, setPreview] = useState<{ dsl?: string; mapping?: any; suggestions?: string[]; quantdb_filters?: any[] }>({});
-  const [matchedCount, setMatchedCount] = useState<number | null>(null);
   const [templateCategory, setTemplateCategory] = useState<string>('all');
 
   const useTemplate = (t: string) => {
@@ -290,7 +288,6 @@ export const NaturalTextInput: React.FC<{ onNext: () => void }> = ({ onNext }) =
       return;
     }
     setLoading(true);
-    setMatchedCount(null);
     try {
       const { parseText } = await import('../services/wizardService');
       const parsed = await parseText(text, currentMarket);
@@ -315,7 +312,6 @@ export const NaturalTextInput: React.FC<{ onNext: () => void }> = ({ onNext }) =
       if (correctedDsl) {
         try {
           const items = await fetchWorkingPoolByDsl(correctedDsl, currentMarket, parsed.quantdb_filters);
-          setMatchedCount(items.length);
           // fetchWorkingPoolByDsl already syncs to backend
           setWorkingPool(items, true); 
         } catch (e) {
@@ -432,19 +428,28 @@ export const NaturalTextInput: React.FC<{ onNext: () => void }> = ({ onNext }) =
               ),
               children: (
                 <div className="mt-3">
-                  <Row gutter={24}>
-                    <Col span={16}>
-                      <div className="bg-white rounded-2xl border border-gray-100 p-6 shadow-sm hover:shadow-md transition-all duration-300">
-                        <Title level={5} className="mb-4 text-gray-800 flex items-center gap-2">
-                          <SendOutlined className="text-blue-500" />
-                          请输入选股逻辑
-                        </Title>
+                  <div className="bg-white rounded-2xl border border-gray-100 p-6 shadow-sm hover:shadow-md transition-all duration-300">
+                        <div className="flex items-start justify-between gap-4 mb-4">
+                          <Title level={5} className="m-0 text-gray-800 flex items-center gap-2">
+                            <SendOutlined className="text-blue-500" />
+                            请输入选股逻辑
+                          </Title>
+                          <Button
+                            type="primary"
+                            onClick={analyze}
+                            loading={loading}
+                            icon={<ThunderboltOutlined />}
+                            className="h-9 px-5 rounded-xl bg-gradient-to-r from-blue-600 to-blue-500 border-none shadow-md shadow-blue-200 hover:shadow-blue-300 transition-all flex-shrink-0"
+                          >
+                            智能解析
+                          </Button>
+                        </div>
                         <TextArea
-                          rows={6}
+                          rows={4}
                           placeholder="例如：市值在10-100亿之间且ROE小于30的股票"
                           value={text}
                           onChange={(e) => setText(e.target.value)}
-                          className="text-lg p-4 rounded-2xl border-gray-200 focus:border-blue-400 focus:ring-4 focus:ring-blue-50 transition-all"
+                          className="text-base p-3 rounded-2xl border-gray-200 focus:border-blue-400 focus:ring-4 focus:ring-blue-50 transition-all"
                           style={{ resize: 'none' }}
                         />
                         
@@ -490,74 +495,21 @@ export const NaturalTextInput: React.FC<{ onNext: () => void }> = ({ onNext }) =
                           </div>
                         </div>
 
-                        <Divider className="my-8" />
-
-                        <div className="flex justify-start items-center">
-                          <div className="flex items-center gap-4">
-                            <Button 
-                              type="primary" 
-                              size="large" 
-                              onClick={analyze} 
-                              loading={loading} 
-                              icon={<ThunderboltOutlined />}
-                              className="h-12 px-8 rounded-2xl bg-gradient-to-r from-blue-600 to-blue-500 border-none shadow-lg shadow-blue-200 hover:shadow-blue-300 transition-all"
-                            >
-                              智能解析
-                            </Button>
-                            <AnimatePresence>
-                              {matchedCount !== null && (
-                                <motion.div
-                                  initial={{ opacity: 0, x: -10 }}
-                                  animate={{ opacity: 1, x: 0 }}
-                                  className="flex items-center gap-2 text-gray-500"
-                                >
-                                  <div className="w-2 h-2 rounded-full bg-green-500" />
-                                  <span>
-                                    匹配到 <span className="text-blue-600 font-bold text-lg">{matchedCount}</span> 只标的
-                                  </span>
-                                </motion.div>
-                              )}
-                            </AnimatePresence>
-                          </div>
-                        </div>
-                      </div>
-                    </Col>
-                    <Col span={8}>
-                      <Card
-                        variant="borderless"
-                        className="h-full rounded-3xl bg-gray-50/50 border border-gray-100 shadow-sm"
-                        title={<span className="text-gray-700 font-bold">逻辑预览</span>}
-                      >
-                        {!preview.dsl ? (
-                          <div className="space-y-6 text-gray-500 leading-relaxed text-sm">
-                            <div className="p-4 bg-white rounded-2xl border border-gray-100">
-                              <p className="font-medium text-gray-700 mb-2">💡 提示</p>
-                              <p className="mb-2">您可以直接用自然语言描述您期望的底层股票池。</p>
-                              <p className="text-orange-600 font-medium">⚠️ 请注意：建议在此构建宽泛的备选池以保证 AI 的学习空间；若过滤条件过于严格，可能会导致标的过少而影响回测效果。如需在实际交易中精准限定名单，请在后续的策略配置中设置。</p>
-                            </div>
-                            <p>
-                              &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;QuantMind 是一款企业级 AI 量化交易平台，基于 Qlib 框架深度定制。我们依托前沿的深度学习模型与海量特征，为您提供专业的每日盘后自动决策服务。
-                            </p>
-                            <p>
-                              &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;您无需深谙复杂算法，只需构建期望的股票池与风险偏好，AI 引擎即可随市场行情实时迭代，为您精准预测次日最具潜力的投资组合。
-                            </p>
-                          </div>
-                        ) : (
-                          <div className="space-y-6">
-                            <Alert 
-                              message="解析成功" 
-                              type="success" 
-                              showIcon 
-                              className="rounded-2xl border-emerald-100 bg-emerald-50 text-emerald-800"
+                        {preview.dsl && (
+                          <div className="mt-6">
+                            <Divider className="my-6" />
+                            <Alert
+                              message="解析成功"
+                              type="success"
+                              showIcon
+                              className="rounded-2xl border-emerald-100 bg-emerald-50 text-emerald-800 mb-4"
                             />
-                            <div>
-                              <Text strong className="text-xs text-gray-400 uppercase tracking-wider mb-2 block">生成的查询逻辑 (DSL)</Text>
-                              <div className="bg-white border border-gray-100 p-4 rounded-2xl font-mono text-xs text-blue-600 break-all leading-relaxed">
-                                {preview.dsl}
-                              </div>
+                            <Text strong className="text-xs text-gray-400 uppercase tracking-wider mb-2 block">生成的查询逻辑 (DSL)</Text>
+                            <div className="bg-gray-50 border border-gray-100 p-4 rounded-2xl font-mono text-xs text-blue-600 break-all leading-relaxed">
+                              {preview.dsl}
                             </div>
                             {preview.mapping?.factors && (
-                              <div>
+                              <div className="mt-4">
                                 <Text strong className="text-xs text-gray-400 uppercase tracking-wider mb-2 block">识别因子</Text>
                                 <div className="flex flex-wrap gap-2">
                                   {preview.mapping.factors.map((f: string) => (
@@ -570,9 +522,7 @@ export const NaturalTextInput: React.FC<{ onNext: () => void }> = ({ onNext }) =
                             )}
                           </div>
                         )}
-                      </Card>
-                    </Col>
-                  </Row>
+                      </div>
                 </div>
               )
             },
@@ -586,21 +536,24 @@ export const NaturalTextInput: React.FC<{ onNext: () => void }> = ({ onNext }) =
               ),
               children: (
                 <div className="mt-3 bg-white rounded-2xl border border-gray-100 p-4 shadow-sm">
-                  <SimpleLogicBuilder onChange={(c) => setConditions(c)} />
-                  <div style={{ marginTop: 16, textAlign: 'center' }}>
+                  <div className="flex items-center justify-between gap-4 mb-4">
+                    <Text strong className="text-sm text-gray-800 flex items-center gap-2">
+                      <EditOutlined className="text-blue-500" />
+                      简易构建器
+                    </Text>
                     <Button
                       type="primary"
-                      size="large"
                       onClick={runVisualStrategy}
                       loading={loading}
                       disabled={!conditions || loading}
                       icon={<SearchOutlined />}
-                      className="rounded-xl bg-gradient-to-r from-blue-500 to-purple-500 border-none shadow-md hover:shadow-lg transition-all"
-                      style={{ minWidth: 160, height: 44 }}
+                      className="rounded-xl bg-gradient-to-r from-blue-500 to-purple-500 border-none shadow-md hover:shadow-lg transition-all flex-shrink-0"
+                      style={{ height: 36 }}
                     >
                       执行筛选
                     </Button>
                   </div>
+                  <SimpleLogicBuilder onChange={(c) => setConditions(c)} />
                 </div>
               )
             },
@@ -620,7 +573,7 @@ export const NaturalTextInput: React.FC<{ onNext: () => void }> = ({ onNext }) =
                     showIcon
                     className="mb-4 rounded-xl py-2 px-4"
                   />
-                  <div style={{ height: '550px' }}>
+                  <div style={{ height: 'min(550px, 60vh)' }}>
                     <CustomStockSelector />
                   </div>
                 </div>

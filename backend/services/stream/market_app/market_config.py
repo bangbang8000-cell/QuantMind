@@ -123,9 +123,9 @@ class Settings(BaseSettings):
     WS_MAX_CONNECTIONS: int = 1000
 
     # Data Sources
-    # 生产环境禁止使用任何模拟/演示数据源；请配置真实数据源（如 ifind/tencent/sina）。
-    DATA_SOURCES: list[str] = ["remote_redis", "ifind", "tencent", "sina"]
-    DEFAULT_SOURCE: str = "remote_redis"
+    # 生产环境禁止使用任何模拟/演示数据源；请配置真实数据源（如 eltdx/ifind/tencent/sina）。
+    DATA_SOURCES: list[str] = ["eltdx", "opentdx", "remote_redis", "ifind", "tencent", "sina"]
+    DEFAULT_SOURCE: str = "eltdx"
 
     @field_validator("DEFAULT_SOURCE")
     @classmethod

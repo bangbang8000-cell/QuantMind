@@ -339,7 +339,7 @@ export const PoolPreview = React.forwardRef<PoolPreviewHandle, { onNext: () => v
   return (
     <div style={{ padding: 0 }}>
       <Row gutter={24}>
-        <Col span={16}>
+        <Col xs={24} md={16}>
           <Card
             title={
               <Space>
@@ -436,7 +436,7 @@ export const PoolPreview = React.forwardRef<PoolPreviewHandle, { onNext: () => v
             )}
           </Card>
         </Col>
-        <Col span={8}>
+        <Col xs={24} md={8}>
           <Space direction="vertical" style={{ width: '100%' }} size="large">
             <Card variant="borderless" title="统计概览">
               {dataSource.length === 0 ? (

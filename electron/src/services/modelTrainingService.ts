@@ -210,7 +210,7 @@ export interface StockScoreHistoryResponse {
   board?: string;
   total: number;
   items: StockScoreHistoryItem[];
-  models?: Array<{ model_id: string }>;
+  models?: Array<{ model_id: string; display_name?: string }>;
 }
 
 export interface NegativeAnalysis {

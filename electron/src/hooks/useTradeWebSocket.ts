@@ -65,9 +65,9 @@ export function useTradeWebSocket({
     const topic = `trade.updates.${userId}`;
 
     // 先确保全局 WS 已建立，再订阅交易主题。
-    // 这样即使上层 WebSocketProvider 未自动连接，实盘页也能拿到实时推送。
+    // 这样即使上层 WebSocketProvider 未自动连接，模拟交易页也能拿到实时推送。
     void websocketService.connect().catch((error) => {
-      console.warn('实盘交易 WS 连接失败，将继续依赖轮询刷新:', error);
+      console.warn('模拟交易 WS 连接失败，将继续依赖轮询刷新:', error);
     });
 
     // 等待 WS 连接后再订阅（websocketService 可能尚未建立连接）

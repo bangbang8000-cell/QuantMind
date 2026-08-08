@@ -33,7 +33,7 @@ from .model_management_utils import (
     FEATURE_SNAPSHOT_DIR,
     MODELS_PRODUCTION,
     MODELS_ROOT,
-    _enrich_feature_catalog_with_data_coverage,
+    _enrich_feature_catalog_with_data_coverage_async,
     _find_model_directories,
     _load_feature_catalog_from_db,
     _load_feature_catalog_from_file,
@@ -180,7 +180,7 @@ async def get_model_feature_catalog(
         )
 
     if include_coverage:
-        return _enrich_feature_catalog_with_data_coverage(catalog, market=market)
+        return await _enrich_feature_catalog_with_data_coverage_async(catalog, market=market)
     return catalog
 
 

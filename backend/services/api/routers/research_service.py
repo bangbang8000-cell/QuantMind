@@ -1017,6 +1017,36 @@ async def remove_from_research_pool(tid: str, uid: str, symbol: str) -> dict[str
     return {"code": 200, "message": "success"}
 
 
+def _load_quantdb_stock_names() -> dict[str, str]:
+    """加载 QuantDB instrument_detail 的股票简称映射（suffix symbol -> name）。
+
+    优先使用 instrument_detail.parquet（含权威 A 股简称），仅当无法读取时回退空 dict。
+    """
+    try:
+        from backend.services.engine.data_platform.quantdb_hub import QuantDBDataHub
+
+        hub = QuantDBDataHub.get_instance()
+        if not hub.available:
+            return {}
+        df = hub.fetch_stock_list()
+        if df is None or df.empty:
+            return {}
+        symbol_col = "Symbol" if "Symbol" in df.columns else "symbol"
+        name_col = "Name" if "Name" in df.columns else ("stock_name" if "stock_name" in df.columns else None)
+        if symbol_col not in df.columns or name_col is None:
+            return {}
+        mapping: dict[str, str] = {}
+        for _, row in df[[symbol_col, name_col]].dropna().iterrows():
+            sym = str(row[symbol_col]).strip()
+            nm = str(row[name_col]).strip()
+            if sym and nm:
+                mapping[sym] = nm
+        return mapping
+    except Exception as exc:  # noqa: BLE001
+        logger.debug("QuantDB stock names load failed: %s", exc)
+        return {}
+
+
 async def get_symbols_features(tid: str, uid: str, symbols: list[str], lite: bool) -> dict[str, Any]:
     normalized_symbols = [StockCodeUtil.to_prefix(s.strip()) for s in symbols if s.strip()]
     if not normalized_symbols:
@@ -1128,9 +1158,14 @@ async def get_symbols_features(tid: str, uid: str, symbols: list[str], lite: boo
                 LEFT JOIN stocks_name sn USING (raw_symbol)
             """
             sdl_result = await session.execute(text(sdl_sql))
+            # QuantDB instrument_detail 提供权威股票简称，用于回填 stock_daily_latest 缺失的 stock_name
+            quantdb_names: dict[str, str] = _load_quantdb_stock_names()
             for r in sdl_result.mappings():
                 raw_sym = r["raw_symbol"]
-                stock_name = r.get("stock_name") or raw_sym
+                stock_name = r.get("stock_name")
+                if not stock_name:
+                    suffix = StockCodeUtil.to_suffix(raw_sym)
+                    stock_name = quantdb_names.get(suffix) or quantdb_names.get(raw_sym) or raw_sym
                 close_price = float(r.get("close") or 0)
                 total_mv = float(r.get("total_mv") or 0)
                 pe_val = float(r.get("pe_ttm") or 0)

@@ -935,6 +935,221 @@ class RedisStopLossStrategy(DynamicRiskMixin, TopkDropoutStrategy, RedisLoggerMi
         self.log_executed_trades(execute_result)
 
 
+class RedisCrashBuyDipStrategy(DynamicRiskMixin, WeightStrategyBase, RedisLoggerMixin):
+    """
+    大盘暴跌抄底策略 (Crash Buy-the-Dip)
+
+    基于 WeightStrategyBase，通过 generate_target_weight_position 返回目标权重。
+    """
+
+    def __init__(self, *args, **kwargs):
+        self.init_redis(kwargs)
+        self.init_dynamic_risk(kwargs)
+
+        self.crash_threshold_points = float(kwargs.pop("crash_threshold_points", 100))
+        self.crash_threshold_pct = float(kwargs.pop("crash_threshold_pct", 0.025))
+        self.top_k = int(kwargs.pop("top_k", 5))
+        self.hold_days = int(kwargs.pop("hold_days", 5))
+        self.take_profit = float(kwargs.pop("take_profit", 0.08))
+        self.stop_loss = float(kwargs.pop("stop_loss", -0.05))
+        self.max_wait_days = int(kwargs.pop("max_wait_days", 3))
+        self.min_oversold_margin = float(kwargs.pop("min_oversold_margin", 0.01))
+        self.index_scale = float(kwargs.pop("index_scale", 1000))
+        self.benchmark = kwargs.pop("benchmark", "SH000300")
+        self.trend_window = int(kwargs.pop("trend_window", 20))
+        self.ma_fast = int(kwargs.pop("ma_fast", 5))
+        self.ma_slow = int(kwargs.pop("ma_slow", 20))
+        self.vol_lookback = int(kwargs.pop("vol_lookback", 10))
+        self.rebalance_days = int(kwargs.pop("rebalance_days", 1))
+
+        for k in list(kwargs.keys()):
+            if k in _OUR_KWARGS or k == "rebalance_days":
+                kwargs.pop(k, None)
+
+        self._crash_dates: set = set()
+        self._crash_info: dict = {}
+        self._factor_df: pd.DataFrame | None = None
+        self._all_dates: list = []
+        self._instruments: list = []
+        self._buy_plan: dict = {}
+        self._positions: dict = {}
+        self._initialized = False
+
+        super().__init__(*args, **kwargs)
+
+    def _ensure_initialized(self) -> None:
+        if self._initialized:
+            return
+        cal = getattr(getattr(self, "trade_exchange", None), "_trade_calendar", None)
+        if cal is None:
+            tc = getattr(getattr(self, "trade_exchange", None), "trade_calendar", None)
+            if tc is not None and hasattr(tc, "_calendar"):
+                cal = tc._calendar
+        if cal is None:
+            return
+        self._all_dates = [pd.Timestamp(d) for d in cal]
+        if not self._all_dates:
+            return
+
+        start_str = self._all_dates[0].strftime("%Y-%m-%d")
+        end_str = self._all_dates[-1].strftime("%Y-%m-%d")
+
+        try:
+            self._instruments = list(D.instruments("csi300"))
+        except Exception:
+            return
+
+        try:
+            idx = D.features([self.benchmark], ["$close", "$change"], start_time=start_str, end_time=end_str).copy()
+            idx["point_change"] = idx["$close"].diff() * self.index_scale
+            for ridx, row in idx[(idx["point_change"] < -self.crash_threshold_points) | (idx["$change"] < -self.crash_threshold_pct)].iterrows():
+                dt = pd.Timestamp(ridx[1]) if isinstance(ridx, tuple) else pd.Timestamp(ridx)
+                self._crash_dates.add(dt)
+                self._crash_info[dt] = {"point_change": float(row["point_change"]), "pct_change": float(row["$change"])}
+        except Exception:
+            pass
+
+        if self._crash_dates:
+            try:
+                df = D.features(self._instruments, ["$close", "$open", "$high", "$low", "$volume", "$change"], start_time=start_str, end_time=end_str)
+                if df is not None and not df.empty:
+                    for w in [5, 10, self.trend_window, 30]:
+                        df[f"ROC{w}"] = df.groupby(level="instrument")["$close"].pct_change(w)
+                    df[f"MA{self.ma_fast}"] = df.groupby(level="instrument")["$close"].transform(lambda x: x.rolling(self.ma_fast).mean())
+                    df[f"MA{self.ma_slow}"] = df.groupby(level="instrument")["$close"].transform(lambda x: x.rolling(self.ma_slow).mean())
+                    df[f"VMA{self.vol_lookback}"] = df.groupby(level="instrument")["$volume"].transform(lambda x: x.rolling(self.vol_lookback).mean())
+                    df["VOL_RATIO"] = df["$volume"] / (df[f"VMA{self.vol_lookback}"] + 1e-8)
+                    df["KMID"] = (df["$close"] - df["$open"]) / (df["$open"] + 1e-8)
+                    df["LOWER_SHADOW"] = (pd.concat([df["$close"], df["$open"]], axis=1).max(axis=1) - df["$low"]) / (df["$low"] + 1e-8)
+                    self._factor_df = df
+            except Exception:
+                pass
+        self._initialized = True
+
+    def _find_oversold(self, crash_date, idx_pct):
+        if self._factor_df is None or self._factor_df.empty:
+            return []
+        try:
+            dd = self._factor_df.xs(crash_date, level=1)
+        except KeyError:
+            return []
+        if dd.empty:
+            return []
+        mask = (dd.get(f"ROC{self.trend_window}", pd.Series(dtype=float)) > 0) & \
+               (dd.get(f"MA{self.ma_fast}", pd.Series(dtype=float)) > dd.get(f"MA{self.ma_slow}", pd.Series(dtype=float))) & \
+               (dd["$change"] > -0.095) & (dd["$change"] < 0.095) & \
+               (dd["$change"] < idx_pct - self.min_oversold_margin) & \
+               (dd.get("VOL_RATIO", pd.Series(dtype=float)) > 0.5)
+        cands = dd[mask].copy()
+        if cands.empty:
+            return []
+        for cn, expr in [("oversold_degree", cands["$change"] - idx_pct), ("trend_strength", cands.get(f"ROC{self.trend_window}", pd.Series(0.0, index=cands.index))), ("volume_spike", cands.get("VOL_RATIO", pd.Series(1.0, index=cands.index)))]:
+            cands[cn] = expr
+            s = cands[cn].std()
+            cands[f"{cn}_n"] = (cands[cn] - cands[cn].mean()) / (s + 1e-8) if s > 0 else 0.0
+        cands["score"] = 0.5 * cands["oversold_degree_n"] + 0.3 * cands["trend_strength_n"] + 0.2 * cands["volume_spike_n"]
+        cands = cands.sort_values("score", ascending=False)
+        out = []
+        for _, row in cands.head(self.top_k).iterrows():
+            sym = row.name[0] if isinstance(row.name, tuple) else row.name
+            out.append({"stock": sym, "score": float(row["score"])})
+        return out
+
+    def _find_entry(self, stock, crash_date):
+        try:
+            ci = self._all_dates.index(crash_date)
+        except ValueError:
+            return None
+        for w in range(1, self.max_wait_days + 1):
+            if ci + w >= len(self._all_dates):
+                break
+            bd = self._all_dates[ci + w]
+            try:
+                dd = self._factor_df.loc[(stock, bd), :]
+            except KeyError:
+                continue
+            if dd["$change"] > -0.01 or (dd.get("KMID", 0) > 0 and dd.get("LOWER_SHADOW", 0) > 0.01) or w == self.max_wait_days:
+                return bd
+        return None
+
+    def _get_trade_date(self):
+        step = getattr(self, "trade_step", None)
+        cal = getattr(self, "trade_calendar", [])
+        if step is not None and cal and 0 <= step < len(cal):
+            return pd.Timestamp(cal[step])
+        return None
+
+    def generate_target_weight_position(self, score=None, current=None, trade_exchange=None, *args, **kwargs):
+        if self.check_account_stop_loss():
+            return {}
+        self._ensure_initialized()
+        td = self._get_trade_date()
+        if td is None:
+            return {}
+
+        # 卖出：到期或止盈止损
+        for stock in list(self._positions.keys()):
+            info = self._positions[stock]
+            try:
+                bi = self._all_dates.index(info["buy_date"])
+                ti = self._all_dates.index(td)
+                if ti >= bi + self.hold_days:
+                    self._positions.pop(stock)
+                    continue
+            except ValueError:
+                pass
+            try:
+                cp = self._factor_df.loc[(stock, td), "$close"]
+                ret = cp / info["buy_price"] - 1
+                if ret >= self.take_profit or ret <= self.stop_loss:
+                    self._positions.pop(stock)
+            except KeyError:
+                pass
+
+        # 大跌日规划买入
+        if td in self._crash_dates and not any(p.get("crash_date") == td for p in self._positions.values()):
+            cands = self._find_oversold(td, self._crash_info.get(td, {}).get("pct_change", 0))
+            for c in cands:
+                bd = self._find_entry(c["stock"], td)
+                if bd is not None:
+                    self._buy_plan.setdefault(bd, []).append({"stock": c["stock"], "crash_date": td})
+
+        # 执行今日买入
+        if td in self._buy_plan:
+            plan = self._buy_plan.pop(td)
+            n = len(plan)
+            if n > 0:
+                w = 1.0 / n
+                for item in plan:
+                    self._positions[item["stock"]] = {"buy_date": td, "buy_price": 0, "crash_date": item["crash_date"]}
+                return {item["stock"]: 1.0 / n for item in plan}
+
+        return {}
+
+    def reset(self, *args, **kwargs):
+        self._positions.clear()
+        self._buy_plan.clear()
+        self._qm_trade_step_counter = 0
+        self.reset_dynamic_risk()
+        try:
+            return super().reset(*args, **kwargs)
+        except TypeError as exc:
+            if "unexpected keyword argument" not in str(exc):
+                raise
+            filtered = dict(kwargs)
+            filtered.pop("level_infra", None)
+            filtered.pop("common_infra", None)
+            filtered.pop("trade_exchange", None)
+            try:
+                return super().reset(*args, **filtered)
+            except TypeError:
+                return super().reset()
+
+    def post_exe_step(self, execute_result=None):
+        self.log_progress()
+        self.log_executed_trades(execute_result)
+
+
 class RedisVolatilityWeightedStrategy(RedisWeightStrategy):
     """
     波动率加权 TopK 策略 (Volatility-Weighted Top-K)
