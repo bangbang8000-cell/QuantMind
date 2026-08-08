@@ -14,8 +14,10 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 from datetime import date, timedelta
+from pathlib import Path
 from time import time as _now
 from typing import Any
 
@@ -737,7 +739,7 @@ async def submit_score_calibration(
     """提交模型分数校准任务，立即返回 task_id，后台异步计算。"""
     user_id, tenant_id = get_authenticated_identity(request)
     task_id = f"calib_{int(_now() * 1000)}_{__import__('uuid').uuid4().hex[:8]}"
-    _calib_tasks[task_id] = {
+    _calib_persist(task_id, {
         "task_id": task_id,
         "status": "pending",
         "progress": 0,
@@ -747,7 +749,7 @@ async def submit_score_calibration(
         "result": None,
         "error": None,
         "created_at": __import__("datetime").datetime.now().isoformat(),
-    }
+    })
     asyncio.create_task(
         _run_score_calibration(task_id, user_id, tenant_id, days, horizons, top_n),
         name=f"score-calib-{task_id}",
@@ -789,9 +791,9 @@ async def _run_score_calibration(
 ) -> None:
     """后台执行分数校准，分阶段更新进度。"""
     try:
-        _calib_tasks[task_id]["status"] = "running"
-        _calib_tasks[task_id]["progress"] = 5
-        _calib_tasks[task_id]["message"] = "读取历史信号..."
+        _calib_update(task_id, status="running")
+        _calib_update(task_id, progress=5)
+        _calib_update(task_id, message="读取历史信号...")
 
         horizon_list = _parse_horizons(horizons)
 
@@ -811,12 +813,12 @@ async def _run_score_calibration(
             result = await session.execute(query, {"tenant_id": tenant_id, "user_id": user_id})
             rows = result.mappings().all()
         if not rows:
-            _calib_tasks[task_id]["status"] = "failed"
-            _calib_tasks[task_id]["error"] = "无历史信号数据"
+            _calib_update(task_id, status="failed")
+            _calib_update(task_id, error="无历史信号数据")
             return
 
-        _calib_tasks[task_id]["progress"] = 15
-        _calib_tasks[task_id]["message"] = "分组统计信号..."
+        _calib_update(task_id, progress=15)
+        _calib_update(task_id, message="分组统计信号...")
 
         # 按日期分组取最近 days 个交易日
         date_scores: dict[str, list[dict[str, Any]]] = {}
@@ -828,33 +830,33 @@ async def _run_score_calibration(
             )
         all_dates = sorted(date_scores.keys())[-days:]
         if not all_dates:
-            _calib_tasks[task_id]["status"] = "failed"
-            _calib_tasks[task_id]["error"] = "无可用交易日"
+            _calib_update(task_id, status="failed")
+            _calib_update(task_id, error="无可用交易日")
             return
 
         # 2. 加载价格面板（线程池避免阻塞事件循环）
-        _calib_tasks[task_id]["progress"] = 30
-        _calib_tasks[task_id]["message"] = "加载价格面板..."
+        _calib_update(task_id, progress=30)
+        _calib_update(task_id, message="加载价格面板...")
         from pathlib import Path as _Path
         from backend.services.engine.inference.inference_backtest_service import _load_price_panel
 
         data_dir = _Path(__import__("os").getenv("QLIB_DIR", "/app/db/qlib_data/cn_data"))
         panel = await asyncio.to_thread(_load_price_panel, data_dir, all_dates)
         if panel.empty:
-            _calib_tasks[task_id]["status"] = "failed"
-            _calib_tasks[task_id]["error"] = "无法加载价格面板"
+            _calib_update(task_id, status="failed")
+            _calib_update(task_id, error="无法加载价格面板")
             return
         close_pivot = panel.pivot_table(index="symbol", columns="trade_date", values="close", aggfunc="last")
         del panel
 
         # 3. 市值快照
-        _calib_tasks[task_id]["progress"] = 45
-        _calib_tasks[task_id]["message"] = "加载市值快照..."
+        _calib_update(task_id, progress=45)
+        _calib_update(task_id, message="加载市值快照...")
         caps_snapshot = await _load_cap_snapshot()
 
         # 4. 逐日计算多周期收益
-        _calib_tasks[task_id]["progress"] = 55
-        _calib_tasks[task_id]["message"] = "回测多周期收益..."
+        _calib_update(task_id, progress=55)
+        _calib_update(task_id, message="回测多周期收益...")
         records: list[dict[str, Any]] = []
         max_h = max(horizon_list)
         total_days = len(all_dates)
@@ -897,26 +899,26 @@ async def _run_score_calibration(
                     "rank_pct": (rank_i + 1) / total, "rank": rank_i + 1, "total": total,
                 })
             if idx % 20 == 0:
-                _calib_tasks[task_id]["progress"] = 55 + int(40 * (idx + 1) / total_days)
-                _calib_tasks[task_id]["message"] = f"回测中... {idx+1}/{total_days} 天"
+                _calib_update(task_id, progress=55 + int(40 * (idx + 1) / total_days))
+                _calib_update(task_id, message=f"回测中... {idx+1}/{total_days} 天")
 
         if not records:
-            _calib_tasks[task_id]["status"] = "failed"
-            _calib_tasks[task_id]["error"] = "回测无有效样本"
+            _calib_update(task_id, status="failed")
+            _calib_update(task_id, error="回测无有效样本")
             return
 
-        _calib_tasks[task_id]["progress"] = 95
-        _calib_tasks[task_id]["message"] = "汇总统计..."
+        _calib_update(task_id, progress=95)
+        _calib_update(task_id, message="汇总统计...")
 
         result = await _aggregate_calibration(records, all_dates, date_scores, horizon_list, top_n)
-        _calib_tasks[task_id]["status"] = "completed"
-        _calib_tasks[task_id]["progress"] = 100
-        _calib_tasks[task_id]["message"] = "完成"
-        _calib_tasks[task_id]["result"] = result
+        _calib_update(task_id, status="completed")
+        _calib_update(task_id, progress=100)
+        _calib_update(task_id, message="完成")
+        _calib_update(task_id, result=result)
     except Exception as exc:
         logger.error("score calibration task %s failed: %s", task_id, exc, exc_info=True)
-        _calib_tasks[task_id]["status"] = "failed"
-        _calib_tasks[task_id]["error"] = str(exc)
+        _calib_update(task_id, status="failed")
+        _calib_update(task_id, error=str(exc))
 
 
 def _parse_horizons(horizons: str) -> list[int]:
@@ -1046,8 +1048,55 @@ async def _aggregate_calibration(
     }
 
 
-# 校准任务内存存储
+# 校准任务存储：内存 + JSON 文件持久化（重启后历史仍可查看）
 _calib_tasks: dict[str, dict[str, Any]] = {}
+
+def _calib_store_path() -> Path:
+    import os as _os
+    base = _os.getenv("QM_DATA_DIR", str(Path(_os.getcwd()) / "data"))
+    p = Path(base) / "score_calibration_tasks.json"
+    p.parent.mkdir(parents=True, exist_ok=True)
+    return p
+
+
+def _calib_load_all() -> None:
+    """从 JSON 文件加载已持久化的任务。"""
+    global _calib_tasks
+    try:
+        p = _calib_store_path()
+        if p.exists():
+            data = json.loads(p.read_text(encoding="utf-8"))
+            if isinstance(data, dict):
+                _calib_tasks.update(data)
+    except Exception as exc:
+        logger.warning("load calib tasks failed: %s", exc)
+
+
+def _calib_persist(task_id: str, task: dict[str, Any]) -> None:
+    """把单条任务持久化到 JSON 文件（内存 + 磁盘）。"""
+    _calib_tasks[task_id] = task
+    try:
+        p = _calib_store_path()
+        p.write_text(
+            json.dumps(_calib_tasks, ensure_ascii=False, default=str),
+            encoding="utf-8",
+        )
+    except Exception as exc:
+        logger.warning("persist calib task %s failed: %s", task_id, exc)
+
+
+
+def _calib_update(task_id: str, **fields: Any) -> dict[str, Any]:
+    """更新任务状态并持久化。返回更新后的任务 dict。"""
+    task = _calib_tasks.get(task_id) or {}
+    task.update(fields)
+    _calib_persist(task_id, task)
+    return task
+
+
+# 启动时加载历史
+
+_calib_load_all()
 
 
 @router.get("/score-calibration-history")

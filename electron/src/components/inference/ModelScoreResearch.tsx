@@ -52,6 +52,28 @@ export const ModelScoreResearch: React.FC = () => {
     }
   }, []);
 
+  /** 点击历史记录：加载该次校准的完整结果 */
+  const viewHistoryTask = useCallback(async (tid: string) => {
+    setLoading(true);
+    setData(null);
+    setProgress(100);
+    setProgressMsg('加载历史结果...');
+    try {
+      const t = await getCalibrationTask(tid);
+      if (t.status === 'completed' && t.result) {
+        setData({ ...t.result, status: 'success', meta: t.meta });
+      } else if (t.status === 'not_found') {
+        setData({ status: 'error', detail: '该历史记录已过期（服务重启后内存任务清空），请重新校准' });
+      } else {
+        setData({ status: 'error', detail: t.error || t.detail || '历史结果加载失败' });
+      }
+    } catch (err: any) {
+      setData({ status: 'error', detail: err?.message || '历史结果加载失败' });
+    } finally {
+      setLoading(false);
+    }
+  }, []);
+
   const load = useCallback(async () => {
     clearPoll();
     setLoading(true);
@@ -103,7 +125,7 @@ export const ModelScoreResearch: React.FC = () => {
   }, [clearPoll]);
 
   useEffect(() => {
-    void load();
+    // 进入页面只加载历史，不自动开始校准
     void loadHistory();
     return () => clearPoll();
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -318,7 +340,9 @@ export const ModelScoreResearch: React.FC = () => {
           </div>
           <div className="space-y-1">
             {history.map(h => (
-              <div key={h.task_id} className="flex items-center justify-between text-[10px] py-1 border-b border-slate-50 last:border-0">
+              <div key={h.task_id}
+                onClick={() => void viewHistoryTask(h.task_id)}
+                className="flex items-center justify-between text-[10px] py-2 border-b border-slate-50 last:border-0 cursor-pointer hover:bg-slate-50 rounded-lg px-1 transition-colors">
                 <div className="flex items-center gap-2 min-w-0">
                   <Tag className="m-0 border-0 text-[9px] font-bold"
                     color={h.status === 'completed' ? 'green' : h.status === 'failed' ? 'red' : 'processing'}>
@@ -338,6 +362,7 @@ export const ModelScoreResearch: React.FC = () => {
                   {h.latest_trade_date && (
                     <span className="text-slate-400 font-mono">{h.latest_trade_date}</span>
                   )}
+                  <span className="text-blue-500 font-bold ml-1">查看 ›</span>
                 </div>
               </div>
             ))}
