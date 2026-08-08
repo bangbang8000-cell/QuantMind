@@ -893,7 +893,7 @@ export const ModelRegistryPage: React.FC = () => {
                             <BarChart3 size={11} />模型分数研究
                           </span>
                         ),
-                        children: <ModelScoreResearch />,
+                        children: <ModelScoreResearch modelId={selectedModel.model_id} />,
                       },
                     ]}
                   />

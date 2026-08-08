@@ -473,14 +473,18 @@ def _cap_bucket(total_mv: float | None) -> str:
 
 
 def _board_type(symbol: str) -> str:
-    """板块类型：科创板 / 创业板 / 主板 / 北交所。"""
+    """板块类型：沪深主板 / 创业板 / 科创板 / 北交所 / 其他。"""
     s = symbol.split(".")[0] if "." in symbol else symbol
     if s.startswith("688"):
         return "科创板"
     if s.startswith(("300", "301")):
         return "创业板"
-    if s.startswith(("600", "601", "603", "605", "000", "001", "002")):
-        return "主板"
+    if s.startswith(("8", "4", "92")) and len(s) == 6 and not s.startswith(("00", "30", "60")):
+        # 北交所：43/83/87/88/92 开头
+        if s.startswith(("43", "83", "87", "88", "92")):
+            return "北交所"
+    if s.startswith(("600", "601", "603", "605", "000", "001", "002", "003")):
+        return "沪深主板"
     return "其他"
 
 
@@ -529,11 +533,23 @@ async def _load_cap_snapshot() -> dict[str, float | None]:
 
     caps: dict[str, float | None] = {}
     async with get_session(read_only=True) as session:
+        # 优先取最新交易日；若该日 total_mv 未回填（全 NULL），回退到最近有市值数据的交易日
+        r = await session.execute(text(
+            "SELECT trade_date, COUNT(total_mv) AS mv_cnt FROM stock_daily_latest "
+            "GROUP BY trade_date ORDER BY trade_date DESC LIMIT 5"
+        ))
+        target_date = None
+        for row in r.mappings():
+            if int(row["mv_cnt"] or 0) > 1000:
+                target_date = row["trade_date"]
+                break
+        if target_date is None:
+            return caps
+
         r = await session.execute(text(
             "SELECT symbol, total_mv FROM stock_daily_latest "
-            "WHERE trade_date = (SELECT MAX(trade_date) FROM stock_daily_latest) "
-            "AND total_mv IS NOT NULL"
-        ))
+            "WHERE trade_date = :d AND total_mv IS NOT NULL"
+        ), {"d": target_date})
         for row in r.mappings():
             caps[str(row["symbol"]).strip().upper()] = float(row["total_mv"])
     _cap_cache = caps
@@ -666,67 +682,89 @@ async def negative_selection(
     }
 
 
+async def _load_industry_score_avg(
+    day_scores: pd.DataFrame,
+    industry_map: dict[str, str],
+    *,
+    positive: bool,
+) -> list[dict[str, Any]]:
+    """行业分数 avg：positive=True 统计正分，False 统计负分。
+
+    返回 [{industry, count, avg, extreme}]，正分按 avg 降序（最强行业在前），
+    负分按 avg 升序（最深负分行业在前）。
+    """
+    if day_scores.empty:
+        return []
+    sym_industry: dict[str, str] = {}
+    for row in day_scores.itertuples(index=False):
+        sym = row.symbol
+        sym_industry[sym] = industry_map.get(sym) or ""
+
+    subset = day_scores[day_scores["score"] > 0 if positive else day_scores["score"] < 0].copy()
+    subset["industry"] = subset["symbol"].map(sym_industry)
+    subset = subset[subset["industry"].notna() & (subset["industry"] != "")]
+    if subset.empty:
+        return []
+
+    agg = subset.groupby("industry").agg(
+        count=("score", "count"),
+        avg=("score", "mean"),
+        extreme=("score", "max" if positive else "min"),
+    ).reset_index()
+    agg = agg.sort_values("avg", ascending=(not positive)).reset_index(drop=True)
+    prefix = "pos" if positive else "neg"
+    return [
+        {
+            "industry": r.industry,
+            f"{prefix}_count": int(r.count),
+            f"{prefix}_avg": round(float(r.avg), 4),
+            f"{prefix}_extreme": round(float(r.extreme), 4),
+        }
+        for r in agg.itertuples(index=False)
+    ]
+
+
+async def _load_board_score_avg(
+    day_scores: pd.DataFrame,
+    *,
+    positive: bool,
+) -> list[dict[str, Any]]:
+    """板块分数 avg：主板/创业板/科创板/北交所/其他。"""
+    if day_scores.empty:
+        return []
+    subset = day_scores[day_scores["score"] > 0 if positive else day_scores["score"] < 0].copy()
+    subset["board"] = subset["symbol"].map(_board_type)
+    if subset.empty:
+        return []
+    agg = subset.groupby("board").agg(
+        count=("score", "count"),
+        avg=("score", "mean"),
+    ).reset_index()
+    prefix = "pos" if positive else "neg"
+    return [
+        {
+            "board": r.board,
+            f"{prefix}_count": int(r.count),
+            f"{prefix}_avg": round(float(r.avg), 4),
+        }
+        for r in agg.itertuples(index=False)
+    ]
+
+
 async def _load_industry_negative_avg(
     signals: list[dict[str, Any]],
     day_scores: pd.DataFrame,
     industry_map: dict[str, str],
 ) -> list[dict[str, Any]]:
-    """负分行业 avg：按申万行业统计负分股票的数量、均值、最深分。"""
-    if day_scores.empty:
-        return []
-
-    # symbol (suffix) → 行业
-    sym_industry: dict[str, str] = {}
-    for row in day_scores.itertuples(index=False):
-        sym = row.symbol  # 已是 suffix 格式（600519.SH）
-        sym_industry[sym] = industry_map.get(sym) or ""
-
-    neg = day_scores[day_scores["score"] < 0].copy()
-    neg["industry"] = neg["symbol"].map(sym_industry)
-    neg = neg[neg["industry"].notna() & (neg["industry"] != "")]
-
-    if neg.empty:
-        return []
-
-    agg = neg.groupby("industry").agg(
-        neg_count=("score", "count"),
-        neg_avg=("score", "mean"),
-        neg_min=("score", "min"),
-    ).reset_index()
-    agg = agg.sort_values("neg_avg").reset_index(drop=True)
-    return [
-        {
-            "industry": r.industry,
-            "neg_count": int(r.neg_count),
-            "neg_avg": round(float(r.neg_avg), 4),
-            "neg_min": round(float(r.neg_min), 4),
-        }
-        for r in agg.itertuples(index=False)
-    ]
+    """负分行业 avg（兼容旧调用）。"""
+    return await _load_industry_score_avg(day_scores, industry_map, positive=False)
 
 
 async def _load_board_negative_avg(
     day_scores: pd.DataFrame,
 ) -> list[dict[str, Any]]:
-    """板块负分 avg：主板/创业板/科创板/北交所/其他。"""
-    if day_scores.empty:
-        return []
-    neg = day_scores[day_scores["score"] < 0].copy()
-    neg["board"] = neg["symbol"].map(_board_type)
-    if neg.empty:
-        return []
-    agg = neg.groupby("board").agg(
-        neg_count=("score", "count"),
-        neg_avg=("score", "mean"),
-    ).reset_index()
-    return [
-        {
-            "board": r.board,
-            "neg_count": int(r.neg_count),
-            "neg_avg": round(float(r.neg_avg), 4),
-        }
-        for r in agg.itertuples(index=False)
-    ]
+    """板块负分 avg（兼容旧调用）。"""
+    return await _load_board_score_avg(day_scores, positive=False)
 
 
 @router.post("/score-calibration")
@@ -735,6 +773,7 @@ async def submit_score_calibration(
     days: int = Query(180, ge=30, le=478, description="回测历史交易日数"),
     horizons: str = Query("1,3,5,10", description="未来 N 日收益列表，逗号分隔，如 1,3,5,10"),
     top_n: int = Query(50, ge=10, le=200, description="排名前 N 内重点标注"),
+    model_id: str = Query("", description="模型 ID，按该模型的历史信号校准（缺省用全部信号）"),
 ):
     """提交模型分数校准任务，立即返回 task_id，后台异步计算。"""
     user_id, tenant_id = get_authenticated_identity(request)
@@ -745,13 +784,13 @@ async def submit_score_calibration(
         "progress": 0,
         "message": "任务已提交，等待调度",
         "user_id": user_id,
-        "params": {"days": days, "horizons": horizons, "top_n": top_n},
+        "params": {"days": days, "horizons": horizons, "top_n": top_n, "model_id": model_id},
         "result": None,
         "error": None,
         "created_at": __import__("datetime").datetime.now().isoformat(),
     })
     asyncio.create_task(
-        _run_score_calibration(task_id, user_id, tenant_id, days, horizons, top_n),
+        _run_score_calibration(task_id, user_id, tenant_id, days, horizons, top_n, model_id),
         name=f"score-calib-{task_id}",
     )
     return {
@@ -787,7 +826,8 @@ async def get_score_calibration_task(task_id: str, request: Request):
 
 
 async def _run_score_calibration(
-    task_id: str, user_id: str, tenant_id: str, days: int, horizons: str, top_n: int
+    task_id: str, user_id: str, tenant_id: str, days: int, horizons: str, top_n: int,
+    model_id: str = "",
 ) -> None:
     """后台执行分数校准，分阶段更新进度。"""
     try:
@@ -798,19 +838,42 @@ async def _run_score_calibration(
         horizon_list = _parse_horizons(horizons)
 
         # 1. 读取历史信号（限制条数避免全表扫描）
+        #    指定 model_id 时，先查该模型的历史 run_id，只校准该模型的信号
+        extra_where = ""
+        params: dict[str, Any] = {"tenant_id": tenant_id, "user_id": user_id}
+        if model_id:
+            model_runs: list[str] = []
+            async with get_session(read_only=True) as session:
+                res = await session.execute(
+                    text(
+                        "SELECT run_id FROM qm_model_inference_runs "
+                        "WHERE tenant_id = :tenant_id AND user_id = :user_id "
+                        "AND model_id = :model_id AND status = 'completed' "
+                        "AND run_id IS NOT NULL"
+                    ),
+                    {"tenant_id": tenant_id, "user_id": user_id, "model_id": model_id},
+                )
+                model_runs = [str(r[0]) for r in res.fetchall() if r[0]]
+            if model_runs:
+                # run_id 数量可能较多，用 IN 子查询按 run_id 关联信号
+                extra_where = " AND run_id IN (SELECT run_id FROM qm_model_inference_runs WHERE tenant_id = :tenant_id AND user_id = :user_id AND model_id = :model_id AND status = 'completed') "
+                params["model_id"] = model_id
+                _calib_update(task_id, message=f"按模型 {model_id[:24]}... 过滤 {len(model_runs)} 个历史批次")
+
         query = text(
-            """
+            f"""
             SELECT trade_date, symbol, fusion_score, score_rank
             FROM engine_signal_scores
             WHERE tenant_id = :tenant_id AND user_id = :user_id
               AND fusion_score IS NOT NULL
+              {extra_where}
             ORDER BY trade_date DESC
             LIMIT 2000000
             """
         )
         rows = []
         async with get_session(read_only=True) as session:
-            result = await session.execute(query, {"tenant_id": tenant_id, "user_id": user_id})
+            result = await session.execute(query, params)
             rows = result.mappings().all()
         if not rows:
             _calib_update(task_id, status="failed")
@@ -930,6 +993,218 @@ def _parse_horizons(horizons: str) -> list[int]:
     return out or [1, 3, 5, 10]
 
 
+async def _compute_market_signal(
+    all_dates: list[str],
+    date_scores: dict[str, list[dict[str, Any]]],
+) -> dict[str, Any]:
+    """大盘信号：每日全部股票信号均值/涨跌家数 → 次日上证指数红/绿概率。
+
+    统计逻辑：
+      - 每日计算全部信号均值、正分家数、负分家数、正分占比
+      - 关联次日上证指数涨跌（红=收涨，绿=收跌）
+      - 分档统计：信号均值>阈值时次日红盘概率 vs 全部日基线
+    """
+    try:
+        # 1. 加载上证指数收盘（QuantDB index_daily）
+        from datetime import date as _date, timedelta as _td
+        from backend.services.engine.data_platform.quantdb_hub import QuantDBDataHub
+
+        hub = QuantDBDataHub()
+        end = _date.fromisoformat(all_dates[-1]) if all_dates else _date.today()
+        start = end - _td(days=40)
+        df = hub.fetch_index_kline("000001.SH", start, end)
+        if df is None or df.empty:
+            return {"status": "unavailable", "detail": "无指数数据"}
+        df = df.sort_values("trade_date")
+        index_close = dict(zip(df["trade_date"].astype(str), df["close"].astype(float)))
+        index_dates = sorted(index_close.keys())
+
+        # 2. 每日市场广度 + 次日指数方向
+        day_breadth: list[dict[str, Any]] = []
+        for idx, d in enumerate(all_dates):
+            if d not in index_close:
+                continue
+            day_items = date_scores.get(d, [])
+            if not day_items:
+                continue
+            scores = [x["score"] for x in day_items]
+            avg = sum(scores) / len(scores)
+            pos = sum(1 for s in scores if s > 0)
+            neg = sum(1 for s in scores if s < 0)
+            total = len(scores)
+            # 次日指数涨跌（找 d 之后最近的指数交易日）
+            next_idx = index_dates.index(d) + 1 if d in index_dates else -1
+            if next_idx >= len(index_dates):
+                continue
+            next_d = index_dates[next_idx]
+            if next_d not in index_close or d not in index_close:
+                continue
+            next_chg = (index_close[next_d] / index_close[d] - 1.0) * 100.0
+            day_breadth.append({
+                "date": d,
+                "avg_score": round(avg, 4),
+                "pos_count": pos,
+                "neg_count": neg,
+                "pos_ratio": round(pos / total * 100.0, 1) if total else 0,
+                "next_day_index_chg": round(next_chg, 3),
+                "next_day_red": 1 if next_chg > 0 else 0,
+            })
+
+        if len(day_breadth) < 10:
+            return {"status": "insufficient", "detail": "样本不足"}
+
+        # 3. 分档统计：信号均值/正分占比 阈值 → 次日红盘概率
+        def _prob_at_threshold(field: str, threshold: float, ge: bool) -> dict[str, Any]:
+            matched = [b for b in day_breadth if (b[field] >= threshold if ge else b[field] <= threshold)]
+            if len(matched) < 5:
+                return None
+            red = sum(1 for b in matched if b["next_day_red"])
+            return {
+                "condition": f"{field}{'>=' if ge else '<='}{threshold}",
+                "days": len(matched),
+                "red_prob": round(red / len(matched) * 100.0, 1),
+                "green_prob": round((len(matched) - red) / len(matched) * 100.0, 1),
+                "avg_next_chg": round(sum(b["next_day_index_chg"] for b in matched) / len(matched), 3),
+            }
+
+        avg_thresholds = [0.05, 0.0, -0.05, -0.10]
+        pos_ratio_thresholds = [50.0, 40.0, 60.0]
+        signal_table = []
+        for t in avg_thresholds:
+            row = _prob_at_threshold("avg_score", t, True)
+            if row: signal_table.append(row)
+        for t in pos_ratio_thresholds:
+            row = _prob_at_threshold("pos_ratio", t, True)
+            if row: signal_table.append(row)
+
+        # 基线（全部日）
+        all_red = sum(1 for b in day_breadth if b["next_day_red"])
+        baseline = {
+            "days": len(day_breadth),
+            "red_prob": round(all_red / len(day_breadth) * 100.0, 1),
+            "avg_next_chg": round(sum(b["next_day_index_chg"] for b in day_breadth) / len(day_breadth), 3),
+        }
+
+        return {
+            "status": "success",
+            "baseline": baseline,
+            "signal_table": signal_table,
+            "recent_days": day_breadth[-15:],
+            "index_symbol": "000001.SH",
+        }
+    except Exception as exc:
+        logger.warning("compute market signal failed: %s", exc)
+        return {"status": "error", "detail": str(exc)}
+
+
+def _compute_winrate_zones(
+    records: list[dict[str, Any]],
+    horizon_list: list[int],
+) -> dict[str, Any]:
+    """按胜率/收益反推最优分数区间（相对最优，适配任意模型）。
+
+    核心思路（用户要求）：先统计每个分数附近的胜率/收益，
+    再从统计反推「胜率最高的分数段」（做多）和「下跌概率最高的分数段」（做空）。
+
+    方法：
+      1. 对每个 horizon，把样本按分数分成 N 个细档（分位数）
+      2. 计算每档的胜率/下跌概率/均收
+      3. 找「胜率最高」且样本足够的连续分数段 = 最优做多区间
+      4. 找「下跌概率最高」的连续分数段 = 最优做空区间
+      5. 同时输出胜率≥80%/90%的段（若存在）
+    """
+    if not records or not horizon_list:
+        return {"status": "empty", "detail": "无样本"}
+
+    results: list[dict[str, Any]] = []
+    for h in horizon_list:
+        pairs = []
+        for r in records:
+            ret = r["rets"].get(h)
+            if ret is not None:
+                pairs.append((r["score"], ret))
+        if len(pairs) < 500:
+            continue
+        pairs.sort(key=lambda x: x[0])
+        n = len(pairs)
+
+        # 分成 20 个分位数细档
+        n_bins = 20
+        bin_size = n // n_bins
+        bins = []
+        for i in range(n_bins):
+            lo = i * bin_size
+            hi = n if i == n_bins - 1 else (i + 1) * bin_size
+            if hi <= lo:
+                continue
+            seg = pairs[lo:hi]
+            seg_rets = [p[1] for p in seg]
+            wins = sum(1 for x in seg_rets if x > 0)
+            downs = sum(1 for x in seg_rets if x < 0)
+            bins.append({
+                "score_min": seg[0][0],
+                "score_max": seg[-1][0],
+                "n": len(seg),
+                "win_rate": wins / len(seg),
+                "down_prob": downs / len(seg),
+                "avg_ret": sum(seg_rets) / len(seg),
+                "horizon": h,
+            })
+
+        if len(bins) < 5:
+            continue
+
+        # 相对最优：胜率最高的前 3 档合并为做多区间
+        by_win = sorted(bins, key=lambda b: -b["win_rate"])
+        best3 = by_win[:3]
+        if best3:
+            best_min = min(b["score_min"] for b in best3)
+            best_max = max(b["score_max"] for b in best3)
+            seg = [p for p in pairs if best_min <= p[0] <= best_max]
+            seg_rets = [p[1] for p in seg]
+            results.append({
+                "type": "long",
+                "horizon": h,
+                "score_min": round(best_min, 4),
+                "score_max": round(best_max, 4),
+                "n": len(seg),
+                "win_rate": round(sum(1 for x in seg_rets if x > 0) / len(seg) * 100.0, 1),
+                "down_prob": round(sum(1 for x in seg_rets if x < 0) / len(seg) * 100.0, 1),
+                "avg_ret": round(sum(seg_rets) / len(seg), 3),
+                "label": "胜率最高(做多)",
+            })
+
+        # 相对最差：下跌概率最高的前 3 档合并为做空区间
+        by_down = sorted(bins, key=lambda b: -b["down_prob"])
+        worst3 = by_down[:3]
+        if worst3:
+            worst_min = min(b["score_min"] for b in worst3)
+            worst_max = max(b["score_max"] for b in worst3)
+            seg = [p for p in pairs if worst_min <= p[0] <= worst_max]
+            seg_rets = [p[1] for p in seg]
+            results.append({
+                "type": "short",
+                "horizon": h,
+                "score_min": round(worst_min, 4),
+                "score_max": round(worst_max, 4),
+                "n": len(seg),
+                "win_rate": round(sum(1 for x in seg_rets if x > 0) / len(seg) * 100.0, 1),
+                "down_prob": round(sum(1 for x in seg_rets if x < 0) / len(seg) * 100.0, 1),
+                "avg_ret": round(sum(seg_rets) / len(seg), 3),
+                "label": "下跌概率最高(做空)",
+            })
+
+    if not results:
+        return {"status": "none", "detail": "无有效样本"}
+
+    results.sort(key=lambda x: (-x["win_rate"]) if x["type"] == "long" else x["down_prob"])
+    return {
+        "status": "success",
+        "note": "按胜率反推最优分数区间：先统计每档胜率/下跌概率，再合并出做多最优段与做空最优段",
+        "zones": results[:20],
+    }
+
+
 async def _aggregate_calibration(
     records: list[dict[str, Any]],
     all_dates: list[str],
@@ -938,24 +1213,41 @@ async def _aggregate_calibration(
     top_n: int,
 ) -> dict[str, Any]:
     """从 records 聚合分数档矩阵与汇总。"""
-    def _band(score: float) -> str:
-        if score <= -0.25: return "≤-0.25"
-        if score <= -0.20: return "-0.25~-0.20"
-        if score <= -0.15: return "-0.20~-0.15"
-        if score <= -0.10: return "-0.15~-0.10"
-        if score <= -0.06: return "-0.10~-0.06"
-        if score < 0: return "-0.06~0"
-        if score < 0.05: return "0~0.05"
-        if score < 0.08: return "0.05~0.08"
-        if score < 0.10: return "0.08~0.10"
-        if score < 0.12: return "0.10~0.12"
-        if score < 0.15: return "0.12~0.15"
-        if score < 0.20: return "0.15~0.20"
-        return "≥0.20"
-
     import collections
-    band_labels = ["≤-0.25","-0.25~-0.20","-0.20~-0.15","-0.15~-0.10","-0.10~-0.06","-0.06~0",
-                   "0~0.05","0.05~0.08","0.08~0.10","0.10~0.12","0.12~0.15","0.15~0.20","≥0.20"]
+
+    # 分位数分档：按实际分数分布切分，每档样本数相近
+    # 等宽分档在高分档样本稀疏（如 ≥0.797 仅 5900），分位数分档保证每档统计可靠
+    all_scores_sorted = sorted(r["score"] for r in records)
+    score_min = min(all_scores_sorted)
+    score_max = max(all_scores_sorted)
+    n_bands = 12
+    # 分位点：0%, 1/n, 2/n, ..., 100%（用分位数保证每档等样本）
+    edges_pct = [i / n_bands for i in range(n_bands)]
+    # 分位数分档边界（用分位值，可能重复时退化）
+    band_edges_q = []
+    for p in edges_pct:
+        idx = min(len(all_scores_sorted) - 1, int(p * (len(all_scores_sorted) - 1)))
+        band_edges_q.append(all_scores_sorted[idx])
+    # 去重边界
+    uniq = []
+    for e in band_edges_q:
+        if not uniq or abs(e - uniq[-1]) > 1e-9:
+            uniq.append(e)
+    if len(uniq) < 3:
+        uniq = [score_min, (score_min + score_max) / 2, score_max]
+    band_edges = uniq
+    n_real = len(band_edges) - 1
+    band_labels = [f"{band_edges[i]:.3f}~{band_edges[i+1]:.3f}" for i in range(n_real)]
+    band_labels[-1] = f"≥{band_edges[-2]:.3f}"
+
+    def _band_idx(score: float) -> int:
+        for i in range(n_real):
+            if score <= band_edges[i + 1]:
+                return i
+        return n_real - 1
+
+    def _band(score: float) -> str:
+        return band_labels[_band_idx(score)]
 
     # 分数档×市值档×horizon
     band_cap_h: dict[tuple[str, str, int], list[float]] = collections.defaultdict(list)
@@ -1018,6 +1310,24 @@ async def _aggregate_calibration(
             "horizons": horizons_stats,
         })
 
+    # 标注档位性质：最优/最差/观察/最热
+    # 依据主周期均收：最高=最优，最低=最差；样本最多=最热；其余=观察
+    if score_summary:
+        by_avg = [s for s in score_summary if s.get("main_horizon_avg_ret") is not None]
+        if by_avg:
+            best = max(by_avg, key=lambda s: s["main_horizon_avg_ret"])["score_band"]
+            worst = min(by_avg, key=lambda s: s["main_horizon_avg_ret"])["score_band"]
+            hottest = max(score_summary, key=lambda s: s["n"])["score_band"]
+            for s in score_summary:
+                nature = "观察"
+                if s["score_band"] == best:
+                    nature = "最优"
+                elif s["score_band"] == worst:
+                    nature = "最差"
+                elif s["score_band"] == hottest:
+                    nature = "最热"
+                s["nature"] = nature
+
     # 负分行业/板块 avg（最新日）
     latest_date = all_dates[-1]
     latest_items = date_scores[latest_date]
@@ -1028,6 +1338,9 @@ async def _aggregate_calibration(
     industry_map = load_shenwan_industry_map()
     neg_industry_avg = await _load_industry_negative_avg(latest_items, latest_df, industry_map)
     neg_board_avg = await _load_board_negative_avg(latest_df)
+    # 正分行业/板块 avg（新增：最强行业/板块排名）
+    pos_industry_avg = await _load_industry_score_avg(latest_df, industry_map, positive=True)
+    pos_board_avg = await _load_board_score_avg(latest_df, positive=True)
 
     # 推荐分数区间
     recommended = None
@@ -1037,14 +1350,30 @@ async def _aggregate_calibration(
             if recommended is None or avg > recommended.get("main_horizon_avg_ret", -999):
                 recommended = s
 
+    # 大盘信号：全市场信号均值 → 次日指数红/绿概率
+    market_signal = await _compute_market_signal(all_dates, date_scores)
+
+    # 胜率聚类：按分数排序，滑动找出高胜率分数区间
+    # 核心思路：先统计每个分数附近的胜率，再反推"胜率≥阈值"的分数段
+    winrate_zones = _compute_winrate_zones(records, horizon_list)
+
     return {
         "matrix": matrix,
         "score_summary": score_summary,
         "neg_industry_avg": neg_industry_avg[:10],
         "neg_board_avg": neg_board_avg,
+        "pos_industry_avg": pos_industry_avg[:10],
+        "pos_board_avg": pos_board_avg,
+        "market_signal": market_signal,
+        "winrate_zones": winrate_zones,
         "recommended_band": recommended,
         "total_samples": len(records),
         "latest_trade_date": latest_date,
+        "score_range": {
+            "min": round(score_min, 4),
+            "max": round(score_max, 4),
+            "band_count": n_real,
+        },
     }
 
 

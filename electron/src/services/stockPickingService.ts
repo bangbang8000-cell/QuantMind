@@ -155,6 +155,7 @@ export interface ScoreBandSummary {
   avg_rank_pct: number;
   main_horizon_avg_ret: number | null;
   horizons: ScoreBandHorizon[];
+  nature?: string;
 }
 
 export interface ScoreCapCell {
@@ -183,10 +184,22 @@ export interface ScoreCalibrationResponse {
   };
   matrix?: ScoreCapRow[];
   score_summary?: ScoreBandSummary[];
-  neg_industry_avg?: Array<{ industry: string; neg_count: number; neg_avg: number; neg_min: number }>;
+  neg_industry_avg?: Array<{ industry: string; neg_count: number; neg_avg: number; neg_extreme?: number }>;
   neg_board_avg?: Array<{ board: string; neg_count: number; neg_avg: number }>;
+  pos_industry_avg?: Array<{ industry: string; pos_count: number; pos_avg: number; pos_extreme?: number }>;
+  pos_board_avg?: Array<{ board: string; pos_count: number; pos_avg: number }>;
+  market_signal?: {
+    status: string;
+    baseline?: { days: number; red_prob: number; avg_next_chg: number };
+    signal_table?: Array<{ condition: string; days: number; red_prob: number; green_prob: number; avg_next_chg: number }>;
+    recent_days?: Array<{ date: string; avg_score: number; pos_count: number; neg_count: number; pos_ratio: number; next_day_index_chg: number; next_day_red: number }>;
+    index_symbol?: string;
+  };
+  score_range?: { min: number; max: number; band_count: number };
   recommended_band?: ScoreBandSummary | null;
   warnings?: string[];
+  total_samples?: number;
+  latest_trade_date?: string;
 }
 
 /** 提交校准任务，返回 task_id */
@@ -218,11 +231,13 @@ export async function submitScoreCalibration(params?: {
   days?: number;
   horizons?: string;
   top_n?: number;
+  model_id?: string;
 }): Promise<CalibrationTaskResponse> {
   const qp = new URLSearchParams();
   if (params?.days) qp.set('days', String(params.days));
   if (params?.horizons) qp.set('horizons', params.horizons);
   if (params?.top_n) qp.set('top_n', String(params.top_n));
+  if (params?.model_id) qp.set('model_id', params.model_id);
   const qs = qp.toString();
   const res = await apiClient.post(`/selection/score-calibration${qs ? `?${qs}` : ''}`);
   return res.data;

@@ -25,7 +25,11 @@ const numColor = (v: number | null | undefined): string => {
   return v > 0 ? '#10b981' : v < 0 ? '#f43f5e' : '#64748b';
 };
 
-export const ModelScoreResearch: React.FC = () => {
+interface Props {
+  modelId?: string;
+}
+
+export const ModelScoreResearch: React.FC<Props> = ({ modelId }) => {
   const [data, setData] = useState<ScoreCalibrationResponse | null>(null);
   const [loading, setLoading] = useState(false);
   const [taskId, setTaskId] = useState<string | null>(null);
@@ -95,7 +99,7 @@ export const ModelScoreResearch: React.FC = () => {
     setProgress(0);
     setProgressMsg('提交校准任务...');
     try {
-      const res = await submitScoreCalibration({ days, horizons, top_n: 50 });
+      const res = await submitScoreCalibration({ days, horizons, top_n: 50, model_id: modelId });
       if (res.status !== 'submitted' || !res.task_id) {
         setData({ status: 'error', detail: res.detail || '提交失败' });
         setLoading(false);
@@ -131,7 +135,7 @@ export const ModelScoreResearch: React.FC = () => {
       setData({ status: 'error', detail: err?.message || '加载失败' });
       setLoading(false);
     }
-  }, [days, horizons, clearPoll, normalizeResult]);
+  }, [days, horizons, clearPoll, normalizeResult, modelId]);
 
   useEffect(() => {
     return () => clearPoll();
@@ -148,8 +152,18 @@ export const ModelScoreResearch: React.FC = () => {
     {
       title: '分数档',
       dataIndex: 'score_band',
-      width: 110,
-      render: (v: string) => <Text className="font-black" style={{ color: bandColor(v) }}>{v}</Text>,
+      width: 120,
+      render: (v: string, r: any) => (
+        <div className="flex items-center gap-1.5">
+          <Text className="font-black" style={{ color: bandColor(v) }}>{v}</Text>
+          {r?.nature && (
+            <Tag className="m-0 border-0 text-[8px] font-bold px-1.5"
+              color={r.nature === '最优' ? 'green' : r.nature === '最差' ? 'red' : r.nature === '最热' ? 'orange' : 'default'}>
+              {r.nature === '最优' ? '★最优' : r.nature === '最差' ? '▼最差' : r.nature === '最热' ? '🔥最热' : ''}
+            </Tag>
+          )}
+        </div>
+      ),
     },
     {
       title: '样本',
@@ -169,6 +183,20 @@ export const ModelScoreResearch: React.FC = () => {
       width: 80,
       render: (v: number) => <Text className="font-mono text-[10px] text-slate-500">{v.toLocaleString()}</Text>,
     },
+    ...([1, 3, 5, 10].filter(h => horizons.split(',').includes(String(h))).map(h => ({
+      title: `T+${h} 上涨`,
+      key: `up_${h}`,
+      width: 76,
+      render: (_: unknown, r: ScoreCalibrationResponse['score_summary'] extends (infer T)[] ? T : never) => {
+        const hs = (r?.horizons || []).find(x => x.horizon === h);
+        if (!hs) return <Text className="text-[10px] text-slate-300">—</Text>;
+        return (
+          <Text className="font-mono text-[10px]" style={{ color: numColor(hs.win_rate - 50) }}>
+            {hs.win_rate.toFixed(1)}%
+          </Text>
+        );
+      },
+    }))),
     ...([1, 3, 5, 10].filter(h => horizons.split(',').includes(String(h))).map(h => ({
       title: `T+${h} 下跌`,
       key: `down_${h}`,
@@ -285,6 +313,36 @@ export const ModelScoreResearch: React.FC = () => {
               </div>
             )}
 
+            {/* 最优分数区间（按胜率反推） */}
+            {(data as any).winrate_zones && (data as any).winrate_zones.status === 'success' && (
+              <div className="rounded-2xl border border-emerald-100 bg-emerald-50/30 p-4 shadow-sm">
+                <div className="mb-2 text-[10px] font-black uppercase tracking-widest text-emerald-600">
+                  最优分数区间（先统计胜率 → 反推做多/做空最优段）
+                </div>
+                <div className="space-y-1">
+                  {((data as any).winrate_zones.zones || []).map((z: any, i: number) => {
+                    const isLong = z.label?.includes('做多');
+                    return (
+                      <div key={i} className="flex items-center justify-between text-[10px] py-0.5">
+                        <div className="flex items-center gap-2">
+                          <Tag className="m-0 border-0 text-[9px] font-bold"
+                            color={isLong ? 'green' : 'red'}>
+                            {z.label?.includes('做多') ? '做多' : '做空'}
+                          </Tag>
+                          <span className="font-black text-slate-700">T+{z.horizon} {z.score_min.toFixed(3)}~{z.score_max.toFixed(3)}</span>
+                        </div>
+                        <span className="font-mono">
+                          <span style={{ color: numColor(z.win_rate - 50) }}>胜率 {z.win_rate}%</span>
+                          <span className="text-slate-400"> / 下跌 {z.down_prob}% / 均收 </span>
+                          <span style={{ color: numColor(z.avg_ret) }}>{z.avg_ret > 0 ? '+' : ''}{z.avg_ret}%</span>
+                        </span>
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+            )}
+
             {data.matrix && data.matrix.length > 0 && (
               <div className="rounded-2xl border border-slate-100 bg-white p-4 shadow-sm">
                 <div className="mb-2 text-[10px] font-black uppercase tracking-widest text-slate-500">
@@ -312,7 +370,24 @@ export const ModelScoreResearch: React.FC = () => {
                       <div key={r.industry} className="flex items-center justify-between text-[10px]">
                         <span className="font-bold text-slate-600">{r.industry}</span>
                         <span className="font-mono" style={{ color: numColor(r.neg_avg) }}>
-                          {r.neg_avg.toFixed(3)}（{r.neg_count}只 / 最深{r.neg_min.toFixed(3)}）
+                          {r.neg_avg.toFixed(3)}（{r.neg_count}只 / 最深{(r as any).neg_min?.toFixed(3) ?? (r as any).neg_extreme?.toFixed(3) ?? '-'}）
+                        </span>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+              {data.pos_industry_avg && data.pos_industry_avg.length > 0 && (
+                <div className="rounded-2xl border border-slate-100 bg-white p-4 shadow-sm">
+                  <div className="mb-2 text-[10px] font-black uppercase tracking-widest text-slate-500">
+                    正分行业 avg（最新日）
+                  </div>
+                  <div className="space-y-1">
+                    {data.pos_industry_avg.map(r => (
+                      <div key={r.industry} className="flex items-center justify-between text-[10px]">
+                        <span className="font-bold text-slate-600">{r.industry}</span>
+                        <span className="font-mono" style={{ color: numColor(r.pos_avg) }}>
+                          {r.pos_avg.toFixed(3)}（{r.pos_count}只 / 最高{(r as any).pos_extreme?.toFixed(3) ?? '-'}）
                         </span>
                       </div>
                     ))}
@@ -336,7 +411,53 @@ export const ModelScoreResearch: React.FC = () => {
                   </div>
                 </div>
               )}
+              {data.pos_board_avg && data.pos_board_avg.length > 0 && (
+                <div className="rounded-2xl border border-slate-100 bg-white p-4 shadow-sm">
+                  <div className="mb-2 text-[10px] font-black uppercase tracking-widest text-slate-500">
+                    板块正分 avg（最新日）
+                  </div>
+                  <div className="space-y-1">
+                    {data.pos_board_avg.map(r => (
+                      <div key={r.board} className="flex items-center justify-between text-[10px]">
+                        <span className="font-bold text-slate-600">{r.board}</span>
+                        <span className="font-mono" style={{ color: numColor(r.pos_avg) }}>
+                          {r.pos_avg.toFixed(3)}（{r.pos_count}只）
+                        </span>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
             </div>
+
+            {/* 大盘信号：全市场分数 → 次日指数红绿概率 */}
+            {data.market_signal && data.market_signal.status === 'success' && (
+              <div className="rounded-2xl border border-slate-100 bg-white p-4 shadow-sm">
+                <div className="mb-2 text-[10px] font-black uppercase tracking-widest text-slate-500">
+                  大盘信号（全市场分数均值 → 次日上证红/绿概率）
+                </div>
+                {data.market_signal.baseline && (
+                  <div className="mb-2 text-[10px] text-slate-500">
+                    基线：{data.market_signal.baseline.days}天 红盘率 {data.market_signal.baseline.red_prob}% / 次日均涨跌 {data.market_signal.baseline.avg_next_chg}%
+                  </div>
+                )}
+                <div className="space-y-1">
+                  {data.market_signal.signal_table?.map(row => {
+                    const better = row.red_prob > (data.market_signal?.baseline?.red_prob ?? 50);
+                    return (
+                      <div key={row.condition} className="flex items-center justify-between text-[10px]">
+                        <span className="font-bold text-slate-600">{row.condition}</span>
+                        <span className="font-mono">
+                          <span style={{ color: numColor(better ? 1 : -1) }}>红盘 {row.red_prob}%</span>
+                          <span className="text-slate-400"> / 绿盘 {row.green_prob}% / {row.days}天 / 均涨跌 </span>
+                          <span style={{ color: numColor(row.avg_next_chg) }}>{row.avg_next_chg}%</span>
+                        </span>
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+            )}
 
             {data.warnings && data.warnings.length > 0 && (
               <Alert type="warning" message={data.warnings.join('；')} className="!text-[10px]" />
