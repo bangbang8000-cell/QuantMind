@@ -233,6 +233,28 @@ export async function getCalibrationTask(taskId: string): Promise<CalibrationTas
   return res.data;
 }
 
+/** 校准历史记录 */
+export interface CalibrationHistoryItem {
+  task_id: string;
+  status: string;
+  progress: number;
+  message?: string;
+  params?: { days?: number; horizons?: string; top_n?: number };
+  created_at?: string;
+  total_samples?: number;
+  recommended_band?: string | null;
+  latest_trade_date?: string;
+}
+
+export async function getCalibrationHistory(limit = 20): Promise<{
+  status: string;
+  items: CalibrationHistoryItem[];
+  total: number;
+}> {
+  const res = await apiClient.get(`/selection/score-calibration-history?limit=${limit}`);
+  return res.data;
+}
+
 export async function getSelectionHistory(
   from: string,
   to: string,

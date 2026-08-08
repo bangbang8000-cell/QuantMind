@@ -4,7 +4,9 @@ import { ReloadOutlined } from '@ant-design/icons';
 import {
   submitScoreCalibration,
   getCalibrationTask,
+  getCalibrationHistory,
   ScoreCalibrationResponse,
+  CalibrationHistoryItem,
 } from '../../services/stockPickingService';
 
 const { Text } = Typography;
@@ -31,12 +33,22 @@ export const ModelScoreResearch: React.FC = () => {
   const [progressMsg, setProgressMsg] = useState('');
   const [days, setDays] = useState(180);
   const [horizons, setHorizons] = useState('1,3,5,10');
+  const [history, setHistory] = useState<CalibrationHistoryItem[]>([]);
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
   const clearPoll = useCallback(() => {
     if (pollRef.current) {
       clearInterval(pollRef.current);
       pollRef.current = null;
+    }
+  }, []);
+
+  const loadHistory = useCallback(async () => {
+    try {
+      const h = await getCalibrationHistory(20);
+      if (h.status === 'success') setHistory(h.items || []);
+    } catch (err: any) {
+      console.error('[ScoreCalibration] load history failed:', err);
     }
   }, []);
 
@@ -62,8 +74,10 @@ export const ModelScoreResearch: React.FC = () => {
           setProgressMsg(t.message || '');
           if (t.status === 'completed' && t.result) {
             clearPoll();
-            setData(t.result);
+            // 后端 result 无 status/meta 字段，补上满足渲染判断
+            setData({ ...t.result, status: 'success', meta: t.meta });
             setLoading(false);
+            void loadHistory();
           } else if (t.status === 'failed' || t.status === 'error') {
             clearPoll();
             setData({ status: 'error', detail: t.error || t.detail || '校准失败' });
@@ -90,6 +104,7 @@ export const ModelScoreResearch: React.FC = () => {
 
   useEffect(() => {
     void load();
+    void loadHistory();
     return () => clearPoll();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
@@ -294,6 +309,41 @@ export const ModelScoreResearch: React.FC = () => {
           </div>
         )}
       </Spin>
+
+      {/* 校准历史 */}
+      {history.length > 0 && (
+        <div className="rounded-2xl border border-slate-100 bg-white p-4 shadow-sm">
+          <div className="mb-2 text-[10px] font-black uppercase tracking-widest text-slate-500">
+            校准历史（{history.length} 次）
+          </div>
+          <div className="space-y-1">
+            {history.map(h => (
+              <div key={h.task_id} className="flex items-center justify-between text-[10px] py-1 border-b border-slate-50 last:border-0">
+                <div className="flex items-center gap-2 min-w-0">
+                  <Tag className="m-0 border-0 text-[9px] font-bold"
+                    color={h.status === 'completed' ? 'green' : h.status === 'failed' ? 'red' : 'processing'}>
+                    {h.status === 'completed' ? '完成' : h.status === 'failed' ? '失败' : '进行中'}
+                  </Tag>
+                  <span className="font-mono text-slate-600 truncate">{h.task_id.slice(0, 20)}...</span>
+                  <span className="text-slate-400">
+                    {h.params?.days ?? '-'}天 / T{String(h.params?.horizons ?? '')} / 样本{h.total_samples?.toLocaleString() ?? '-'}
+                  </span>
+                </div>
+                <div className="flex items-center gap-2 flex-shrink-0">
+                  {h.recommended_band && (
+                    <Tag className="m-0 border-0 bg-emerald-50 text-emerald-600 text-[9px] font-bold">
+                      推荐 {h.recommended_band}
+                    </Tag>
+                  )}
+                  {h.latest_trade_date && (
+                    <span className="text-slate-400 font-mono">{h.latest_trade_date}</span>
+                  )}
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
     </div>
   );
 };

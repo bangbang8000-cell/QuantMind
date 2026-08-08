@@ -13,6 +13,7 @@
 """
 from __future__ import annotations
 
+import asyncio
 import logging
 from datetime import date, timedelta
 from time import time as _now
@@ -1047,3 +1048,30 @@ async def _aggregate_calibration(
 
 # 校准任务内存存储
 _calib_tasks: dict[str, dict[str, Any]] = {}
+
+
+@router.get("/score-calibration-history")
+async def list_score_calibration_history(
+    request: Request,
+    limit: int = Query(20, ge=1, le=100),
+):
+    """校准历史：列出最近的校准任务（内存存储，重启后清空）。"""
+    user_id, tenant_id = get_authenticated_identity(request)
+    tasks = []
+    for tid, t in _calib_tasks.items():
+        if t.get("user_id") != user_id:
+            continue
+        tasks.append({
+            "task_id": tid,
+            "status": t.get("status"),
+            "progress": t.get("progress"),
+            "message": t.get("message"),
+            "params": t.get("params", {}),
+            "created_at": t.get("created_at"),
+            "total_samples": (t.get("result") or {}).get("total_samples"),
+            "recommended_band": ((t.get("result") or {}).get("recommended_band") or {}).get("score_band"),
+            "latest_trade_date": (t.get("result") or {}).get("latest_trade_date"),
+        })
+    # 最新在前
+    tasks.sort(key=lambda x: x.get("created_at") or "", reverse=True)
+    return {"status": "success", "items": tasks[:limit], "total": len(tasks)}
