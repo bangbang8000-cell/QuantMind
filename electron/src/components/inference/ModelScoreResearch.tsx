@@ -346,9 +346,14 @@ export const ModelScoreResearch: React.FC<Props> = ({ modelId }) => {
             {/* 多条件组合最优区间（大盘×市值×板块） */}
             {(data as any).condition_zones && (data as any).condition_zones.status === 'success' && (
               <div className="rounded-2xl border border-blue-100 bg-blue-50/30 p-4 shadow-sm">
-                <div className="mb-2 text-[10px] font-black uppercase tracking-widest text-blue-600">
+                <div className="mb-1 text-[10px] font-black uppercase tracking-widest text-blue-600">
                   多条件组合最优区间（大盘状态 × 市值 × 板块）
                 </div>
+                {(data as any).condition_zones.metric_note && (
+                  <div className="mb-2 text-[9px] text-slate-500">
+                    📌 {(data as any).condition_zones.metric_note}
+                  </div>
+                )}
                 <div className="grid grid-cols-1 lg:grid-cols-2 gap-3">
                   <div>
                     <div className="mb-1 text-[9px] font-bold text-emerald-600">买入区间（胜率最高）</div>

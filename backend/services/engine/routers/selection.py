@@ -917,20 +917,23 @@ async def _run_score_calibration(
         _calib_update(task_id, message="加载市值快照...")
         caps_snapshot = await _load_cap_snapshot()
 
-        # 3.5 上证指数每日收盘 + MA20 状态（用于大盘多空条件）
+        # 3.5 大盘状态判定：上证指数(000001.SH) 收盘价 vs MA20(20日均线)
+        #   - 大盘多 = 指数收盘 >= MA20（趋势向上，顺势可做多）
+        #   - 大盘空 = 指数收盘 <  MA20（趋势向下，系统性风险，防守/回避）
+        # 与选股方法论"系统性风险过滤"一致：指数跌破20日均线强制空仓，避开崩盘。
         index_above_ma20: dict[str, bool] = {}
         try:
             from backend.services.engine.data_platform.quantdb_hub import QuantDBDataHub
 
             _hub = QuantDBDataHub()
-            # 扩大指数窗口：信号最早日往前推 40 天，确保 MA20 有足够前置数据
+            # 扩大指数窗口：信号最早日往前推 45 天，确保 MA20 有足够前置数据（需前19天）
             _start = date.fromisoformat(all_dates[0]) - timedelta(days=45)
             _end = date.fromisoformat(all_dates[-1]) + timedelta(days=1)
             _idx_df = _hub.fetch_index_kline("000001.SH", _start, _end)
             if _idx_df is not None and not _idx_df.empty:
                 _idx_df = _idx_df.sort_values("trade_date").reset_index(drop=True)
                 _idx_close = _idx_df["close"].astype(float)
-                _idx_ma20 = _idx_close.rolling(20).mean()
+                _idx_ma20 = _idx_close.rolling(20).mean()  # MA20 = 最近20个交易日收盘均值
                 for _i in range(len(_idx_df)):
                     _d = str(_idx_df.loc[_i, "trade_date"])[:10]  # 转纯 YYYY-MM-DD
                     _c = float(_idx_close.iloc[_i])
@@ -1333,6 +1336,7 @@ def _compute_condition_zones(
     return {
         "status": "success",
         "note": "多条件组合：大盘状态×市值×板块，找出胜率最高的买入分数段与下跌概率最高的卖出/回避分数段",
+        "metric_note": "大盘状态 = 上证指数(000001.SH)收盘价 vs 20日均线(MA20)：指数>=MA20为「大盘多」(趋势向上)，<MA20为「大盘空」(趋势向下/系统性风险)",
         "buy_zones": buy[:20],
         "sell_zones": sell[:20],
     }
