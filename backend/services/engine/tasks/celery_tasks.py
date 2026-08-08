@@ -735,11 +735,12 @@ def daily_data_sync_task(
     symbols: str = "",
     incremental: bool = True,
     calibrate: bool = True,
+    skip_pg: bool = False,
 ) -> dict[str, Any]:
     """
-    Celery Beat 每日 18:00 自动增量同步全市场数据。
+    Celery Beat 每日 22:30 自动增量同步全市场数据。
 
-    A 股：QuantDB SDK → parquet → PG stock_daily_latest → Qlib 缓存（单源）
+    A 股：QuantDB SDK → parquet → Qlib 缓存（单源，PG 填充可跳过）
     HK/US/crypto：investment_data → baostock → akshare → eltdx 多源聚合
     使用 Redis 分布式锁防止并发执行。
     """
@@ -764,7 +765,7 @@ def daily_data_sync_task(
         if market.upper() == "A":
             from backend.scripts.quantdb_daily_sync import run_daily_sync
 
-            result = run_daily_sync()
+            result = run_daily_sync(skip_pg=skip_pg)
             logger.info(
                 "[DailySync] QuantDB 完成: parquet=%s pg_rows=%s qlib=%s",
                 (result.get("parquet") or {}).get("total_downloaded"),
@@ -799,6 +800,24 @@ def daily_data_sync_task(
             rds.delete(lock_key)
         except Exception:
             pass
+
+
+@celery_app.task(name="engine.tasks.update_qlib_cache", max_retries=0, bind=True)
+def update_qlib_cache_task(self) -> dict[str, Any]:
+    """独立增量更新 Qlib 缓存（不依赖完整每日同步）。
+
+    从 QuantDB parquet 增量生成 Qlib 二进制缓存。即使主同步任务因
+    PG 填充等环节超时被杀，此任务也能保证 Qlib 数据跟进最新交易日。
+    """
+    try:
+        from backend.services.engine.qlib_data_builder import ensure_qlib_cache
+
+        provider = ensure_qlib_cache("/data/quantdb")
+        logger.info("[QlibCache] 更新完成: %s", provider)
+        return {"status": "ok", "provider_uri": provider}
+    except Exception as exc:
+        logger.exception("[QlibCache] 更新失败: %s", exc)
+        return {"status": "error", "reason": str(exc)}
 
 
 # ---------------------------------------------------------------------------

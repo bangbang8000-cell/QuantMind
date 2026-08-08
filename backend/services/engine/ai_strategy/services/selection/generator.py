@@ -207,9 +207,9 @@ class QuantDBQueryExecutor:
 
     # Fields that require special SQL computation (not simple column filters)
     _COMPUTED_FIELDS: dict[str, str] = {
-        # turnover_rate = volume(手) * 100 / circulating_capital * 100 (percentage)
+        # turnover_rate = volume(股) / circulating_capital(股) * 100 (percentage)
         "turnover_rate": """
-            d.volume * 100.0 / NULLIF(v.circulating_capital, 0) * 100
+            d.volume / NULLIF(v.circulating_capital, 0) * 100
         """,
     }
 
@@ -414,9 +414,10 @@ class QuantDBQueryExecutor:
                 sql_op = {">=": ">=", "<=": "<=", "==": "=", "!=": "!="}.get(op, op)
 
                 if field == "turnover_rate":
-                    # val is already in percentage (e.g., 3 = 3%)
+                    # volume 单位已是"股"，circulating_capital 是流通股本(股)
+                    # 换手率(%) = volume / circulating_capital * 100
                     where_parts.append(
-                        f"d.volume * 100.0 / NULLIF(v.circulating_capital, 0) * 100 {sql_op} {val}"
+                        f"d.volume / NULLIF(v.circulating_capital, 0) * 100 {sql_op} {val}"
                     )
 
             if not where_parts:

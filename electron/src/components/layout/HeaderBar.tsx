@@ -75,9 +75,6 @@ export const HeaderBar: React.FC = () => {
               <span className="absolute -top-0.5 -right-0.5 w-2 h-2 bg-green-400 rounded-full animate-ping" />
             )}
           </div>
-          <span className={`text-sm font-semibold tracking-tight ${apiStatus === 'connected' ? 'text-green-700' : 'text-red-700'}`}>
-            {apiStatus === 'connected' ? '云端中心已就绪' : '连接异常'}
-          </span>
           {apiStatus === 'connected' && (
             <span className="text-[10px] font-mono font-bold px-1.5 py-0.5 rounded bg-white/60 text-slate-500 border border-slate-100">
               {networkLatency}MS

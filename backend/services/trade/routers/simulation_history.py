@@ -16,11 +16,16 @@ router = APIRouter()
 logger = logging.getLogger(__name__)
 
 
-def _require_user_id(raw_user_id: str) -> str:
-    """获取用户ID (字符串类型，兼容 'admin' 等非数字ID)"""
+def _require_user_id(raw_user_id: str) -> int:
+    """获取用户ID。sim_trades.user_id 列为 integer，JWT 的 sub 是字符串，需转 int。"""
     if not raw_user_id:
         raise HTTPException(status_code=400, detail="Invalid user_id in token")
-    return raw_user_id
+    raw = str(raw_user_id).strip()
+    if raw.isdigit():
+        return int(raw)
+    # 兼容非数字 ID（'admin' 等）：转字符串比较会失败，尝试按 0 处理避免 500
+    logger.warning("Non-numeric user_id in simulation trade request: %s", raw)
+    return int(raw) if raw.isdigit() else 0
 
 
 @router.get("/trades", response_model=list[SimTradeResponse])

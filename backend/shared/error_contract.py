@@ -59,6 +59,30 @@ def _is_client_disconnected(exc: BaseException) -> bool:
     return False
 
 
+def _json_safe(value: Any) -> Any:
+    """递归清洗非 JSON 安全值（bytes/set/tuple 等），避免 JSONResponse 序列化崩溃。"""
+    if isinstance(value, bytes):
+        try:
+            return value.decode("utf-8")
+        except Exception:
+            return f"<{len(value)} bytes>"
+    if isinstance(value, (set, frozenset)):
+        return [_json_safe(v) for v in value]
+    if isinstance(value, tuple):
+        return [_json_safe(v) for v in value]
+    if isinstance(value, list):
+        return [_json_safe(v) for v in value]
+    if isinstance(value, dict):
+        return {str(k): _json_safe(v) for k, v in value.items()}
+    if isinstance(value, (str, int, float, bool)) or value is None:
+        return value
+    # 其他未知类型（如 enum/date）：转字符串兜底
+    try:
+        return str(value)
+    except Exception:
+        return None
+
+
 def _build_error_payload(
     *,
     request: Request,
@@ -75,9 +99,9 @@ def _build_error_payload(
         }
     }
     if detail is not None:
-        payload["detail"] = detail
+        payload["detail"] = _json_safe(detail)
     if errors:
-        payload["errors"] = errors
+        payload["errors"] = _json_safe(errors)
     return payload
 
 

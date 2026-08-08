@@ -26,6 +26,18 @@ logger = logging.getLogger(__name__)
 
 router = APIRouter()
 
+
+def _require_user_id(raw_user_id: str) -> int:
+    """获取用户ID。Redis 账户 key 与 sim_orders/sim_trades 的 user_id 均为 integer，
+    JWT 的 sub 是字符串，需统一转 int 才能命中同一账户 key。"""
+    if not raw_user_id:
+        raise HTTPException(status_code=400, detail="Invalid user_id in token")
+    raw = str(raw_user_id).strip()
+    if raw.isdigit():
+        return int(raw)
+    logger.warning("Non-numeric user_id in simulation request: %s", raw)
+    return 0
+
 FUNDAMENTAL_PARQUET_PATH = "/app/db/custom/fundamental_aligned.parquet"
 _PARQUET_LATEST_PRICE_MAP: dict[str, float] | None = None
 
@@ -212,8 +224,9 @@ async def get_simulation_settings(
     redis: RedisClient = Depends(get_redis),
 ):
     manager = SimulationAccountManager(redis)
+    uid = _require_user_id(auth.user_id)
     data = await manager.get_settings(
-        user_id=auth.user_id,
+        user_id=uid,
         tenant_id=auth.tenant_id,
         default_initial_cash=DEFAULT_INITIAL_CASH,
         cooldown_days=COOLDOWN_DAYS,
@@ -256,9 +269,10 @@ async def reset_simulation_account(
     Reset simulation account with initial cash.
     """
     manager = SimulationAccountManager(redis)
+    uid = _require_user_id(auth.user_id)
     if request.initial_cash is None:
         settings = await manager.get_settings(
-            user_id=auth.user_id,
+            user_id=uid,
             tenant_id=auth.tenant_id,
             default_initial_cash=DEFAULT_INITIAL_CASH,
             cooldown_days=COOLDOWN_DAYS,
@@ -274,9 +288,9 @@ async def reset_simulation_account(
 
     # 当显式传入 initial_cash 时，同步更新 settings，保证后续 initial_equity 口径一致。
     if request.initial_cash is not None:
-        await manager.set_initial_cash(auth.user_id, initial_cash, tenant_id=auth.tenant_id)
+        await manager.set_initial_cash(uid, initial_cash, tenant_id=auth.tenant_id)
 
-    account = await manager.init_account(auth.user_id, initial_cash, tenant_id=auth.tenant_id)
+    account = await manager.init_account(uid, initial_cash, tenant_id=auth.tenant_id)
     await _capture_simulation_snapshot(redis)
     return {"success": True, "message": "Simulation account reset", "data": account}
 
@@ -291,7 +305,8 @@ async def get_simulation_account(
     如果账户不存在，返回空账户（total_asset=0），不自动初始化。
     """
     manager = SimulationAccountManager(redis)
-    account = await manager.get_account(auth.user_id, tenant_id=auth.tenant_id)
+    uid = _require_user_id(auth.user_id)
+    account = await manager.get_account(uid, tenant_id=auth.tenant_id)
     if not account:
         # 不再自动初始化，返回空账户标记
         return {
@@ -307,7 +322,7 @@ async def get_simulation_account(
 
     # 从 settings 中读取 initial_cash 作为 initial_equity
     settings = await manager.get_settings(
-        user_id=auth.user_id,
+        user_id=uid,
         tenant_id=auth.tenant_id,
         default_initial_cash=DEFAULT_INITIAL_CASH,
         cooldown_days=COOLDOWN_DAYS,
@@ -434,7 +449,8 @@ async def confirm_holding_sync(
     逻辑：根据识别出的股票和数量，拉取当前最新市价，并重新计算账户初始金额，使同步后的盈亏对齐。
     """
     manager = SimulationAccountManager(redis)
-    
+    uid = _require_user_id(auth.user_id)
+
     # 1. 预先获取所有股票的最新价格并计算总市值
     sync_positions = []
     total_market_value = 0.0
@@ -467,17 +483,17 @@ async def confirm_holding_sync(
     calculated_initial_cash = total_market_value + sync_cash
 
     # 3. 更新 settings 中的 initial_cash（用于前端显示初始权益）
-    await manager.set_initial_cash(auth.user_id, calculated_initial_cash, auth.tenant_id)
+    await manager.set_initial_cash(uid, calculated_initial_cash, auth.tenant_id)
 
     # 4. 初始化账户 (重置现金为 calculated_initial_cash)
-    await manager.init_account(auth.user_id, calculated_initial_cash, auth.tenant_id)
+    await manager.init_account(uid, calculated_initial_cash, auth.tenant_id)
 
     # 5. 写入持仓 (通过 update_balance 扣除现金，从而使总资产保持不变，盈亏从 0 开始)
     for pos in sync_positions:
         # delta_cash = -(数量 * 现价)，这样操作后：
         # 现金减少，市值增加，总资产 = calculated_initial_cash 保持不变
         await manager.update_balance(
-            user_id=auth.user_id,
+            user_id=uid,
             tenant_id=auth.tenant_id,
             symbol=pos["symbol"],
             delta_cash=-(pos["quantity"] * pos["price"]),

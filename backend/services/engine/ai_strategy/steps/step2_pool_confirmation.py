@@ -54,6 +54,7 @@ from .step1_stock_selection import (
     _map_factor,
     _parse_dsl,
     is_quantdb_factor,
+    split_conditions_by_source,
 )
 
 logger = logging.getLogger(__name__)
@@ -873,6 +874,49 @@ def _enrich_with_quantdb_data(symbols: list[str]) -> dict[str, dict]:
     return result
 
 
+def _filter_items_by_quantdb(
+    items: list[PoolItem],
+    qdb_conditions: list[dict[str, Any]],
+    target_date: date,
+) -> list[PoolItem]:
+    """用 QuantDBQueryExecutor 对 QuantDB 条件过滤，与 PG 结果取交集。
+
+    PG 结果 symbol 为 prefix 格式（SH600036），QuantDB 执行器返回 suffix 格式
+    （600036.SH），先统一成 prefix 再求交集。
+    """
+    if not qdb_conditions or not items:
+        return items
+
+    try:
+        from ..services.selection.generator import QuantDBQueryExecutor
+
+        executor = QuantDBQueryExecutor()
+        qdb_symbols_suffix = executor.execute(qdb_conditions, target_date=target_date)
+        if not qdb_symbols_suffix:
+            logger.info("QuantDB filter returned empty set — no stock passes the QuantDB conditions")
+            return []
+
+        # suffix → prefix 统一
+        qdb_prefix = {
+            StockCodeUtil.to_prefix(s)
+            for s in qdb_symbols_suffix
+            if s
+        }
+        if not qdb_prefix:
+            return []
+
+        logger.info(
+            "QuantDB filter: %d symbols passed conditions (prefix-sample: %s)",
+            len(qdb_prefix),
+            list(qdb_prefix)[:3],
+        )
+        return [it for it in items if StockCodeUtil.to_prefix(it.symbol) in qdb_prefix]
+    except Exception as exc:
+        # 过滤失败时降级为不过滤（保持旧行为），但记录告警以便排查
+        logger.warning("QuantDB filter failed, returning PG results unfiltered: %s", exc)
+        return items
+
+
 async def query_pool(dsl: str, user_id: str, market: str | None = None, exchange: str | None = None) -> QueryPoolResponse:
     """执行 DSL/SQL 查询并返回股票池"""
     from .step1_stock_selection import get_latest_table
@@ -891,7 +935,23 @@ async def query_pool(dsl: str, user_id: str, market: str | None = None, exchange
             raise ValueError("DSL格式不正确，必须以 'SELECT symbol WHERE' 开头")
 
         conditions, combiners = _parse_dsl(dsl)
-        items, as_of_date = _query_stock_pool(conditions, combiners, user_id, market_table)
+        # 拆分 PG 原生条件 与 QuantDB 因子条件
+        pg_conditions, pg_combiners, qdb_conditions, qdb_combiners = split_conditions_by_source(
+            conditions, combiners
+        )
+        logger.info(
+            "query_pool: %d PG conditions, %d QuantDB conditions",
+            len(pg_conditions),
+            len(qdb_conditions),
+        )
+
+        items, as_of_date = _query_stock_pool(pg_conditions, pg_combiners, user_id, market_table)
+
+        # QuantDB 因子条件：用 DuckDB 视图过滤，与 PG 结果取交集
+        if qdb_conditions and as_of_date:
+            items = _filter_items_by_quantdb(items, qdb_conditions, as_of_date)
+        elif qdb_conditions:
+            logger.warning("query_pool: QuantDB conditions present but no as_of_date to filter by")
 
     # 交易所过滤：A 股 symbol 为前缀格式（SH600000 / SZ000001 / BJ920000）
     if exchange and market in (None, "", "A", "CN"):
@@ -902,9 +962,6 @@ async def query_pool(dsl: str, user_id: str, market: str | None = None, exchange
             items = [it for it in items if str(it.symbol or "").upper().startswith(wanted)]
 
     universe_total = _get_universe_total(user_id, market_table)
-
-    # QuantDB enrichment is now handled at the wizard layer (faster DuckDB SQL approach)
-    # The pandas-based _enrich_with_quantdb_data is too slow for interactive use
 
     summary, charts = _build_pool_summary(items, as_of_date, universe_total=universe_total)
     return QueryPoolResponse(items=items, summary=summary, charts=charts)

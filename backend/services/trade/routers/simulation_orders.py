@@ -2,6 +2,7 @@ from datetime import datetime
 from typing import List, Optional
 from uuid import UUID
 
+import logging
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -22,13 +23,18 @@ from backend.services.trade.simulation.services.simulation_manager import (
 )
 
 router = APIRouter()
+logger = logging.getLogger(__name__)
 
 
-def _require_user_id(raw_user_id: str) -> str:
-    """获取用户ID（字符串口径，兼容历史库 user_id 字段类型）"""
+def _require_user_id(raw_user_id: str) -> int:
+    """获取用户ID。sim_orders.user_id 列为 integer，JWT 的 sub 是字符串，需转 int。"""
     if not raw_user_id:
         raise HTTPException(status_code=400, detail="Invalid user_id in token")
-    return str(raw_user_id).strip()
+    raw = str(raw_user_id).strip()
+    if raw.isdigit():
+        return int(raw)
+    logger.warning("Non-numeric user_id in simulation order request: %s", raw)
+    return 0
 
 
 @router.post("/orders", response_model=SimOrderResponse, status_code=status.HTTP_201_CREATED)

@@ -158,17 +158,21 @@ class SimulationExecutionEngine:
         # Level 2: 数据库兜底 (L2 Fallback)
         try:
             from sqlalchemy import text
+            from backend.shared.stock_utils import StockCodeUtil
+
+            # stock_daily_latest 存 prefix 格式（SH600519），下单可能传 suffix（600519.SH）
+            db_symbol = StockCodeUtil.to_prefix(symbol) or symbol
 
             query_with_limits = text(
                 """
-                SELECT close, adj_factor, limit_up_today, limit_down_today, volume
+                SELECT close, adj_factor
                 FROM stock_daily_latest
                 WHERE symbol = :symbol
                 ORDER BY trade_date DESC LIMIT 1
                 """
             )
             try:
-                result = await self.db.execute(query_with_limits, {"symbol": symbol})
+                result = await self.db.execute(query_with_limits, {"symbol": db_symbol})
                 row = result.fetchone()
                 if row:
                     hfq_close = float(row[0])
@@ -178,11 +182,13 @@ class SimulationExecutionEngine:
                     return MarketSnapshot(
                         price=price,
                         price_source="db_fallback",
-                        limit_up=self._is_price_near(price, self._as_float(row[2])),
-                        limit_down=self._is_price_near(price, self._as_float(row[3])),
-                        suspended=(self._as_float(row[4]) or 0.0) <= 0.0,
                     )
             except Exception:
+                # 首次查询失败（如事务被污染），rollback 恢复后再用更简单的查询重试
+                try:
+                    await self.db.rollback()
+                except Exception:
+                    pass
                 query_legacy = text(
                     """
                     SELECT close, adj_factor
@@ -191,7 +197,7 @@ class SimulationExecutionEngine:
                     ORDER BY trade_date DESC LIMIT 1
                     """
                 )
-                legacy_result = await self.db.execute(query_legacy, {"symbol": symbol})
+                legacy_result = await self.db.execute(query_legacy, {"symbol": db_symbol})
                 legacy_row = legacy_result.fetchone()
                 if legacy_row:
                     hfq_close = float(legacy_row[0])
