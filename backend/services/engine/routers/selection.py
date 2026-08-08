@@ -661,3 +661,389 @@ async def negative_selection(
         "matrix": matrix,
         "warnings": [],
     }
+
+
+async def _load_industry_negative_avg(
+    signals: list[dict[str, Any]],
+    day_scores: pd.DataFrame,
+    industry_map: dict[str, str],
+) -> list[dict[str, Any]]:
+    """负分行业 avg：按申万行业统计负分股票的数量、均值、最深分。"""
+    if day_scores.empty:
+        return []
+
+    # symbol (suffix) → 行业
+    sym_industry: dict[str, str] = {}
+    for row in day_scores.itertuples(index=False):
+        sym = row.symbol  # 已是 suffix 格式（600519.SH）
+        sym_industry[sym] = industry_map.get(sym) or ""
+
+    neg = day_scores[day_scores["score"] < 0].copy()
+    neg["industry"] = neg["symbol"].map(sym_industry)
+    neg = neg[neg["industry"].notna() & (neg["industry"] != "")]
+
+    if neg.empty:
+        return []
+
+    agg = neg.groupby("industry").agg(
+        neg_count=("score", "count"),
+        neg_avg=("score", "mean"),
+        neg_min=("score", "min"),
+    ).reset_index()
+    agg = agg.sort_values("neg_avg").reset_index(drop=True)
+    return [
+        {
+            "industry": r.industry,
+            "neg_count": int(r.neg_count),
+            "neg_avg": round(float(r.neg_avg), 4),
+            "neg_min": round(float(r.neg_min), 4),
+        }
+        for r in agg.itertuples(index=False)
+    ]
+
+
+async def _load_board_negative_avg(
+    day_scores: pd.DataFrame,
+) -> list[dict[str, Any]]:
+    """板块负分 avg：主板/创业板/科创板/北交所/其他。"""
+    if day_scores.empty:
+        return []
+    neg = day_scores[day_scores["score"] < 0].copy()
+    neg["board"] = neg["symbol"].map(_board_type)
+    if neg.empty:
+        return []
+    agg = neg.groupby("board").agg(
+        neg_count=("score", "count"),
+        neg_avg=("score", "mean"),
+    ).reset_index()
+    return [
+        {
+            "board": r.board,
+            "neg_count": int(r.neg_count),
+            "neg_avg": round(float(r.neg_avg), 4),
+        }
+        for r in agg.itertuples(index=False)
+    ]
+
+
+@router.post("/score-calibration")
+async def submit_score_calibration(
+    request: Request,
+    days: int = Query(180, ge=30, le=478, description="回测历史交易日数"),
+    horizons: str = Query("1,3,5,10", description="未来 N 日收益列表，逗号分隔，如 1,3,5,10"),
+    top_n: int = Query(50, ge=10, le=200, description="排名前 N 内重点标注"),
+):
+    """提交模型分数校准任务，立即返回 task_id，后台异步计算。"""
+    user_id, tenant_id = get_authenticated_identity(request)
+    task_id = f"calib_{int(_now() * 1000)}_{__import__('uuid').uuid4().hex[:8]}"
+    _calib_tasks[task_id] = {
+        "task_id": task_id,
+        "status": "pending",
+        "progress": 0,
+        "message": "任务已提交，等待调度",
+        "user_id": user_id,
+        "params": {"days": days, "horizons": horizons, "top_n": top_n},
+        "result": None,
+        "error": None,
+        "created_at": __import__("datetime").datetime.now().isoformat(),
+    }
+    asyncio.create_task(
+        _run_score_calibration(task_id, user_id, tenant_id, days, horizons, top_n),
+        name=f"score-calib-{task_id}",
+    )
+    return {
+        "status": "submitted",
+        "task_id": task_id,
+        "data": {"task_id": task_id, "status": "pending", "progress": 0},
+    }
+
+
+@router.get("/score-calibration/{task_id}")
+async def get_score_calibration_task(task_id: str, request: Request):
+    """查询校准任务进度。"""
+    user_id, tenant_id = get_authenticated_identity(request)
+    task = _calib_tasks.get(task_id)
+    if not task:
+        return {"status": "not_found", "detail": "任务不存在"}
+    if task.get("user_id") != user_id:
+        return {"status": "error", "detail": "无权访问该任务"}
+    return {
+        "status": task.get("status"),
+        "task_id": task_id,
+        "progress": task.get("progress", 0),
+        "message": task.get("message", ""),
+        "result": task.get("result"),
+        "error": task.get("error"),
+        "meta": {
+            "model_scope": "全部历史信号（当前模型版本）",
+            "backtest_days": task.get("params", {}).get("days"),
+            "horizons": _parse_horizons(task.get("params", {}).get("horizons", "1,3,5,10")),
+            "top_n": task.get("params", {}).get("top_n"),
+        },
+    }
+
+
+async def _run_score_calibration(
+    task_id: str, user_id: str, tenant_id: str, days: int, horizons: str, top_n: int
+) -> None:
+    """后台执行分数校准，分阶段更新进度。"""
+    try:
+        _calib_tasks[task_id]["status"] = "running"
+        _calib_tasks[task_id]["progress"] = 5
+        _calib_tasks[task_id]["message"] = "读取历史信号..."
+
+        horizon_list = _parse_horizons(horizons)
+
+        # 1. 读取历史信号（限制条数避免全表扫描）
+        query = text(
+            """
+            SELECT trade_date, symbol, fusion_score, score_rank
+            FROM engine_signal_scores
+            WHERE tenant_id = :tenant_id AND user_id = :user_id
+              AND fusion_score IS NOT NULL
+            ORDER BY trade_date DESC
+            LIMIT 2000000
+            """
+        )
+        rows = []
+        async with get_session(read_only=True) as session:
+            result = await session.execute(query, {"tenant_id": tenant_id, "user_id": user_id})
+            rows = result.mappings().all()
+        if not rows:
+            _calib_tasks[task_id]["status"] = "failed"
+            _calib_tasks[task_id]["error"] = "无历史信号数据"
+            return
+
+        _calib_tasks[task_id]["progress"] = 15
+        _calib_tasks[task_id]["message"] = "分组统计信号..."
+
+        # 按日期分组取最近 days 个交易日
+        date_scores: dict[str, list[dict[str, Any]]] = {}
+        for r in rows:
+            d = str(r["trade_date"])
+            date_scores.setdefault(d, []).append(
+                {"symbol": str(r["symbol"]).upper(), "score": float(r["fusion_score"]),
+                 "rank": int(r["score_rank"]) if r["score_rank"] else None}
+            )
+        all_dates = sorted(date_scores.keys())[-days:]
+        if not all_dates:
+            _calib_tasks[task_id]["status"] = "failed"
+            _calib_tasks[task_id]["error"] = "无可用交易日"
+            return
+
+        # 2. 加载价格面板（线程池避免阻塞事件循环）
+        _calib_tasks[task_id]["progress"] = 30
+        _calib_tasks[task_id]["message"] = "加载价格面板..."
+        from pathlib import Path as _Path
+        from backend.services.engine.inference.inference_backtest_service import _load_price_panel
+
+        data_dir = _Path(__import__("os").getenv("QLIB_DIR", "/app/db/qlib_data/cn_data"))
+        panel = await asyncio.to_thread(_load_price_panel, data_dir, all_dates)
+        if panel.empty:
+            _calib_tasks[task_id]["status"] = "failed"
+            _calib_tasks[task_id]["error"] = "无法加载价格面板"
+            return
+        close_pivot = panel.pivot_table(index="symbol", columns="trade_date", values="close", aggfunc="last")
+        del panel
+
+        # 3. 市值快照
+        _calib_tasks[task_id]["progress"] = 45
+        _calib_tasks[task_id]["message"] = "加载市值快照..."
+        caps_snapshot = await _load_cap_snapshot()
+
+        # 4. 逐日计算多周期收益
+        _calib_tasks[task_id]["progress"] = 55
+        _calib_tasks[task_id]["message"] = "回测多周期收益..."
+        records: list[dict[str, Any]] = []
+        max_h = max(horizon_list)
+        total_days = len(all_dates)
+        for idx, d in enumerate(all_dates):
+            if idx + max_h >= total_days:
+                break
+            day_items = date_scores[d]
+            if not day_items:
+                continue
+            sorted_items = sorted(day_items, key=lambda x: -x["score"])
+            total = len(sorted_items)
+            for rank_i, it in enumerate(sorted_items):
+                suffix = StockCodeUtil.to_suffix(it["symbol"])
+                prefix = StockCodeUtil.to_prefix(it["symbol"])
+                try:
+                    c0 = close_pivot.at[suffix, d]
+                except KeyError:
+                    continue
+                if not c0 or c0 <= 0:
+                    continue
+                rets: dict[int, float] = {}
+                for h in horizon_list:
+                    f_idx = idx + h
+                    if f_idx >= total_days:
+                        continue
+                    f_date = all_dates[f_idx]
+                    try:
+                        c1 = close_pivot.at[suffix, f_date]
+                    except KeyError:
+                        continue
+                    if not c1:
+                        continue
+                    rets[h] = (float(c1) / float(c0) - 1.0) * 100.0
+                if not rets:
+                    continue
+                cap = _cap_bucket(caps_snapshot.get(prefix))
+                board = _board_type(suffix)
+                records.append({
+                    "score": it["score"], "rets": rets, "cap": cap, "board": board,
+                    "rank_pct": (rank_i + 1) / total, "rank": rank_i + 1, "total": total,
+                })
+            if idx % 20 == 0:
+                _calib_tasks[task_id]["progress"] = 55 + int(40 * (idx + 1) / total_days)
+                _calib_tasks[task_id]["message"] = f"回测中... {idx+1}/{total_days} 天"
+
+        if not records:
+            _calib_tasks[task_id]["status"] = "failed"
+            _calib_tasks[task_id]["error"] = "回测无有效样本"
+            return
+
+        _calib_tasks[task_id]["progress"] = 95
+        _calib_tasks[task_id]["message"] = "汇总统计..."
+
+        result = await _aggregate_calibration(records, all_dates, date_scores, horizon_list, top_n)
+        _calib_tasks[task_id]["status"] = "completed"
+        _calib_tasks[task_id]["progress"] = 100
+        _calib_tasks[task_id]["message"] = "完成"
+        _calib_tasks[task_id]["result"] = result
+    except Exception as exc:
+        logger.error("score calibration task %s failed: %s", task_id, exc, exc_info=True)
+        _calib_tasks[task_id]["status"] = "failed"
+        _calib_tasks[task_id]["error"] = str(exc)
+
+
+def _parse_horizons(horizons: str) -> list[int]:
+    out = []
+    for h in str(horizons).split(","):
+        h = h.strip()
+        if h.isdigit() and 1 <= int(h) <= 20:
+            out.append(int(h))
+    return out or [1, 3, 5, 10]
+
+
+async def _aggregate_calibration(
+    records: list[dict[str, Any]],
+    all_dates: list[str],
+    date_scores: dict[str, list[dict[str, Any]]],
+    horizon_list: list[int],
+    top_n: int,
+) -> dict[str, Any]:
+    """从 records 聚合分数档矩阵与汇总。"""
+    def _band(score: float) -> str:
+        if score <= -0.25: return "≤-0.25"
+        if score <= -0.20: return "-0.25~-0.20"
+        if score <= -0.15: return "-0.20~-0.15"
+        if score <= -0.10: return "-0.15~-0.10"
+        if score <= -0.06: return "-0.10~-0.06"
+        if score < 0: return "-0.06~0"
+        if score < 0.05: return "0~0.05"
+        if score < 0.08: return "0.05~0.08"
+        if score < 0.10: return "0.08~0.10"
+        if score < 0.12: return "0.10~0.12"
+        if score < 0.15: return "0.12~0.15"
+        if score < 0.20: return "0.15~0.20"
+        return "≥0.20"
+
+    import collections
+    band_labels = ["≤-0.25","-0.25~-0.20","-0.20~-0.15","-0.15~-0.10","-0.10~-0.06","-0.06~0",
+                   "0~0.05","0.05~0.08","0.08~0.10","0.10~0.12","0.12~0.15","0.15~0.20","≥0.20"]
+
+    # 分数档×市值档×horizon
+    band_cap_h: dict[tuple[str, str, int], list[float]] = collections.defaultdict(list)
+    band_h: dict[str, dict[int, list[float]]] = collections.defaultdict(lambda: collections.defaultdict(list))
+    band_ranks: dict[str, list[int]] = collections.defaultdict(list)
+    band_rank_pcts: dict[str, list[float]] = collections.defaultdict(list)
+    for r in records:
+        b = _band(r["score"])
+        for h, ret in r["rets"].items():
+            band_cap_h[(b, r["cap"], h)].append(ret)
+            band_h[b][h].append(ret)
+        band_ranks[b].append(r["rank"])
+        band_rank_pcts[b].append(r["rank_pct"])
+
+    main_h = horizon_list[0] if horizon_list else 5
+    cap_order = ["微盘", "小盘", "中盘", "大盘", "超大盘"]
+    matrix = []
+    for band_label in band_labels:
+        caps = []
+        for cap in cap_order:
+            rets = band_cap_h.get((band_label, cap, main_h), [])
+            if rets:
+                caps.append({
+                    "cap": cap, "n": len(rets),
+                    "down_prob": round(sum(1 for x in rets if x < 0) / len(rets) * 100.0, 1),
+                    "avg_ret": round(sum(rets)/len(rets), 3),
+                })
+            else:
+                caps.append({"cap": cap, "n": 0, "down_prob": None, "avg_ret": None})
+        matrix.append({"score_band": band_label, "caps": caps})
+
+    score_summary = []
+    for band_label in band_labels:
+        h_dict = band_h.get(band_label)
+        if not h_dict:
+            continue
+        ranks = band_ranks[band_label]
+        rank_pcts = band_rank_pcts[band_label]
+        horizons_stats = []
+        for h in sorted(h_dict.keys()):
+            rets = h_dict[h]
+            if not rets:
+                continue
+            sorted_rets = sorted(rets)
+            horizons_stats.append({
+                "horizon": h, "n": len(rets),
+                "win_rate": round(sum(1 for x in rets if x > 0) / len(rets) * 100.0, 1),
+                "down_prob": round(sum(1 for x in rets if x < 0) / len(rets) * 100.0, 1),
+                "avg_ret": round(sum(rets) / len(rets), 3),
+                "median_ret": round(sorted_rets[len(sorted_rets)//2], 3),
+            })
+        main_rets = band_h[band_label].get(main_h, [])
+        score_summary.append({
+            "score_band": band_label,
+            "n": len(ranks),
+            "top50_count": sum(1 for rk in ranks if rk <= 50),
+            "avg_rank": round(sum(ranks) / len(ranks), 1),
+            "avg_rank_pct": round(sum(rank_pcts) / len(rank_pcts), 3),
+            "main_horizon_avg_ret": round(sum(main_rets) / len(main_rets), 3) if main_rets else None,
+            "horizons": horizons_stats,
+        })
+
+    # 负分行业/板块 avg（最新日）
+    latest_date = all_dates[-1]
+    latest_items = date_scores[latest_date]
+    latest_df = pd.DataFrame(
+        [{"symbol": StockCodeUtil.to_suffix(x["symbol"]), "score": x["score"]}
+         for x in latest_items]
+    )
+    industry_map = load_shenwan_industry_map()
+    neg_industry_avg = await _load_industry_negative_avg(latest_items, latest_df, industry_map)
+    neg_board_avg = await _load_board_negative_avg(latest_df)
+
+    # 推荐分数区间
+    recommended = None
+    for s in score_summary:
+        avg = s.get("main_horizon_avg_ret")
+        if s["n"] >= 50 and avg is not None and avg > 0:
+            if recommended is None or avg > recommended.get("main_horizon_avg_ret", -999):
+                recommended = s
+
+    return {
+        "matrix": matrix,
+        "score_summary": score_summary,
+        "neg_industry_avg": neg_industry_avg[:10],
+        "neg_board_avg": neg_board_avg,
+        "recommended_band": recommended,
+        "total_samples": len(records),
+        "latest_trade_date": latest_date,
+    }
+
+
+# 校准任务内存存储
+_calib_tasks: dict[str, dict[str, Any]] = {}

@@ -53,6 +53,7 @@ import { InferenceBacktestModule } from '../components/backtestCenter/InferenceB
 import { BatchInferencePanel } from '../components/inference/BatchInferencePanel';
 import { BatchSingleDayPanel } from '../components/inference/BatchSingleDayPanel';
 import { InferenceHistoryPanel } from '../components/inference/InferenceHistoryPanel';
+import { ModelScoreResearch } from '../components/inference/ModelScoreResearch';
 import { StockPickingPanel } from '../components/inference/StockPickingPanel';
 import { NegativeScorePanel } from '../components/inference/NegativeScorePanel';
 import {
@@ -884,6 +885,15 @@ export const ModelRegistryPage: React.FC = () => {
                             onDelete={handleDeleteHistory}
                           />
                         ),
+                      },
+                      {
+                        key: 'score-research',
+                        label: (
+                          <span className="text-xs font-black uppercase tracking-widest px-1 flex items-center gap-1.5">
+                            <BarChart3 size={11} />模型分数研究
+                          </span>
+                        ),
+                        children: <ModelScoreResearch />,
                       },
                     ]}
                   />

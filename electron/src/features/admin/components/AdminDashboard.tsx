@@ -114,6 +114,16 @@ export const AdminDashboard: React.FC = () => {
         engine: <ThunderboltOutlined />,
         trade: <SwapOutlined />,
         stream: <GlobalOutlined />,
+        postgres: <DatabaseOutlined />,
+        redis: <DatabaseOutlined />,
+        data_gateway: <DeploymentUnitOutlined />,
+        web: <HomeOutlined />,
+        qwenpaw: <MessageOutlined />,
+        rsshub: <GlobalOutlined />,
+        huntly: <MessageOutlined />,
+        dashboard: <AreaChartOutlined />,
+        celery: <ThunderboltOutlined />,
+        celery_beat: <ClockCircleOutlined />,
     };
 
     const serviceDescMap: Record<string, string> = {
@@ -153,7 +163,7 @@ export const AdminDashboard: React.FC = () => {
                     const isHealthy = s.healthy && s.status === 'healthy';
                     const isUnreachable = s.status === 'unreachable';
                     return (
-                        <Col xs={24} sm={12} lg={6} key={s.service || idx}>
+                        <Col xs={24} sm={12} lg={8} xl={6} key={s.service || idx}>
                             <Card className="rounded-2xl border-slate-200 shadow-sm hover:shadow-md transition-all">
                                 <div className="flex items-center justify-between mb-4">
                                     <div className="flex items-center gap-3">
@@ -165,7 +175,9 @@ export const AdminDashboard: React.FC = () => {
                                                 <Text className="font-black text-slate-800 text-sm">{s.service.toUpperCase()}</Text>
                                                 <Badge status={isHealthy ? 'processing' : 'error'} color={isHealthy ? '#10b981' : '#ef4444'} />
                                             </div>
-                                            <Text className="text-[10px] text-slate-400 font-bold">端口 {servicePortMap[s.service] || '—'}</Text>
+                                            <Text className="text-[10px] text-slate-400 font-bold">
+                                                {s.port ? `端口 ${s.port}` : s.service === 'celery' ? '异步任务' : s.service === 'celery_beat' ? '定时调度' : `端口 ${servicePortMap[s.service] || '—'}`}
+                                            </Text>
                                         </div>
                                     </div>
                                     <Tag color={isHealthy ? 'success' : isUnreachable ? 'error' : 'warning'} className="m-0 border-none rounded-full px-2 text-[9px] font-black">
@@ -183,7 +195,7 @@ export const AdminDashboard: React.FC = () => {
                                             style={{ width: `${s.score}%` }}
                                         />
                                     </div>
-                                    <Text className="text-[10px] text-slate-400 font-medium block pt-1">{serviceDescMap[s.service] || s.url}</Text>
+                                    <Text className="text-[10px] text-slate-400 font-medium block pt-1">{s.desc || serviceDescMap[s.service] || s.url || '—'}</Text>
                                 </div>
                             </Card>
                         </Col>

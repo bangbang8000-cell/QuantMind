@@ -137,6 +137,102 @@ export async function getNegativeSelection(
   return res.data;
 }
 
+/** 模型分数校准回测：分数档×市值档×多周期收益/下跌概率 */
+export interface ScoreBandHorizon {
+  horizon: number;
+  n: number;
+  win_rate: number;
+  down_prob: number;
+  avg_ret: number;
+  median_ret: number;
+}
+
+export interface ScoreBandSummary {
+  score_band: string;
+  n: number;
+  top50_count: number;
+  avg_rank: number;
+  avg_rank_pct: number;
+  main_horizon_avg_ret: number | null;
+  horizons: ScoreBandHorizon[];
+}
+
+export interface ScoreCapCell {
+  cap: string;
+  n: number;
+  down_prob: number | null;
+  avg_ret: number | null;
+}
+
+export interface ScoreCapRow {
+  score_band: string;
+  caps: ScoreCapCell[];
+}
+
+export interface ScoreCalibrationResponse {
+  status: string;
+  detail?: string;
+  meta?: {
+    model_scope: string;
+    backtest_days: number;
+    horizons: number[];
+    main_horizon: number;
+    top_n: number;
+    total_samples: number;
+    latest_trade_date: string;
+  };
+  matrix?: ScoreCapRow[];
+  score_summary?: ScoreBandSummary[];
+  neg_industry_avg?: Array<{ industry: string; neg_count: number; neg_avg: number; neg_min: number }>;
+  neg_board_avg?: Array<{ board: string; neg_count: number; neg_avg: number }>;
+  recommended_band?: ScoreBandSummary | null;
+  warnings?: string[];
+}
+
+/** 提交校准任务，返回 task_id */
+export interface CalibrationTaskResponse {
+  status: string;
+  task_id?: string;
+  data?: { task_id: string; status: string; progress: number };
+  detail?: string;
+}
+
+/** 校准任务进度 */
+export interface CalibrationTaskProgress {
+  status: string;
+  task_id?: string;
+  progress?: number;
+  message?: string;
+  result?: ScoreCalibrationResponse;
+  error?: string;
+  detail?: string;
+  meta?: {
+    model_scope: string;
+    backtest_days: number;
+    horizons: number[];
+    top_n: number;
+  };
+}
+
+export async function submitScoreCalibration(params?: {
+  days?: number;
+  horizons?: string;
+  top_n?: number;
+}): Promise<CalibrationTaskResponse> {
+  const qp = new URLSearchParams();
+  if (params?.days) qp.set('days', String(params.days));
+  if (params?.horizons) qp.set('horizons', params.horizons);
+  if (params?.top_n) qp.set('top_n', String(params.top_n));
+  const qs = qp.toString();
+  const res = await apiClient.post(`/selection/score-calibration${qs ? `?${qs}` : ''}`);
+  return res.data;
+}
+
+export async function getCalibrationTask(taskId: string): Promise<CalibrationTaskProgress> {
+  const res = await apiClient.get(`/selection/score-calibration/${taskId}`);
+  return res.data;
+}
+
 export async function getSelectionHistory(
   from: string,
   to: string,

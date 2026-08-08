@@ -239,15 +239,12 @@ services:
       - ./backend:/app/backend
       - ./config:/app/config
       - ./scripts:/app/scripts
-<<<<<<< Updated upstream
       # AlphaAgent 包源码（容器内 Python 通过 PYTHONPATH=/app 直接 import）
       - ./alphaagent:/app/alphaagent
       # TradingAgents-Astock 多Agent投研框架
       - ./TradingAgents-astock:/app/TradingAgents-astock
-=======
       # 训练脚本（用于 Docker-in-Docker 启动训练容器）
       - ./docker/training:/app/docker/training
->>>>>>> Stashed changes
       # 策略模板
       - ./strategy_templates:/app/strategy_templates
       # 用户股票池文件 (AI策略生成)
@@ -615,6 +612,8 @@ services:
       - ./scripts:/app/scripts:ro
       - ./strategy_templates:/app/strategy_templates:ro
       - ./CLAUDE.md:/app/CLAUDE.md:ro
+      # 项目根目录（只读，供 Agent 查找本地文件/技能 zip 等）
+      - ./:/quantmind:ro
       # RD-Agent 已 pip install 到镜像中，不再需要运行时挂载
       # QuantMind 数据（读写）
       - ./data:/data

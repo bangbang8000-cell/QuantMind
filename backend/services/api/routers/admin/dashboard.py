@@ -30,12 +30,65 @@ class ApiResponse(BaseModel):
     data: dict[str, Any] | None = None
 
 
+# 核心服务健康检查（HTTP）
 CORE_SERVICE_HEALTH_URLS = {
     "api": os.getenv("ADMIN_DASHBOARD_API_HEALTH_URL", "http://127.0.0.1:8000/health"),
     "trade": os.getenv("ADMIN_DASHBOARD_TRADE_HEALTH_URL", "http://127.0.0.1:8002/health"),
     "engine": os.getenv("ADMIN_DASHBOARD_ENGINE_HEALTH_URL", "http://127.0.0.1:8001/health"),
     "stream": os.getenv("ADMIN_DASHBOARD_STREAM_HEALTH_URL", "http://127.0.0.1:8003/health"),
 }
+
+# 基础设施服务（TCP 端口探测；容器内通过 docker 主机名访问独立容器）
+INFRA_SERVICES = [
+    {
+        "service": "postgres",
+        "host": os.getenv("ADMIN_DASHBOARD_DB_HOST", "quantmind-db"),
+        "port": int(os.getenv("ADMIN_DASHBOARD_DB_PORT", "5432")),
+        "desc": "PostgreSQL 数据库",
+    },
+    {
+        "service": "redis",
+        "host": os.getenv("ADMIN_DASHBOARD_REDIS_HOST", "quantmind-redis"),
+        "port": int(os.getenv("ADMIN_DASHBOARD_REDIS_PORT", "6379")),
+        "desc": "Redis 缓存/队列",
+    },
+    {
+        "service": "data_gateway",
+        "host": os.getenv("ADMIN_DASHBOARD_DATA_GATEWAY_HOST", "quantmind-data-gateway"),
+        "port": int(os.getenv("ADMIN_DASHBOARD_DATA_GATEWAY_PORT", "8004")),
+        "desc": "数据网关 (8004)",
+    },
+    {
+        "service": "web",
+        "host": os.getenv("ADMIN_DASHBOARD_WEB_HOST", "quantmind-web"),
+        "port": int(os.getenv("ADMIN_DASHBOARD_WEB_PORT", "80")),
+        "desc": "Nginx 前端 (80/3080)",
+    },
+    {
+        "service": "qwenpaw",
+        "host": os.getenv("ADMIN_DASHBOARD_QWENPAW_HOST", "qwenpaw"),
+        "port": int(os.getenv("ADMIN_DASHBOARD_QWENPAW_PORT", "8088")),
+        "desc": "QwenPaw AI 助手 (8089)",
+    },
+    {
+        "service": "rsshub",
+        "host": os.getenv("ADMIN_DASHBOARD_RSSHUB_HOST", "quantmind-rsshub"),
+        "port": int(os.getenv("ADMIN_DASHBOARD_RSSHUB_PORT", "1200")),
+        "desc": "RSSHub 订阅源 (1200)",
+    },
+    {
+        "service": "huntly",
+        "host": os.getenv("ADMIN_DASHBOARD_HUNTLY_HOST", "quantmind-huntly"),
+        "port": int(os.getenv("ADMIN_DASHBOARD_HUNTLY_PORT", "80")),
+        "desc": "Huntly RSS 阅读器 (8090)",
+    },
+    {
+        "service": "dashboard",
+        "host": os.getenv("ADMIN_DASHBOARD_DASHBOARD_HOST", "quantmind-dashboard"),
+        "port": int(os.getenv("ADMIN_DASHBOARD_DASHBOARD_PORT", "8501")),
+        "desc": "Streamlit 数据看板 (8501)",
+    },
+]
 
 
 def _build_system_metrics(
@@ -89,6 +142,79 @@ async def _fetch_service_health(
         }
 
 
+async def _fetch_tcp_service_health(service: dict[str, Any]) -> dict[str, Any]:
+    """TCP 端口探测基础设施服务（DB/Redis/Web 等）。"""
+    import socket
+
+    host = service.get("host", "127.0.0.1")
+    port = int(service.get("port", 0))
+    name = service.get("service", "unknown")
+    try:
+        loop = asyncio.get_running_loop()
+        conn = await asyncio.wait_for(
+            loop.run_in_executor(None, socket.create_connection, (host, port), 1.5),
+            timeout=2.0,
+        )
+        conn.close()
+        return {
+            "service": name,
+            "host": host,
+            "port": port,
+            "status": "healthy",
+            "score": 100,
+            "healthy": True,
+            "desc": service.get("desc", ""),
+        }
+    except Exception as exc:
+        logger.warning("Admin dashboard TCP probe failed for %s:%s: %s", host, port, exc)
+        return {
+            "service": name,
+            "host": host,
+            "port": port,
+            "status": "unreachable",
+            "score": 0,
+            "healthy": False,
+            "desc": service.get("desc", ""),
+            "error": str(exc),
+        }
+
+
+async def _fetch_celery_health(service_name: str, redis_db: int = 3) -> dict[str, Any]:
+    """通过 Redis 中 celery 的 pidbox 键判断 worker/beat 是否活跃。
+
+    celery 容器与 quantmind 共享网络、无独立监听端口，故以 Redis 注册信息为准。
+    """
+    try:
+        import redis as _redis
+
+        client = _redis.from_url(
+            os.getenv("REDIS_URL", "redis://quantmind-redis:6379"),
+            socket_timeout=2,
+            db=redis_db,
+        )
+        # pidbox 存在说明 celery worker 已注册并活跃
+        keys = client.keys("*pidbox*")
+        client.close()
+        alive = any(b"pidbox" in k if isinstance(k, bytes) else "pidbox" in str(k) for k in keys)
+        return {
+            "service": service_name,
+            "status": "healthy" if alive else "degraded",
+            "score": 100 if alive else 60,
+            "healthy": alive,
+            "desc": "Celery Worker 异步任务" if service_name == "celery" else "Celery Beat 定时调度",
+        }
+    except Exception as exc:
+        logger.warning("Admin dashboard celery probe failed for %s: %s", service_name, exc)
+        return {
+            "service": service_name,
+            "status": "unreachable",
+            "score": 0,
+            "healthy": False,
+            "desc": "Celery Worker 异步任务" if service_name == "celery" else "Celery Beat 定时调度",
+            "error": str(exc),
+        }
+
+
 async def _collect_system_health() -> tuple[int, list[dict[str, Any]]]:
     """聚合核心服务健康状态为一个 0-100 分值。"""
     timeout_raw = os.getenv("ADMIN_DASHBOARD_HEALTH_TIMEOUT_SECONDS", "2.5").strip()
@@ -103,7 +229,17 @@ async def _collect_system_health() -> tuple[int, list[dict[str, Any]]]:
             _fetch_service_health(client, service_name, health_url)
             for service_name, health_url in CORE_SERVICE_HEALTH_URLS.items()
         ]
-        services = await asyncio.gather(*probes)
+        http_services = await asyncio.gather(*probes)
+
+    infra_services = await asyncio.gather(
+        *[_fetch_tcp_service_health(service) for service in INFRA_SERVICES]
+    )
+
+    celery_services = await asyncio.gather(
+        _fetch_celery_health("celery"),
+        _fetch_celery_health("celery_beat"),
+    )
+    services = list(http_services) + list(infra_services) + list(celery_services)
 
     score = round(sum(service.get("score", 0) for service in services) / max(len(services), 1))
     return score, services

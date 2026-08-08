@@ -328,7 +328,9 @@ export interface DashboardMetrics {
 /** 后端 /admin/dashboard/metrics 返回的真实服务健康信息 */
 export interface DashboardServiceInfo {
     service: string;
-    url: string;
+    url?: string;
+    port?: number;
+    desc?: string;
     status: string;
     score: number;
     healthy: boolean;

@@ -77,8 +77,8 @@ export const AdminFeatureCatalog: React.FC = () => {
     try {
       const data = await adminService.getModelFeatureCatalog();
       setCatalog(data);
-      if (!selectedCatId && data.categories?.length) {
-        setSelectedCatId(data.categories[0].id);
+      if (!data.categories?.length) {
+        setSelectedCatId(null);
       }
       setDirty(false);
     } catch (e: any) {
@@ -88,9 +88,16 @@ export const AdminFeatureCatalog: React.FC = () => {
     } finally {
       setLoading(false);
     }
-  }, [selectedCatId]);
+  }, []);
 
   useEffect(() => { loadCatalog(); }, [loadCatalog]);
+
+  // 首次加载后默认选中第一个分类
+  useEffect(() => {
+    if (catalog?.categories?.length && !selectedCatId) {
+      setSelectedCatId(catalog.categories[0].id);
+    }
+  }, [catalog, selectedCatId]);
 
   const markDirty = () => setDirty(true);
 
@@ -256,20 +263,41 @@ export const AdminFeatureCatalog: React.FC = () => {
     {
       title: 'Key',
       dataIndex: 'key',
-      width: 200,
+      width: 180,
       render: (key: string) => <Text code className="text-xs">{key}</Text>,
     },
     {
       title: '名称',
       dataIndex: 'feature_name',
-      ellipsis: true,
+      width: 240,
+      ellipsis: { showTitle: false },
+      render: (name: string) => (
+        <Tooltip title={name} placement="topLeft">
+          <span className="text-xs font-medium">{name}</span>
+        </Tooltip>
+      ),
     },
     {
       title: '公式',
       dataIndex: 'formula',
-      ellipsis: true,
+      width: 220,
+      ellipsis: { showTitle: false },
+      render: (v: string) => v ? (
+        <Tooltip title={v} placement="topLeft">
+          <Text type="secondary" className="text-xs font-mono">{v}</Text>
+        </Tooltip>
+      ) : '—',
+    },
+    {
+      title: '数据来源',
+      dataIndex: 'source_table_fields',
       width: 200,
-      render: (v: string) => v ? <Text type="secondary" className="text-xs font-mono">{v}</Text> : '—',
+      ellipsis: { showTitle: false },
+      render: (v: string) => v ? (
+        <Tooltip title={v} placement="topLeft">
+          <Text type="secondary" className="text-xs font-mono">{v}</Text>
+        </Tooltip>
+      ) : '—',
     },
     {
       title: '市场',
@@ -290,7 +318,7 @@ export const AdminFeatureCatalog: React.FC = () => {
     {
       title: '启用',
       dataIndex: 'enabled',
-      width: 80,
+      width: 70,
       align: 'center',
       render: (enabled: boolean, record) => (
         <Switch
@@ -302,8 +330,9 @@ export const AdminFeatureCatalog: React.FC = () => {
     },
     {
       title: '操作',
-      width: 100,
+      width: 90,
       align: 'center',
+      fixed: 'right' as const,
       render: (_: unknown, record) => (
         <Space size="small">
           <Tooltip title="编辑">
@@ -447,7 +476,7 @@ export const AdminFeatureCatalog: React.FC = () => {
               rowKey="key"
               size="small"
               pagination={false}
-              scroll={{ y: 'calc(var(--app-h) - 340px)' }}
+              scroll={{ y: 'calc(var(--app-h) - 340px)', x: 'max-content' }}
             />
           ) : (
             <Empty description="请从左侧选择一个分类" />
