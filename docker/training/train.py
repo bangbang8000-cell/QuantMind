@@ -3023,14 +3023,6 @@ def main() -> int:
             )
             logger.info("Selected %d features from auto selection", len(valid_features))
 
-        # ── 训练时长预算：主流程开始时记录起点，WFA/训练阶段检查剩余时间 ──
-        _budget_min = int((cfg.get("max_time_minutes") or 120))
-        _t0_budget = time.time()
-        _budget_deadline = _t0_budget + _budget_min * 60
-
-        def _budget_remaining_min() -> float:
-            return max(0.0, (_budget_deadline - time.time()) / 60.0)
-
         # ── WFA 稳定性诊断（可选）：数据就绪后、正式训练前执行 ──
         wfa_result = train_wfa(df, valid_features, cfg)
 
