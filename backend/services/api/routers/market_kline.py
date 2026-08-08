@@ -382,3 +382,56 @@ async def get_kline_by_path(
         symbol=symbol, market=market, period="daily",
         start=None, end=None, days=days, current_user=current_user,
     )
+
+
+@router.get("/index-kline")
+async def get_index_kline(
+    symbol: str = Query("000001.SH", description="指数代码，缺省上证指数"),
+    days: int = Query(120, ge=20, le=500),
+    current_user: dict = Depends(get_current_user),
+):
+    """上证指数(000001.SH) 日线 + MA20，用于 K 线图大盘趋势叠加。
+
+    返回 {dates, close, ma20, below_ma20(最新日是否<MA20)}。
+    数据源：QuantDB index_daily。
+    """
+    _ = current_user
+    try:
+        from datetime import date, timedelta
+        from backend.services.engine.data_platform.quantdb_hub import QuantDBDataHub
+
+        hub = QuantDBDataHub()
+        end = date.today()
+        start = end - timedelta(days=int(days * 1.6))
+        df = hub.fetch_index_kline(symbol, start, end)
+        if df is None or df.empty:
+            return {"success": True, "data": {"dates": [], "close": [], "ma20": [], "below_ma20": None, "source_used": "none"}}
+        df = df.sort_values("trade_date").tail(days).reset_index(drop=True)
+        closes = df["close"].astype(float).tolist()
+        dates = [str(x)[:10] for x in df["trade_date"].tolist()]
+        # MA20
+        ma20_list: list[float | None] = []
+        for i in range(len(closes)):
+            if i < 19:
+                ma20_list.append(None)
+            else:
+                ma20_list.append(round(sum(closes[i - 19:i + 1]) / 20.0, 2))
+        latest = closes[-1] if closes else None
+        ma20_latest = ma20_list[-1] if ma20_list else None
+        below_ma20 = bool(latest is not None and ma20_latest is not None and latest < ma20_latest)
+        return {
+            "success": True,
+            "data": {
+                "symbol": symbol,
+                "dates": dates,
+                "close": [round(c, 2) for c in closes],
+                "ma20": ma20_list,
+                "below_ma20": below_ma20,
+                "latest_close": round(latest, 2) if latest is not None else None,
+                "latest_ma20": ma20_latest,
+                "source_used": "quantdb_index_daily",
+            },
+        }
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("index kline failed: %s", exc)
+        return {"success": True, "data": {"dates": [], "close": [], "ma20": [], "below_ma20": None, "source_used": "none", "error": str(exc)}}

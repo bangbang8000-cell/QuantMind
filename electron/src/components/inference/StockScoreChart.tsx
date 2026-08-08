@@ -104,6 +104,38 @@ async function fetchQuantdbKline(symbol: string, days: number): Promise<KlineIte
   return resp.data?.data?.items ?? [];
 }
 
+/** 上证指数 + MA20（/market/index-kline，QuantDB index_daily） */
+async function fetchShanghaiIndex(days: number): Promise<{
+  dates: string[];
+  close: number[];
+  ma20: (number | null)[];
+  below_ma20: boolean | null;
+  latest_close?: number | null;
+  latest_ma20?: number | null;
+} | null> {
+  try {
+    const token = authService.getAccessToken();
+    const resp = await axios.get(`${baseURL}/market/index-kline`, {
+      params: { symbol: '000001.SH', days },
+      headers: token ? { Authorization: `Bearer ${token}` } : {},
+      timeout: 15000,
+    });
+    const d = resp.data?.data;
+    if (!d || !d.dates?.length) return null;
+    return {
+      dates: d.dates,
+      close: d.close,
+      ma20: d.ma20,
+      below_ma20: d.below_ma20 ?? null,
+      latest_close: d.latest_close ?? null,
+      latest_ma20: d.latest_ma20 ?? null,
+    };
+  } catch (err: any) {
+    console.error('[StockScoreChart] fetch index failed:', err);
+    return null;
+  }
+}
+
 /** 分数标注逻辑（wide_scale 融合模型分数为 [-1,1]，用分位区间替代硬编码阈值） */
 function annotateScore(score: number, wideScale = false): { label: string; color: string } | null {
   if (wideScale) {
@@ -135,6 +167,15 @@ export const StockScoreChart: React.FC<Props> = ({ symbol, name, stockInfo, mark
   const [selectedModel, setSelectedModel] = useState<string>(modelId ?? 'all');
   const [error, setError] = useState<string | null>(null);
   const chartRef = useRef<any>(null);
+  // ── 上证指数 + MA20（大盘趋势叠加）──
+  const [indexData, setIndexData] = useState<{
+    dates: string[];
+    close: number[];
+    ma20: (number | null)[];
+    below_ma20: boolean | null;
+    latest_close?: number | null;
+    latest_ma20?: number | null;
+  } | null>(null);
 
   // ── 自定义参考线：按模型持久化（同一模型所有股票共用） ──
   // 每条线 = { id, value(分数), label(如"可买"), color }
@@ -200,14 +241,16 @@ export const StockScoreChart: React.FC<Props> = ({ symbol, name, stockInfo, mark
       setError(null);
       setLoading(true);
       try {
-        const [kresp, sresp] = await Promise.all([
+        const [kresp, sresp, idxresp] = await Promise.all([
           fetchQuantdbKline(suffixSymbol, days),
           modelTrainingService.getStockInferenceHistory(symbol, days, modelId),
+          fetchShanghaiIndex(days),
         ]);
         if (cancelled) return;
         setKlineItems(kresp ?? []);
         setScoreItems(sresp?.items ?? []);
         setAvailableModels(sresp?.models ?? []);
+        setIndexData(idxresp);
       } catch (e: any) {
         if (!cancelled) setError(e?.response?.data?.detail || e?.message || '加载失败');
       } finally {
@@ -577,7 +620,7 @@ export const StockScoreChart: React.FC<Props> = ({ symbol, name, stockInfo, mark
           return html;
         },
       },
-      legend: { data: ['K线', '推理分数', '模拟交易', '策略提醒'], textStyle: { fontSize: 10 }, top: 0 },
+      legend: { data: ['K线', '推理分数', '模拟交易', '策略提醒', ...(indexData ? ['上证指数', '上证MA20'] : [])], textStyle: { fontSize: 10 }, top: 0 },
       grid: { left: 8, right: 8, top: 28, bottom: 20, containLabel: true },
       xAxis: {
         type: 'category',
@@ -597,7 +640,16 @@ export const StockScoreChart: React.FC<Props> = ({ symbol, name, stockInfo, mark
           axisLabel: { fontSize: 9, color: '#94a3b8', formatter: (v: number) => v.toFixed(1) },
           splitLine: { show: false },
         },
-      ],
+        // 第三轴：上证指数（右外侧，青色），用于大盘趋势叠加
+        indexData ? {
+          type: 'value', position: 'right', offset: 40,
+          scale: true,
+          axisLabel: { fontSize: 8, color: '#0ea5e9' },
+          splitLine: { show: false },
+          name: '上证指数',
+          nameTextStyle: { fontSize: 8, color: '#0ea5e9' },
+        } : null,
+      ].filter(Boolean),
       dataZoom: replayEnabled
         ? []
         : [
@@ -669,9 +721,40 @@ export const StockScoreChart: React.FC<Props> = ({ symbol, name, stockInfo, mark
             formatter: (p: any) => `<div><b>${p.data?.date}</b><br/><span style="color:${SEVERITY_COLOR[p.data?.severity]};font-weight:bold">📌 ${p.data?.message}</span></div>`,
           },
         },
+        // 上证指数 + MA20 叠加（第三轴 yAxisIndex=2）
+        ...(indexData ? [
+          {
+            name: '上证指数', type: 'line',
+            data: dates.map(d => {
+              const idx = indexData.dates.indexOf(d);
+              return idx >= 0 ? indexData.close[idx] : null;
+            }),
+            yAxisIndex: 2,
+            connectNulls: true,
+            symbol: 'none',
+            lineStyle: { width: 1.2, color: '#0ea5e9', opacity: 0.7 },
+            itemStyle: { color: '#0ea5e9' },
+            zlevel: 2,
+            tooltip: { formatter: (p: any) => `<div><b>${dates[p.dataIndex]}</b><br/><span style="color:#0ea5e9;font-weight:bold">上证指数 ${p.value !== null && p.value !== undefined ? Number(p.value).toFixed(2) : '-'}</span></div>` },
+          },
+          {
+            name: '上证MA20', type: 'line',
+            data: dates.map(d => {
+              const idx = indexData.dates.indexOf(d);
+              return idx >= 0 && indexData.ma20[idx] != null ? indexData.ma20[idx] : null;
+            }),
+            yAxisIndex: 2,
+            connectNulls: true,
+            symbol: 'none',
+            lineStyle: { width: 1.2, color: '#f97316', type: 'dashed', opacity: 0.8 },
+            itemStyle: { color: '#f97316' },
+            zlevel: 2,
+            tooltip: { formatter: (p: any) => `<div><b>${dates[p.dataIndex]}</b><br/><span style="color:#f97316;font-weight:bold">上证MA20 ${p.value !== null && p.value !== undefined ? Number(p.value).toFixed(2) : '-'}</span></div>` },
+          },
+        ] : []),
       ],
     };
-  }, [visibleKline, visibleScores, trades, replayEnabled, strategyAlerts, strategyAlertsByDate, defaultZoom, refLines]);
+  }, [visibleKline, visibleScores, trades, replayEnabled, strategyAlerts, strategyAlertsByDate, defaultZoom, refLines, indexData, dates]);
 
   // 打开回放时：点击逻辑绑定到 visibleKline 的索引
   const onEvents = useMemo(() => ({ click: onChartClick }), [clickableDates]);
@@ -729,6 +812,14 @@ export const StockScoreChart: React.FC<Props> = ({ symbol, name, stockInfo, mark
         {strategySummary.staticWarnings.length > 0 && (
           <Tag color="gold" className="m-0 rounded-full text-[9px] font-bold px-2">
             ⚠ {strategySummary.staticWarnings.join(' · ')}
+          </Tag>
+        )}
+
+        {/* 大盘状态：上证指数 vs MA20 */}
+        {indexData && indexData.latest_close != null && (
+          <Tag className={clsx('m-0 rounded-full text-[9px] font-bold px-2', indexData.below_ma20 ? 'bg-rose-50 text-rose-600 border-rose-200' : 'bg-emerald-50 text-emerald-600 border-emerald-200')}>
+            {indexData.below_ma20 ? '📉 大盘空' : '📈 大盘多'} 上证{indexData.latest_close}
+            {indexData.latest_ma20 != null ? ` / MA20 ${indexData.latest_ma20}` : ''}
           </Tag>
         )}
 
