@@ -262,7 +262,7 @@ def _existing_quarters() -> set[str]:
     d = _quantdb_root() / REL_DIR
     if not d.is_dir():
         return set()
-    return {p.name[7:] for p in d.glob("quarter=*")}
+    return {p.name[8:] for p in d.glob("quarter=*")}  # quarter=2026Q2 → 2026Q2
 
 
 def _normalise(df: pd.DataFrame, query_date: date, market: str) -> pd.DataFrame | None:
