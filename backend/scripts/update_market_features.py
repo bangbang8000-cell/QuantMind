@@ -242,6 +242,84 @@ def load_futures_parquet() -> pd.DataFrame:
     return df
 
 
+def load_us_parquet() -> pd.DataFrame:
+    """从 QuantUS dt 分区 parquet 加载美股日线（2001 起，替代旧 H5）。
+
+    dt 分区是"每日期截面"（symbol × time 全市场），需要转成长表
+    (instrument, trade_date)，供 compute_features_for_group 按标的计算。
+    """
+    from backend.services.engine.data_platform.quantus_hub import QuantUSDataHub
+
+    hub = QuantUSDataHub()
+    data_dir = hub.data_dir
+    fwd_dir = data_dir / "1_kline_data" / "daily_forward"
+    if not fwd_dir.is_dir():
+        raise FileNotFoundError(f"QuantUS 数据目录不可用: {fwd_dir}")
+
+    _log(f"读取 QuantUS parquet: {fwd_dir}")
+    import glob as _glob
+
+    files = sorted(_glob.glob(str(fwd_dir / "dt=*" / "data.parquet")))
+    if not files:
+        raise FileNotFoundError(f"QuantUS 无日K分区: {fwd_dir}")
+    _log(f"  日K分区: {len(files)} 个, {files[0].split('=')[-1]} ~ {files[-1].split('=')[-1]}")
+
+    frames = []
+    for f in files:
+        try:
+            chunk = pd.read_parquet(f, engine="pyarrow")
+            frames.append(chunk)
+        except Exception as e:  # noqa: BLE001
+            _log(f"  跳过分区 {f}: {e}")
+    if not frames:
+        raise RuntimeError("QuantUS 日K 全部读取失败")
+
+    df = pd.concat(frames, ignore_index=True)
+    _log(f"  合并 {len(df):,} 行")
+
+    # symbol -> instrument（美股 symbol 原样，如 AAPL）
+    if "symbol" in df.columns:
+        df = df.rename(columns={"symbol": "instrument"})
+    elif "instrument" not in df.columns:
+        raise RuntimeError("QuantUS parquet 缺少 symbol/instrument 列")
+
+    # time -> trade_date
+    if "time" in df.columns:
+        df["trade_date"] = pd.to_datetime(df["time"], errors="coerce").dt.date
+        df = df.drop(columns=["time"])
+    if "trade_date" not in df.columns:
+        raise RuntimeError("QuantUS parquet 缺少 time/trade_date 列")
+
+    df = df.dropna(subset=["trade_date", "close"])
+
+    # amount 兜底
+    if "amount" not in df.columns:
+        df["amount"] = df["close"] * df["volume"]
+    if "adj_factor" not in df.columns:
+        df["adj_factor"] = 1.0
+    if "turnover_rate" not in df.columns:
+        df["turnover_rate"] = 0.0
+
+    # A 股特有列填 0 / NaN
+    for col in ["pe_ttm", "pb", "roe", "bp", "ep_ttm", "float_mv", "total_mv"]:
+        if col not in df.columns:
+            df[col] = 0.0
+    if "ln_mv_total" not in df.columns:
+        df["ln_mv_total"] = np.log(df["amount"].clip(lower=1))
+    for col in ["industry", "is_st", "listing_market"]:
+        if col not in df.columns:
+            df[col] = ""
+    for col in ["return_1d", "return_5d", "return_20d", "ma5", "ma20", "ma60",
+                "rsi_14", "kdj_k", "macd_hist", "vol_std_20", "vol_atr_14",
+                "beta_20", "flow_net_amount", "volume_ma_5", "amount_ma_5"]:
+        if col not in df.columns:
+            df[col] = np.nan
+
+    _log(f"  加载 {len(df):,} 行, {df['instrument'].nunique()} 个标的")
+    _log(f"  日期范围: {df['trade_date'].min()} ~ {df['trade_date'].max()}")
+    return df
+
+
 def compute_market_features(df: pd.DataFrame, market: str) -> pd.DataFrame:
     """为所有标的计算特征。"""
     from backend.scripts.update_feature_parquet import compute_features_for_group
@@ -302,9 +380,11 @@ def main():
     _log(f"市场: {market}")
     _log(f"输出: {parquet_path}")
 
-    # 加载数据（期货走 QuantFutures parquet，其他走 H5）
+    # 加载数据（期货走 QuantFutures parquet，美股走 QuantUS parquet，其他走 H5）
     if market == "futures":
         df = load_futures_parquet()
+    elif market == "us_stock":
+        df = load_us_parquet()
     else:
         df = load_h5_data(market)
 
@@ -358,6 +438,25 @@ def main():
         combined = new_data
 
     combined = combined.sort_values(["trade_date", "instrument"]).reset_index(drop=True)
+
+    # 宏观因子合并（美股全市场共用）
+    if market == "us_stock":
+        try:
+            macro_path = PROJECT_ROOT / "data" / "quantus" / "5_technical_derived" / "macro_usa" / "macro_usa.parquet"
+            if not macro_path.exists():
+                macro_path = Path("/data/quantus/5_technical_derived/macro_usa/macro_usa.parquet")
+            if macro_path.exists():
+                macro = pd.read_parquet(str(macro_path), engine="pyarrow")
+                macro["trade_date"] = pd.to_datetime(macro["trade_date"]).dt.date
+                combined["_td"] = pd.to_datetime(combined["trade_date"]).dt.date
+                combined = combined.merge(macro, left_on="_td", right_on="trade_date", how="left", suffixes=("", "_macro"))
+                combined = combined.drop(columns=["trade_date_macro", "_td"])
+                macro_cols = [c for c in macro.columns if c != "trade_date"]
+                _log(f"  合并宏观因子: {len(macro_cols)} 列 {macro_cols}")
+            else:
+                _log("  WARN: 宏观因子 parquet 不存在，跳过")
+        except Exception as exc:  # noqa: BLE001
+            _log(f"  WARN: 宏观因子合并失败: {exc}")
 
     _log(f"合并后: {len(combined):,} 行, {len(combined.columns)} 列")
     _log(f"日期: {combined['trade_date'].min()} ~ {combined['trade_date'].max()}")
