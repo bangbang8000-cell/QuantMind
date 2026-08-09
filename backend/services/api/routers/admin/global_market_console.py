@@ -139,6 +139,7 @@ _GROUPS = [
 class SyncDatasetsRequest(BaseModel):
     datasets: list[str] = Field(..., min_length=1)
     days: int = Field(5, ge=1, le=365, description="同步最近多少个交易日")
+    with_qlib: bool = Field(False, description="同步后重建 Qlib 缓存")
 
 
 class DataSourcesRequest(BaseModel):
@@ -468,6 +469,22 @@ def make_market_router(*, market: str, env_var: str, default_dir: str, sync_entr
                     kwargs["minute_freqs"] = tuple(minute_freqs)
                     kwargs["minute_days"] = min(req.days, 90)
             result = mod.run(**kwargs)
+
+            # Phase 2: 同步后重建 Qlib 缓存（勾选 with_qlib 时）
+            qlib_cache = None
+            if req.with_qlib:
+                _job_update(job_id, stage="qlib_cache")
+                try:
+                    from backend.services.engine.qlib_data_builder import ensure_qlib_cache
+
+                    market_map = {"US": "US", "HK": "HK", "BC": "CRYPTO", "FUTURES": "FUTURES"}
+                    qlib_market = market_map.get(market, market)
+                    provider_uri = ensure_qlib_cache(market=qlib_market)
+                    qlib_cache = {"status": "ok", "provider_uri": provider_uri}
+                except Exception as exc:  # noqa: BLE001
+                    logger.error("%s sync job %s: qlib cache failed: %s", market, job_id, exc, exc_info=True)
+                    qlib_cache = {"status": "error", "reason": str(exc)}
+
             _job_update(
                 job_id,
                 status="completed",
@@ -475,6 +492,7 @@ def make_market_router(*, market: str, env_var: str, default_dir: str, sync_entr
                 done=len(req.datasets),
                 results=[{"dataset": d, "status": "synced"} for d in req.datasets],
                 summary=result,
+                qlib_cache=qlib_cache,
                 finished_at=_now_iso(),
             )
         except Exception as exc:  # noqa: BLE001
@@ -495,6 +513,7 @@ def make_market_router(*, market: str, env_var: str, default_dir: str, sync_entr
             "total": len(payload.datasets),
             "done": 0,
             "results": [],
+            "qlib_cache": None,
             "cancel_requested": False,
             "started_at": _now_iso(),
             "started_by": current_user.get("username") or current_user.get("user_id"),

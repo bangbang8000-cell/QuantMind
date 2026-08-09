@@ -12,6 +12,7 @@ const MARKET_LABELS: Record<MarketId, string> = {
   HK: '港股',
   US: '美股',
   CRYPTO: '区块链',
+  FUTURES: '期货',
 };
 
 export const MarketOverviewCard: React.FC = () => {

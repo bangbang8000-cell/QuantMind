@@ -132,19 +132,19 @@ export const ModelRegistryPage: React.FC = () => {
         modelTrainingService.listSystemModels(),
       ]);
       const allItems = resp.items ?? [];
-      // 按当前市场过滤用户模型
+      // 按当前市场过滤用户模型：老模型（无 market 字段）仅在 CN 市场显示
       const items = allItems.filter((m) => {
         const meta = m.metadata_json || {};
-        const modelMarket = (meta.market as string) || '';
-        if (!modelMarket) return true;
+        const modelMarket = ((meta.market as string) || '').toUpperCase();
+        if (!modelMarket) return currentMarket === 'CN';
         return modelMarket === currentMarket;
       });
       // 系统模型转为 UserModelRecord 格式并合并到列表顶部
       const sysItems: UserModelRecord[] = (sysModels ?? [])
         .filter((sm) => {
           const meta = sm as unknown as Record<string, unknown>;
-          const mkt = (meta.market as string) || '';
-          if (!mkt) return true;
+          const mkt = ((meta.market as string) || '').toUpperCase();
+          if (!mkt) return currentMarket === 'CN';
           return mkt === currentMarket;
         })
         .map((sm) => ({

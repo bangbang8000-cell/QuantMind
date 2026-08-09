@@ -72,6 +72,17 @@ export const MARKET_CONFIGS: Record<AppMarket, MarketConfig> = {
     calendar: '24/7',
     adapterId: 'crypto',
   },
+  FUTURES: {
+    label: '期货',
+    qlibRegion: 'cn',
+    qlibProviderUri: 'db/qlib_data/futures_data',
+    defaultUniverse: 'all',
+    benchmark: 'CL.FUT',
+    benchmarkName: 'WTI原油',
+    currency: 'USD',
+    calendar: 'CME',
+    adapterId: 'futures',
+  },
 };
 
 export function getMarketConfig(market: AppMarket): MarketConfig {

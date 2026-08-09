@@ -52,6 +52,7 @@ MARKET_PARQUET_NAMES = {
     "crypto": "model_features_crypto.parquet",
     "hong_kong": "model_features_hk.parquet",
     "us_stock": "model_features_us.parquet",
+    "futures": "model_features_futures.parquet",
 }
 
 
@@ -166,6 +167,81 @@ def load_h5_data(market: str) -> pd.DataFrame:
     return df
 
 
+def load_futures_parquet() -> pd.DataFrame:
+    """从 QuantFutures parquet 加载期货数据（无 H5，直接读 daily_forward 分区）。
+
+    期货日K 是标准 10 列（symbol/time/open/high/low/close/volume/amount），
+    符号如 RB0.CN / CL.FUT / Au99.99。统一为 instrument + trade_date 列。
+    """
+    from backend.services.engine.data_platform.quantfutures_hub import QuantFuturesDataHub
+
+    hub = QuantFuturesDataHub.get_instance()
+    data_dir = hub.data_dir
+    fwd_dir = data_dir / "1_kline_data" / "daily_forward"
+    if not fwd_dir.is_dir():
+        raise FileNotFoundError(f"QuantFutures 数据目录不可用: {fwd_dir}")
+
+    _log(f"读取 QuantFutures parquet: {fwd_dir}")
+    import glob as _glob
+
+    files = sorted(_glob.glob(str(fwd_dir / "dt=*" / "data.parquet")))
+    if not files:
+        raise FileNotFoundError(f"QuantFutures 无日K分区: {fwd_dir}")
+
+    frames = []
+    for f in files:
+        try:
+            frames.append(pd.read_parquet(f, engine="pyarrow"))
+        except Exception as e:  # noqa: BLE001
+            _log(f"  跳过分区 {f}: {e}")
+    if not frames:
+        raise RuntimeError("QuantFutures 日K 全部读取失败")
+
+    df = pd.concat(frames, ignore_index=True)
+
+    # symbol -> instrument（保持期货原生代码）
+    if "symbol" in df.columns:
+        df = df.rename(columns={"symbol": "instrument"})
+    elif "instrument" not in df.columns:
+        raise RuntimeError("期货 parquet 缺少 symbol/instrument 列")
+
+    # time -> trade_date
+    if "time" in df.columns:
+        df["trade_date"] = pd.to_datetime(df["time"], errors="coerce").dt.date
+        df = df.drop(columns=["time"])
+    if "trade_date" not in df.columns:
+        raise RuntimeError("期货 parquet 缺少 time/trade_date 列")
+
+    df = df.dropna(subset=["trade_date", "close"])
+
+    # amount 兜底
+    if "amount" not in df.columns:
+        df["amount"] = df["close"] * df["volume"]
+    if "adj_factor" not in df.columns:
+        df["adj_factor"] = 1.0
+    if "turnover_rate" not in df.columns:
+        df["turnover_rate"] = 0.0
+
+    # A 股特有列填 0 / NaN
+    for col in ["pe_ttm", "pb", "roe", "bp", "ep_ttm", "float_mv", "total_mv"]:
+        if col not in df.columns:
+            df[col] = 0.0
+    if "ln_mv_total" not in df.columns:
+        df["ln_mv_total"] = np.log(df["amount"].clip(lower=1))
+    for col in ["industry", "is_st", "listing_market"]:
+        if col not in df.columns:
+            df[col] = ""
+    for col in ["return_1d", "return_5d", "return_20d", "ma5", "ma20", "ma60",
+                "rsi_14", "kdj_k", "macd_hist", "vol_std_20", "vol_atr_14",
+                "beta_20", "flow_net_amount", "volume_ma_5", "amount_ma_5"]:
+        if col not in df.columns:
+            df[col] = np.nan
+
+    _log(f"  加载 {len(df):,} 行, {df['instrument'].nunique()} 个标的")
+    _log(f"  日期范围: {df['trade_date'].min()} ~ {df['trade_date'].max()}")
+    return df
+
+
 def compute_market_features(df: pd.DataFrame, market: str) -> pd.DataFrame:
     """为所有标的计算特征。"""
     from backend.scripts.update_feature_parquet import compute_features_for_group
@@ -213,8 +289,8 @@ def compute_market_features(df: pd.DataFrame, market: str) -> pd.DataFrame:
 
 def main():
     parser = argparse.ArgumentParser(description="多市场特征工程")
-    parser.add_argument("--market", required=True, choices=["crypto", "hong_kong", "us_stock"],
-                        help="市场: crypto, hong_kong, us_stock")
+    parser.add_argument("--market", required=True, choices=["crypto", "hong_kong", "us_stock", "futures"],
+                        help="市场: crypto, hong_kong, us_stock, futures")
     parser.add_argument("--rebuild", action="store_true", help="重建全部特征")
     parser.add_argument("--dry-run", action="store_true", help="仅检查不写入")
     args = parser.parse_args()
@@ -226,11 +302,14 @@ def main():
     _log(f"市场: {market}")
     _log(f"输出: {parquet_path}")
 
-    # 加载 H5 数据
-    df = load_h5_data(market)
+    # 加载数据（期货走 QuantFutures parquet，其他走 H5）
+    if market == "futures":
+        df = load_futures_parquet()
+    else:
+        df = load_h5_data(market)
 
     if df.empty:
-        _log("ERROR: H5 数据为空")
+        _log(f"ERROR: {market} 数据为空")
         sys.exit(1)
 
     # 增量模式：检查现有 parquet

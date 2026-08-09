@@ -1270,6 +1270,7 @@ class ModelRegistryService:
         metadata = {
             **metadata,
             "context": merged_context,
+            "market": market_str or "CN",
             "display_name": raw_display_name,
             "model_name": str(
                 request_payload.get("display_name")

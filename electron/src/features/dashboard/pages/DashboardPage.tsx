@@ -17,21 +17,25 @@ import { MarketOverview } from '../components/MarketOverview';
 import StrategyLabSignalCard from '../components/StrategyLabSignalCard';
 import { dataDashboardService, KlineItem } from '../services/dataDashboardService';
 import { researchService } from '../../../services/researchService';
+import { useAppDispatch, useAppSelector } from '../../../store';
+import { selectCurrentMarket, setMarket, AppMarket } from '../../../store/slices/uiSlice';
 
 const { Title, Text } = Typography;
 
-type Market = 'A' | 'HK' | 'US';
-
 const MARKET_TABS = [
-    { key: 'A', label: 'A股', icon: <StockOutlined /> },
-    { key: 'HK', label: '港股', icon: <BankOutlined /> },
-    { key: 'US', label: '美股', icon: <BarChartOutlined /> },
+    { key: 'CN' as AppMarket, label: 'A股', icon: <StockOutlined /> },
+    { key: 'HK' as AppMarket, label: '港股', icon: <BankOutlined /> },
+    { key: 'US' as AppMarket, label: '美股', icon: <BarChartOutlined /> },
+    { key: 'CRYPTO' as AppMarket, label: '区块链', icon: <AppstoreOutlined /> },
+    { key: 'FUTURES' as AppMarket, label: '期货', icon: <StockOutlined /> },
 ];
 
 const DEFAULT_SYMBOLS: Record<string, { symbol: string; name: string }> = {
-    A: { symbol: '600519.SH', name: '贵州茅台' },
+    CN: { symbol: '600519.SH', name: '贵州茅台' },
     HK: { symbol: '00700.HK', name: '腾讯控股' },
     US: { symbol: 'AAPL', name: 'Apple' },
+    CRYPTO: { symbol: 'BTCUSDT', name: '比特币' },
+    FUTURES: { symbol: 'RB0.CN', name: '螺纹钢主力' },
 };
 
 interface WatchlistItem {
@@ -41,9 +45,10 @@ interface WatchlistItem {
 }
 
 const DashboardPage: React.FC = () => {
-    const [market, setMarket] = useState<Market>('A');
-    const [symbol, setSymbol] = useState(DEFAULT_SYMBOLS.A.symbol);
-    const [symbolName, setSymbolName] = useState(DEFAULT_SYMBOLS.A.name);
+    const market = useAppSelector(selectCurrentMarket);
+    const dispatch = useAppDispatch();
+    const [symbol, setSymbol] = useState(DEFAULT_SYMBOLS.CN.symbol);
+    const [symbolName, setSymbolName] = useState(DEFAULT_SYMBOLS.CN.name);
     const [klineData, setKlineData] = useState<KlineItem[]>([]);
     const [klineLoading, setKlineLoading] = useState(false);
     const [klineSource, setKlineSource] = useState('');
@@ -81,7 +86,7 @@ const DashboardPage: React.FC = () => {
     }, [market]);
 
     // Load K-line data
-    const loadKline = useCallback(async (m: Market, sym: string) => {
+    const loadKline = useCallback(async (m: AppMarket, sym: string) => {
         setKlineLoading(true);
         try {
             const resp = await dataDashboardService.getKline(m, sym, 120);
@@ -117,19 +122,23 @@ const DashboardPage: React.FC = () => {
     );
 
     // Convert watchlist symbol to kline API format
-    // SZ300258 → 300258.SZ, SH600519 → 600519.SH, 00700.HK stays
-    const normalizeSymbol = (raw: string): { symbol: string; market: Market } => {
+    // SZ300258 → 300258.SZ, SH600519 → 600519.SH, 00700.HK stays, BTCUSDT → crypto
+    const normalizeSymbol = (raw: string): { symbol: string; market: AppMarket } => {
         const s = raw.trim().toUpperCase();
         // SZ/SH/BJ prefix: SZ300258 → 300258.SZ
         const cnMatch = s.match(/^(SZ|SH|BJ)(\d{6})$/);
-        if (cnMatch) return { symbol: `${cnMatch[2]}.${cnMatch[1]}`, market: 'A' };
+        if (cnMatch) return { symbol: `${cnMatch[2]}.${cnMatch[1]}`, market: 'CN' };
         // .HK suffix or 5-digit HK code
         if (s.includes('.HK')) return { symbol: s, market: 'HK' };
         if (/^0\d{4}$/.test(s.replace(/\.\w+$/, ''))) return { symbol: `${s.replace(/\.\w+$/, '')}.HK`, market: 'HK' };
         // .SH/.SZ/.BJ suffix already in correct format
-        if (/\.(SH|SZ|BJ)$/.test(s)) return { symbol: s, market: 'A' };
+        if (/\.(SH|SZ|BJ)$/.test(s)) return { symbol: s, market: 'CN' };
         // 6-digit A-stock code without suffix
-        if (/^\d{6}$/.test(s)) return { symbol: `${s}.SZ`, market: 'A' };
+        if (/^\d{6}$/.test(s)) return { symbol: `${s}.SZ`, market: 'CN' };
+        // Crypto: USDT/USDC suffix or high-entropy alphanumeric ticker
+        if (/USDT$|USDC$|^BTC|^ETH|^BNB|^SOL|^XRP|^DOGE/.test(s)) return { symbol: s, market: 'CRYPTO' };
+        // Futures: .CN/.FUT/.CNF suffix
+        if (/\.(CN|FUT|CNF)$/.test(s)) return { symbol: s, market: 'FUTURES' };
         // Otherwise US
         return { symbol: s, market: 'US' };
     };
@@ -138,12 +147,12 @@ const DashboardPage: React.FC = () => {
     const handleWatchlistClick = useCallback(
         (item: WatchlistItem) => {
             const { symbol: sym, market: m } = normalizeSymbol(item.symbol);
-            setMarket(m);
+            dispatch(setMarket(m));
             setSymbol(sym);
             setSymbolName(item.stockName || item.symbol);
             loadKline(m, sym);
         },
-        [loadKline],
+        [dispatch, loadKline],
     );
 
     return (
@@ -161,7 +170,7 @@ const DashboardPage: React.FC = () => {
                 {/* Market Tabs */}
                 <Tabs
                     activeKey={market}
-                    onChange={(k) => setMarket(k as Market)}
+                    onChange={(k) => dispatch(setMarket(k as AppMarket))}
                     items={MARKET_TABS.map((t) => ({
                         key: t.key,
                         label: (

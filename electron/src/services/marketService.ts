@@ -52,7 +52,7 @@ const SUPPORTED_INDICES = {
 };
 
 // 多市场指数配置
-export type MarketId = 'CN' | 'HK' | 'US' | 'CRYPTO';
+export type MarketId = 'CN' | 'HK' | 'US' | 'CRYPTO' | 'FUTURES';
 
 export const MARKET_INDICES: Record<MarketId, { symbol: string; name: string; basePrice: number }[]> = {
   CN: [
@@ -86,6 +86,12 @@ export const MARKET_INDICES: Record<MarketId, { symbol: string; name: string; ba
     { symbol: 'sol', name: 'Solana', basePrice: 150 },
     { symbol: 'xrp', name: '瑞波币', basePrice: 2.2 },
     { symbol: 'ada', name: '艾达币', basePrice: 0.65 },
+  ],
+  FUTURES: [
+    { symbol: 'cl', name: 'WTI原油', basePrice: 78 },
+    { symbol: 'rb', name: '螺纹钢', basePrice: 3200 },
+    { symbol: 'au', name: '沪金', basePrice: 780 },
+    { symbol: 'cu', name: '沪铜', basePrice: 72000 },
   ],
 };
 

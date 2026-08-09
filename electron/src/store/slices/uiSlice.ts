@@ -1,6 +1,6 @@
 import { createSlice, PayloadAction } from '@reduxjs/toolkit';
 
-export type AppMarket = 'CN' | 'US' | 'HK' | 'CRYPTO';
+export type AppMarket = 'CN' | 'US' | 'HK' | 'CRYPTO' | 'FUTURES';
 
 export interface UIState {
   theme: 'light' | 'dark';
@@ -18,7 +18,7 @@ const initialTradingMode: 'real' | 'simulation' =
   (savedMode === 'real' || savedMode === 'simulation') ? savedMode : 'simulation';
 
 const savedMarket = localStorage.getItem(MARKET_PREF_KEY);
-const validMarkets: AppMarket[] = ['CN', 'US', 'HK', 'CRYPTO'];
+const validMarkets: AppMarket[] = ['CN', 'US', 'HK', 'CRYPTO', 'FUTURES'];
 const initialMarket: AppMarket =
   validMarkets.includes(savedMarket as AppMarket) ? (savedMarket as AppMarket) : 'CN';
 

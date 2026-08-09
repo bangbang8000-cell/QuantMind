@@ -564,6 +564,7 @@ class DataPlatformService {
     async syncMarketDatasets(market: 'quantus' | 'quanthk' | 'quantbc' | 'quantfutures', payload: {
         datasets: string[];
         days?: number;
+        with_qlib?: boolean;
     }): Promise<{ job: QuantDBSyncJob }> {
         const resp = await this.axiosInstance.post(`${this.marketBase(market)}/sync-datasets`, payload);
         return this.unwrap(resp);

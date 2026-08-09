@@ -10,10 +10,10 @@ interface IndexItem {
 }
 
 const MARKET_INDICES: Record<string, IndexItem[]> = {
-    A: [
-        { symbol: '000001.SH', name: '上证指数', market: 'A' },
-        { symbol: '399001.SZ', name: '深证成指', market: 'A' },
-        { symbol: '399006.SZ', name: '创业板指', market: 'A' },
+    CN: [
+        { symbol: '000001.SH', name: '上证指数', market: 'CN' },
+        { symbol: '399001.SZ', name: '深证成指', market: 'CN' },
+        { symbol: '399006.SZ', name: '创业板指', market: 'CN' },
     ],
     HK: [
         { symbol: '^HSI', name: '恒生指数', market: 'HK' },
@@ -24,6 +24,22 @@ const MARKET_INDICES: Record<string, IndexItem[]> = {
         { symbol: '^IXIC', name: '纳斯达克', market: 'US' },
         { symbol: '^GSPC', name: '标普500', market: 'US' },
     ],
+    CRYPTO: [
+        { symbol: 'BTCUSDT', name: 'BTC/USDT', market: 'CRYPTO' },
+        { symbol: 'ETHUSDT', name: 'ETH/USDT', market: 'CRYPTO' },
+    ],
+    FUTURES: [
+        { symbol: 'RB0.CN', name: '螺纹钢主力', market: 'FUTURES' },
+        { symbol: 'CL.FUT', name: 'WTI原油', market: 'FUTURES' },
+    ],
+};
+
+const MARKET_LABELS: Record<string, string> = {
+    CN: 'A股',
+    HK: '港股',
+    US: '美股',
+    CRYPTO: '区块链',
+    FUTURES: '期货',
 };
 
 interface MarketOverviewProps {
@@ -62,7 +78,7 @@ export const MarketOverview: React.FC<MarketOverviewProps> = ({ market }) => {
     const indices = MARKET_INDICES[market] || [];
 
     return (
-        <Card size="small" title={`${market === 'A' ? 'A股' : market === 'HK' ? '港股' : '美股'}市场概览`}>
+        <Card size="small" title={`${MARKET_LABELS[market] ?? market}市场概览`}>
             {loading ? (
                 <div style={{ textAlign: 'center', padding: 20 }}>
                     <Spin size="small" />
