@@ -1,6 +1,6 @@
 import React, { useCallback, useEffect, useState } from 'react';
 import {
-    Alert, Button, Card, Col, Descriptions, Input, Progress, Row, Select, Space,
+    Alert, Button, Card, Checkbox, Col, Descriptions, Input, Progress, Row, Select, Space,
     Statistic, Table, Tabs, Tag, Typography, message,
 } from 'antd';
 import {
@@ -40,6 +40,8 @@ export const AdminQuantDBPanel: React.FC = () => {
     const [loading, setLoading] = useState(false);
     const [info, setInfo] = useState<QuantDBInfo | null>(null);
     const [previewDataset, setPreviewDataset] = useState<QuantDBDataset | null>(null);
+    const [sources, setSources] = useState<Array<{ source: string; label: string; enabled: boolean }>>([]);
+    const [sourcesLoading, setSourcesLoading] = useState(false);
 
     const loadInfo = useCallback(async () => {
         setLoading(true);
@@ -52,6 +54,36 @@ export const AdminQuantDBPanel: React.FC = () => {
             setLoading(false);
         }
     }, []);
+
+    const loadSources = useCallback(async () => {
+        setSourcesLoading(true);
+        try {
+            const resp = await dataPlatformService.getMarketDataSources('quantdb');
+            setSources(resp.sources);
+        } catch (error: unknown) {
+            message.error(`加载数据源配置失败: ${describeError(error)}`);
+        } finally {
+            setSourcesLoading(false);
+        }
+    }, []);
+
+    const saveSources = useCallback(async (source: string, enabled: boolean) => {
+        const next = sources.map((s) => (s.source === source ? { ...s, enabled } : s));
+        setSources(next);
+        try {
+            const payload: Record<string, boolean> = {};
+            next.forEach((s) => { payload[s.source] = s.enabled; });
+            await dataPlatformService.saveMarketDataSources('quantdb', payload);
+            message.success('A股数据源配置已保存');
+        } catch (error: unknown) {
+            message.error(`保存数据源配置失败: ${describeError(error)}`);
+            loadSources();
+        }
+    }, [sources, loadSources]);
+
+    useEffect(() => {
+        loadSources();
+    }, [loadSources]);
 
     useEffect(() => {
         loadInfo();
@@ -77,7 +109,7 @@ export const AdminQuantDBPanel: React.FC = () => {
                 title={
                     <Space>
                         <CloudServerOutlined />
-                        <span>QuantDB SDK 数据源</span>
+                        <span>QuantDB A股 数据源</span>
                         <Tag color={statusColor}>{statusText}</Tag>
                     </Space>
                 }
@@ -158,6 +190,30 @@ export const AdminQuantDBPanel: React.FC = () => {
                     </Descriptions>
                 )}
             </Card>
+
+            {/* 数据源勾选配置 */}
+            <div className="p-3 bg-gray-50 rounded">
+                <Space direction="vertical" className="w-full" size="small">
+                    <Space>
+                        <DatabaseOutlined />
+                        <Text strong>数据源</Text>
+                        <Text type="secondary" className="text-xs">默认 QuantDB A股/akshare/北向/南向；雅虎默认关闭不勾选</Text>
+                    </Space>
+                    <Space wrap size="small">
+                        {sources.map((s) => (
+                            <Checkbox
+                                key={s.source}
+                                checked={s.enabled}
+                                disabled={sourcesLoading}
+                                onChange={(e) => saveSources(s.source, e.target.checked)}
+                            >
+                                <Text className="text-xs">{s.label}</Text>
+                                <Text type="secondary" className="text-xs">({s.source})</Text>
+                            </Checkbox>
+                        ))}
+                    </Space>
+                </Space>
+            </div>
 
             <QuantDBConfigCard onSaved={loadInfo} />
 

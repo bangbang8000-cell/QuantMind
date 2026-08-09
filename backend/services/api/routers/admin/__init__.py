@@ -3,6 +3,10 @@ from fastapi import APIRouter
 from .dashboard import router as dashboard_router
 from .data_platform import router as data_platform_router
 from .quantdb_console import router as quantdb_console_router
+from .quantus_console import router as quantus_console_router
+from .quanthk_console import router as quanthk_console_router
+from .quantbc_console import router as quantbc_console_router
+from .quantfutures_console import router as quantfutures_console_router
 from .model_management import router as model_management_router
 from .model_management_ops import router as model_management_ops_router
 from .admin_training import router as admin_training_router
@@ -35,6 +39,18 @@ admin_router.include_router(
 )
 admin_router.include_router(
     quantdb_console_router, prefix="/data-platform/quantdb", tags=["Admin-QuantDB"]
+)
+admin_router.include_router(
+    quantus_console_router, prefix="/data-platform/quantus", tags=["Admin-QuantUS"]
+)
+admin_router.include_router(
+    quanthk_console_router, prefix="/data-platform/quanthk", tags=["Admin-QuantHK"]
+)
+admin_router.include_router(
+    quantbc_console_router, prefix="/data-platform/quantbc", tags=["Admin-QuantBC"]
+)
+admin_router.include_router(
+    quantfutures_console_router, prefix="/data-platform/quantfutures", tags=["Admin-QuantFutures"]
 )
 admin_router.include_router(
     alpha_factor_pipeline_router, prefix="/alpha-factors", tags=["Admin-AlphaFactorPipeline"]

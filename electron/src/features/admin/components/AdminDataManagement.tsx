@@ -20,11 +20,13 @@ import {
     StockOutlined,
     FundOutlined,
     CloudServerOutlined,
+    BlockOutlined,
 } from '@ant-design/icons';
 import dayjs from 'dayjs';
 import { adminService } from '../services/adminService';
 import { dataPlatformService } from '../services/dataPlatformService';
 import { AdminQuantDBPanel } from './AdminQuantDBPanel';
+import { AdminQuantMarketPanel } from './AdminQuantMarketPanel';
 import {
     AdminFeatureSnapshotsOlderSample,
     AdminFeatureSnapshotsInvalidSample,
@@ -911,7 +913,7 @@ export const AdminDataManagement: React.FC = () => {
                                     <Title level={5} className="!text-slate-800 !font-black !mb-3 uppercase tracking-tight text-sm">日常同步任务包含：</Title>
                                     <ul className="space-y-2 m-0 p-0 list-none">
                                         {[
-                                            'QuantDB SDK 增量同步 parquet (data/quantdb/)',
+                                            'QuantDB A股 增量同步 parquet (data/quantdb/)',
                                             '从 parquet 批量填充 PG stock_daily_latest',
                                             '增量更新 Qlib 二进制缓存 (.qlib_cache/cn_data)',
                                             '估值/技术指标随 features_daily 一并写入'
@@ -934,14 +936,14 @@ export const AdminDataManagement: React.FC = () => {
                                             '生成日历、标的列表、特征文件',
                                             '支持 33 个主流加密货币交易对',
                                         ] : selectedMarket === 'hong_kong' ? [
-                                            '从 yfinance 下载恒生指数+恒生科技成分股',
-                                            '覆盖 137 只港股（2010 年至今）',
-                                            '转换为 Qlib bin 格式 (day)',
+                                            'akshare：日线 + 估值/财务指标/公司资料 + 指数',
+                                            'CCASS 机构持仓 + 南向/北向资金',
+                                            '覆盖 2000+ 只港股（本地 parquet）',
                                             '支持增量更新和全量重下',
                                         ] : [
-                                            '从 yfinance 下载 S&P 500 + NASDAQ 成分股',
-                                            '覆盖 491 只美股（2010 年至今）',
-                                            '转换为 Qlib bin 格式 (day)',
+                                            'akshare：日线 + 指数（纳指/标普/道指）',
+                                            'Yahoo：财务三表/分析师预期/期权链',
+                                            '覆盖 490+ 只美股（本地 parquet）',
                                             '支持增量更新和全量重下',
                                         ].map((text, i) => (
                                             <li key={i} className="flex items-start text-xs text-slate-500 font-medium">
@@ -1188,12 +1190,12 @@ export const AdminDataManagement: React.FC = () => {
                                     <InfoCircleOutlined className="text-amber-500 mt-0.5 mr-2" />
                                     <Text className="text-[11px] text-amber-700 font-medium leading-relaxed">
                                         {selectedMarket === 'a_share'
-                                            ? '增量同步：QuantDB SDK → parquet → PG → Qlib 缓存（A 股唯一数据源）。Celery Beat 已配置每日 18:00 自动执行。'
+                                            ? '增量同步：QuantDB A股 → parquet → PG → Qlib 缓存（A 股唯一数据源）。Celery Beat 已配置每日 18:00 自动执行。'
                                             : selectedMarket === 'crypto'
                                                 ? '加密货币数据从 Binance 公开 API 下载 5 分钟 K 线，转换为 Qlib bin 格式。数据量较大，首次同步需要 20-30 分钟。'
                                                 : selectedMarket === 'hong_kong'
-                                                    ? '港股数据从 yfinance 下载恒生指数 + 恒生科技指数 + H 股成分股日线数据。首次同步约 2-3 分钟。'
-                                                    : '美股数据从 yfinance 下载 S&P 500 + NASDAQ 成分股日线数据。首次同步约 3-5 分钟。'
+                                                    ? '港股数据源按勾选分发：akshare（日线/估值/财务/指数）+ CCASS 机构持仓 + 南向/北向资金，落盘本地 parquet。'
+                                                    : '美股数据源按勾选分发：akshare（日线/指数）+ Yahoo（财务/分析师），落盘本地 parquet。'
                                         }
                                     </Text>
                                 </div>
@@ -1349,8 +1351,28 @@ export const AdminDataManagement: React.FC = () => {
                     },
                     {
                         key: 'quantdb',
-                        label: <span className="font-bold flex items-center"><CloudServerOutlined className="mr-1" />QuantDB SDK</span>,
+                        label: <span className="font-bold flex items-center"><CloudServerOutlined className="mr-1" />QuantDB A股</span>,
                         children: <AdminQuantDBPanel />,
+                    },
+                    {
+                        key: 'quantus',
+                        label: <span className="font-bold flex items-center"><FundOutlined className="mr-1" />QuantUS 美股</span>,
+                        children: <AdminQuantMarketPanel market="quantus" marketLabel="QuantUS 美股" color="#1677ff" />,
+                    },
+                    {
+                        key: 'quanthk',
+                        label: <span className="font-bold flex items-center"><GlobalOutlined className="mr-1" />QuantHK 港股</span>,
+                        children: <AdminQuantMarketPanel market="quanthk" marketLabel="QuantHK 港股" color="#722ed1" />,
+                    },
+                    {
+                        key: 'quantbc',
+                        label: <span className="font-bold flex items-center"><BlockOutlined className="mr-1" />QuantBC 区块链</span>,
+                        children: <AdminQuantMarketPanel market="quantbc" marketLabel="QuantBC 区块链" color="#13c2c2" />,
+                    },
+                    {
+                        key: 'quantfutures',
+                        label: <span className="font-bold flex items-center"><StockOutlined className="mr-1" />QuantFutures 期货</span>,
+                        children: <AdminQuantMarketPanel market="quantfutures" marketLabel="QuantFutures 期货" color="#fa8c16" />,
                     },
                 ]}
             />

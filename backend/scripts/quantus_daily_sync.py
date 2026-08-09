@@ -1,0 +1,72 @@
+#!/usr/bin/env python3
+"""美股数据同步入口 — 按勾选数据集分发到对应同步脚本。
+
+支持的数据集（与后台 catalog 对应）:
+  daily_forward / valuation / sector / f10 / income / balance / cashflow /
+  dividend / splits / 4_analyst 系列 / 4_options  → 雅虎源（global_market_sync）
+  index_daily                                      → akshare 指数（akshare_index_sync）
+
+用法:
+  python backend/scripts/quantus_daily_sync.py --days 5
+  python backend/scripts/quantus_daily_sync.py --datasets daily_forward,index_daily --days 5
+"""
+
+from __future__ import annotations
+
+import sys
+from typing import Any
+
+from backend.scripts.global_market_sync import run as _yahoo_run
+
+# 雅虎数据段（global_market_sync 处理）
+_YAHOO_DATASETS = {
+    "daily_forward", "valuation", "sector", "f10",
+    "income", "balance", "cashflow", "dividend", "splits",
+    "recommendations", "upgrades_downgrades", "earnings_history",
+    "earnings_dates", "earnings_estimate", "revenue_estimate",
+    "growth_estimates", "analyst_price_targets", "major_holders",
+    "mutual_fund_holders", "calendar", "insider_transactions", "options_chain",
+}
+
+
+def run(*, days: int = 5, symbols: str | None = None, datasets: list[str] | None = None,
+        fast: bool = False, **kwargs: Any) -> dict:
+    """同步美股数据。datasets 为勾选的数据集名；None 时全量同步雅虎数据。"""
+    if not datasets:
+        return _yahoo_run("US", days=days, symbols=symbols, fast=fast)
+
+    result: dict = {"market": "US", "days": days, "datasets": datasets}
+
+    yahoo_ds = [d for d in datasets if d in _YAHOO_DATASETS]
+    if yahoo_ds:
+        result["yahoo"] = _yahoo_run("US", days=days, symbols=symbols, fast=fast)
+
+    # akshare 指数（index_daily）
+    if "index_daily" in datasets:
+        from backend.scripts.akshare_index_sync import sync as ak_index_sync
+
+        try:
+            result["akshare_index"] = ak_index_sync("US")
+        except Exception as exc:  # noqa: BLE001
+            result["akshare_index"] = {"error": str(exc)}
+
+    return result
+
+
+def _cli() -> int:
+    import argparse
+
+    parser = argparse.ArgumentParser(description="美股数据同步")
+    parser.add_argument("--days", type=int, default=5)
+    parser.add_argument("--symbols", default=None)
+    parser.add_argument("--datasets", default=None, help="逗号分隔数据集名")
+    args, _ = parser.parse_known_args()
+
+    ds = [d.strip() for d in args.datasets.split(",") if d.strip()] if args.datasets else None
+    result = run(days=args.days, symbols=args.symbols, datasets=ds)
+    print(result)
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(_cli())
