@@ -233,9 +233,11 @@ def _resolve_symbol(row: pd.Series, symbol_map: dict[str, str]) -> tuple[str | N
 
     # 前缀规则兜底：仅科创板 30→688 100% 可靠（科创板代码统一 688xxx）。
     # HKEX 科创板代号 030001 → 真实 688001（code 已 zfill 6，后 3 位即真实尾码）。
+    # 注意：HKEX 的 ETF/指数代号前缀同样是 03，必须先排除，否则 50ETF 会被
+    # 误映射成 688xxx 股票代码。
     # 其他 HKEX 市场码（70/72/77/90 等）与 A 股 6 位代码无可逆映射，
     # 猜测会产生错误代码污染数据，故放弃。
-    if code.startswith("03"):
+    if code.startswith("03") and not _is_etf_or_index(name):
         return f"688{code[3:]}.SH", "prefix"
     return None, "unmatched"
 
@@ -246,8 +248,9 @@ def _is_etf_or_index(name: str) -> bool:
     pat = (
         r"ETF|LOF|基金|红利|增强|指增|中金|永赢|华宝|富国|华夏|易方达|嘉实|南方|"
         r"博时|广发|招商|国泰|华泰|天弘|建信|工银|银华|汇添富|景顺|鹏华|大成|"
-        r"诺安|华安|A50|A500|现金|国企|证券|银行|医药|军工|半导体|食品|新能源|"
-        r"化工|环保|科技|央企|消费|有色|地产|保险|央企改革|央企创新"
+        r"诺安|华安|A50|A500|HS300|ZZ500|科创50|消电50|医疗50|中证|国企|央企|"
+        r"证券|银行|医药|军工|半导体|食品|新能源|化工|环保|科技|消费|有色|地产|"
+        r"保险|央企改革|央企创新|大数据|计算机|芯片|传媒|国防|消费|红利"
     )
     return bool(re.search(pat, name))
 
