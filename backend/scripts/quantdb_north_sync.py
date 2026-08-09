@@ -153,8 +153,8 @@ def _recent_quarters(n: int = 2) -> list[str]:
 # 名称 → symbol 映射
 # ---------------------------------------------------------------------------
 def _norm_name(name: object) -> str:
-    """归一化股票名称用于匹配：去空格/全角、NFKC 半角化、去尾部 -U/-W/-UW 后缀。"""
-    s = str(name).strip().replace(" ", "").replace("　", "")
+    """归一化股票名称用于匹配：去空格/下划线/全角、NFKC 半角化、去尾部 -U/-W/-UW 后缀。"""
+    s = str(name).strip().replace(" ", "").replace("　", "").replace("_", "")
     s = unicodedata.normalize("NFKC", s)  # 全角Ａ/空格 → 半角 A/空格
     s = re.sub(r"-[UWCN]+$", "", s)
     return s
