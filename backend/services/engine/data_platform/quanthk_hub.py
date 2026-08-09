@@ -240,44 +240,69 @@ class QuantHKDataHub(QuantDBDataHub):
         return pd.concat(frames, ignore_index=True)
 
     def fetch_hsgt_south(self, symbol: str | None = None, start=None, end=None):
-        """港股通南向资金持仓（按日分区，symbol 为 4位+.HK 如 0700.HK）。
+        """港股通南向资金持仓（symbol 为 4位+.HK 如 0700.HK）。
+
+        数据为混合格式：
+          - per-stock 平铺 parquet（{symbol}.parquet，2024-11~2025-12 历史）
+          - dt=YYYYMMDD 按日分区（2026-08 起 HKEX 抓取）
+        统一按 query_date 过滤返回。
 
         Args:
             symbol: 4位+.HK 代码（如 0700.HK），为空返回全部
             start/end: 交易日范围（date）
         """
+        import pandas as pd
+
         rel = self._data_dir / "2_base_sector" / "hsgt_south"
         if not rel.is_dir():
             return self._empty_df()
 
-        if not self._view_exists("qhk_hsgt_south"):
-            self._mount_hsgt_south_view(rel)
-        if self._view_exists("qhk_hsgt_south"):
-            conn = self._get_duck_conn()
-            conditions = _dt_conditions(start, end)
-            if symbol:
-                conditions.append(f"symbol = '{symbol}'")
-            where = " AND ".join(conditions) if conditions else "1=1"
-            df = conn.execute(f"SELECT * FROM qhk_hsgt_south WHERE {where} ORDER BY dt").fetchdf()
-            return self._normalize_columns(df)
-
-        import pandas as pd
-
         frames = []
+        # per-stock 平铺 parquet（历史日频）
+        for pf in rel.glob("*.parquet"):
+            try:
+                chunk = pd.read_parquet(pf)
+            except Exception:  # noqa: BLE001
+                continue
+            if chunk.empty:
+                continue
+            if symbol and "symbol" in chunk.columns:
+                chunk = chunk[chunk["symbol"] == symbol]
+            if chunk.empty:
+                continue
+            if "query_date" in chunk.columns:
+                chunk["query_date"] = pd.to_datetime(chunk["query_date"], errors="coerce")
+                if start:
+                    chunk = chunk[chunk["query_date"] >= pd.Timestamp(start)]
+                if end:
+                    chunk = chunk[chunk["query_date"] <= pd.Timestamp(end)]
+            frames.append(chunk)
+
+        # dt= 按日分区（HKEX 抓取，query_date 列 + Hive dt 分区）
         for dt_dir in sorted(rel.glob("dt=*")):
             if start and dt_dir.name[3:] < start.strftime("%Y%m%d"):
                 continue
             if end and dt_dir.name[3:] > end.strftime("%Y%m%d"):
                 continue
             for pf in dt_dir.glob("*.parquet"):
-                chunk = pd.read_parquet(pf)
+                try:
+                    chunk = pd.read_parquet(pf)
+                except Exception:  # noqa: BLE001
+                    continue
+                if chunk.empty:
+                    continue
                 if symbol and "symbol" in chunk.columns:
                     chunk = chunk[chunk["symbol"] == symbol]
                 if not chunk.empty:
                     frames.append(chunk)
+
         if not frames:
             return self._empty_df()
-        return pd.concat(frames, ignore_index=True)
+        out = pd.concat(frames, ignore_index=True)
+        if "query_date" in out.columns:
+            out["query_date"] = pd.to_datetime(out["query_date"], errors="coerce")
+            out = out.sort_values("query_date")
+        return out
 
     def _mount_hsgt_south_view(self, rel: Path) -> None:
         """挂载 hsgt_south 分区视图（qhk_hsgt_south）。"""

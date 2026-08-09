@@ -118,8 +118,34 @@ def _read_south_csv(path: Path) -> pd.DataFrame | None:
     return df
 
 
-def import_south(src_dir: str | None = None, *, dry_run: bool = False) -> dict:
-    """全量导入南向资金历史到 quanthk。"""
+def _import_one(csv_path: Path, target_dir: Path) -> tuple[int, bool, str]:
+    """导入单个 CSV → (rows, success, error)。"""
+    try:
+        df = _read_south_csv(csv_path)
+        if df is None or df.empty:
+            return 0, False, "empty"
+        symbol = df["symbol"].iloc[0]
+        out = target_dir / f"{symbol}.parquet"
+        if out.exists():
+            old = pd.read_parquet(out)
+            combined = pd.concat([old, df], ignore_index=True)
+            combined = combined.drop_duplicates(subset=["symbol", "query_date"], keep="last")
+            combined.to_parquet(out, index=False)
+        else:
+            df.to_parquet(out, index=False)
+        return len(df), True, ""
+    except Exception as exc:  # noqa: BLE001
+        return 0, False, str(exc)
+
+
+def import_south(src_dir: str | None = None, *, dry_run: bool = False,
+                 workers: int = 8) -> dict:
+    """多线程导入南向资金历史到 quanthk。
+
+    data-hs 每只股票一个 CSV（955 个），用 ThreadPoolExecutor 并行读取落盘。
+    """
+    from concurrent.futures import ThreadPoolExecutor, as_completed
+
     src = Path(src_dir or DEFAULT_SRC_DIR)
     if not src.is_dir():
         raise FileNotFoundError(f"数据目录不存在: {src}")
@@ -129,7 +155,7 @@ def import_south(src_dir: str | None = None, *, dry_run: bool = False) -> dict:
 
     # 收集所有 CSV（data-hs/{股票名}/南向资金_{名}_{代码}.csv）
     csv_files = list(src.rglob("*.csv"))
-    log.info("待导入 CSV: %d 个 (%s)", len(csv_files), src)
+    log.info("待导入 CSV: %d 个，线程 %d (%s)", len(csv_files), workers, src)
 
     if dry_run:
         return {"dir": str(src), "files": len(csv_files), "dry_run": True, "target_dir": str(target_dir)}
@@ -137,28 +163,23 @@ def import_south(src_dir: str | None = None, *, dry_run: bool = False) -> dict:
     total_rows = 0
     written = 0
     errors = 0
-    for i, f in enumerate(csv_files):
-        try:
-            df = _read_south_csv(f)
-            if df is not None and not df.empty:
-                symbol = df["symbol"].iloc[0]
-                out = target_dir / f"{symbol}.parquet"
-                if out.exists():
-                    old = pd.read_parquet(out)
-                    combined = pd.concat([old, df], ignore_index=True)
-                    combined = combined.drop_duplicates(subset=["symbol", "query_date"], keep="last")
-                    combined.to_parquet(out, index=False)
-                else:
-                    df.to_parquet(out, index=False)
-                total_rows += len(df)
+    err_samples = []
+
+    with ThreadPoolExecutor(max_workers=workers) as pool:
+        futures = {pool.submit(_import_one, f, target_dir): f for f in csv_files}
+        done = 0
+        for fut in as_completed(futures):
+            done += 1
+            rows, success, err = fut.result()
+            if success:
+                total_rows += rows
                 written += 1
             else:
                 errors += 1
-        except Exception as exc:  # noqa: BLE001
-            log.warning("读取 %s 失败: %s", f.name, exc)
-            errors += 1
-        if (i + 1) % 300 == 0:
-            log.info("  进度 %d/%d，累计 %d 行", i + 1, len(csv_files), total_rows)
+                if len(err_samples) < 10:
+                    err_samples.append(f"{futures[fut].name}: {err}")
+            if done % 200 == 0:
+                log.info("  进度 %d/%d，累计 %d 行", done, len(csv_files), total_rows)
 
     return {
         "dir": str(src),
@@ -166,6 +187,7 @@ def import_south(src_dir: str | None = None, *, dry_run: bool = False) -> dict:
         "stocks_written": written,
         "rows": total_rows,
         "errors": errors,
+        "error_samples": err_samples,
         "target_dir": str(target_dir),
     }
 
@@ -174,10 +196,11 @@ def main() -> int:
     parser = argparse.ArgumentParser(description="南向资金历史 → QuantHK")
     parser.add_argument("--dir", default=None, help="data-hs 目录")
     parser.add_argument("--dry-run", action="store_true", help="仅预览，不写盘")
+    parser.add_argument("--workers", type=int, default=8, help="并发线程数")
     args = parser.parse_args()
 
     try:
-        result = import_south(args.dir, dry_run=args.dry_run)
+        result = import_south(args.dir, dry_run=args.dry_run, workers=args.workers)
         print(result)
         return 0
     except Exception as exc:  # noqa: BLE001
