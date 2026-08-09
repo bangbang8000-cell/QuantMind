@@ -210,6 +210,34 @@ class QuantDBDataHub:
             except Exception as exc:
                 logger.warning("创建 DuckDB 视图 %s 失败: %s", view_name, exc)
 
+        # 非分区 per-symbol parquet 视图（无 dt= Hive 分区）
+        per_symbol_views = {
+            "qdb_hsgt_north_daily": "2_base_sector/hsgt_north/daily_freq/*.parquet",
+        }
+        for view_name, parquet_glob in per_symbol_views.items():
+            glob_dir = dd / parquet_glob
+            if not list(Path(str(glob_dir)).parent.glob("*.parquet")):
+                continue  # 目录为空则跳过
+            try:
+                conn.execute(
+                    f"CREATE VIEW IF NOT EXISTS {view_name} AS "
+                    f"SELECT * FROM read_parquet('{glob_dir}', union_by_name=true)"
+                )
+            except Exception as exc:
+                logger.warning("创建 DuckDB 视图 %s 失败: %s", view_name, exc)
+
+        # 北向资金季度快照视图（quarter=YYYYQN Hive 分区，2024-08 起季度披露）
+        north_quarter_dir = dd / "2_base_sector" / "hsgt_north" / "quarter=*" / "data.parquet"
+        if list(Path(str(dd / "2_base_sector" / "hsgt_north")).glob("quarter=*")):
+            try:
+                conn.execute(
+                    "CREATE VIEW IF NOT EXISTS qdb_hsgt_north AS "
+                    f"SELECT * FROM read_parquet('{north_quarter_dir}', "
+                    "hive_partitioning=1, union_by_name=true)"
+                )
+            except Exception as exc:
+                logger.warning("创建 DuckDB 视图 qdb_hsgt_north 失败: %s", exc)
+
         self._views_mounted_per_conn.add(conn_id)
 
     # ------------------------------------------------------------------

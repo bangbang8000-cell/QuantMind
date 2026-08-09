@@ -748,6 +748,73 @@ def show_status() -> dict:
 # ---------------------------------------------------------------------------
 # Main
 # ---------------------------------------------------------------------------
+def _sync_extra_sources(
+    *,
+    days: int = 5,
+    dry_run: bool = False,
+    datasets: list[str] | None = None,
+) -> dict:
+    """同步额外数据源（北向资金/北向日频/南向资金）。
+
+    datasets 为 None（每日同步路径）时同步所有已勾选的数据源；
+    否则只同步被请求的数据集（后台管理逐数据集触发路径）。
+    hsgt_north_daily 是 2017~2024 历史回填，仅显式请求时才跑，不进每日同步。
+    """
+    out: dict = {}
+    try:
+        from backend.shared.data_source_config import is_source_enabled
+
+        north_enabled = is_source_enabled("A", "hsgt_north")
+        south_enabled = is_source_enabled("A", "hsgt_south")
+    except Exception:  # noqa: BLE001
+        north_enabled = True
+        south_enabled = True
+
+    want_north = (datasets is None or "hsgt_north" in datasets) and north_enabled
+    want_north_daily = datasets is not None and "hsgt_north_daily" in datasets and north_enabled
+    want_south = (datasets is None or "hsgt_south" in datasets) and south_enabled
+    log.info(
+        "额外数据源: 北向=%s 北向日频=%s 南向=%s (datasets=%s)",
+        want_north, want_north_daily, want_south, datasets,
+    )
+
+    if want_north:
+        try:
+            from backend.scripts.quantdb_north_sync import sync as north_sync
+
+            # 北向个股 2024-08-19 起改季度披露，按季度末+第5交易日同步最新季度
+            r = north_sync(latest=True, dry_run=dry_run)
+            out["hsgt_north"] = r
+            log.info("北向资金同步完成: %s", r)
+        except Exception as exc:  # noqa: BLE001
+            log.warning("北向资金同步失败: %s", exc)
+            out["hsgt_north"] = {"status": "error", "error": str(exc)}
+
+    if want_north_daily:
+        try:
+            from backend.scripts.akshare_north_daily import sync as north_daily_sync
+
+            r = north_daily_sync(dry_run=dry_run)
+            out["hsgt_north_daily"] = r
+            log.info("北向资金日频同步完成: %s", r)
+        except Exception as exc:  # noqa: BLE001
+            log.warning("北向资金日频同步失败: %s", exc)
+            out["hsgt_north_daily"] = {"status": "error", "error": str(exc)}
+
+    if want_south:
+        try:
+            from backend.scripts.quanthk_south_sync import sync as south_sync
+
+            r = south_sync(days=days, dry_run=dry_run)
+            out["hsgt_south"] = r
+            log.info("南向资金同步完成: %s", r)
+        except Exception as exc:  # noqa: BLE001
+            log.warning("南向资金同步失败: %s", exc)
+            out["hsgt_south"] = {"status": "error", "error": str(exc)}
+
+    return out
+
+
 def run_daily_sync(
     *,
     parquet_only: bool = False,
@@ -776,6 +843,9 @@ def run_daily_sync(
             all_ds = V2_DATASETS + V1_DATASETS
             ds_list = [ds for ds in all_ds if ds["sub_category"] in datasets]
         result["parquet"] = sync_parquet(ds_list, dry_run=dry_run)
+
+    # Phase 1.5: 额外数据源（北向/南向，按数据源勾选控制；逐数据集路径只同步请求项）
+    result["sources"] = _sync_extra_sources(dry_run=dry_run, datasets=datasets)
 
     if parquet_only:
         result["finished"] = datetime.now().isoformat()

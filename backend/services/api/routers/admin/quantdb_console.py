@@ -93,6 +93,8 @@ DATASETS: tuple[DatasetSpec, ...] = (
     DatasetSpec("index_weights", "指数权重", "2", "base_sector", "2_base_sector/index_weights", "symbol", "沪深300/中证500/1000 等"),
     DatasetSpec("trading_calendar", "交易日历", "2", "base_sector", "2_base_sector/trading_calendar", "single"),
     DatasetSpec("margin_trading", "融资融券", "2", "base_sector", "2_base_sector/margin_trading", "partition"),
+    DatasetSpec("hsgt_north", "北向资金(季度)", "2", "base_sector", "2_base_sector/hsgt_north", "partition", "2024-08 起北向个股改季度披露，每季度末+第5交易日抓取，symbol 6位格式"),
+    DatasetSpec("hsgt_north_daily", "北向资金日频(akshare)", "2", "base_sector", "2_base_sector/hsgt_north/daily_freq", "symbol", "2017-03~2024-08 北向持股日频，akshare逐股拉取"),
     # 3 财务数据
     DatasetSpec("balance", "资产负债表", "3", "financial", "3_financial_data/balance", "symbol"),
     DatasetSpec("income", "利润表", "3", "financial", "3_financial_data/income", "symbol"),
@@ -134,10 +136,13 @@ def _data_dir() -> Path:
 # 本地落盘统计
 # ---------------------------------------------------------------------------
 def _partition_dates(root: Path) -> list[str]:
+    """分区目录可用日期/季度。支持 dt=YYYYMMDD（按日）与 quarter=YYYYQN（按季）。"""
     out = []
     for p in root.iterdir():
         if p.is_dir() and p.name.startswith("dt="):
             out.append(p.name[3:])
+        elif p.is_dir() and p.name.startswith("quarter="):
+            out.append(p.name[8:])  # 2026Q2
     out.sort()
     return out
 
@@ -222,6 +227,38 @@ async def get_catalog(current_user: dict = Depends(require_admin)):
     except Exception as exc:  # noqa: BLE001
         logger.error("quantdb catalog failed: %s", exc, exc_info=True)
         raise HTTPException(status_code=500, detail=f"failed: {exc}")
+
+
+# ---------------------------------------------------------------------------
+# 数据源勾选配置
+# ---------------------------------------------------------------------------
+@router.get("/data-sources")
+async def get_data_sources(current_user: dict = Depends(require_admin)):
+    from backend.shared.data_source_config import list_sources
+
+    return {
+        "success": True,
+        "data": {
+            "market": "A",
+            "sources": list_sources("A"),
+            "timestamp": _now_iso(),
+        },
+    }
+
+
+@router.post("/data-sources")
+async def save_data_sources(payload: DataSourcesRequest, current_user: dict = Depends(require_admin)):
+    from backend.shared.data_source_config import save_sources
+
+    saved = save_sources("A", payload.sources)
+    return {
+        "success": True,
+        "data": {
+            "market": "A",
+            "sources": saved,
+            "timestamp": _now_iso(),
+        },
+    }
 
 
 # ---------------------------------------------------------------------------
@@ -416,6 +453,10 @@ class SyncDatasetsRequest(BaseModel):
     with_pg: bool = Field(False, description="同步后从 parquet 填充 PG stock_daily_latest")
     with_qlib: bool = Field(False, description="同步后增量重建 Qlib 缓存")
     pg_full: bool = Field(False, description="PG 全量重灌（默认增量）")
+
+
+class DataSourcesRequest(BaseModel):
+    sources: dict[str, bool] = Field(..., description="数据源勾选状态 {source: enabled}")
 
 
 _jobs: dict[str, dict[str, Any]] = {}
@@ -689,13 +730,23 @@ def _run_sync_job(job_id: str, req: SyncDatasetsRequest) -> None:
     # 将 parquet 同步结果映射到 job results
     parquet_info = sync_result.get("parquet") or {}
     synced_count = parquet_info.get("synced", 0)
-    up_to_date_count = parquet_info.get("up_to_date", 0)
+    parquet_info.get("up_to_date", 0)
     errors = parquet_info.get("errors", [])
-    total_downloaded = parquet_info.get("total_downloaded", 0)
+    parquet_info.get("total_downloaded", 0)
+    sources_info = sync_result.get("sources") or {}
 
     results = []
     for name in req.datasets:
-        if any(name in str(e) for e in errors):
+        src = sources_info.get(name)
+        if src is not None:
+            if src.get("status") == "error":
+                results.append({"dataset": name, "status": "failed", "downloaded": 0,
+                                "error": str(src.get("error", "unknown"))})
+            elif src.get("synced", 0) > 0 or src.get("status") in ("ok", "completed"):
+                results.append({"dataset": name, "status": "synced", "downloaded": src.get("synced", 1)})
+            else:
+                results.append({"dataset": name, "status": "up_to_date", "downloaded": 0})
+        elif any(name in str(e) for e in errors):
             results.append({"dataset": name, "status": "failed", "downloaded": 0, "error": next((e for e in errors if name in str(e)), "unknown")})
         elif synced_count > 0:
             results.append({"dataset": name, "status": "synced", "downloaded": 1})
@@ -886,13 +937,18 @@ async def get_remote_diff(
                 # 比对 ETag：检查本地状态库
                 rel_path = obj.get("relative_path") or key
                 target = root / spec.rel_dir
-                local_file = target / rel_path if spec.layout == "partition" else target / rel_path
-                remote_etag = (obj.get("etag") or "").strip('"')
+                target / rel_path if spec.layout == "partition" else target / rel_path
+                (obj.get("etag") or "").strip('"')
+                remote_size = obj.get("size")
 
-                # 简化检查：对 partition 布局，看本地是否有该分区文件
+                # partition 布局：文件存在 + 大小一致才算通过（内容被污染但存在
+                # 的文件通过大小差异暴露，如 daily_backward 复权因子错误）
                 if spec.layout == "partition" and trade_date:
                     dt_dir = target / f"dt={trade_date.replace('-', '')}"
-                    if not dt_dir.exists() or not any(dt_dir.glob("*.parquet")):
+                    pq = next(dt_dir.glob("*.parquet"), None) if dt_dir.exists() else None
+                    if pq is None:
+                        etag_changed += 1
+                    elif remote_size and abs(pq.stat().st_size - int(remote_size)) > 64:
                         etag_changed += 1
                 elif spec.layout in ("single", "symbol"):
                     # 单文件/标的文件：检查本地文件是否存在且 ETag 未变
