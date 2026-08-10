@@ -18,6 +18,8 @@ import {
 } from 'lucide-react';
 import { motion } from 'framer-motion';
 import { useSelector } from 'react-redux';
+import { selectCurrentMarket } from '../../store/slices/uiSlice';
+import { getMarketConfig } from '../../config/marketConfig';
 
 interface FloatingNavBarProps {
   current?: string;
@@ -33,9 +35,11 @@ interface NavItemConfig {
 export const FloatingNavBar: React.FC<FloatingNavBarProps> = ({ current, onChange }) => {
   const user = useSelector((state: any) => state.auth.user);
   const isAdmin = user?.is_admin || false;
+  const currentMarket = useSelector(selectCurrentMarket);
+  const marketLabel = getMarketConfig(currentMarket).label;
 
   const navItems: NavItemConfig[] = [
-    { id: 'dashboard', label: '仪表盘', icon: LayoutDashboard },
+    { id: 'dashboard', label: marketLabel, icon: LayoutDashboard },
     { id: 'strategy', label: '智能策略', icon: LineChart },
     { id: 'ai-ide', label: 'AI-IDE', icon: SquareTerminal },
     { id: 'backtest', label: '回测中心', icon: FlaskConical },
