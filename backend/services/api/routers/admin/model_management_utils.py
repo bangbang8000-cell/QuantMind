@@ -320,11 +320,30 @@ def _build_suggested_periods(min_date: date, max_date: date) -> dict[str, list[s
     }
 
 
+def _normalize_market_key(market: str | None) -> str:
+    """把市场名归一化为标准 key（a_share / hong_kong / us_stock / crypto / futures）。
+
+    兼容前端 AppMarket 枚举（CN/US/HK/CRYPTO/FUTURES）与内部命名（a_share 等）。
+    """
+    raw = (market or "").strip().upper()
+    mapping = {
+        "CN": "a_share", "A": "a_share", "A_SHARE": "a_share",
+        "HK": "hong_kong", "HONG_KONG": "hong_kong",
+        "US": "us_stock", "US_STOCK": "us_stock",
+        "CRYPTO": "crypto", "BC": "crypto",
+        "FUTURES": "futures",
+    }
+    if raw in mapping:
+        return mapping[raw]
+    lower = (market or "").strip().lower()
+    return lower if lower else "a_share"
+
+
 def _scan_feature_snapshot_coverage(market: str | None = None) -> dict[str, Any] | None:
     if not FEATURE_SNAPSHOT_DIR.exists() or not FEATURE_SNAPSHOT_DIR.is_dir():
         return None
 
-    market_key = (market or "a_share").lower()
+    market_key = _normalize_market_key(market)
     if market_key == "a_share":
         # A 股：年份文件 model_features_YYYY.parquet（+ core）
         files = sorted(FEATURE_SNAPSHOT_DIR.glob("model_features_20[0-9][0-9].parquet"))
@@ -391,7 +410,7 @@ def _get_feature_snapshot_coverage_cached(market: str | None = None) -> dict[str
     global _feature_coverage_cache_data
     global _feature_coverage_cache_expires_at
 
-    market_key = (market or "a_share").lower()
+    market_key = _normalize_market_key(market)
     now_ts = time_module.time()
     cached = _feature_coverage_cache_data or {}
     if market_key in cached and now_ts < _feature_coverage_cache_expires_at:
@@ -412,7 +431,7 @@ async def _get_feature_snapshot_coverage_cached_async(market: str | None = None)
     global _feature_coverage_cache_data
     global _feature_coverage_cache_expires_at
 
-    market_key = (market or "a_share").lower()
+    market_key = _normalize_market_key(market)
     now_ts = time_module.time()
     cached = _feature_coverage_cache_data or {}
     if market_key in cached and now_ts < _feature_coverage_cache_expires_at:
