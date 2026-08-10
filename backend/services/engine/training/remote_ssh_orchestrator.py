@@ -570,8 +570,12 @@ class RemoteSSHOrchestrator(TrainingOrchestrator):
         return config
 
     def _resolve_feature_files(self, payload: dict) -> list[str]:
-        """根据训练区间解析需要的特征快照年份文件（容器内路径）。"""
-        # 容器内特征快照实际位置（与 LocalDockerOrchestrator 挂载一致）
+        """根据训练市场与区间解析需要推送的特征快照文件（容器内路径）。
+
+        市场 → 文件：
+          - A股（CN/a_share）: 按年份 model_features_YYYY.parquet
+          - 其他市场: 单体 model_features_{market}.parquet
+        """
         feature_dir = Path("/app/db/feature_snapshots")
         if not feature_dir.is_dir():
             feature_dir = Path("/data/feature_snapshots")
@@ -579,6 +583,30 @@ class RemoteSSHOrchestrator(TrainingOrchestrator):
             logger.warning("特征快照目录不存在: %s", feature_dir)
             return []
 
+        # 解析市场（payload.context.market: CN/HK/US/CRYPTO/FUTURES 或 a_share 等）
+        context = payload.get("context", {}) if isinstance(payload.get("context"), dict) else {}
+        market_raw = str(context.get("market") or "CN").upper()
+        market_key = {
+            "CN": "a_share", "A": "a_share", "A_SHARE": "a_share",
+            "HK": "hong_kong", "US": "us_stock",
+            "CRYPTO": "crypto", "BC": "crypto",
+            "FUTURES": "futures",
+        }.get(market_raw, "a_share")
+
+        # 非 A 股：单体文件
+        if market_key != "a_share":
+            from backend.services.api.routers.admin.model_management_utils import (
+                _MARKET_SNAPSHOT_PARQUET,
+            )
+
+            parquet_name = _MARKET_SNAPSHOT_PARQUET.get(market_key)
+            f = feature_dir / parquet_name if parquet_name else None
+            if f and f.exists():
+                return [str(f)]
+            logger.warning("市场 %s 特征快照不存在: %s", market_raw, f)
+            return []
+
+        # A 股：按年份文件
         train_start = str(payload.get("train_start") or "2022-01-01")
         train_end = str(payload.get("train_end") or "2024-12-31")
         try:

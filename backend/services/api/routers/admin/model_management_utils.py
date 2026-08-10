@@ -320,14 +320,23 @@ def _build_suggested_periods(min_date: date, max_date: date) -> dict[str, list[s
     }
 
 
-def _scan_feature_snapshot_coverage() -> dict[str, Any] | None:
+def _scan_feature_snapshot_coverage(market: str | None = None) -> dict[str, Any] | None:
     if not FEATURE_SNAPSHOT_DIR.exists() or not FEATURE_SNAPSHOT_DIR.is_dir():
         return None
 
-    # 支持两种文件命名模式: train_ready_*.parquet 和 model_features_*.parquet
-    files = sorted(FEATURE_SNAPSHOT_DIR.glob("train_ready_*.parquet"))
-    if not files:
-        files = sorted(FEATURE_SNAPSHOT_DIR.glob("model_features_*.parquet"))
+    market_key = (market or "a_share").lower()
+    if market_key == "a_share":
+        # A 股：年份文件 model_features_YYYY.parquet（+ core）
+        files = sorted(FEATURE_SNAPSHOT_DIR.glob("model_features_20[0-9][0-9].parquet"))
+        core = FEATURE_SNAPSHOT_DIR / "model_features_core.parquet"
+        if core.exists():
+            files.append(core)
+    else:
+        # 非 A 股：单体 model_features_{market}.parquet（用市场→文件名映射）
+        parquet_name = _MARKET_SNAPSHOT_PARQUET.get(market_key)
+        f = FEATURE_SNAPSHOT_DIR / parquet_name if parquet_name else None
+        files = [f] if f and f.exists() else []
+
     if not files:
         return None
 
@@ -367,6 +376,7 @@ def _scan_feature_snapshot_coverage() -> dict[str, Any] | None:
     return {
         "source": "local_parquet",
         "snapshot_dir": str(FEATURE_SNAPSHOT_DIR),
+        "market": market_key,
         "file_count": len(files),
         "scanned_files": scanned_files,
         "failed_files": failed_files,
@@ -377,21 +387,24 @@ def _scan_feature_snapshot_coverage() -> dict[str, Any] | None:
     }
 
 
-def _get_feature_snapshot_coverage_cached() -> dict[str, Any] | None:
+def _get_feature_snapshot_coverage_cached(market: str | None = None) -> dict[str, Any] | None:
     global _feature_coverage_cache_data
     global _feature_coverage_cache_expires_at
 
+    market_key = (market or "a_share").lower()
     now_ts = time_module.time()
-    if _feature_coverage_cache_data is not None and now_ts < _feature_coverage_cache_expires_at:
-        return _feature_coverage_cache_data
+    cached = _feature_coverage_cache_data or {}
+    if market_key in cached and now_ts < _feature_coverage_cache_expires_at:
+        return cached[market_key]
 
-    payload = _scan_feature_snapshot_coverage()
-    _feature_coverage_cache_data = payload
+    payload = _scan_feature_snapshot_coverage(market)
+    cached[market_key] = payload
+    _feature_coverage_cache_data = cached
     _feature_coverage_cache_expires_at = now_ts + FEATURE_COVERAGE_CACHE_TTL_SEC
     return payload
 
 
-async def _get_feature_snapshot_coverage_cached_async() -> dict[str, Any] | None:
+async def _get_feature_snapshot_coverage_cached_async(market: str | None = None) -> dict[str, Any] | None:
     """异步版：把同步 parquet 扫描放到线程池执行，避免阻塞事件循环。
 
     15GB+ 的 train_ready_*.parquet 冷扫描耗时数十秒，同步执行会让
@@ -399,12 +412,15 @@ async def _get_feature_snapshot_coverage_cached_async() -> dict[str, Any] | None
     global _feature_coverage_cache_data
     global _feature_coverage_cache_expires_at
 
+    market_key = (market or "a_share").lower()
     now_ts = time_module.time()
-    if _feature_coverage_cache_data is not None and now_ts < _feature_coverage_cache_expires_at:
-        return _feature_coverage_cache_data
+    cached = _feature_coverage_cache_data or {}
+    if market_key in cached and now_ts < _feature_coverage_cache_expires_at:
+        return cached[market_key]
 
-    payload = await asyncio.to_thread(_scan_feature_snapshot_coverage)
-    _feature_coverage_cache_data = payload
+    payload = await asyncio.to_thread(_scan_feature_snapshot_coverage, market)
+    cached[market_key] = payload
+    _feature_coverage_cache_data = cached
     _feature_coverage_cache_expires_at = now_ts + FEATURE_COVERAGE_CACHE_TTL_SEC
     return payload
 
@@ -599,7 +615,7 @@ def _enrich_feature_catalog_with_data_coverage(catalog: dict[str, Any] | None, m
     if not isinstance(catalog, dict):
         return catalog
 
-    coverage = _get_feature_snapshot_coverage_cached()
+    coverage = _get_feature_snapshot_coverage_cached(market)
     if not coverage:
         return catalog
 
@@ -613,7 +629,7 @@ async def _enrich_feature_catalog_with_data_coverage_async(catalog: dict[str, An
     if not isinstance(catalog, dict):
         return catalog
 
-    coverage = await _get_feature_snapshot_coverage_cached_async()
+    coverage = await _get_feature_snapshot_coverage_cached_async(market)
     if not coverage:
         return catalog
 
