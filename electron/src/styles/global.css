@@ -644,21 +644,6 @@ html.platform-win32.os-win10 .module-grid-container {
   display: none;
 }
 
-.dock-market-badge {
-  align-self: center;
-  flex-shrink: 0;
-  margin-right: 4px;
-  padding: 3px 10px;
-  border-radius: 9999px;
-  font-size: 11px;
-  font-weight: 800;
-  letter-spacing: 0.02em;
-  color: #fff;
-  background: linear-gradient(135deg, #3b82f6, #6366f1);
-  box-shadow: 0 2px 8px rgba(59, 130, 246, 0.35);
-  white-space: nowrap;
-}
-
 .dock-group {
   display: flex;
   align-items: stretch;

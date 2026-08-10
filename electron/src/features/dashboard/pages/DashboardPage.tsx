@@ -47,6 +47,7 @@ interface WatchlistItem {
 const DashboardPage: React.FC = () => {
     const market = useAppSelector(selectCurrentMarket);
     const dispatch = useAppDispatch();
+    const marketLabel = MARKET_TABS.find((t) => t.key === market)?.label ?? 'A股';
     const [symbol, setSymbol] = useState(DEFAULT_SYMBOLS.CN.symbol);
     const [symbolName, setSymbolName] = useState(DEFAULT_SYMBOLS.CN.name);
     const [klineData, setKlineData] = useState<KlineItem[]>([]);
@@ -161,7 +162,7 @@ const DashboardPage: React.FC = () => {
             <div style={{ marginBottom: 16 }}>
                 <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 }}>
                     <Space>
-                        <Title level={4} style={{ margin: 0 }}>数据看板</Title>
+                        <Title level={4} style={{ margin: 0 }}>{marketLabel}数据看板</Title>
                         <Tag color="blue">{fieldCount} 个字段</Tag>
                     </Space>
                     <StockSearch market={market} onSelect={handleStockSelect} />

@@ -18,8 +18,6 @@ import {
 } from 'lucide-react';
 import { motion } from 'framer-motion';
 import { useSelector } from 'react-redux';
-import { selectCurrentMarket } from '../../store/slices/uiSlice';
-import { getMarketConfig } from '../../config/marketConfig';
 
 interface FloatingNavBarProps {
   current?: string;
@@ -35,8 +33,6 @@ interface NavItemConfig {
 export const FloatingNavBar: React.FC<FloatingNavBarProps> = ({ current, onChange }) => {
   const user = useSelector((state: any) => state.auth.user);
   const isAdmin = user?.is_admin || false;
-  const currentMarket = useSelector(selectCurrentMarket);
-  const marketCfg = getMarketConfig(currentMarket);
 
   const navItems: NavItemConfig[] = [
     { id: 'dashboard', label: '仪表盘', icon: LayoutDashboard },
@@ -67,13 +63,6 @@ export const FloatingNavBar: React.FC<FloatingNavBarProps> = ({ current, onChang
   return (
     <nav className="bottom-dock" aria-label="主导航">
       <div className="bottom-dock-inner">
-        <span
-          className="dock-market-badge"
-          title={`当前市场：${marketCfg.label}`}
-          aria-label={`当前市场：${marketCfg.label}`}
-        >
-          {marketCfg.label}
-        </span>
         {groupedNavItems.map((group, groupIndex) => (
           <React.Fragment key={`group-${groupIndex}`}>
             <div className="dock-group">
