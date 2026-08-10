@@ -21,14 +21,18 @@ from typing import Any, Optional
 
 import numpy as np
 import pandas as pd
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 from sqlalchemy import text
 
+from backend.services.api.user_app.middleware.auth import require_admin
 from backend.shared.database_manager_v2 import get_session
 
 logger = logging.getLogger(__name__)
-router = APIRouter(tags=["AlphaFactorPipeline"])
+router = APIRouter(
+    tags=["AlphaFactorPipeline"],
+    dependencies=[Depends(require_admin)],  # 路由器级认证兜底，新增端点默认受保护
+)
 
 # ── 路径配置 ──
 if os.path.exists("/app") and not os.environ.get("QUANTMIND_HOST_MODE"):

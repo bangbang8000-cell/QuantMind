@@ -263,6 +263,7 @@ export interface TrainingDraft {
   target: TrainingTarget;
   params: TrainingParams;
   context: TrainingContext;
+  wfa?: WfaConfig;
   lastSavedAt: string;
 }
 

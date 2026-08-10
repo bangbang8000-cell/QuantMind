@@ -72,7 +72,8 @@ export function QuantDBCatalogPanel({ connected, onPreview }: QuantDBCatalogPane
             const resp = await dataPlatformService.listQuantDBSyncJobs();
             setActiveJob(resp.jobs[0] ?? null);
             return resp.jobs[0] ?? null;
-        } catch {
+        } catch (err: unknown) {
+            console.error('[QuantDBCatalogPanel] loadLatestJob failed:', err);
             return null;
         }
     }, []);

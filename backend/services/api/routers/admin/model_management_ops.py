@@ -44,7 +44,7 @@ from .model_management_utils import (
     _scan_feature_snapshots_status,
 )
 
-router = APIRouter()
+router = APIRouter(dependencies=[Depends(require_admin)])  # 路由器级认证兜底
 
 DAILY_SYNC_SHELL_SCRIPT = (
     Path(os.getcwd()) / "scripts" / "data" / "maintenance" / "run_daily_pg_parquet_and_qlib_sync.sh"

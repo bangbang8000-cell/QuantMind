@@ -16,7 +16,9 @@ from pydantic import BaseModel
 
 from backend.services.api.user_app.middleware.auth import require_admin
 
-router = APIRouter()
+router = APIRouter(
+    dependencies=[Depends(require_admin)],  # 路由器级认证兜底
+)
 logger = logging.getLogger(__name__)
 
 

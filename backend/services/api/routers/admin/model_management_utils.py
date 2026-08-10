@@ -37,7 +37,7 @@ except ImportError:
 
 from .db import Base, DataFileRecord, ModelRecord, TrainingJobRecord  # noqa: F401 — ensure all models are registered in Base.metadata before create_all
 
-router = APIRouter()
+router = APIRouter(dependencies=[Depends(require_admin)])  # 路由器级认证兜底
 
 # 模型存放根目录（扫描所有子目录）
 MODELS_ROOT = os.path.abspath(os.path.join(os.getcwd(), "models"))

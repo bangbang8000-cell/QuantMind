@@ -48,6 +48,8 @@ from .model_management_utils import (
     _INFERENCE_LOCK_TTL_SEC,
 )
 
+router = APIRouter(dependencies=[Depends(require_admin)])  # 路由器级认证兜底
+
 @router.post("", response_model=ModelResponse)
 async def create_model(
     data: ModelCreate,

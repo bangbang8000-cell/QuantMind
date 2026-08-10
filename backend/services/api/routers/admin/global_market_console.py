@@ -287,7 +287,7 @@ def make_market_router(*, market: str, env_var: str, default_dir: str, sync_entr
         default_dir: 容器内默认数据目录（/data/quantus / /data/quanthk）
         sync_entry: 同步脚本路径（backend.scripts.quantus_daily_sync / quanthk_daily_sync）
     """
-    router = APIRouter()
+    router = APIRouter(dependencies=[Depends(require_admin)])  # 路由器级认证兜底
     DATASETS = _default_datasets(market)
     _BY_NAME = {ds.dataset: ds for ds in DATASETS}
 

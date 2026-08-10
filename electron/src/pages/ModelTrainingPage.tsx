@@ -1,19 +1,19 @@
-import React, { useEffect, useMemo, useRef, useState } from 'react';
+import React, { useEffect, useMemo, useReducer, useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { AnimatePresence, motion } from 'framer-motion';
-import { 
-  Brain, ChevronRight, Play, Settings2, BarChart, Database, 
-  Copy, Sparkles, RefreshCcw, Target 
+import {
+  Brain, ChevronRight, Play, Settings2, BarChart, Database,
+  Copy, Sparkles, RefreshCcw, Target
 } from 'lucide-react';
-import { 
-  Button, Space, Tag, Typography, message, Card 
+import {
+  Button, Space, Tag, Typography, message, Card
 } from 'antd';
 import dayjs, { Dayjs } from 'dayjs';
 import { clsx } from 'clsx';
 import { PAGE_LAYOUT } from '../config/pageLayout';
 import { modelTrainingService } from '../services/modelTrainingService';
 import { useAppSelector } from '../store';
-import { selectCurrentMarket } from '../store/slices/uiSlice';
+import { selectCurrentMarket, AppMarket } from '../store/slices/uiSlice';
 import { getMarketConfig } from '../config/marketConfig';
 import { TrainingTarget, TrainingParams, TrainingContext, TrainingStatus, TrainingDraft, SplitKey, TimePeriodMap, FeatureCategory, STORAGE_KEY, DEFAULT_FEATURE_CATEGORIES, PRESET_DEFAULT_FEATURES, MARKET_DEFAULT_FEATURES, getDefaultFeaturesForMarket, resolveDefaultSelectedFeatures, DEFAULT_TIME_PERIODS, DEFAULT_TARGET, DEFAULT_PARAMS, DEFAULT_CONTEXT, buildAutoDisplayName, buildLabelFormula, buildEffectiveTradeDate, daysBetween, toISOStringRange, restoreRange, shouldMigrateLegacyDraftPeriods, buildTrainingRequest, formatRange, toDynamicCategories, TrainingResult, buildBackendTrainingPayload, parseTrainingResult, parseSuggestedTimePeriods, MODEL_DL_DEFAULTS, WfaConfig } from './training/trainingUtils';
 import { AdminModelFeatureDataCoverage } from '../features/admin/types';
@@ -50,21 +50,115 @@ const MetricCard: React.FC<{
   </div>
 );
 
+// ==========================================================================
+// P0-4: useReducer 草稿恢复（原子化 7 字段一次性写入）
+// ==========================================================================
+
+interface FormState {
+  selectedFeatures: string[];
+  timePeriods: TimePeriodMap;
+  wfaConfig: WfaConfig;
+  target: TrainingTarget;
+  params: TrainingParams;
+  context: TrainingContext;
+  displayName: string;
+  displayNameMode: 'auto' | 'manual';
+  draftHydrated: boolean;
+}
+
+type FormAction =
+  | { type: 'HYDRATE'; payload: TrainingDraft | null }
+  | { type: 'SET_FEATURES'; payload: string[] }
+  | { type: 'SET_TIME'; key: SplitKey; value: [Dayjs, Dayjs] }
+  | { type: 'SET_TARGET'; payload: TrainingTarget }
+  | { type: 'SET_PARAMS'; payload: TrainingParams }
+  | { type: 'SET_CONTEXT'; payload: TrainingContext }
+  | { type: 'SET_DISPLAY_NAME'; payload: { name: string; mode: 'auto' | 'manual' } }
+  | { type: 'SET_WFA'; payload: WfaConfig }
+  | { type: 'SET_FEATURE_CATEGORIES'; payload: FeatureCategory[] }
+  | { type: 'SET_MARKET_CONTEXT'; payload: { market: AppMarket; benchmark: string } };
+
+function formReducer(state: FormState, action: FormAction): FormState {
+  switch (action.type) {
+    case 'HYDRATE': {
+      if (!action.payload) return { ...state, draftHydrated: true };
+      const p = action.payload;
+      const restoredParams = { ...DEFAULT_PARAMS, ...p.params };
+      if (!p.params?.model_types && p.params?.model_type) {
+        restoredParams.model_types = [p.params.model_type];
+      }
+      if (restoredParams.model_type && MODEL_DL_DEFAULTS[restoredParams.model_type]) {
+        const defaults = MODEL_DL_DEFAULTS[restoredParams.model_type];
+        Object.assign(restoredParams, defaults);
+      }
+      const restoredWfa = p.wfa ?? { enabled: false, strategy: 'rolling', nWindows: 4, trainYears: 3, valMonths: 12, stepMonths: 12 };
+      return {
+        ...state,
+        selectedFeatures: p.selectedFeatures && p.selectedFeatures.length > 0
+          ? p.selectedFeatures : state.selectedFeatures,
+        timePeriods: {
+          train: restoreRange(p.timePeriods?.train, DEFAULT_TIME_PERIODS.train),
+          val: restoreRange(p.timePeriods?.val, DEFAULT_TIME_PERIODS.val),
+          test: restoreRange(p.timePeriods?.test, DEFAULT_TIME_PERIODS.test),
+        },
+        target: p.target || DEFAULT_TARGET,
+        params: restoredParams,
+        context: { ...DEFAULT_CONTEXT, ...p.context },
+        displayNameMode: p.displayNameMode || 'auto',
+        displayName: p.displayName || state.displayName,
+        wfaConfig: restoredWfa,
+        draftHydrated: true,
+      };
+    }
+    case 'SET_FEATURES':
+      return { ...state, selectedFeatures: action.payload };
+    case 'SET_TIME':
+      return { ...state, timePeriods: { ...state.timePeriods, [action.key]: action.value } };
+    case 'SET_TARGET':
+      return { ...state, target: action.payload };
+    case 'SET_PARAMS':
+      return { ...state, params: action.payload };
+    case 'SET_CONTEXT':
+      return { ...state, context: action.payload };
+    case 'SET_DISPLAY_NAME':
+      return { ...state, displayName: action.payload.name, displayNameMode: action.payload.mode };
+    case 'SET_WFA':
+      return { ...state, wfaConfig: action.payload };
+    case 'SET_FEATURE_CATEGORIES':
+      return { ...state };
+    case 'SET_MARKET_CONTEXT':
+      return { ...state, context: { ...state.context, ...action.payload } };
+    default:
+      return state;
+  }
+}
+
+// ==========================================================================
+// Component
+// ==========================================================================
+
 export const ModelTrainingPage: React.FC = () => {
   const navigate = useNavigate();
   const currentMarket = useAppSelector(selectCurrentMarket);
+
+  // ── useReducer：草稿持久化的 7 字段 ──
+  const [formState, dispatch] = useReducer(formReducer, {
+    selectedFeatures: getDefaultFeaturesForMarket(currentMarket),
+    timePeriods: DEFAULT_TIME_PERIODS,
+    wfaConfig: { enabled: false, strategy: 'rolling', nWindows: 4, trainYears: 3, valMonths: 12, stepMonths: 12 },
+    target: DEFAULT_TARGET,
+    params: DEFAULT_PARAMS,
+    context: DEFAULT_CONTEXT,
+    displayName: buildAutoDisplayName(dayjs(), DEFAULT_TARGET, PRESET_DEFAULT_FEATURES.length),
+    displayNameMode: 'auto' as const,
+    draftHydrated: false,
+  });
+
+  // ── useState: 训练运行时 state（不参与草稿持久化） ──
   const [currentStep, setCurrentStep] = useState(0);
   const [featureCategories, setFeatureCategories] = useState<FeatureCategory[]>(DEFAULT_FEATURE_CATEGORIES);
   const [featureCatalogLoading, setFeatureCatalogLoading] = useState(false);
   const [dataCoverage, setDataCoverage] = useState<AdminModelFeatureDataCoverage | null>(null);
-  const [selectedFeatures, setSelectedFeatures] = useState<string[]>(() => getDefaultFeaturesForMarket(currentMarket));
-  const [timePeriods, setTimePeriods] = useState<TimePeriodMap>(DEFAULT_TIME_PERIODS);
-  const [wfaConfig, setWfaConfig] = useState<WfaConfig>({ enabled: false, strategy: 'rolling', nWindows: 4, trainYears: 3, valMonths: 12, stepMonths: 12 });
-  const [target, setTarget] = useState<TrainingTarget>(DEFAULT_TARGET);
-  const [params, setParams] = useState<TrainingParams>(DEFAULT_PARAMS);
-  const [context, setContext] = useState<TrainingContext>(DEFAULT_CONTEXT);
-  const [displayNameMode, setDisplayNameMode] = useState<'auto' | 'manual'>('auto');
-  const [displayName, setDisplayName] = useState<string>(buildAutoDisplayName(dayjs(), DEFAULT_TARGET, PRESET_DEFAULT_FEATURES.length));
   const [trainingStatus, setTrainingStatus] = useState<TrainingStatus>('draft');
   const [executionStage, setExecutionStage] = useState('待配置');
   const [backendRunStatus, setBackendRunStatus] = useState<string>('');
@@ -74,30 +168,29 @@ export const ModelTrainingPage: React.FC = () => {
   const [resultError, setResultError] = useState<string>('');
   const [settingDefaultModel, setSettingDefaultModel] = useState(false);
   const [draftSavedAt, setDraftSavedAt] = useState<string>('');
-  const [draftHydrated, setDraftHydrated] = useState(false);
   const [trainingNodes, setTrainingNodes] = useState<any[]>([]);
   const [selectedNode, setSelectedNode] = useState<string>('local');
   const [nodesLoading, setNodesLoading] = useState(false);
-  
+
   const timersRef = useRef<number[]>([]);
   const pollTimerRef = useRef<number | null>(null);
   const logsRef = useRef<string[]>([]);
   const catalogSuggestionAppliedRef = useRef(false);
 
+  // Derive individual fields from formState for inline use
+  const { selectedFeatures, timePeriods, wfaConfig, target, params, context, displayName, displayNameMode } = formState;
+
   const labelFormula = useMemo(() => buildLabelFormula(target), [target]);
   const effectiveTradeDate = useMemo(() => buildEffectiveTradeDate(target, timePeriods.test[0]), [target, timePeriods.test]);
 
-  // 市场切换时更新训练上下文和默认特征
+  // 市场切换
   useEffect(() => {
     const mc = getMarketConfig(currentMarket);
-    setContext(prev => ({
-      ...prev,
-      market: currentMarket,
-      benchmark: mc.benchmark,
-    }));
-    // 切换市场时重置为该市场的默认特征
-    setSelectedFeatures(getDefaultFeaturesForMarket(currentMarket));
+    dispatch({ type: 'SET_MARKET_CONTEXT', payload: { market: currentMarket, benchmark: mc.benchmark } });
+    dispatch({ type: 'SET_FEATURES', payload: getDefaultFeaturesForMarket(currentMarket) });
+    catalogSuggestionAppliedRef.current = false;
   }, [currentMarket]);
+
   const featureCount = selectedFeatures.length;
   const autoDisplayName = useMemo(
     () => buildAutoDisplayName(dayjs(), target, featureCount, undefined, currentMarket),
@@ -117,13 +210,15 @@ export const ModelTrainingPage: React.FC = () => {
     ['pending', 'provisioning', 'running', 'waiting_callback'].includes((backendRunStatus || '').toLowerCase());
   const disableStartTraining = isTrainingInProgress && currentStep === 3;
 
+  // 自动 displayName
   useEffect(() => {
     if (displayNameMode !== 'auto') return;
     if (displayName !== autoDisplayName) {
-      setDisplayName(autoDisplayName);
+      dispatch({ type: 'SET_DISPLAY_NAME', payload: { name: autoDisplayName, mode: 'auto' } });
     }
   }, [autoDisplayName, displayName, displayNameMode]);
 
+  // 训练节点
   useEffect(() => {
     let active = true;
     const loadNodes = async () => {
@@ -141,100 +236,82 @@ export const ModelTrainingPage: React.FC = () => {
     return () => { active = false; };
   }, []);
 
+  // 特征字典加载
   useEffect(() => {
     let active = true;
     const loadCatalog = async () => {
       setFeatureCatalogLoading(true);
-      // 1) 字典 schema 先快路径加载（不带 coverage，毫秒级响应）
       try {
         const catalog = await modelTrainingService.getFeatureCatalog(currentMarket, false);
         if (!active) return;
         const dynamicCats = toDynamicCategories(catalog);
         setFeatureCategories(dynamicCats);
-
-        // 默认勾选列表 = catalog.default_selected（truth source），
-        // 后端未下发时回落 PRESET 并 console.warn 提示。
-        setSelectedFeatures(resolveDefaultSelectedFeatures(dynamicCats, currentMarket));
+        dispatch({ type: 'SET_FEATURES', payload: resolveDefaultSelectedFeatures(dynamicCats, currentMarket) });
       } catch (error) {
         if (active) message.warning('特征字典加载失败，已回退到内置字段');
       } finally {
         if (active) setFeatureCatalogLoading(false);
       }
 
-      // 2) 覆盖统计独立异步请求 —— 失败不影响 schema 渲染
       try {
         const catalogWithCoverage = await modelTrainingService.getFeatureCatalog(currentMarket, true);
         if (!active) return;
-
         if (catalogWithCoverage.data_coverage) {
           setDataCoverage(catalogWithCoverage.data_coverage);
         }
-
         if (catalogWithCoverage.data_coverage?.suggested_periods && !catalogSuggestionAppliedRef.current) {
           const suggested = parseSuggestedTimePeriods(catalogWithCoverage.data_coverage.suggested_periods);
           if (suggested) {
-            setTimePeriods(suggested);
+            dispatch({ type: 'SET_TIME', key: 'train', value: suggested.train });
+            dispatch({ type: 'SET_TIME', key: 'val', value: suggested.val });
+            dispatch({ type: 'SET_TIME', key: 'test', value: suggested.test });
             catalogSuggestionAppliedRef.current = true;
           }
         }
-      } catch {
-        // coverage 失败不影响特征字典渲染
-      }
+      } catch { /* coverage failure ok */ }
     };
     loadCatalog();
     return () => { active = false; };
   }, [currentMarket]);
 
+  // P0-4: 草稿恢复 — 一次 dispatch 原子化写入（替代 7 个 setState）
   useEffect(() => {
     const saved = localStorage.getItem(STORAGE_KEY);
-    if (!saved) { setDraftHydrated(true); return; }
+    if (!saved) { dispatch({ type: 'HYDRATE', payload: null }); return; }
     try {
       const parsed = JSON.parse(saved) as TrainingDraft;
-      setSelectedFeatures(parsed.selectedFeatures || []);
-      setTimePeriods({
-        train: restoreRange(parsed.timePeriods?.train, DEFAULT_TIME_PERIODS.train),
-        val: restoreRange(parsed.timePeriods?.val, DEFAULT_TIME_PERIODS.val),
-        test: restoreRange(parsed.timePeriods?.test, DEFAULT_TIME_PERIODS.test),
-      });
-      setTarget(parsed.target || DEFAULT_TARGET);
-      const restoredParams = { ...DEFAULT_PARAMS, ...parsed.params };
-      if (!parsed.params?.model_types && parsed.params?.model_type) {
-        restoredParams.model_types = [parsed.params.model_type];
-      }
-      // 从 localStorage 恢复时，如果保存的 params 与当前 model_type 的推荐默认值不同，
-      // 用 MODEL_DL_DEFAULTS 覆盖（确保加载正确模型的参数）
-      if (restoredParams.model_type && MODEL_DL_DEFAULTS[restoredParams.model_type]) {
-        const defaults = MODEL_DL_DEFAULTS[restoredParams.model_type];
-        // 只覆盖 DL 参数，不覆盖树模型/线性模型参数
-        Object.assign(restoredParams, defaults);
-      }
-      setParams(restoredParams);
-      setContext({ ...DEFAULT_CONTEXT, ...parsed.context });
-      setDisplayNameMode(parsed.displayNameMode || 'auto');
-      setDisplayName(parsed.displayName || autoDisplayName);
+      dispatch({ type: 'HYDRATE', payload: parsed });
       if (!draftRestoreNoticeShown) {
         draftRestoreNoticeShown = true;
         message.success('已恢复上次训练草稿');
       }
-    } catch (e) { localStorage.removeItem(STORAGE_KEY); }
-    setDraftHydrated(true);
-  }, []); // Remove autoDisplayName from dependencies to run only once on mount
+    } catch {
+      localStorage.removeItem(STORAGE_KEY);
+      dispatch({ type: 'HYDRATE', payload: null });
+    }
+  }, []); // 只 mount 时执行
 
+  // P0-4: 草稿保存 — draftHydrated 守卫防止覆盖已恢复草稿
   useEffect(() => {
-    if (!draftHydrated) return;
+    if (!formState.draftHydrated) return;
     const draft: TrainingDraft = {
-      displayName, displayNameMode, selectedFeatures,
+      displayName,
+      displayNameMode,
+      selectedFeatures,
       timePeriods: {
         train: toISOStringRange(timePeriods.train),
         val: toISOStringRange(timePeriods.val),
         test: toISOStringRange(timePeriods.test),
       },
-      target, params, context,
+      target,
+      params,
+      context,
+      wfa: wfaConfig,
       lastSavedAt: new Date().toISOString(),
     };
     localStorage.setItem(STORAGE_KEY, JSON.stringify(draft));
     setDraftSavedAt(draft.lastSavedAt);
-  }, [draftHydrated, displayName, displayNameMode, selectedFeatures, timePeriods, target, params, context]);
+  }, [formState.draftHydrated, displayName, displayNameMode, selectedFeatures, timePeriods, target, params, context, wfaConfig]);
 
   const clearTimers = () => {
     timersRef.current.forEach(t => window.clearTimeout(t));
@@ -270,12 +347,12 @@ export const ModelTrainingPage: React.FC = () => {
     setExecutionStage('准备训练请求');
     setProgress(5);
     pushLog(`正在提交训练请求：${displayName}`);
-    
+
     try {
       const payload = buildBackendTrainingPayload(requestPreview, timePeriods, { nodeId: selectedNode });
       const { runId } = await modelTrainingService.runTraining(payload);
       pushLog(`提交成功，Run ID: ${runId}`);
-      
+
       pollTimerRef.current = window.setInterval(async () => {
         const run = await modelTrainingService.getTrainingRun(runId);
         setBackendRunStatus(run.status || '');
@@ -285,7 +362,7 @@ export const ModelTrainingPage: React.FC = () => {
            });
         }
         if (run.status === 'running') setProgress(Math.max(run.progress || 20, 20));
-        
+
         if (run.isCompleted) {
           clearTimers();
           if (run.status === 'failed') {
@@ -323,7 +400,6 @@ export const ModelTrainingPage: React.FC = () => {
       startTraining();
       return;
     }
-    // 重新配置逻辑
     setCurrentStep(0);
     setTrainingStatus('draft');
     setResult(null);
@@ -332,17 +408,18 @@ export const ModelTrainingPage: React.FC = () => {
 
   const handleResetAll = () => {
     clearTimers();
-    // 重置默认勾选：优先用 catalog flag（truth source），catalog 未加载时回落 PRESET
-    setSelectedFeatures(
-      featureCategories.length > 0
-        ? resolveDefaultSelectedFeatures(featureCategories, currentMarket)
-        : getDefaultFeaturesForMarket(currentMarket),
-    );
-    setTimePeriods(DEFAULT_TIME_PERIODS);
-    setTarget(DEFAULT_TARGET);
-    setParams(DEFAULT_PARAMS);
-    setContext(DEFAULT_CONTEXT);
-    setDisplayNameMode('auto');
+    const features = featureCategories.length > 0
+      ? resolveDefaultSelectedFeatures(featureCategories, currentMarket)
+      : getDefaultFeaturesForMarket(currentMarket);
+    dispatch({ type: 'SET_FEATURES', payload: features });
+    dispatch({ type: 'SET_TIME',  key: 'train', value: DEFAULT_TIME_PERIODS.train });
+    dispatch({ type: 'SET_TIME',  key: 'val',   value: DEFAULT_TIME_PERIODS.val });
+    dispatch({ type: 'SET_TIME',  key: 'test',  value: DEFAULT_TIME_PERIODS.test });
+    dispatch({ type: 'SET_TARGET', payload: DEFAULT_TARGET });
+    dispatch({ type: 'SET_PARAMS', payload: DEFAULT_PARAMS });
+    dispatch({ type: 'SET_CONTEXT', payload: DEFAULT_CONTEXT });
+    dispatch({ type: 'SET_DISPLAY_NAME', payload: { name: '', mode: 'auto' } });
+    dispatch({ type: 'SET_WFA', payload: { enabled: false, strategy: 'rolling', nWindows: 4, trainYears: 3, valMonths: 12, stepMonths: 12 } });
     setTrainingStatus('draft');
     setResult(null);
     setCurrentStep(0);
@@ -482,9 +559,9 @@ export const ModelTrainingPage: React.FC = () => {
 
                 <AnimatePresence mode="wait">
                   <motion.div key={currentStep} initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -10 }} transition={{ duration: 0.2 }}>
-                    {currentStep === 0 && <FeatureSelector categories={featureCategories} selectedFeatures={selectedFeatures} onChange={setSelectedFeatures} loading={featureCatalogLoading} />}
-                    {currentStep === 1 && <TrainingTargetConfig target={target} timePeriods={timePeriods} onTargetChange={setTarget} onTimeChange={(k, v) => setTimePeriods({...timePeriods, [k]: v})} dataCoverage={dataCoverage} wfa={wfaConfig} onWfaChange={setWfaConfig} />}
-                    {currentStep === 2 && <ParameterConfig params={params} context={context} onParamsChange={setParams} onContextChange={setContext} displayName={displayName} onDisplayNameChange={(n, m) => { setDisplayName(n); setDisplayNameMode(m); }} autoDisplayName={autoDisplayName} market={currentMarket} />}
+                    {currentStep === 0 && <FeatureSelector categories={featureCategories} selectedFeatures={selectedFeatures} onChange={(f) => dispatch({ type: 'SET_FEATURES', payload: f })} loading={featureCatalogLoading} />}
+                    {currentStep === 1 && <TrainingTargetConfig target={target} timePeriods={timePeriods} onTargetChange={(t) => dispatch({ type: 'SET_TARGET', payload: t })} onTimeChange={(k, v) => dispatch({ type: 'SET_TIME', key: k, value: v })} dataCoverage={dataCoverage} wfa={wfaConfig} onWfaChange={(w) => dispatch({ type: 'SET_WFA', payload: w })} />}
+                    {currentStep === 2 && <ParameterConfig params={params} context={context} onParamsChange={(p) => dispatch({ type: 'SET_PARAMS', payload: p })} onContextChange={(c) => dispatch({ type: 'SET_CONTEXT', payload: c })} displayName={displayName} onDisplayNameChange={(n, m) => dispatch({ type: 'SET_DISPLAY_NAME', payload: { name: n, mode: m } })} autoDisplayName={autoDisplayName} market={currentMarket} />}
                     {currentStep === 3 && <TrainingConsole trainingStatus={trainingStatus} executionStage={executionStage} progress={progress} logs={logs} backendRunStatus={backendRunStatus} result={result} requestPreview={requestPreview} totalDays={totalDays} trainDays={trainDays} valDays={valDays} testDays={testDays} target={target} />}
                     {currentStep === 4 && <TrainingResultView result={result} resultError={resultError} settingDefaultModel={settingDefaultModel} onSetDefaultModel={handleSetDefaultModel} trainingStatus={trainingStatus} />}
                   </motion.div>

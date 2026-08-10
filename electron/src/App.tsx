@@ -57,6 +57,7 @@ const AdminRDAgentFactors = lazy(() => import('./features/admin/components/Admin
 const AdminDataPlatform = lazy(() => import('./features/admin/components/AdminDataPlatform').then(m => ({ default: m.AdminDataPlatform })));
 const AdminTagManagement = lazy(() => import('./features/admin/components/AdminTagManagement').then(m => ({ default: m.AdminTagManagement })));
 const AdminFeatureCatalog = lazy(() => import('./features/admin/components/AdminFeatureCatalog').then(m => ({ default: m.AdminFeatureCatalog })));
+const ComingSoonPage = lazy(() => import('./features/admin/components/ComingSoonPage').then(m => ({ default: m.ComingSoonPage })));
 const AlphaResearchPage = lazy(() => import('./features/alpha-research/pages/AlphaResearchPage'));
 const TradingAgentsPage = lazy(() => import('./features/trading-agents/pages/TradingAgentsPage'));
 
@@ -647,11 +648,11 @@ export default function App() {
                     <Route path="rd-agent" element={<Suspense fallback={<Spin size="large" />}><AdminRDAgentFactors /></Suspense>} />
                     <Route path="feature-catalog" element={<Suspense fallback={<Spin size="large" />}><AdminFeatureCatalog /></Suspense>} />
                     {/* 待开发页面占位 */}
-                    <Route path="inference" element={<div className="p-8 text-center text-slate-400">推理监控页面开发中...</div>} />
-                    <Route path="orders" element={<div className="p-8 text-center text-slate-400">订单管理页面开发中...</div>} />
-                    <Route path="risk" element={<div className="p-8 text-center text-slate-400">风险控制页面开发中...</div>} />
+                    <Route path="inference" element={<ComingSoonPage title="推理监控" />} />
+                    <Route path="orders" element={<ComingSoonPage title="订单管理" />} />
+                    <Route path="risk" element={<ComingSoonPage title="风险控制" />} />
                     <Route path="quotes" element={<Suspense fallback={<Spin size="large" />}><AdminDataPlatform /></Suspense>} />
-                    <Route path="settings" element={<div className="p-8 text-center text-slate-400">系统设置页面开发中...</div>} />
+                    <Route path="settings" element={<ComingSoonPage title="系统设置" />} />
                   </Route>
 
                   {/* 主应用路由 - 仪表盘等 */}

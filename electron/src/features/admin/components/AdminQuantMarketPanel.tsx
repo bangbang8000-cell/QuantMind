@@ -100,7 +100,8 @@ export function AdminQuantMarketPanel({ market, marketLabel, color }: AdminQuant
             const resp = await dataPlatformService.listMarketSyncJobs(market);
             setActiveJob(resp.jobs[0] ?? null);
             return resp.jobs[0] ?? null;
-        } catch {
+        } catch (err: unknown) {
+            console.error(`[AdminQuantMarketPanel] loadLatestJob failed for ${market}:`, err);
             return null;
         }
     }, [market]);

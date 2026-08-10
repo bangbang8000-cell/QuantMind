@@ -37,7 +37,7 @@ from backend.shared.runtime_secrets import mask_secret, set_secret
 
 logger = logging.getLogger(__name__)
 
-router = APIRouter()
+router = APIRouter(dependencies=[Depends(require_admin)])  # 路由器级认证兜底
 
 MAX_PREVIEW_ROWS = 200
 MAX_MANIFEST_FILES = 500

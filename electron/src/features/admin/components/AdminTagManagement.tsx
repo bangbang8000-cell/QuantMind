@@ -123,8 +123,9 @@ export const AdminTagManagement: React.FC = () => {
       }
       setModalOpen(false);
       loadTags();
-    } catch {
-      // validation error or API error
+    } catch (e: unknown) {
+      const msg = e instanceof Error ? e.message : '操作失败';
+      message.error(msg);
     }
   };
 
@@ -133,8 +134,9 @@ export const AdminTagManagement: React.FC = () => {
       await newsService.adminDeleteTag(id);
       message.success('词条已删除');
       loadTags();
-    } catch {
-      message.error('删除失败');
+    } catch (e: unknown) {
+      const msg = e instanceof Error ? e.message : '删除失败';
+      message.error(msg);
     }
   };
 
@@ -142,8 +144,9 @@ export const AdminTagManagement: React.FC = () => {
     try {
       await newsService.adminToggleTag(tag.id);
       loadTags();
-    } catch {
-      message.error('操作失败');
+    } catch (e: unknown) {
+      const msg = e instanceof Error ? e.message : '操作失败';
+      message.error(msg);
     }
   };
 

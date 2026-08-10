@@ -7,7 +7,7 @@ from backend.services.api.user_app.middleware.auth import require_admin
 from backend.services.api.user_app.schemas.user import PaginatedResponse, UserResponse
 from backend.services.api.user_app.services.user_service import UserService
 
-router = APIRouter()
+router = APIRouter(dependencies=[Depends(require_admin)])  # 路由器级认证兜底
 
 
 def get_user_service() -> UserService:

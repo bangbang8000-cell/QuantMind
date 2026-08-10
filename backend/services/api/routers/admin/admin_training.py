@@ -21,7 +21,7 @@ from backend.shared.model_registry import model_registry_service
 from .admin_training_utils import *
 from .admin_training_utils import _resolve_admin_scope, _SetDefaultModelRequest, _SetStrategyBindingRequest
 
-router = APIRouter()
+router = APIRouter(dependencies=[Depends(require_admin)])  # 路由器级认证兜底
 logger = logging.getLogger(__name__)
 @router.get("/user-models", summary="管理员查看用户模型列表（兼容别名）")
 async def admin_list_user_models(

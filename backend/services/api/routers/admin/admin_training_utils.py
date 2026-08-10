@@ -22,7 +22,7 @@ from backend.services.engine.training.training_log_stream import TrainingRunLogS
 from backend.shared.database_manager_v2 import get_session
 from backend.shared.model_registry import model_registry_service
 
-router = APIRouter()
+router = APIRouter(dependencies=[Depends(require_admin)])  # 路由器级认证兜底
 logger = logging.getLogger(__name__)
 _FEATURE_CATALOG_FALLBACK = Path(os.getcwd()) / "config" / "features" / "model_training_feature_catalog_v1.json"
 _ALLOWED_TARGET_MODE = {"return", "classification"}

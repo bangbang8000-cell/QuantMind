@@ -5,9 +5,13 @@ from __future__ import annotations
 import os
 
 import httpx
-from fastapi import APIRouter, Request, Response
+from fastapi import APIRouter, Depends, Request, Response
 
-router = APIRouter()
+from backend.services.api.user_app.middleware.auth import require_admin
+
+router = APIRouter(
+    dependencies=[Depends(require_admin)],  # 路由器级认证兜底，新增端点默认受保护
+)
 
 ENGINE_BASE_URL = os.getenv("ENGINE_SERVICE_URL", "http://127.0.0.1:8001").rstrip("/")
 PROXY_TIMEOUT = 300.0  # 5 min for long-running analysis

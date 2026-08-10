@@ -15,7 +15,7 @@ from backend.shared.auth import get_internal_call_secret
 
 logger = logging.getLogger(__name__)
 
-router = APIRouter()
+router = APIRouter(dependencies=[Depends(require_admin)])  # 路由器级认证兜底
 
 _ENGINE_BASE_URL = os.getenv("ENGINE_SERVICE_URL", "http://127.0.0.1:8001").rstrip("/")
 _ENGINE_INTERNAL_SECRET = get_internal_call_secret()
