@@ -253,6 +253,7 @@ const SmartStrategyStudioV2: React.FC = () => {
           <Steps
             current={currentStep}
             size="small"
+            onChange={(step) => setCurrentStep(step)}
             style={{ width: 'min(500px, 100%)', flexShrink: 1, minWidth: 0 }}
             items={steps.map(s => ({ title: s.title }))}
           />

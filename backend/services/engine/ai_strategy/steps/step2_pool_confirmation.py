@@ -792,6 +792,114 @@ def _suffix_matches_exchange(symbol: str, exchange: str) -> bool:
     return True
 
 
+def _enrich_hub_pool_metrics(market: str, items: list[PoolItem]) -> None:
+    """为 parquet 标的池补充名称/市值/PE 等维度（best-effort，各市场数据源不同）。
+
+    港股: akshare_profile(公司名称) + akshare_valuation(PE/PB/简称)
+    美股: f10(股票代码/name/market_cap/pe_ratio)
+    期货/区块链: 暂无数补充，仅用 symbol。
+    """
+    market_upper = str(market or "").upper()
+    if not items:
+        return
+
+    try:
+        from backend.services.engine.data_platform.market_hub import get_hub_for_market
+
+        hub = get_hub_for_market(market_upper)
+        if hub is None:
+            return
+        base = hub.data_dir
+    except Exception as exc:  # noqa: BLE001
+        logger.debug("market %s 补充数据 hub 获取失败: %s", market_upper, exc)
+        return
+
+    symbol_to_item = {str(it.symbol).upper(): it for it in items}
+
+    try:
+        if market_upper == "HK":
+            # 名称: akshare_profile/公司名称
+            profile_dir = base / "2_base_sector" / "akshare_profile"
+            if profile_dir.is_dir():
+                import glob as _g
+
+                name_map: dict[str, str] = {}
+                for pf in _g.glob(str(profile_dir / "*.parquet"))[:2000]:
+                    try:
+                        pdf = pd.read_parquet(pf, engine="pyarrow")
+                        for _, r in pdf.iterrows():
+                            sym = str(r.get("symbol", "")).upper().strip()
+                            nm = str(r.get("公司名称", "")).strip()
+                            if sym and nm:
+                                name_map[sym] = nm
+                    except Exception:
+                        continue
+                for sym, it in symbol_to_item.items():
+                    if sym in name_map:
+                        it.name = name_map[sym]
+
+            # 估值: akshare_valuation/市盈率-TTM + 市净率-MRQ
+            val_dir = base / "2_base_sector" / "akshare_valuation"
+            if val_dir.is_dir():
+                import glob as _g
+
+                val_map: dict[str, dict[str, float]] = {}
+                for vf in _g.glob(str(val_dir / "*.parquet"))[:2000]:
+                    try:
+                        vdf = pd.read_parquet(vf, engine="pyarrow")
+                        for _, r in vdf.iterrows():
+                            sym = str(r.get("symbol", "")).upper().strip()
+                            if not sym:
+                                continue
+                            val_map[sym] = {}
+                            for col, key in (("市盈率-TTM", "pe"), ("市净率-MRQ", "pb")):
+                                try:
+                                    v = float(r.get(col))
+                                    if v == v and v > 0:
+                                        val_map[sym][key] = round(v, 2)
+                                except Exception:
+                                    pass
+                    except Exception:
+                        continue
+                for sym, it in symbol_to_item.items():
+                    if sym in val_map:
+                        it.metrics.update(val_map[sym])
+
+        elif market_upper == "US":
+            # 美股: f10/*.parquet 含 name/market_cap/pe_ratio
+            f10_dir = base / "2_base_sector" / "f10"
+            if f10_dir.is_dir():
+                import glob as _g
+
+                for pf in _g.glob(str(f10_dir / "*.parquet"))[:2000]:
+                    try:
+                        fdf = pd.read_parquet(pf, engine="pyarrow")
+                        for _, r in fdf.iterrows():
+                            sym = str(r.get("symbol", "")).upper().strip()
+                            if sym not in symbol_to_item:
+                                continue
+                            it = symbol_to_item[sym]
+                            nm = str(r.get("name", "")).strip()
+                            if nm:
+                                it.name = nm
+                            try:
+                                mc = float(r.get("market_cap"))
+                                if mc and mc == mc:
+                                    it.metrics["market_cap"] = round(mc, 2)
+                            except Exception:
+                                pass
+                            try:
+                                pe = float(r.get("pe_ratio"))
+                                if pe and pe == pe and pe > 0:
+                                    it.metrics["pe"] = round(pe, 2)
+                            except Exception:
+                                pass
+                    except Exception:
+                        continue
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("market %s 补充数据失败: %s", market_upper, exc)
+
+
 def _load_market_pool_from_hub(market: str, dsl: str = "") -> tuple[list[PoolItem], date | None]:
     """非 A 股市场：从本地 parquet hub 读取最新交易日标的池，替代不存在的 PG latest 表。
 
@@ -856,6 +964,8 @@ def _load_market_pool_from_hub(market: str, dsl: str = "") -> tuple[list[PoolIte
             as_of_date = date(int(latest_dt[:4]), int(latest_dt[4:6]), int(latest_dt[6:8]))
         except Exception:
             pass
+        # 补充名称/市值/PE 等维度（best-effort）
+        _enrich_hub_pool_metrics(market_upper, items)
         logger.info(
             "market %s parquet 标的池: %d 个标的 (date=%s)",
             market_upper, len(items), latest_dt,
