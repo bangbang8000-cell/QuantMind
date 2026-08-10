@@ -262,7 +262,12 @@ async def get_training_run(
     return await get_training_run_for_owner(run_id, current_user)
 
 
-@router.post("/training-runs/{run_id}/complete", summary="训练完成回调（内部接口）")
+@router.post(
+    "/training-runs/{run_id}/complete",
+    summary="训练完成回调（内部接口）",
+    status_code=401,
+    responses={401: {"description": "Invalid or missing X-Internal-Call-Secret"}},
+)
 async def training_complete_callback(
     run_id: str,
     result: dict[str, Any],

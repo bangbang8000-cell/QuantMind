@@ -2,6 +2,7 @@ import asyncio
 import json
 import logging
 import os
+import secrets
 import uuid
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -970,14 +971,43 @@ async def get_training_run_for_owner(run_id: str, current_user: dict[str, Any]) 
     }
 
 
+def _verify_internal_call_secret(provided: str) -> None:
+    """P0-3: 强制 fail-closed 的 internal secret 校验。
+
+    三个独立失败路径均返回 401：
+    1. env 缺失（INTERNAL_CALL_SECRET 未配置）→ 401 + 详细日志
+    2. header 缺失或空字符串 → 401
+    3. header 值不匹配 → 401
+
+    用 secrets.compare_digest 替代 ==，避免 timing attack。
+    """
+    expected = os.getenv("INTERNAL_CALL_SECRET", "")
+    if not expected:
+        logger.error(
+            "INTERNAL_CALL_SECRET env not set; refusing internal callback"
+        )
+        raise HTTPException(
+            status_code=401,
+            detail="Internal call secret not configured",
+        )
+    if not provided:
+        raise HTTPException(
+            status_code=401,
+            detail="Missing X-Internal-Call-Secret",
+        )
+    if not secrets.compare_digest(provided, expected):
+        raise HTTPException(
+            status_code=401,
+            detail="Invalid internal call secret",
+        )
+
+
 async def complete_training_run(
     run_id: str,
     result: dict[str, Any],
     x_internal_call_secret: str,
 ) -> dict[str, Any]:
-    expected = os.getenv("INTERNAL_CALL_SECRET", "")
-    if not expected or x_internal_call_secret != expected:
-        raise HTTPException(status_code=403, detail="Invalid internal call secret")
+    _verify_internal_call_secret(x_internal_call_secret)
 
     incoming_status = str(result.get("status", "completed"))
     status = incoming_status if incoming_status in ("completed", "failed") else "completed"

@@ -32,6 +32,29 @@ _runtime_loaded = load_runtime_env()
 if _runtime_loaded:
     logger.info("Loaded %d runtime secrets from runtime.env", _runtime_loaded)
 
+# ── P0-3: 启动时强制 INTERNAL_CALL_SECRET 存在（fail-closed）──
+# 训练完成回调依赖此 secret；缺失会导致任意人都能伪造回调。
+# 生产环境直接 raise，dev/test 自动生成避免本地启动挂掉。
+import secrets as _secrets
+if not os.getenv("INTERNAL_CALL_SECRET"):
+    _env = os.getenv("QUANTMIND_ENV", "").lower()
+    if _env in ("production", "prod"):
+        raise RuntimeError(
+            "INTERNAL_CALL_SECRET must be set in production. "
+            "Set it in .env or generate with: openssl rand -hex 32"
+        )
+    _auto = _secrets.token_urlsafe(32)
+    os.environ["INTERNAL_CALL_SECRET"] = _auto
+    if _env == "development":
+        logger.warning(
+            "INTERNAL_CALL_SECRET auto-generated for development"
+        )
+    else:
+        logger.warning(
+            "INTERNAL_CALL_SECRET not set; auto-generated for local. "
+            "Set QUANTMIND_ENV=production to require explicit secret."
+        )
+
 # ── Qlib 数据目录修复 ──
 # features_real 是实际数据目录，Qlib 期望 features/
 # 通过 qlib_paths 统一解析，优先 QuantDB 缓存路径

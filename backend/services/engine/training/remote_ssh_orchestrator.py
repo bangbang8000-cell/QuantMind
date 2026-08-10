@@ -70,6 +70,12 @@ class RemoteSSHOrchestrator(TrainingOrchestrator):
             raise ValueError(
                 "TRAINING_AUTODL_HOST 未配置，无法使用远程训练。请先在 .env 设置 AutoDL 节点 IP。"
             )
+        # P0-3: 强制 fail-closed，secret 缺失直接抛错
+        if not self.internal_secret:
+            raise RuntimeError(
+                "INTERNAL_CALL_SECRET not set; cannot start remote training orchestrator. "
+                "Set it in .env or QUANTMIND_ENV=development for auto-generation."
+            )
 
     # ── SSH 基础工具（asyncio subprocess，零额外依赖） ──────────────────────────
 

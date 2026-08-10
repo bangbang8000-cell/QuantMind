@@ -116,6 +116,12 @@ class LocalDockerOrchestrator(TrainingOrchestrator):
             os.getenv("QUANTMIND_API_BASE_URL") or "http://quantmind-api:8000"
         ).strip()
         self.internal_secret = (os.getenv("INTERNAL_CALL_SECRET") or "").strip()
+        # P0-3: 强制 fail-closed。secret 缺失直接抛错，不再用空 secret 走 fail-open。
+        if not self.internal_secret:
+            raise RuntimeError(
+                "INTERNAL_CALL_SECRET not set; cannot start training orchestrator. "
+                "Set it in .env or QUANTMIND_ENV=development for auto-generation."
+            )
         self.log_stream = TrainingRunLogStream()
 
     # ── 训练期间资源保护 ──────────────────────────────────────────────────────────
