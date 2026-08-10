@@ -48,12 +48,12 @@
 
 ## 项目简介
 
-QuantMind 是一个端到端的量化交易平台，集成 Qlib 量化框架、RD-Agent 智能体与 TradingAgents 多 Agent 投研，支持 A 股、港股、美股、加密货币四个市场。
+QuantMind 是一个端到端的量化交易平台，集成 Qlib 量化框架、RD-Agent 智能体与 TradingAgents 多 Agent 投研，支持 A 股、港股、美股、区块链、期货五大市场。
 
 **核心能力：**
-- **多市场数据管线** — 自动采集、清洗、校准 A/HK/US/Crypto 行情数据
-- **AI 因子挖掘** — 基于 RD-Agent 的自动化因子进化，AlphaAgent 因子编码
-- **模型训练与推理** — LightGBM/XGBoost 等模型，支持增量训练、批量推理、信号生成
+- **多市场数据管线** — 自动采集、清洗、校准 A/HK/US/Crypto/期货 行情数据
+- **AI 因子挖掘** — 基于 RD-Agent 的自动化因子进化（多市场因子集），AlphaAgent 因子编码
+- **模型训练与推理** — LightGBM/XGBoost 等模型，支持按市场切换特征与数据源、增量训练、批量推理、信号生成
 - **策略生成** — AI 辅助生成 Qlib 策略代码，支持自然语言交互
 - **回测引擎** — 基于 Qlib 的高性能回测，多策略对比，批量聚合回测
 - **策略实验室** — Python SDK 编辑器，7 类示例策略，子进程沙箱运行
@@ -273,6 +273,28 @@ def on_universe(ctx): ... # 选股回调
 - 市场行情问答
 - 操作指引
 - 集成 QwenPaw 智能体（网页 AI 机器人）
+
+---
+
+## Skills（Claude Code 技能包）
+
+QuantMind 提供完整的 **Claude Code / QuantBot 技能包**（`.claude/skills/`），让 AI 助手直接调用平台量化功能：数据分析、因子挖掘、模型训练、策略生成、回测、模拟交易等。技能通过自然语言触发词激活。
+
+**技能清单**（详见 [.claude/skills/README.md](.claude/skills/README.md)）：
+
+| 技能 | 触发词 | 功能 |
+|------|--------|------|
+| `quantmind-operations` | 模型训练、模型管理、数据更新 | 平台运营操作总指南 |
+| `stock-market-analysis` | 分析市场、全市场扫描、行业轮动 | 股票市场深度数据分析与导出 |
+| `smart-strategy-stock-picking` | 选股、筛选股票、股票池 | 条件选股（按市场动态加载） |
+| `ai-ide-strategy-writing` | 写策略、生成策略、AI-IDE | AI 生成 Qlib 策略代码 |
+| `backtest-center` | 回测、策略对比、参数优化 | Qlib 回测中心 |
+| `batch-inference-analysis` | 分析批量推理、解读信号 | 批量推理结果分析 |
+| `rd-agent-factor-mining` | 挖因子、因子演化、RD-Agent | 多市场因子挖掘 |
+| `quantdb-sdk` | quantdb、查询K线、数据集 | QuantDB 数据 SDK |
+| `simulation-trading` | 模拟交易、查持仓 | 模拟交易 |
+
+**安装**：解压 `quantmind-operations-skill.zip` 到 `~/.claude/`，或直接使用项目内 `.claude/skills/`。
 
 ---
 
