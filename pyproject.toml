@@ -120,6 +120,7 @@ exclude = [
     "*/site-packages/*",
     "user_strategies",
     "examples/testing",
+    "backend/scripts/ccass_crawler.py",  # 第三方 HKEX 爬虫（导入自外部项目），不按本项目规范 lint
 ]
 
 [tool.ruff.lint]

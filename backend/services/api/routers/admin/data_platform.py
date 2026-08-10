@@ -34,6 +34,60 @@ def _now_iso() -> str:
     return datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
 
 
+# Alpha Agent 市场 → PostgreSQL 表名（list_alpha_agent_markets 用）
+_ALPHA_AGENT_PG_TABLE_MAP: dict[str, str] = {
+    "a_share": "stock_daily_latest",
+    "crypto": "stock_daily_latest_crypto",
+    "hong_kong": "stock_daily_latest_hk",
+    "us_stock": "stock_daily_latest_us",
+}
+
+# Alpha Agent 市场 → H5 数据文件路径（fallback，仅当无 PG 统计时读取）
+_ALPHA_AGENT_H5_MAP: dict[str, str] = {
+    "a_share": "/app/alphaagent/scenarios/qlib/experiment/factor_data_template/daily_pv_all.h5",
+    "crypto": "/app/db/crypto_data/5min_pv.h5",
+    "hong_kong": "/app/db/hk_data/daily_pv.h5",
+    "us_stock": "/app/db/us_data/daily_pv.h5",
+}
+
+
+def _futures_local_stats() -> dict | None:
+    """从 QuantFuturesDataHub 读取期货本地 parquet 统计（行数/标的/日期范围）。"""
+    try:
+        from backend.services.engine.data_platform.quantfutures_hub import QuantFuturesDataHub
+        import duckdb
+
+        hub = QuantFuturesDataHub.get_instance()
+        fwd = hub.data_dir / "1_kline_data" / "daily_forward"
+        if not fwd.is_dir():
+            return None
+        con = duckdb.connect(config={"memory_limit": "2GB", "threads": "2"})
+        try:
+            df = con.execute(
+                f"""
+                SELECT COUNT(*) AS rows,
+                       COUNT(DISTINCT symbol) AS symbols,
+                       MIN(CAST(time AS DATE)) AS start_date,
+                       MAX(CAST(time AS DATE)) AS end_date
+                FROM read_parquet('{fwd / "dt=*" / "data.parquet"}', hive_partitioning=1)
+                """
+            ).fetchdf()
+        finally:
+            con.close()
+        if df.empty or not df.iloc[0]["rows"]:
+            return None
+        row = df.iloc[0]
+        return {
+            "rows": int(row["rows"]),
+            "symbols": int(row["symbols"]),
+            "start_date": str(row["start_date"])[:10],
+            "end_date": str(row["end_date"])[:10],
+            "file_size_mb": round(sum(p.stat().st_size for p in fwd.rglob("*.parquet")) / 1024 / 1024, 1),
+        }
+    except Exception:
+        return None
+
+
 def _get_routing():
     """延迟引入 data_platform，避免 API 启动时强依赖 engine 模块。"""
     from backend.services.engine.data_platform.aggregator import FieldRoutingTable
@@ -807,26 +861,9 @@ async def list_alpha_agent_markets(current_user: dict = Depends(require_admin)):
         from backend.services.engine.rd_agent.market_adapters import list_markets, get_adapter
 
         # 市场 → PostgreSQL 表名
-        table_map = {
-            "a_share": "stock_daily_latest",
-            "crypto": "stock_daily_latest_crypto",
-            "hong_kong": "stock_daily_latest_hk",
-            "us_stock": "stock_daily_latest_us",
-        }
+        table_map = _ALPHA_AGENT_PG_TABLE_MAP
         # 市场 → H5 数据文件路径（fallback）
-        h5_map = {
-            "a_share": "/app/alphaagent/scenarios/qlib/experiment/factor_data_template/daily_pv_all.h5",
-            "crypto": "/app/db/crypto_data/5min_pv.h5",
-            "hong_kong": "/app/db/hk_data/daily_pv.h5",
-            "us_stock": "/app/db/us_data/daily_pv.h5",
-        }
-        # 市场 → Qlib 目录
-        qlib_map = {
-            "a_share": "/app/db/qlib_data/cn_data",
-            "crypto": "/app/db/qlib_data/crypto_data",
-            "hong_kong": "/app/db/qlib_data/hk_data",
-            "us_stock": "/app/db/qlib_data/us_data",
-        }
+        h5_map = _ALPHA_AGENT_H5_MAP
 
         # 查询 PostgreSQL 获取各市场实时数据统计
         from backend.shared.database_manager_v2 import get_session
@@ -878,35 +915,47 @@ async def list_alpha_agent_markets(current_user: dict = Depends(require_admin)):
                 m["h5_info"] = pg_stats[mid]
                 m["data_source"] = "postgresql"
             else:
-                # Fallback: 读取 H5 文件
-                h5_path = h5_map.get(mid)
-                if h5_path and Path(h5_path).exists():
-                    try:
-                        import pandas as pd
-                        df = pd.read_hdf(h5_path, key="data")
-                        dates = df.index.get_level_values("datetime")
-                        instruments = df.index.get_level_values("instrument")
-                        m["h5_info"] = {
-                            "rows": len(df),
-                            "symbols": int(instruments.nunique()),
-                            "start_date": str(dates.min().date()),
-                            "end_date": str(dates.max().date()),
-                            "file_size_mb": round(Path(h5_path).stat().st_size / 1024 / 1024, 1),
-                        }
-                        m["data_source"] = "h5"
-                    except Exception:
-                        m["h5_info"] = None
+                # 期货：数据在本地 QuantFutures parquet（无 PG 表 / H5），
+                # 直接从数据中枢读取统计。
+                if mid == "futures":
+                    m["h5_info"] = _futures_local_stats()
+                    m["data_source"] = "parquet" if m["h5_info"] else None
                 else:
-                    m["h5_info"] = None
+                    # Fallback: 读取 H5 文件
+                    h5_path = h5_map.get(mid)
+                    if h5_path and Path(h5_path).exists():
+                        try:
+                            import pandas as pd
+                            df = pd.read_hdf(h5_path, key="data")
+                            dates = df.index.get_level_values("datetime")
+                            instruments = df.index.get_level_values("instrument")
+                            m["h5_info"] = {
+                                "rows": len(df),
+                                "symbols": int(instruments.nunique()),
+                                "start_date": str(dates.min().date()),
+                                "end_date": str(dates.max().date()),
+                                "file_size_mb": round(Path(h5_path).stat().st_size / 1024 / 1024, 1),
+                            }
+                            m["data_source"] = "h5"
+                        except Exception:
+                            m["h5_info"] = None
+                    else:
+                        m["h5_info"] = None
 
-            # 读取 Qlib 目录详情
-            qlib_dir = qlib_map.get(mid)
+            # 读取 Qlib 目录详情（路径统一由市场适配器解析，消除硬编码漂移）
+            qlib_dir = None
+            try:
+                adapter = get_adapter(mid)
+                qlib_dir = adapter.get_qlib_provider_uri()
+            except Exception:
+                qlib_dir = None
             if qlib_dir and Path(qlib_dir).is_dir():
                 try:
                     p = Path(qlib_dir)
                     cal_files = list((p / "calendars").iterdir()) if (p / "calendars").is_dir() else []
                     feat_count = len(list((p / "features").iterdir())) if (p / "features").is_dir() else 0
                     m["qlib_info"] = {
+                        "qlib_dir": str(qlib_dir),
                         "calendar_files": [f.name for f in cal_files],
                         "feature_dirs": feat_count,
                     }

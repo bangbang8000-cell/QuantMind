@@ -37,4 +37,4 @@ def list_markets() -> list[dict[str, str]]:
 
 
 # 导入适配器以触发注册
-from . import a_share, crypto, hong_kong, us_stock  # noqa: F401, E402
+from . import a_share, crypto, futures, hong_kong, us_stock  # noqa: F401, E402

@@ -23,6 +23,7 @@ from backend.services.engine.data_platform.base import (
 # ---------------------------------------------------------------------------
 # 列表 / 注册
 # ---------------------------------------------------------------------------
+@pytest.mark.skip(reason="A股适配器已收敛为 quantdb_local 单源，tdx_api 等旧 A股适配器已停注册（HK/US 仍走 akshare/efinance/yahoo_finance）。停用保留，后期可能用于旧链路回归。")
 def test_d4_modules_listed():
     names = list_known()
     for n in (
@@ -32,6 +33,7 @@ def test_d4_modules_listed():
         assert n in names
 
 
+@pytest.mark.skip(reason="A股适配器已收敛为 quantdb_local 单源，tdx_api/simonlin_a_stock 已停注册。停用保留。")
 def test_register_all_includes_d4():
     res = register_all()
     # tdx_api / simonlin_a_stock 无强依赖，恒注册

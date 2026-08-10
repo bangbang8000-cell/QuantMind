@@ -96,6 +96,33 @@ class StockCodeUtil:
         return code
 
     @staticmethod
+    def to_hk_suffix(code: str) -> str:
+        """港股代码 → 后缀格式（4位+.HK；创业板8开头保留5位+.HK）。
+
+        港股代码本为 5 位（HKEX 原始格式），但主板前导 0 是补位，实际有效
+        位数为 4；创业板代码以 8 开头为真 5 位。为与日线/南向数据
+        （0700.HK）一致，主板去前导 0 转 4 位+.HK，创业板保留 5 位+.HK。
+
+        Examples:
+            - '00700' -> '0700.HK'
+            - '00001' -> '0001.HK'
+            - '80001' -> '80001.HK' (创业板保留5位)
+            - '0700.HK' -> '0700.HK' (已是后缀，原样返回)
+        """
+        if not code:
+            return ""
+        code = str(code).strip()
+        if code.endswith(".HK"):
+            return code
+        code = code.zfill(5)
+        if code.startswith("8"):
+            return f"{code}.HK"
+        stripped = code.lstrip("0")
+        if not stripped:
+            return "0000.HK"
+        return f"{stripped.zfill(4)}.HK"
+
+    @staticmethod
     def to_qlib(code: str) -> str:
         """转换为 Qlib 格式 sh600000 (仅用于 Qlib 迁移桥接)
 

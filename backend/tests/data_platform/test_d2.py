@@ -39,6 +39,7 @@ def test_routing_loads_real_yaml():
     assert "US" in rt.list_markets()
 
 
+@pytest.mark.skip(reason="A股日线已收敛为 quantdb_local 单源（field_routing.yaml 主源改为 quantdb_local），baostock 仅保留作历史/备用。停用保留，后期可能用于旧链路回归。")
 def test_routing_a_daily_kline_primary_baostock():
     rt = FieldRoutingTable()
     r = rt.get_route("A", "daily_kline")
@@ -47,6 +48,7 @@ def test_routing_a_daily_kline_primary_baostock():
     assert "efinance" in r.fallbacks
 
 
+@pytest.mark.skip(reason="HK 日线主源已在路由中调整（baostock 停注册，efinance 为 HK 共用）。停用保留，后期可能用于旧链路回归。")
 def test_routing_hk_daily_kline_primary_efinance():
     rt = FieldRoutingTable()
     r = rt.get_route("HK", "daily_kline")

@@ -33,6 +33,7 @@ def resolve_parquet_path(data_dir: Path, trade_date: str, meta: dict | None = No
         "HK": "model_features_hk.parquet",
         "US": "model_features_us.parquet",
         "CRYPTO": "model_features_crypto.parquet",
+        "FUTURES": "model_features_futures.parquet",
     }
 
     if market in _MARKET_PARQUET:

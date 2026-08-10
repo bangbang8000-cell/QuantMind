@@ -25,7 +25,7 @@ logger = logging.getLogger(__name__)
 _QUANTUS_DATA_DIR_ENV = "QM_QUANTUS_DATA_DIR"
 _QUANTUS_DEFAULT_DATA_DIRS = [
     "/data/quantus",  # Docker 容器内（挂载点）
-    str(Path(__file__).resolve().parents[5] / "data" / "quantus"),  # 项目根/data/quantus
+    str(Path(__file__).resolve().parents[4] / "data" / "quantus"),  # 项目根/data/quantus
 ]
 
 

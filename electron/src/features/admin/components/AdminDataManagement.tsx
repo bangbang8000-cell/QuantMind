@@ -40,6 +40,7 @@ const MARKET_CONFIG: Record<string, { label: string; icon: React.ReactNode; colo
     crypto: { label: '加密货币', icon: <FundOutlined />, color: '#f59e0b', gradient: 'from-amber-500 to-yellow-500' },
     hong_kong: { label: '港股', icon: <GlobalOutlined />, color: '#3b82f6', gradient: 'from-blue-500 to-cyan-500' },
     us_stock: { label: '美股', icon: <LineChartOutlined />, color: '#10b981', gradient: 'from-emerald-500 to-teal-500' },
+    futures: { label: '期货', icon: <ThunderboltOutlined />, color: '#fa8c16', gradient: 'from-orange-500 to-amber-500' },
 };
 
 const { Title, Text, Paragraph } = Typography;
@@ -746,11 +747,14 @@ export const AdminDataManagement: React.FC = () => {
                             (() => {
                                 const h5 = currentMarket?.h5_info;
                                 const qlibInfo = currentMarket?.qlib_info;
+                                // Qlib 路径优先使用后端解析值，回退到本地兜底
                                 const qlibPaths: Record<string, string> = {
                                     crypto: '/app/db/qlib_data/crypto_data',
                                     hong_kong: '/app/db/qlib_data/hk_data',
                                     us_stock: '/app/db/qlib_data/us_data',
+                                    futures: '/app/db/qlib_data/futures_data',
                                 };
+                                const qlibDir = qlibInfo?.qlib_dir || qlibPaths[selectedMarket] || '—';
                                 if (!h5 && !currentMarket?.data_ready) {
                                     return (
                                         <div className="text-center py-8">
@@ -763,7 +767,7 @@ export const AdminDataManagement: React.FC = () => {
                                 return (
                                     <div className="grid grid-cols-2 md:grid-cols-3 gap-y-8 gap-x-12">
                                         {[
-                                            { label: 'Qlib 路径', value: qlibPaths[selectedMarket] || '—', span: 3, full: true },
+                                            { label: 'Qlib 路径', value: qlibDir, span: 3, full: true },
                                             { label: '日历文件', value: qlibInfo?.calendar_files?.join(', ') || '—' },
                                             { label: '数据区间', value: h5 ? `${h5.start_date} → ${h5.end_date}` : '—', span: 2 },
                                             { label: '标的总数', value: h5?.symbols, highlight: true },
@@ -790,7 +794,9 @@ export const AdminDataManagement: React.FC = () => {
                                 <div className="w-8 h-8 rounded-lg bg-indigo-50 flex items-center justify-center text-indigo-600">
                                     <FileTextOutlined />
                                 </div>
-                                <span className="font-black text-slate-800 tracking-tight text-lg uppercase">特征快照分析</span>
+                                <span className="font-black text-slate-800 tracking-tight text-lg uppercase">
+                                    特征快照分析 <span className="text-indigo-400 text-sm ml-2">{currentMarketCfg.label}</span>
+                                </span>
                             </div>
                         }
                         className="rounded-[2.5rem] border-none shadow-2xl shadow-slate-200/30"
@@ -862,7 +868,9 @@ export const AdminDataManagement: React.FC = () => {
                                                 <div key={idx} className="group bg-white rounded-2xl p-4 border border-slate-100 flex items-center justify-between hover:border-indigo-200 hover:shadow-md transition-all duration-300">
                                                     <div className="flex items-center space-x-4">
                                                         <div className="w-10 h-10 rounded-xl bg-slate-50 flex items-center justify-center group-hover:bg-indigo-50 transition-colors">
-                                                            <span className="text-slate-400 font-black text-xs group-hover:text-indigo-500">{m.year}</span>
+                                                            <span className="text-slate-400 font-black text-xs group-hover:text-indigo-500">
+                                                                {m.year ?? m.filename?.replace('model_features_', '').replace('.parquet', '').slice(0, 8)}
+                                                            </span>
                                                         </div>
                                                         <div className="space-y-1">
                                                             <div className="text-xs font-black text-slate-700 tracking-tight">
@@ -939,6 +947,11 @@ export const AdminDataManagement: React.FC = () => {
                                             'akshare：日线 + 估值/财务指标/公司资料 + 指数',
                                             'CCASS 机构持仓 + 南向/北向资金',
                                             '覆盖 2000+ 只港股（本地 parquet）',
+                                            '支持增量更新和全量重下',
+                                        ] : selectedMarket === 'futures' ? [
+                                            'akshare：国际期货 + 国内商品 + 上金所贵金属',
+                                            '本地 parquet 存储（QuantFutures 数据中枢）',
+                                            '覆盖 36 个主力/贵金属合约（CL.FUT / RB0.CN / Au99.99）',
                                             '支持增量更新和全量重下',
                                         ] : [
                                             'akshare：日线 + 指数（纳指/标普/道指）',
@@ -1195,7 +1208,9 @@ export const AdminDataManagement: React.FC = () => {
                                                 ? '加密货币数据从 Binance 公开 API 下载 5 分钟 K 线，转换为 Qlib bin 格式。数据量较大，首次同步需要 20-30 分钟。'
                                                 : selectedMarket === 'hong_kong'
                                                     ? '港股数据源按勾选分发：akshare（日线/估值/财务/指数）+ CCASS 机构持仓 + 南向/北向资金，落盘本地 parquet。'
-                                                    : '美股数据源按勾选分发：akshare（日线/指数）+ Yahoo（财务/分析师），落盘本地 parquet。'
+                                                    : selectedMarket === 'futures'
+                                                        ? '期货数据源按勾选分发：akshare（国际期货/国内商品/上金所贵金属），落盘本地 parquet，Qlib 缓存从 parquet 构建。'
+                                                        : '美股数据源按勾选分发：akshare（日线/指数）+ Yahoo（财务/分析师），落盘本地 parquet。'
                                         }
                                     </Text>
                                 </div>

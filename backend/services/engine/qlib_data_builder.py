@@ -1,19 +1,20 @@
 """
-Qlib 数据构建器 — 从 QuantDB parquet 生成 Qlib 格式缓存。
+Qlib 数据构建器 — 从各市场 parquet 生成 Qlib 格式缓存。
 
 Qlib binary 格式要求：
 - calendars/day.txt: 每行一个日期 YYYY-MM-DD
 - instruments/all.txt: tab 分隔 symbol\\tstart_date\\tend_date
 - features/{symbol}/{field}.day.bin: 4-byte float32 start_idx + N*4-byte float32 values
 
-QuantDB parquet 是 single source of truth，Qlib 缓存是派生产物，可随时重建。
+各市场 parquet 是 single source of truth，Qlib 缓存是派生产物，可随时重建。
+支持 CN / US / HK / CRYPTO / FUTURES 五市场，通过 Hub 注入实现通用化。
 """
 
 from __future__ import annotations
 
 import logging
 import struct
-from datetime import date
+from datetime import date, datetime
 from pathlib import Path
 from typing import Optional
 
@@ -37,25 +38,89 @@ _KLINE_COL_MAP = {
     "amount": "amount",
 }
 
+# 各市场的 Qlib symbol 前缀规则。
+# A 股是 Qlib 原生格式 sh600036（exchange+code）；其他市场用 {market}_ 前缀
+# + 原始 symbol（保留大小写与点号），反向剥离前缀即可无损还原。
+_MARKET_QLIB_PREFIX: dict[str, str] = {
+    "CN": "",  # 特殊：A 股用原生 exchange 前缀（sh600036），不走统一前缀
+    "US": "us_",
+    "HK": "hk_",
+    "CRYPTO": "bc_",
+    "FUTURES": "fut_",
+}
+
+_MARKET_HUB_FACTORY = {}
+
+
+def _register_market_hub(market: str, builder_cls: type):
+    """注册市场对应的 Hub 工厂（避免循环 import）。"""
+    _MARKET_HUB_FACTORY[market.upper()] = builder_cls
+
 
 class QlibDataBuilder:
-    """从 QuantDB parquet 构建 Qlib binary 缓存。
+    """从各市场 parquet 构建 Qlib binary 缓存。
 
     用法：
-        builder = QlibDataBuilder(
-            quantdb_dir="data/quantdb",
-            qlib_dir="data/quantdb/.qlib_cache/cn_data",
-        )
+        builder = QlibDataBuilder(hub, qlib_dir="data/quantdb/.qlib_cache/cn_data")
         builder.build_all()
     """
 
     def __init__(
         self,
-        quantdb_dir: str | Path,
+        hub: QuantDBDataHub,
         qlib_dir: str | Path,
+        market: str = "CN",
     ) -> None:
-        self._hub = QuantDBDataHub(quantdb_dir)
+        self._hub = hub
         self._qlib_dir = Path(qlib_dir)
+        self._market = market.upper()
+        self._qlib_prefix = _MARKET_QLIB_PREFIX.get(self._market, "")
+
+    @classmethod
+    def for_market(
+        cls,
+        market: str,
+        data_dir: str | Path | None = None,
+        qlib_dir: str | Path | None = None,
+    ) -> "QlibDataBuilder":
+        """根据市场创建对应数据中枢的构建器。
+
+        market: CN / US / HK / CRYPTO / FUTURES
+        data_dir: 数据目录（默认按市场解析）
+        qlib_dir: Qlib 输出目录（默认 {data_dir}/.qlib_cache/{market}_data）
+        """
+        from backend.services.engine.data_platform import quantus_hub, quanthk_hub, quantbc_hub, quantfutures_hub
+
+        market_upper = market.upper()
+        if market_upper == "CN":
+            if data_dir is None:
+                data_dir = _resolve_cn_data_dir()
+            hub = QuantDBDataHub(data_dir)
+            default_qlib = Path(data_dir) / ".qlib_cache" / "cn_data"
+        elif market_upper == "US":
+            if data_dir is None:
+                data_dir = quantus_hub._resolve_quantus_data_dir()
+            hub = quantus_hub.QuantUSDataHub(data_dir)
+            default_qlib = Path(data_dir) / ".qlib_cache" / "us_data"
+        elif market_upper == "HK":
+            if data_dir is None:
+                data_dir = quanthk_hub._resolve_quanthk_data_dir()
+            hub = quanthk_hub.QuantHKDataHub(data_dir)
+            default_qlib = Path(data_dir) / ".qlib_cache" / "hk_data"
+        elif market_upper == "CRYPTO":
+            if data_dir is None:
+                data_dir = quantbc_hub._resolve_quantbc_data_dir()
+            hub = quantbc_hub.QuantBCDataHub(data_dir)
+            default_qlib = Path(data_dir) / ".qlib_cache" / "bc_data"
+        elif market_upper == "FUTURES":
+            if data_dir is None:
+                data_dir = quantfutures_hub._resolve_quantfutures_data_dir()
+            hub = quantfutures_hub.QuantFuturesDataHub(data_dir)
+            default_qlib = Path(data_dir) / ".qlib_cache" / "futures_data"
+        else:
+            raise ValueError(f"未知市场: {market_upper}")
+
+        return cls(hub, qlib_dir or default_qlib, market=market_upper)
 
     @property
     def qlib_dir(self) -> Path:
@@ -77,7 +142,7 @@ class QlibDataBuilder:
             {"calendar": int, "instruments": int, "features": int, "skipped": int}
         """
         if not self._hub.available:
-            raise RuntimeError(f"QuantDB 数据目录不可用: {self._hub.data_dir}")
+            raise RuntimeError(f"数据目录不可用: {self._hub.data_dir}")
 
         result: dict = {}
 
@@ -93,66 +158,80 @@ class QlibDataBuilder:
         result["skipped"] = feat_result["skipped"]
 
         logger.info(
-            "QlibDataBuilder 完成: calendar=%d, instruments=%d, features=%d, skipped=%d",
-            result["calendar"], result["instruments"],
+            "QlibDataBuilder[%s] 完成: calendar=%d, instruments=%d, features=%d, skipped=%d",
+            self._market, result["calendar"], result["instruments"],
             result["features"], result["skipped"],
         )
         return result
 
+    # ------------------------------------------------------------------
+    # 日历与标的（通用化：优先 hub 专用方法，缺失则从 parquet 推导）
+    # ------------------------------------------------------------------
     def build_calendar(self) -> int:
-        """从 QuantDB 交易日历生成 calendars/day.txt。"""
+        """从交易日历或 parquet 日期列生成 calendars/day.txt。"""
         cal_dir = self._qlib_dir / "calendars"
         cal_dir.mkdir(parents=True, exist_ok=True)
         cal_file = cal_dir / "day.txt"
 
         df = self._hub.fetch_calendar()
-        if df.empty:
-            logger.warning("QuantDB 交易日历为空")
+        dates = self._extract_dates(df) if not df.empty else None
+
+        # hub 日历缺失时，从 daily_forward parquet 推导
+        if not dates:
+            dates = self._dates_from_parquet()
+
+        if not dates:
+            logger.warning("%s 交易日历为空", self._market)
             return 0
-
-        # 确定日期列
-        date_col = None
-        for col in ("trade_date", "date", "time", "cal_date", "TradingDate"):
-            if col in df.columns:
-                date_col = col
-                break
-
-        if date_col is None:
-            logger.warning("QuantDB 交易日历中未找到日期列")
-            return 0
-
-        dates = pd.to_datetime(df[date_col]).dt.strftime("%Y-%m-%d").unique()
-        dates = sorted(dates)
 
         with open(cal_file, "w") as f:
             f.write("\n".join(dates) + "\n")
 
-        logger.info("Qlib calendar: %d trading days -> %s", len(dates), cal_file)
+        logger.info("Qlib[%s] calendar: %d trading days -> %s", self._market, len(dates), cal_file)
         return len(dates)
 
+    def _extract_dates(self, df: pd.DataFrame) -> list[str] | None:
+        """从 hub fetch_calendar 返回的 DataFrame 提取日期列表。"""
+        date_col = None
+        for col in ("trade_date", "date", "time", "cal_date", "TradingDate", "trading_date"):
+            if col in df.columns:
+                date_col = col
+                break
+        if date_col is None:
+            return None
+        dates = pd.to_datetime(df[date_col]).dt.strftime("%Y-%m-%d").unique()
+        return sorted(dates.tolist()) if len(dates) else None
+
+    def _dates_from_parquet(self) -> list[str]:
+        """从 daily_forward 分区的 time 列推导全部交易日。"""
+        fwd = self._hub.data_dir / "1_kline_data" / "daily_forward"
+        if not fwd.is_dir():
+            return []
+        import duckdb
+
+        try:
+            con = duckdb.connect(config={"memory_limit": "4GB", "threads": "2"})
+            try:
+                df = con.execute(
+                    f"SELECT DISTINCT CAST(time AS DATE) d FROM read_parquet('{fwd / 'dt=*' / 'data.parquet'}', hive_partitioning=1)"
+                ).fetchdf()
+            finally:
+                con.close()
+            if df.empty:
+                return []
+            return sorted(df["d"].astype(str).tolist())
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("从 parquet 推导日历失败: %s", exc)
+            return []
+
     def build_instruments(self) -> int:
-        """从 QuantDB 股票列表生成 instruments/all.txt。"""
+        """从标的列表或 parquet symbol 列生成 instruments/all.txt。"""
         inst_dir = self._qlib_dir / "instruments"
         inst_dir.mkdir(parents=True, exist_ok=True)
         inst_file = inst_dir / "all.txt"
 
-        df = self._hub.fetch_stock_list()
-        if df.empty:
-            logger.warning("QuantDB 股票列表为空")
-            return 0
+        raw_symbols = self._collect_raw_symbols()
 
-        # 获取 symbol 列（可能是 Symbol 或 symbol）
-        symbol_col = None
-        for col in ("Symbol", "symbol"):
-            if col in df.columns:
-                symbol_col = col
-                break
-
-        if symbol_col is None:
-            logger.warning("QuantDB 股票列表中未找到 symbol 列")
-            return 0
-
-        # 获取日历范围
         cal_dates = self._load_calendar()
         if not cal_dates:
             logger.warning("请先构建日历 (build_calendar)")
@@ -161,25 +240,62 @@ class QlibDataBuilder:
         start_date = cal_dates[0]
         end_date = cal_dates[-1]
 
-        # 转换为 Qlib 格式: sh600036
-        qlib_symbols = []
-        for sym in df[symbol_col].dropna().unique():
-            qlib_sym = self._to_qlib_symbol(str(sym))
-            if qlib_sym:
-                qlib_symbols.append(qlib_sym)
-
-        qlib_symbols = sorted(set(qlib_symbols))
+        qlib_symbols = sorted({s for s in raw_symbols if s})
 
         with open(inst_file, "w") as f:
             for sym in qlib_symbols:
                 f.write(f"{sym}\t{start_date}\t{end_date}\n")
 
-        logger.info("Qlib instruments: %d symbols -> %s", len(qlib_symbols), inst_file)
+        logger.info("Qlib[%s] instruments: %d symbols -> %s", self._market, len(qlib_symbols), inst_file)
 
-        # 另外为各股票池生成成分文件，供 D.instruments(market="csi300") 使用。
-        # 缺失时 Qlib 会直接抛 ValueError，导致因子回测无法运行。
-        self._build_universe_instruments(inst_dir, start_date, end_date, set(qlib_symbols))
+        # 各市场股票池成分文件（仅 A 股有 UNIVERSE_MAP，其他市场跳过）
+        universes = getattr(self._hub, "UNIVERSE_MAP", {}) or {}
+        if self._market == "CN" and universes:
+            self._build_universe_instruments(inst_dir, start_date, end_date, set(qlib_symbols))
         return len(qlib_symbols)
+
+    def _collect_raw_symbols(self) -> set[str]:
+        """收集原生 symbol 列表：优先 hub.fetch_stock_list，否则从 parquet 推导。"""
+        symbols: set[str] = set()
+        try:
+            df = self._hub.fetch_stock_list()
+            if df is not None and not df.empty:
+                symbol_col = None
+                for col in ("Symbol", "symbol", "instrument"):
+                    if col in df.columns:
+                        symbol_col = col
+                        break
+                if symbol_col:
+                    for sym in df[symbol_col].dropna().unique():
+                        qs = self._to_qlib_symbol(str(sym))
+                        if qs:
+                            symbols.add(qs)
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("%s fetch_stock_list 失败，回退 parquet 推导: %s", self._market, exc)
+
+        if symbols:
+            return symbols
+
+        # 从 daily_forward parquet 推导
+        fwd = self._hub.data_dir / "1_kline_data" / "daily_forward"
+        if fwd.is_dir():
+            import duckdb
+
+            try:
+                con = duckdb.connect(config={"memory_limit": "4GB", "threads": "2"})
+                try:
+                    df = con.execute(
+                        f"SELECT DISTINCT symbol FROM read_parquet('{fwd / 'dt=*' / 'data.parquet'}', hive_partitioning=1)"
+                    ).fetchdf()
+                finally:
+                    con.close()
+                for sym in df["symbol"].dropna().unique():
+                    qs = self._to_qlib_symbol(str(sym))
+                    if qs:
+                        symbols.add(qs)
+            except Exception as exc:  # noqa: BLE001
+                logger.warning("从 parquet 推导标的失败: %s", exc)
+        return symbols
 
     def _build_universe_instruments(
         self, inst_dir: Path, start_date: str, end_date: str, known: set[str]
@@ -209,6 +325,9 @@ class QlibDataBuilder:
             except Exception as e:
                 logger.warning("生成股票池 %s 成分文件失败: %s", universe, e)
 
+    # ------------------------------------------------------------------
+    # 特征构建
+    # ------------------------------------------------------------------
     def build_features(
         self,
         symbols: list[str] | None = None,
@@ -216,15 +335,10 @@ class QlibDataBuilder:
         incremental: bool = True,
         batch_size: int = 100,
     ) -> dict:
-        """从 QuantDB 前复权 K 线生成 features/*.day.bin。
+        """从 parquet 前复权 K 线生成 features/*.day.bin。
 
-        Args:
-            symbols: 要构建的 symbol 列表（None = 全部）
-            incremental: 增量模式，只追加新数据
-            batch_size: 每批处理的 symbol 数量
-
-        Returns:
-            {"updated": int, "skipped": int}
+        非 A 股市场标的数大（HK 数千），逐标的全库扫描太慢，
+        走 build_features_bulk 一次读入再分组。
         """
         if symbols is None:
             symbols = self._get_all_symbols()
@@ -232,7 +346,10 @@ class QlibDataBuilder:
         if not symbols:
             return {"updated": 0, "skipped": 0}
 
-        # 加载日历索引
+        # 非 A 股市场（无 daily_unadjusted 复权需求）用批量构建
+        if self._market != "CN" and not incremental:
+            return self.build_features_bulk()
+
         cal_dates = self._load_calendar()
         if not cal_dates:
             logger.warning("请先构建日历 (build_calendar)")
@@ -265,15 +382,75 @@ class QlibDataBuilder:
 
             if i + batch_size < len(symbols):
                 logger.info(
-                    "Features 进度: %d/%d (updated=%d, skipped=%d)",
-                    min(i + batch_size, len(symbols)), len(symbols), updated, skipped,
+                    "Features[%s] 进度: %d/%d (updated=%d, skipped=%d)",
+                    self._market, min(i + batch_size, len(symbols)), len(symbols), updated, skipped,
                 )
 
         return {"updated": updated, "skipped": skipped}
 
-    # ------------------------------------------------------------------
-    # 内部方法
-    # ------------------------------------------------------------------
+    def build_features_bulk(self) -> dict:
+        """一次扫描全市场 parquet，按标的分组写 bin（非 A 股专用）。
+
+        非 A 股市场（US/HK/CRYPTO/FUTURES）只有 daily_forward 分区，无
+        daily_unadjusted，factor 恒为 1.0。整体读入再 groupby，避免逐标的
+        全库扫描导致 OOM / 数小时耗时。
+        """
+        import duckdb
+
+        cal_dates = self._load_calendar()
+        if not cal_dates:
+            logger.warning("请先构建日历 (build_calendar)")
+            return {"updated": 0, "skipped": 0}
+        cal_index = {d: i for i, d in enumerate(cal_dates)}
+
+        fwd = str(self._hub.data_dir / "1_kline_data/daily_forward/dt=*/data.parquet")
+
+        con = duckdb.connect(config={"memory_limit": "8GB", "threads": "4"})
+        try:
+            df = con.execute(
+                f"""
+                SELECT symbol, CAST(time AS DATE) d,
+                       open, high, low, close, volume, amount
+                FROM read_parquet('{fwd}', hive_partitioning=1)
+                ORDER BY symbol, d
+                """
+            ).fetchdf()
+        finally:
+            con.close()
+
+        if df.empty:
+            return {"updated": 0, "skipped": 0}
+
+        df["ci"] = df["d"].astype(str).map(cal_index)
+        df = df[df["ci"].notna()]
+        df["ci"] = df["ci"].astype(np.int64)
+
+        updated = skipped = 0
+        for qdb_sym, group in df.groupby("symbol", sort=False):
+            qlib_sym = self._to_qlib_symbol(qdb_sym)
+            positions = group["ci"].values
+            start_idx = int(positions.min())
+            span = int(positions.max()) - start_idx + 1
+            offsets = positions - start_idx
+
+            feat_dir = self._qlib_dir / "features" / qlib_sym
+            feat_dir.mkdir(parents=True, exist_ok=True)
+
+            try:
+                for field in ("open", "high", "low", "close", "volume", "amount"):
+                    aligned = np.full(span, np.nan, dtype=np.float32)
+                    aligned[offsets] = group[field].values.astype(np.float32)
+                    self._write_bin_file(feat_dir / f"{field}.day.bin", start_idx, aligned)
+                factor = np.ones(span, dtype=np.float32)
+                self._write_bin_file(feat_dir / "factor.day.bin", start_idx, factor)
+                updated += 1
+            except Exception as exc:  # noqa: BLE001
+                logger.warning("构建 %s features 失败: %s", qlib_sym, exc)
+                skipped += 1
+
+        logger.info("Qlib[%s] features (bulk): updated=%d, skipped=%d", self._market, updated, skipped)
+        return {"updated": updated, "skipped": skipped}
+
     def _load_calendar(self) -> list[str]:
         """加载已构建的 Qlib 日历。"""
         cal_file = self._qlib_dir / "calendars" / "day.txt"
@@ -324,16 +501,14 @@ class QlibDataBuilder:
         cal_dates: list[str],
         cal_index: dict[str, int],
     ) -> bool:
-        """从 QuantDB index_daily 构建指数 features。"""
+        """从 index_daily 构建指数 features（仅 A 股有指数）。"""
         df = self._hub.fetch_index_kline(qdb_sym, date(2016, 1, 4), date(2026, 12, 31))
         if df.empty:
             return False
 
-        # 按日期对齐到日历
         first_date = str(df.iloc[0].get("trade_date", ""))[:10]
         start_idx = cal_index.get(first_date, 0)
 
-        # 指数无复权因子，factor=1.0
         field_data = {
             "open": df["open"].values if "open" in df.columns else None,
             "high": df["high"].values if "high" in df.columns else None,
@@ -360,15 +535,14 @@ class QlibDataBuilder:
         cal_dates: list[str],
         cal_index: dict[str, int],
     ) -> bool:
-        """从 QuantDB parquet 全量构建 symbol 的 features。"""
-        # 读取前复权日K + 不复权日K（计算 factor）
-        df_qfq = self._hub.fetch_daily_kline(qdb_sym, date(2016, 1, 4), date(2026, 12, 31), adjust="qfq")
+        """从 parquet 全量构建 symbol 的 features。"""
+        start_dt = self._market_start_date()
+        df_qfq = self._hub.fetch_daily_kline(qdb_sym, start_dt, date(2026, 12, 31), adjust="qfq")
         if df_qfq.empty:
             return False
 
-        df_unadj = self._hub.fetch_daily_kline(qdb_sym, date(2016, 1, 4), date(2026, 12, 31), adjust="none")
+        df_unadj = self._hub.fetch_daily_kline(qdb_sym, start_dt, date(2026, 12, 31), adjust="none")
 
-        # 计算复权因子
         if not df_unadj.empty and len(df_unadj) == len(df_qfq):
             factor = np.where(
                 df_unadj["close"].values > 0,
@@ -378,7 +552,6 @@ class QlibDataBuilder:
         else:
             factor = np.ones(len(df_qfq))
 
-        # 构建 Qlib 数据：每个字段一个 bin 文件
         field_data = {
             "open": df_qfq["open"].values if "open" in df_qfq.columns else None,
             "high": df_qfq["high"].values if "high" in df_qfq.columns else None,
@@ -389,10 +562,10 @@ class QlibDataBuilder:
             "factor": factor,
         }
 
-        # 个股交易日可能少于全市场日历（停牌、上游缺该日数据），必须按日历索引
-        # 逐条落位并对缺失日填 NaN。连续写入会让缺口后的所有数据整体前移。
+        # 按日历索引逐条落位，缺失日填 NaN
+        trade_col = "trade_date" if "trade_date" in df_qfq.columns else "time"
         row_positions = []
-        for raw_date in df_qfq["trade_date"].values:
+        for raw_date in df_qfq[trade_col].values:
             idx = cal_index.get(str(raw_date)[:10])
             row_positions.append(-1 if idx is None else idx)
         row_positions = np.asarray(row_positions, dtype=np.int64)
@@ -415,6 +588,12 @@ class QlibDataBuilder:
 
         return True
 
+    def _market_start_date(self) -> date:
+        """各市场历史起始日期。"""
+        if self._market == "CN":
+            return date(2016, 1, 4)
+        return date(1990, 1, 1)
+
     def _incremental_build(
         self,
         qlib_sym: str,
@@ -424,13 +603,10 @@ class QlibDataBuilder:
         cal_index: dict[str, int],
     ) -> bool:
         """增量构建：追加新数据到现有 bin 文件。"""
-        # 检查现有 bin 文件，确定已覆盖到哪个日期
         close_bin = feat_dir / "close.day.bin"
         if not close_bin.exists():
-            # 没有现有数据，走全量构建
             return self._full_build(qlib_sym, qdb_sym, feat_dir, cal_dates, cal_index)
 
-        # 读取现有 close bin，确定已覆盖的日期范围
         try:
             existing_start_idx, existing_close = self._read_bin_file(close_bin)
         except Exception:
@@ -439,17 +615,13 @@ class QlibDataBuilder:
         if len(existing_close) == 0:
             return self._full_build(qlib_sym, qdb_sym, feat_dir, cal_dates, cal_index)
 
-        # 已覆盖的最后一个日历索引
         existing_end_idx = existing_start_idx + len(existing_close) - 1
         if existing_end_idx >= len(cal_dates) - 1:
-            # 已经是最新，跳过
             return False
 
-        # 需要追加的日期范围
         next_cal_date = cal_dates[existing_end_idx + 1]
         end_cal_date = cal_dates[-1]
 
-        # 从 QuantDB 读取增量数据
         try:
             start_dt = date.fromisoformat(next_cal_date)
             end_dt = date.fromisoformat(end_cal_date)
@@ -462,7 +634,6 @@ class QlibDataBuilder:
 
         df_unadj = self._hub.fetch_daily_kline(qdb_sym, start_dt, end_dt, adjust="none")
 
-        # 计算复权因子
         if not df_unadj.empty and len(df_unadj) == len(df_qfq):
             new_factor = np.where(
                 df_unadj["close"].values > 0,
@@ -472,7 +643,6 @@ class QlibDataBuilder:
         else:
             new_factor = np.ones(len(df_qfq))
 
-        # 追加数据到 bin 文件
         new_field_data = {
             "open": df_qfq["open"].values if "open" in df_qfq.columns else None,
             "high": df_qfq["high"].values if "high" in df_qfq.columns else None,
@@ -496,134 +666,56 @@ class QlibDataBuilder:
 
         return True
 
-    def build_features_bulk(self) -> dict:
-        """一次扫描全市场 parquet，按标的分组写 bin。
+    # ------------------------------------------------------------------
+    # Symbol 转换（多市场）
+    # ------------------------------------------------------------------
+    def _to_qlib_symbol(self, symbol: str) -> str:
+        """原生 symbol -> Qlib 格式（保留原始大小写，保证无损往返）。
 
-        逐标的构建需要对每个 symbol 各做两次全库扫描（前复权 + 不复权），
-        5500 个标的会重复扫 2500+ 个分区，容器内直接 OOM。这里改为整体读入
-        再 groupby，代价是一次约 10GB 的 DataFrame。
+        - A 股: 600519.SH -> sh600519（原生 exchange 前缀）
+        - 美股: AAPL -> us_AAPL
+        - 港股: 00700.HK -> hk_00700.HK
+        - 加密货币: BTCUSDT -> bc_BTCUSDT
+        - 期货: CL.FUT -> fut_CL.FUT, Au99.99 -> fut_Au99.99
         """
-        import duckdb
-
-        cal_dates = self._load_calendar()
-        if not cal_dates:
-            logger.warning("请先构建日历 (build_calendar)")
-            return {"updated": 0, "skipped": 0}
-        cal_index = {d: i for i, d in enumerate(cal_dates)}
-
-        fwd = str(self._hub.data_dir / "1_kline_data/daily_forward/dt=*/data.parquet")
-        unadj = str(self._hub.data_dir / "1_kline_data/daily_unadjusted/dt=*/data.parquet")
-
-        con = duckdb.connect(config={"memory_limit": "8GB", "threads": "4"})
-        try:
-            df = con.execute(
-                f"""
-                SELECT f.symbol, CAST(f.time AS DATE) d,
-                       f.open, f.high, f.low, f.close, f.volume, f.amount,
-                       u.close AS close_unadj
-                FROM read_parquet('{fwd}') f
-                LEFT JOIN read_parquet('{unadj}') u
-                  ON u.symbol = f.symbol AND CAST(u.time AS DATE) = CAST(f.time AS DATE)
-                ORDER BY f.symbol, d
-                """
-            ).fetchdf()
-        finally:
-            con.close()
-
-        if df.empty:
-            return {"updated": 0, "skipped": 0}
-
-        df["ci"] = df["d"].astype(str).map(cal_index)
-        df = df[df["ci"].notna()]
-        df["ci"] = df["ci"].astype(np.int64)
-
-        updated = skipped = 0
-        for qdb_sym, group in df.groupby("symbol", sort=False):
-            qlib_sym = self._to_qlib_symbol(qdb_sym)
-            positions = group["ci"].values
-            start_idx = int(positions.min())
-            span = int(positions.max()) - start_idx + 1
-            offsets = positions - start_idx
-
-            feat_dir = self._qlib_dir / "features" / qlib_sym
-            feat_dir.mkdir(parents=True, exist_ok=True)
-
-            close_unadj = group["close_unadj"].values.astype(np.float64)
-            close_qfq = group["close"].values.astype(np.float64)
-            with np.errstate(divide="ignore", invalid="ignore"):
-                factor = np.where(close_unadj > 0, close_qfq / close_unadj, 1.0)
-            factor = np.nan_to_num(factor, nan=1.0, posinf=1.0, neginf=1.0)
-
-            try:
-                for field in ("open", "high", "low", "close", "volume", "amount"):
-                    aligned = np.full(span, np.nan, dtype=np.float32)
-                    aligned[offsets] = group[field].values.astype(np.float32)
-                    self._write_bin_file(feat_dir / f"{field}.day.bin", start_idx, aligned)
-                aligned = np.full(span, np.nan, dtype=np.float32)
-                aligned[offsets] = factor.astype(np.float32)
-                self._write_bin_file(feat_dir / "factor.day.bin", start_idx, aligned)
-                updated += 1
-            except Exception as exc:
-                logger.warning("构建 %s features 失败: %s", qlib_sym, exc)
-                skipped += 1
-
-        logger.info("Qlib features (bulk): updated=%d, skipped=%d", updated, skipped)
-        return {"updated": updated, "skipped": skipped}
-
-    @staticmethod
-    def _write_bin_file(path: Path, start_idx: int, values: np.ndarray) -> None:
-        """写入 Qlib binary 文件。
-
-        格式: 4-byte float32 start_idx + N * 4-byte float32 values
-        """
-        with open(path, "wb") as f:
-            f.write(struct.pack("f", float(start_idx)))
-            f.write(values.astype(np.float32).tobytes())
-
-    @staticmethod
-    def _read_bin_file(path: Path) -> tuple[int, np.ndarray]:
-        """读取 Qlib binary 文件。返回 (start_idx, values)。"""
-        with open(path, "rb") as f:
-            raw = f.read()
-        if len(raw) < 4:
-            return 0, np.array([], dtype=np.float32)
-        start_idx = int(struct.unpack("f", raw[:4])[0])
-        values = np.frombuffer(raw[4:], dtype=np.float32)
-        return start_idx, values
-
-    @staticmethod
-    def _to_qlib_symbol(symbol: str) -> str:
-        """suffix 格式 600036.SH -> Qlib 格式 sh600036。"""
         s = symbol.strip()
-        if "." in s:
-            code, exchange = s.split(".", 1)
-            return f"{exchange.lower()}{code}"
-        return s.lower()
-
-    @staticmethod
-    def _to_qdb_symbol(qlib_symbol: str) -> str:
-        """Qlib 格式 sh600036 -> suffix 格式 600036.SH。"""
-        s = qlib_symbol.strip()
-        # Qlib 格式: sh600036, sz000001, bj830001
-        if s.startswith("sh"):
-            return f"{s[2:]}.SH"
-        if s.startswith("sz"):
-            return f"{s[2:]}.SZ"
-        if s.startswith("bj"):
-            return f"{s[2:]}.BJ"
-        # 可能已经是 suffix 格式
-        if "." in s:
+        if self._market == "CN":
+            if "." in s:
+                code, exchange = s.split(".", 1)
+                if exchange.upper() in ("SH", "SZ", "BJ"):
+                    return f"{exchange.lower()}{code}"
+            return s.lower() if not s.lower().startswith(("sh", "sz", "bj")) else s.lower()
+        # 非 A 股：统一前缀 + 原始 symbol（含点号，保留大小写）
+        prefix = _MARKET_QLIB_PREFIX.get(self._market, "mkt_")
+        # 幂等：已是该市场前缀则直接返回
+        if s.startswith(prefix):
             return s
+        return f"{prefix}{s}"
+
+    def _to_qdb_symbol(self, qlib_symbol: str) -> str:
+        """Qlib 格式 -> 原生 symbol。必须与 _to_qlib_symbol 完全对称。"""
+        s = qlib_symbol.strip()
+        # A 股：exchange 前缀还原
+        if self._market == "CN":
+            if s.startswith("sh"):
+                return f"{s[2:]}.SH"
+            if s.startswith("sz"):
+                return f"{s[2:]}.SZ"
+            if s.startswith("bj"):
+                return f"{s[2:]}.BJ"
+            if "." in s:
+                return s
+            return s
+        # 非 A 股：剥离市场前缀
+        prefix = _MARKET_QLIB_PREFIX.get(self._market, "mkt_")
+        if s.startswith(prefix):
+            return s[len(prefix):]
+        # 可能已经是原生格式
         return s
 
     @staticmethod
     def _is_index_symbol(qlib_symbol: str) -> bool:
-        """判断 Qlib 格式 symbol 是否为指数。
-
-        指数代码规则：
-        - SH: 000xxx (上证指数系列)
-        - SZ: 399xxx (深证指数系列)
-        """
+        """判断 Qlib 格式 symbol 是否为指数（仅 A 股）。"""
         s = qlib_symbol.strip()
         if s.startswith("sh") and s[2:].startswith("000"):
             return True
@@ -631,6 +723,9 @@ class QlibDataBuilder:
             return True
         return False
 
+    # ------------------------------------------------------------------
+    # 通用工具
+    # ------------------------------------------------------------------
     def is_built(self) -> bool:
         """检查 Qlib 缓存是否已构建。"""
         cal_file = self._qlib_dir / "calendars" / "day.txt"
@@ -651,6 +746,7 @@ class QlibDataBuilder:
 
         status: dict = {
             "qlib_dir": str(self._qlib_dir),
+            "market": self._market,
             "calendar_built": cal_file.exists(),
             "instruments_built": inst_file.exists(),
             "features_built": feat_dir.exists(),
@@ -674,28 +770,75 @@ class QlibDataBuilder:
 
         return status
 
+    @staticmethod
+    def _write_bin_file(path: Path, start_idx: int, values: np.ndarray) -> None:
+        """写入 Qlib binary 文件。
 
-def ensure_qlib_cache(quantdb_dir: str | Path, qlib_dir: str | Path | None = None) -> str:
-    """确保 Qlib 缓存可用，返回 provider_uri。
+        格式: 4-byte float32 start_idx + N * 4-byte float32 values
+        """
+        with open(path, "wb") as f:
+            f.write(struct.pack("f", float(start_idx)))
+            f.write(values.astype(np.float32).tobytes())
 
-    如果缓存不存在或过期，从 QuantDB parquet 构建。
+    @staticmethod
+    def _read_bin_file(path: Path) -> tuple[int, np.ndarray]:
+        """读取 Qlib binary 文件。返回 (start_idx, values)。"""
+        with open(path, "rb") as f:
+            raw = f.read()
+        if len(raw) < 4:
+            return 0, np.array([], dtype=np.float32)
+        start_idx = int(struct.unpack("f", raw[:4])[0])
+        values = np.frombuffer(raw[4:], dtype=np.float32)
+        return start_idx, values
+
+
+def _resolve_cn_data_dir() -> Path:
+    """解析 A 股数据目录（兼容容器/宿主机）。"""
+    import os
+
+    env_val = os.getenv("QM_QUANTDB_DATA_DIR", "").strip()
+    if env_val:
+        return Path(env_val)
+    for candidate in (
+        Path("/data/quantdb"),
+        Path(__file__).resolve().parents[3] / "data" / "quantdb",
+    ):
+        if candidate.is_dir():
+            return candidate
+    return Path("/data/quantdb")
+
+
+def ensure_qlib_cache(
+    market: str = "CN",
+    quantdb_dir: str | Path | None = None,
+    qlib_dir: str | Path | None = None,
+) -> str:
+    """确保指定市场的 Qlib 缓存可用，返回 provider_uri。
+
+    如果缓存不存在或过期，从该市场 parquet 构建。
+
+    Args:
+        market: 市场名 CN/US/HK/CRYPTO/FUTURES，或兼容旧调用的数据目录路径。
+                当第一个位置参数是存在的目录时视为 quantdb_dir（A 股）。
+        quantdb_dir: 数据目录（默认按市场解析）
+        qlib_dir: Qlib 输出目录（默认 {data_dir}/.qlib_cache/{market}_data）
     """
-    quantdb_dir = Path(quantdb_dir)
-    if qlib_dir is None:
-        qlib_dir = quantdb_dir / ".qlib_cache" / "cn_data"
-    else:
-        qlib_dir = Path(qlib_dir)
+    # 向后兼容：旧调用 ensure_qlib_cache("/data/quantdb") 把路径当 market
+    if isinstance(market, (str, Path)) and str(market).startswith(("/", "~", ".")):
+        p = Path(str(market))
+        if p.is_dir() or "/quantdb" in str(market):
+            quantdb_dir = quantdb_dir or p
+            market = "CN"
 
-    builder = QlibDataBuilder(quantdb_dir, qlib_dir)
+    builder = QlibDataBuilder.for_market(market, data_dir=quantdb_dir, qlib_dir=qlib_dir)
 
     if not builder.is_built():
-        logger.info("Qlib 缓存不存在，开始构建...")
+        logger.info("Qlib[%s] 缓存不存在，开始构建...", market)
         builder.build_all(incremental=False)
     else:
-        # 增量更新：先重建日历（trading_calendar 可能已更新），
-        # 再增量更新 instruments 和 features
+        # 增量更新：先重建日历（数据可能已更新），再增量更新 instruments 和 features
         builder.build_calendar()
         builder.build_instruments()
         builder.build_features(incremental=True)
 
-    return str(qlib_dir)
+    return str(builder.qlib_dir)

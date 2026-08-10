@@ -989,3 +989,177 @@ class LocalDockerOrchestrator:
                     container_id=container_id[:12],
                 )
         await _try_resume()
+
+
+    # ── 多周期训练编排（一次训练产出多周期模型 + 自动融合）───────────────────────
+    async def launch_multi_horizon_job(
+        self,
+        parent_run_id: str,
+        child_run_ids: list[str],
+        payload: dict,
+    ) -> None:
+        """串行跑多个周期的训练任务，全部成功后自动创建 ICIR 加权融合模型。
+
+        每个 child 是一个独立单周期训练任务（已有完整 Docker 容器 + 回调闭环）。
+        编排器按顺序依次启动，等待每个 child 完成（或失败），再推进下一个。
+        全部成功 → 调 register_ensemble_model 生成「多周期融合模型」。
+        """
+        from backend.shared.database_manager_v2 import get_session
+        from backend.services.api.routers.admin.db import TrainingJobRecord
+        from backend.shared.model_registry import model_registry_service
+
+        tenant_id = str(payload.get("_tenant_id") or "")
+        user_id = str(payload.get("_user_id") or "")
+        # 从 parent record 读取归属
+        if not tenant_id or not user_id:
+            async with get_session() as db:
+                parent_rec = await db.get(TrainingJobRecord, parent_run_id)
+                if parent_rec:
+                    tenant_id = str(parent_rec.tenant_id or "default")
+                    user_id = str(parent_rec.user_id or "")
+        display_name = str(payload.get("display_name") or "multi_horizon")
+
+        async def _set_parent(status: str, progress: int, log_line: str) -> None:
+            async with get_session() as db:
+                r = await db.get(TrainingJobRecord, parent_run_id)
+                if r:
+                    r.status = status
+                    r.progress = progress
+                    r.logs = (r.logs or "") + log_line
+                    await db.commit()
+                self.log_stream.append_log(
+                    run_id=parent_run_id,
+                    tenant_id=tenant_id,
+                    user_id=user_id,
+                    line=log_line.strip(),
+                    status=status,
+                    progress=progress,
+                )
+
+        try:
+            await _set_parent("provisioning", 5, f"[MH] 多周期训练启动，共 {len(child_run_ids)} 个周期\n")
+
+            completed_model_ids: list[str] = []
+            horizon_labels: list[str] = []
+            n_total = len(child_run_ids)
+
+            for idx, child_run_id in enumerate(child_run_ids):
+                # 读取 child payload（含固定 target_horizon_days）
+                async with get_session() as db:
+                    child_rec = await db.get(TrainingJobRecord, child_run_id)
+                    if child_rec is None:
+                        raise RuntimeError(f"child run not found: {child_run_id}")
+                    child_payload = (
+                        child_rec.request_payload
+                        if isinstance(child_rec.request_payload, dict)
+                        else {}
+                    )
+                horizon = int(child_payload.get("target_horizon_days") or 0)
+                horizon_labels.append(f"T{horizon}")
+
+                base_progress = 5 + int((idx / n_total) * 90)
+                await _set_parent(
+                    "running",
+                    base_progress,
+                    f"[MH] ({idx + 1}/{n_total}) 训练 T+{horizon} 模型…\n",
+                )
+
+                # 启动 child 训练（内部会启容器 + 等回调 + 注册模型）
+                await self.launch_training_job(run_id=child_run_id, payload=child_payload)
+
+                # 等待 child 完成
+                child_deadline = time.time() + 7200
+                while time.time() < child_deadline:
+                    await asyncio.sleep(_POLL_INTERVAL)
+                    async with get_session(read_only=True) as db:
+                        r = await db.get(TrainingJobRecord, child_run_id)
+                        if r is None:
+                            break
+                        st = str(r.status or "")
+                        if st == "completed":
+                            completed_model_ids.append(
+                                model_registry_service.build_model_id_from_run(child_run_id)
+                            )
+                            break
+                        if st == "failed":
+                            raise RuntimeError(
+                                f"child T+{horizon} training failed: {(r.result or {}).get('error') or (r.logs or '')[-300:]}"
+                            )
+
+                if child_run_id not in completed_model_ids:
+                    raise RuntimeError(f"child T+{horizon} timed out waiting for completion")
+
+                await _set_parent(
+                    "running",
+                    5 + int(((idx + 1) / n_total) * 90),
+                    f"[MH] T+{horizon} 模型训练完成（{idx + 1}/{n_total}）\n",
+                )
+
+            # ── 全部完成 → 创建融合模型 ──
+            if len(completed_model_ids) < 2:
+                raise RuntimeError("multi-horizon requires at least 2 completed models")
+
+            fusion_name = f"{display_name}_MultiHorizon"
+            fusion = await model_registry_service.register_ensemble_model(
+                tenant_id=tenant_id,
+                user_id=user_id,
+                source_model_ids=completed_model_ids,
+                display_name=fusion_name,
+                weight_strategy="icir",
+            )
+            fusion_model_id = str(fusion.get("model_id") or "")
+
+            await _set_parent(
+                "completed",
+                100,
+                f"[MH] 融合模型已创建: {fusion_model_id}（ICIR 加权，周期: {'+'.join(horizon_labels)}）\n",
+            )
+
+            # 把融合模型信息 + 最丰富的一个 child 完整结果写入 parent result，
+            # 保证前端 parseTrainingResult 能正常解析（metrics + artifacts 必需）
+            async with get_session() as db:
+                r = await db.get(TrainingJobRecord, parent_run_id)
+                if r:
+                    child_results = []
+                    for child_run_id in child_run_ids:
+                        child_rec = await db.get(TrainingJobRecord, child_run_id)
+                        if child_rec and isinstance(child_rec.result, dict):
+                            child_results.append(
+                                {
+                                    "run_id": child_run_id,
+                                    "target_horizon_days": int(
+                                        (child_rec.request_payload or {}).get("target_horizon_days") or 0
+                                    ),
+                                    "result": child_rec.result,
+                                }
+                            )
+                    # 选 metrics 最完整的 child 作为展示基底
+                    base_result: dict = {}
+                    for cr in child_results:
+                        m = (cr.get("result") or {}).get("metrics") or {}
+                        if m.get("train") and m.get("val") and m.get("test"):
+                            base_result = cr["result"]
+                            break
+                    parent_result = dict(base_result)
+                    parent_result["status"] = "completed"
+                    parent_result["multi_horizon"] = {
+                        "horizons": horizon_labels,
+                        "child_run_ids": child_run_ids,
+                        "child_model_ids": completed_model_ids,
+                        "fusion_model_id": fusion_model_id,
+                        "child_results": child_results,
+                    }
+                    if isinstance(parent_result.get("metadata"), dict):
+                        parent_result["metadata"]["multi_horizon"] = {
+                            "horizons": horizon_labels,
+                            "fusion_model_id": fusion_model_id,
+                        }
+                    r.result = parent_result
+                    await db.commit()
+        except Exception as exc:  # noqa: BLE001
+            logger.error("[%s] multi-horizon orchestration failed: %s", parent_run_id, exc)
+            await _set_parent(
+                "failed",
+                100,
+                f"[MH] 多周期训练失败: {exc}\n",
+            )

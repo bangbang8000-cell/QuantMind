@@ -16,6 +16,7 @@ const MARKET_OPTIONS: MarketOption[] = [
   { id: 'HK', label: '港股', color: 'text-orange-600', bgColor: 'bg-orange-50', borderColor: 'border-orange-200' },
   { id: 'US', label: '美股', color: 'text-blue-600', bgColor: 'bg-blue-50', borderColor: 'border-blue-200' },
   { id: 'CRYPTO', label: '区块链', color: 'text-purple-600', bgColor: 'bg-purple-50', borderColor: 'border-purple-200' },
+  { id: 'FUTURES', label: '期货', color: 'text-amber-600', bgColor: 'bg-amber-50', borderColor: 'border-amber-200' },
 ];
 
 export const MarketSelector: React.FC = () => {

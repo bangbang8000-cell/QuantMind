@@ -24,6 +24,7 @@ from backend.services.engine.data_platform.adapters import (
 )
 
 
+@pytest.mark.skip(reason="A股适配器已收敛为 quantdb_local 单源，baostock/qstock/investment_data/eltdx 已停注册。停用保留，后期可能用于旧链路回归。")
 def test_list_known_has_all_five():
     names = list_known()
     for n in (
@@ -33,6 +34,7 @@ def test_list_known_has_all_five():
         assert n in names
 
 
+@pytest.mark.skip(reason="A股适配器已收敛为 quantdb_local 单源，investment_data 等旧适配器已停注册。停用保留。")
 def test_register_all_returns_dict():
     res = register_all()
     assert isinstance(res, dict)
@@ -222,6 +224,7 @@ def test_eltdx_unavailable_when_lib_missing():
 # ---------------------------------------------------------------------------
 # 集成：register_all() 后 registry 应可用
 # ---------------------------------------------------------------------------
+@pytest.mark.skip(reason="A股适配器已收敛为 quantdb_local 单源，investment_data 已停注册。停用保留，后期可能用于旧链路回归。")
 def test_registered_sources_visible_in_registry():
     register_all()
     from backend.services.engine.data_platform.registry import get_registry

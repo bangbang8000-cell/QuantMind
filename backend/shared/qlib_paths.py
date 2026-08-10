@@ -17,6 +17,14 @@ from pathlib import Path
 
 _PROJECT_ROOT = Path(__file__).resolve().parents[2]
 
+# 各市场本地 parquet 数据目录（与 docker-compose 的 QM_QUANT*_DATA_DIR 对齐）
+_MARKET_DATA_DIR: dict[str, str] = {
+    "US": os.getenv("QM_QUANTUS_DATA_DIR", "/data/quantus"),
+    "HK": os.getenv("QM_QUANTHK_DATA_DIR", "/data/quanthk"),
+    "CRYPTO": os.getenv("QM_QUANTBC_DATA_DIR", "/data/quantbc"),
+    "FUTURES": os.getenv("QM_QUANTFUTURES_DATA_DIR", "/data/quantfutures"),
+}
+
 
 def resolve_qlib_provider_uri(market: str = "CN") -> str:
     """返回 Qlib provider_uri 绝对路径。
@@ -34,10 +42,25 @@ def resolve_qlib_provider_uri(market: str = "CN") -> str:
     _MARKET_SUBDIR: dict[str, str] = {
         "HK": "hk_data",
         "US": "us_data",
-        "CRYPTO": "crypto_data",
+        "CRYPTO": "bc_data",
+        "FUTURES": "futures_data",
+    }
+    # 各市场 .qlib_cache 缓存子目录名（QlibDataBuilder.for_market 生成）
+    _CACHE_SUBDIR: dict[str, str] = {
+        "HK": "hk_data",
+        "US": "us_data",
+        "CRYPTO": "bc_data",
+        "FUTURES": "futures_data",
     }
     if market_upper in _MARKET_SUBDIR:
         subdir = _MARKET_SUBDIR[market_upper]
+        # 优先各市场自己的 .qlib_cache（新构建的多市场 Qlib 缓存）
+        market_data_dir = _MARKET_DATA_DIR.get(market_upper)
+        if market_data_dir:
+            cache_sub = _CACHE_SUBDIR.get(market_upper, subdir)
+            cache_candidate = Path(market_data_dir) / ".qlib_cache" / cache_sub
+            if cache_candidate.exists():
+                return str(cache_candidate)
         for candidate in (
             Path(f"/data/qlib_data/{subdir}"),
             Path(f"/app/db/qlib_data/{subdir}"),

@@ -132,6 +132,63 @@ export const TrainingTargetConfig: React.FC<TrainingTargetConfigProps> = ({
             </div>
           </div>
 
+          {/* ── 多周期训练 ── */}
+          <div className="rounded-2xl border border-indigo-100 bg-gradient-to-r from-indigo-50/60 to-slate-50 p-4">
+            <div className="flex items-center justify-between gap-3">
+              <div className="flex items-center gap-2">
+                <Activity size={15} className="text-indigo-500" />
+                <div className="text-sm font-semibold text-slate-800">多周期训练</div>
+              </div>
+              <Switch
+                checked={(target.horizonDaysList?.length ?? 0) >= 2}
+                onChange={(checked) => {
+                  if (checked) {
+                    onTargetChange({ ...target, horizonDays: target.horizonDays, horizonDaysList: [1, 3, 5, 10] });
+                  } else {
+                    const { horizonDaysList, ...rest } = target;
+                    onTargetChange({ ...rest });
+                  }
+                }}
+              />
+            </div>
+            <div className="mt-1.5 text-xs text-slate-500 leading-relaxed">
+              一次训练产出 T+1/T+3/T+5/T+10 四个周期模型，并自动创建 ICIR 加权融合模型，利用跨周期一致性提升选股稳定性。
+            </div>
+            {(target.horizonDaysList?.length ?? 0) >= 2 && (
+              <>
+                <div className="mt-3 flex flex-wrap gap-2">
+                  {[1, 3, 5, 10].map((h) => (
+                    <Button
+                      key={h}
+                      size="small"
+                      type={target.horizonDaysList?.includes(h) ? 'primary' : 'default'}
+                      className={clsx('h-8 rounded-full', target.horizonDaysList?.includes(h) && 'bg-indigo-600')}
+                      onClick={() => {
+                        const cur = target.horizonDaysList ?? [];
+                        const next = cur.includes(h) ? cur.filter((x) => x !== h) : [...cur, h].sort((a, b) => a - b);
+                        onTargetChange({ ...target, horizonDays: next[0] ?? target.horizonDays, horizonDaysList: next });
+                      }}
+                    >
+                      T+{h}
+                    </Button>
+                  ))}
+                </div>
+                <div className="mt-2 text-[11px] text-slate-400 font-mono">
+                  将产出 {target.horizonDaysList?.length ?? 0} 个模型 + 1 个融合模型（训练耗时约 ×{target.horizonDaysList?.length ?? 4}）
+                </div>
+                {wfa?.enabled && onWfaChange && (
+                  <Alert
+                    className="mt-2 rounded-lg border-amber-100 bg-amber-50/60"
+                    type="warning"
+                    showIcon
+                    message="多周期训练会禁用 WFA 诊断"
+                    description="避免 4 周期 × 4 窗口 = 16 次训练导致超时，训练结束后可单独在模型详情查看 WFA。"
+                  />
+                )}
+              </>
+            )}
+          </div>
+
           <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4">
             <div className="text-[10px] font-black uppercase tracking-[0.22em] text-slate-400">标签预览</div>
             <div className="mt-2 text-sm font-medium text-slate-800">{target.mode === 'classification' ? '预测未来 N 日涨跌方向' : `预测未来 ${target.horizonDays} 日收益率`}</div>

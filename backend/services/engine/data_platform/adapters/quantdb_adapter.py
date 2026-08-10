@@ -253,7 +253,7 @@ class QuantDBAdapter(OfflineDataSourceAdapter):
     ) -> pd.DataFrame:
         try:
             df = self.client.load_as_df(
-                category_id="4", sub_category="valuation", symbol=_to_qdb_symbol(symbol)
+                category_id="5", sub_category="valuation", symbol=_to_qdb_symbol(symbol)
             )
         except Exception as exc:
             raise DataUnavailable(f"QuantDB valuation failed: {exc}") from exc

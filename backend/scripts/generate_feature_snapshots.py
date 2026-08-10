@@ -50,6 +50,190 @@ _LEAKY_RETURN_COLS: tuple[str, ...] = (
     "return_1d", "return_3d", "return_5d", "return_10d", "return_20d", "return_60d",
 )
 
+
+def _add_alpha158_new_factors(df: pd.DataFrame) -> pd.DataFrame:
+    """加入 Alpha158 中去重后的新增高价值因子（SUMP/SUMN/SUMD/MIN/MAX/RANK）。
+
+    这些因子对次日收益有较强预测力(IC 0.02~0.065)且与现有特征不重复：
+      - SUMPn/SUMNn/SUMDn: 过去 n 日涨/跌/净涨天数 (做多/做空双方向)
+      - MINn/MAXn: 过去 n 日最低/最高价相对当前价的位置
+      - RANKn: 当前日收益在过去 n 日收益中的时序排名
+    需按股票分组时序计算, df 需含 symbol/trade_date/open/high/low/close/volume。
+    """
+    need_cols = {"symbol", "trade_date", "open", "high", "low", "close", "volume"}
+    if not need_cols.issubset(df.columns):
+        _log("  警告: 缺 OHLCV 列, 跳过 Alpha158 新增因子")
+        return df
+
+    g = df.sort_values(["symbol", "trade_date"]).copy()
+    sym = g["symbol"]
+    c = g["close"]
+    h = g["high"]
+    lo = g["low"]
+    v = g["volume"]
+
+    # 日收益率(时序)
+    ret = c.groupby(sym).pct_change()
+    pos = (ret > 0).astype(float)
+    neg = (ret < 0).astype(float)
+
+    windows = [5, 10, 20, 30, 60]
+
+    def _roll(df_, col, w, agg):
+        """按股票分组滚动聚合, 返回与 df 同索引的 Series。"""
+        return df_.groupby(sym)[col].transform(
+            lambda x: x.rolling(w, min_periods=max(3, int(w * 0.5))).agg(agg)
+        )
+
+    # 涨跌天数统计 SUMP/SUMN/SUMD (只加 20/30/60, 短窗口 IC 弱)
+    for w in (20, 30, 60):
+        sp = pos.groupby(sym).transform(lambda x: x.rolling(w, min_periods=max(3, int(w * 0.5))).sum())
+        sn = neg.groupby(sym).transform(lambda x: x.rolling(w, min_periods=max(3, int(w * 0.5))).sum())
+        g[f"SUMP{w}"] = sp
+        g[f"SUMN{w}"] = sn
+        g[f"SUMD{w}"] = sp - sn
+
+    # 高低点位置 MIN/MAX
+    for w in (5, 10, 20, 30, 60):
+        g[f"MAX{w}"] = _roll(g, "close", w, "max") / c - 1
+        g[f"MIN{w}"] = _roll(g, "close", w, "min") / c - 1
+
+    # 时序排名 RANK (当前收益在过去 n 日的位置)
+    for w in (5, 10, 20, 30, 60):
+        g[f"RANK{w}"] = ret.groupby(sym).transform(
+            lambda x: x.rolling(w, min_periods=max(3, int(w * 0.5))).rank(pct=True)
+        )
+
+    _log(f"  Alpha158 新增因子: {len(g.columns) - len(df.columns)} 个")
+    return g
+
+
+def _add_gtja_factors(df: pd.DataFrame) -> pd.DataFrame:
+    """加入去重后的 GTJA Alpha191 高价值因子。
+
+    基于 IC 分析与现有特征去重, 保留 13 个独立且有预测力的因子(多空双方向):
+      - gtja_158: (high-low)/close 振幅
+      - gtja_070/095: STD(amount, 6/20) 成交额波动
+      - gtja_042: -RANK(STD(high,10)) * CORR(high,vol,10)
+      - gtja_083/016/099/090/032/062: 量价相关性/协方差的截面排名 (做空信号)
+      - gtja_150: (close+high+low)/3 * volume 典型价格×量
+      - gtja_176: CORR(rank(RSV12), rank(vol), 6)
+      - gtja_036: RANK(SUM(CORR(rank(vol),rank(vwap),6),2))
+    需按股票分组时序计算, df 需含 symbol/trade_date/open/high/low/close/volume/amount。
+    """
+    need_cols = {"symbol", "trade_date", "open", "high", "low", "close", "volume", "amount"}
+    if not need_cols.issubset(df.columns):
+        _log("  警告: 缺 OHLCV 列, 跳过 GTJA 因子")
+        return df
+
+    g = df.sort_values(["symbol", "trade_date"]).copy()
+    sym = g["symbol"]
+    c = g["close"]
+    h = g["high"]
+    lo = g["low"]
+    v = g["volume"]
+    amt = g["amount"].fillna((h + lo + c) / 3 * v)
+    vwap = (amt / v.replace(0, np.nan)).fillna((h + lo + c) / 3)
+    td = g["trade_date"]
+
+    def cross_rank(s):
+        return s.groupby(td).rank(pct=True)
+
+    def roll_corr(a, b, w):
+        return a.groupby(sym).transform(
+            lambda x: x.rolling(w, min_periods=max(3, int(w * 0.5))).corr(b.loc[x.index])
+        )
+
+    def roll_cov(a, b, w):
+        return a.groupby(sym).transform(
+            lambda x: x.rolling(w, min_periods=max(3, int(w * 0.5))).cov(b.loc[x.index])
+        )
+
+    def roll_std(s, w):
+        return s.groupby(sym).transform(
+            lambda x: x.rolling(w, min_periods=max(3, int(w * 0.5))).std()
+        )
+
+    def roll_sum(s, w):
+        return s.groupby(sym).transform(
+            lambda x: x.rolling(w, min_periods=max(1, int(w * 0.5))).sum()
+        )
+
+    def roll_max(s, w):
+        return s.groupby(sym).transform(
+            lambda x: x.rolling(w, min_periods=max(3, int(w * 0.5))).max()
+        )
+
+    def roll_min(s, w):
+        return s.groupby(sym).transform(
+            lambda x: x.rolling(w, min_periods=max(3, int(w * 0.5))).min()
+        )
+
+    def roll_mean(s, w):
+        return s.groupby(sym).transform(
+            lambda x: x.rolling(w, min_periods=max(3, int(w * 0.5))).mean()
+        )
+
+    # 截面 rank 序列
+    r_vol = cross_rank(v)
+    r_high = cross_rank(h)
+    r_close = cross_rank(c)
+    r_vwap = cross_rank(vwap)
+    r_low = cross_rank(lo)
+
+    out = {}
+
+    # gtja_016: -TSMAX(RANK(CORR(rank(vol),rank(vwap),5)),5)
+    corr_rv = roll_corr(r_vol, r_vwap, 5)
+    out["gtja_016"] = -roll_max(corr_rv.rank(pct=True), 5)
+
+    # gtja_032: -SUM(RANK(CORR(rank(high),rank(vol),3)),3)
+    corr_hv = roll_corr(r_high, r_vol, 3)
+    out["gtja_032"] = -roll_sum(corr_hv.rank(pct=True), 3)
+
+    # gtja_062: -CORR(high, rank(vol), 5)
+    out["gtja_062"] = -roll_corr(h, r_vol, 5)
+
+    # gtja_083: -RANK(COV(rank(high), rank(vol), 5))
+    out["gtja_083"] = -roll_cov(r_high, r_vol, 5).rank(pct=True)
+
+    # gtja_090: -RANK(CORR(rank(vwap), rank(vol), 5))
+    out["gtja_090"] = -roll_corr(r_vwap, r_vol, 5).rank(pct=True)
+
+    # gtja_099: -RANK(COV(rank(close), rank(vol), 5))
+    out["gtja_099"] = -roll_cov(r_close, r_vol, 5).rank(pct=True)
+
+    # gtja_036: RANK(SUM(CORR(rank(vol),rank(vwap),6),2))
+    corr_vw6 = roll_corr(r_vol, r_vwap, 6)
+    out["gtja_036"] = roll_sum(corr_vw6, 2).rank(pct=True)
+
+    # gtja_070: STD(AMOUNT, 6)
+    out["gtja_070"] = roll_std(amt, 6)
+
+    # gtja_095: STD(AMOUNT, 20)
+    out["gtja_095"] = roll_std(amt, 20)
+
+    # gtja_150: (close+high+low)/3 * volume
+    out["gtja_150"] = (c + h + lo) / 3 * v
+
+    # gtja_176: CORR(rank(KDJ_RSV_12), rank(vol), 6)
+    hh12 = roll_max(h, 12)
+    ll12 = roll_min(lo, 12)
+    rsv12 = (c - ll12) / (hh12 - ll12).replace(0, np.nan)
+    out["gtja_176"] = roll_corr(rsv12.rank(pct=True), r_vol, 6)
+
+    # gtja_042: -RANK(STD(high,10)) * CORR(high,vol,10)
+    out["gtja_042"] = -roll_std(h, 10).rank(pct=True) * roll_corr(h, v, 10)
+
+    # gtja_158: (high-low)/close
+    out["gtja_158"] = (h - lo) / c.clip(lower=1e-8)
+
+    for k, val in out.items():
+        g[k] = val
+
+    _log(f"  GTJA Alpha191 新增因子: {len(out)} 个")
+    return g
+
 def _build_snapshot(year: int, dry_run: bool = False) -> dict | None:
     """从 QuantDB parquet 生成指定年份的特征快照。"""
     import duckdb
@@ -242,6 +426,11 @@ def _build_snapshot(year: int, dry_run: bool = False) -> dict | None:
 
     # 排序
     df = df.sort_values(["trade_date", "symbol"]).reset_index(drop=True)
+
+    # ── Step 4.5: 加入 Alpha158 新增高价值因子 ──
+    df = _add_alpha158_new_factors(df)
+    # ── Step 4.6: 加入 GTJA Alpha191 去重后因子 ──
+    df = _add_gtja_factors(df)
 
     row_count = len(df)
     sym_count = int(df["symbol"].nunique())

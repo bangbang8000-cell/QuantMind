@@ -46,7 +46,7 @@ _QUANTDB_DATA_DIR_ENV = "QM_QUANTDB_DATA_DIR"
 _DEFAULT_DATA_DIRS = [
     "/data/quantdb",  # Docker 容器内（挂载点）
     "/app/data/quantdb",  # Docker 容器内
-    str(Path(__file__).resolve().parents[5] / "data" / "quantdb"),  # 项目根/data/quantdb
+    str(Path(__file__).resolve().parents[4] / "data" / "quantdb"),  # 项目根/data/quantdb
 ]
 
 
@@ -907,7 +907,7 @@ class QuantDBDataHub:
             {"categories": [{"id": str, "name": str, "feature_count": int, "sample_features": [str]}]}
         """
         catalog_path = (
-            Path(__file__).resolve().parents[5]
+            Path(__file__).resolve().parents[4]
             / "config" / "features" / "model_training_feature_catalog_v1.json"
         )
         if not catalog_path.exists():

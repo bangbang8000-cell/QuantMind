@@ -24,7 +24,7 @@ logger = logging.getLogger(__name__)
 _QUANTBC_DATA_DIR_ENV = "QM_QUANTBC_DATA_DIR"
 _QUANTBC_DEFAULT_DATA_DIRS = [
     "/data/quantbc",  # Docker 容器内（挂载点）
-    str(Path(__file__).resolve().parents[5] / "data" / "quantbc"),  # 项目根/data/quantbc
+    str(Path(__file__).resolve().parents[4] / "data" / "quantbc"),  # 项目根/data/quantbc
 ]
 
 

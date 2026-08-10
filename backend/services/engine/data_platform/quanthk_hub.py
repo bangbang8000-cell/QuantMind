@@ -25,7 +25,7 @@ logger = logging.getLogger(__name__)
 _QUANTHK_DATA_DIR_ENV = "QM_QUANTHK_DATA_DIR"
 _QUANTHK_DEFAULT_DATA_DIRS = [
     "/data/quanthk",  # Docker 容器内（挂载点）
-    str(Path(__file__).resolve().parents[5] / "data" / "quanthk"),  # 项目根/data/quanthk
+    str(Path(__file__).resolve().parents[4] / "data" / "quanthk"),  # 项目根/data/quanthk
 ]
 
 

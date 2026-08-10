@@ -28,7 +28,7 @@ logger = logging.getLogger(__name__)
 _QUANTFUTURES_DATA_DIR_ENV = "QM_QUANTFUTURES_DATA_DIR"
 _QUANTFUTURES_DEFAULT_DATA_DIRS = [
     "/data/quantfutures",  # Docker 容器内（挂载点）
-    str(Path(__file__).resolve().parents[5] / "data" / "quantfutures"),  # 项目根/data/quantfutures
+    str(Path(__file__).resolve().parents[4] / "data" / "quantfutures"),  # 项目根/data/quantfutures
 ]
 
 

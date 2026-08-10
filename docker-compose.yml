@@ -200,6 +200,13 @@ services:
       - QUANTDB_API_KEY=${QUANTDB_API_KEY:-}
       # QuantDB 本地数据中枢（A 股优先数据源）
       - QM_QUANTDB_DATA_DIR=/data/quantdb
+      # QuantUS / QuantHK 本地数据中枢（美股/港股，Yahoo Finance 摄取）
+      - QM_QUANTUS_DATA_DIR=/data/quantus
+      - QM_QUANTHK_DATA_DIR=/data/quanthk
+      # QuantBC 本地数据中枢（区块链/加密货币，Binance 摄取）
+      - QM_QUANTBC_DATA_DIR=/data/quantbc
+      # QuantFutures 本地数据中枢（期货/贵金属，akshare 摄取）
+      - QM_QUANTFUTURES_DATA_DIR=/data/quantfutures
 
       # AlphaAgent 因子编码专家系统提示词
       - ALPHA_AGENT_SYSTEM_PROMPT=${ALPHA_AGENT_SYSTEM_PROMPT:-}

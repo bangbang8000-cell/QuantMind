@@ -165,21 +165,29 @@ def sync(
     *,
     symbols: list[str] | None = None,
     days: int = 5,
+    start_date: str | None = None,
     concurrent: int = DEFAULT_THREADS,
     dry_run: bool = False,
 ) -> dict:
-    """增量同步 akshare 日线。"""
+    """增量同步 akshare 日线。
+
+    start_date 指定历史起点（如 2001-01-01），akshare 返回全历史，
+    按此过滤后写入 dt= 分区，实现全量回拉。不传则按 days 增量补最近。
+    """
     market = market.upper()
     if market not in MARKET_CONFIG:
         raise ValueError(f"market 必须是 HK/US，收到 {market}")
 
     existing = _existing_partitions(market)
     end = date.today()
-    start = end - timedelta(days=days * 1.7)
-    min_date = start.strftime("%Y%m%d")
+    if start_date:
+        min_date = start_date.replace("-", "")
+    else:
+        start = end - timedelta(days=days * 1.7)
+        min_date = start.strftime("%Y%m%d")
 
     syms = symbols or _stock_list(market)
-    log.info("[%s] 待同步标的: %d 只，最近 %d 天 (从 %s)", market, len(syms), days, min_date)
+    log.info("[%s] 待同步标的: %d 只，从 %s (days=%s)", market, len(syms), min_date, days)
 
     if dry_run:
         return {"market": market, "stocks": len(syms), "min_date": min_date, "existing_partitions": len(existing), "dry_run": True}
@@ -235,6 +243,7 @@ def main() -> int:
     parser = argparse.ArgumentParser(description="akshare 港美股日线 → QuantUS/QuantHK")
     parser.add_argument("--market", required=True, choices=["HK", "US"], help="市场")
     parser.add_argument("--days", type=int, default=5, help="同步最近多少个交易日")
+    parser.add_argument("--start-date", default=None, help="历史起点 YYYY-MM-DD（全量回拉，如 2001-01-01）")
     parser.add_argument("--symbol", default=None, help="指定股票代码，逗号分隔多个")
     parser.add_argument("--concurrent", type=int, default=DEFAULT_THREADS, help="并发数")
     parser.add_argument("--dry-run", action="store_true", help="仅预览，不抓取")
@@ -242,7 +251,8 @@ def main() -> int:
 
     try:
         syms = [s.strip() for s in args.symbol.split(",") if s.strip()] if args.symbol else None
-        result = sync(args.market, symbols=syms, days=args.days, concurrent=args.concurrent, dry_run=args.dry_run)
+        result = sync(args.market, symbols=syms, days=args.days, start_date=args.start_date,
+                      concurrent=args.concurrent, dry_run=args.dry_run)
         print(result)
         return 0
     except Exception as exc:  # noqa: BLE001

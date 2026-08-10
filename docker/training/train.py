@@ -353,8 +353,8 @@ def compute_psi_drift(
         "enabled": True,
         "train_start": train_start,
         "train_end": train_end,
-        "recent_start": str(recent_dates[0]),
-        "recent_end": str(recent_dates[-1]),
+        "recent_start": str(recent_dates[0].date()),
+        "recent_end": str(recent_dates[-1].date()),
         "drift": drift_counts,
         "top_drift_features": results[:top_n],
         "max_psi": round(max(r["psi"] for r in results), 4),
@@ -495,6 +495,7 @@ _MARKET_PARQUET_FILES: dict[str, str] = {
     "HK": "model_features_hk.parquet",
     "US": "model_features_us.parquet",
     "CRYPTO": "model_features_crypto.parquet",
+    "FUTURES": "model_features_futures.parquet",
 }
 
 
@@ -990,8 +991,6 @@ def _wfa_split_window(
     all_dates = sorted(df["trade_date"].unique())
     if not all_dates:
         return pd.DataFrame(), pd.DataFrame()
-
-    import datetime as _dt
 
     step_days = wfa["step_months"] * 30
     train_years_days = wfa["train_years"] * 365
@@ -3510,7 +3509,7 @@ def load_model(model_dir, meta):
         if lgb is None: logger.error("LightGBM 未安装"); sys.exit(1)
         return ("lgb", lgb.Booster(model_file=str(model_path)))
 
-_MARKET_PARQUET = {"HK": "model_features_hk.parquet", "US": "model_features_us.parquet", "CRYPTO": "model_features_crypto.parquet"}
+_MARKET_PARQUET = {"HK": "model_features_hk.parquet", "US": "model_features_us.parquet", "CRYPTO": "model_features_crypto.parquet", "FUTURES": "model_features_futures.parquet"}
 
 def load_date_data(trade_date, data_dir, meta):
     market = str((meta.get("context") or {}).get("market", "")).upper()
