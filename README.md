@@ -98,23 +98,40 @@ docker compose logs -f quantmind
 
 ### 下载市场数据
 
-从 [Releases](https://github.com/guge199205-byte/QuantMind-private/releases) 下载数据文件：
+市场数据存放在 `data/` 目录（`./data:/data` 挂载进容器），五大市场数据中枢：
+
+| 市场 | 数据目录 | 数据源 |
+|------|----------|--------|
+| **A 股** | `data/quantdb/` | QuantDB 本地 parquet + 17 适配器 |
+| **港股** | `data/quanthk/` | Yahoo Finance / akshare |
+| **美股** | `data/quantus/` | Yahoo Finance |
+| **区块链**（默认屏蔽） | `data/quantbc/` | Binance |
+| **期货** | `data/quantfutures/` | akshare |
+
+**方式一：下载预置数据包**（推荐，从 [Releases](https://github.com/guge199205-byte/QuantMind-private/releases)）：
 
 ```bash
-# 下载港股数据（41MB H5 + 24MB Qlib）
-wget https://github.com/guge199205-byte/QuantMind-private/releases/download/v1.0.0-data/hk_data_h5.tar.gz
-wget https://github.com/guge199205-byte/QuantMind-private/releases/download/v1.0.0-data/hk_qlib_data.tar.gz
+# 下载并解压到 data/ 目录（与 ./data:/data 挂载对应）
+wget https://github.com/guge199205-byte/QuantMind-private/releases/download/v1.0.0-data/quantdb_data.tar.gz
+tar xzf quantdb_data.tar.gz -C data/
 
-# 解压到 db 目录
-tar xzf hk_data_h5.tar.gz -C db/
-tar xzf hk_qlib_data.tar.gz -C db/
-
-# 复制到 Docker 容器
-docker cp db/hk_data quantmind:/app/db/
-docker cp db/qlib_data/hk_data quantmind:/app/db/qlib_data/
-
-# 美股、加密货币同理
+# 港股、美股同理（quantus_data.tar.gz / quanthk_data.tar.gz）
 ```
+
+**方式二：从数据源同步**（需网络，按市场）：
+
+```bash
+# A 股：从 QuantDB / baostock 等同步
+docker exec quantmind python backend/scripts/quantdb_daily_sync.py
+
+# 港股：akshare K 线
+docker exec quantmind python backend/scripts/quanthk_daily_sync.py
+
+# 期货
+docker exec quantmind python backend/scripts/quantfutures_daily_sync.py
+```
+
+> 注意：区块链（quantbc）默认在生产环境屏蔽，无需下载。若需启用，设置 `ENABLE_CRYPTO=true` 后执行 `backend/scripts/quantbc_daily_sync.py`。
 
 ---
 

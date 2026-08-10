@@ -379,12 +379,47 @@ def _ensure_database_schema():
             # 部分表可能已存在，返回非零但无碍
             logger.warning("数据库初始化有警告（可忽略，表可能已存在）: %s",
                            result.stderr[:200] if result.stderr else "")
+        # 执行市场分析模块建表（qm_market_sectors 等，不在 db_init.sql 内）
+        _ensure_market_analysis_tables(env)
     except FileNotFoundError:
         # psql 客户端可能未安装在镜像中，回退到 Python 方式
         logger.info("psql 未安装，使用 Python 执行数据库初始化")
         _ensure_database_schema_python()
     except Exception as e:
         logger.warning("数据库自动建表失败（不影响启动，后续按需建表）: %s", e)
+
+
+def _ensure_market_analysis_tables(env: dict) -> None:
+    """执行市场分析模块的建表 SQL（qm_market_sectors / qm_sector_constituents 等）。
+
+    db_init.sql 不含这些表，须额外执行 market_analysis/migrations 下的 SQL。
+    """
+    import subprocess
+
+    migration_sql = "/app/backend/services/api/market_analysis/migrations/001_create_market_analysis.sql"
+    if not os.path.isfile(migration_sql):
+        logger.debug("市场分析建表 SQL 未找到: %s", migration_sql)
+        return
+    db_host = os.getenv("DB_HOST", os.getenv("POSTGRES_HOST", "db"))
+    db_port = os.getenv("DB_PORT", "5432")
+    db_name = os.getenv("DB_NAME", os.getenv("POSTGRES_DB", "quantmind"))
+    db_user = os.getenv("DB_USER", os.getenv("POSTGRES_USER", "quantmind"))
+    try:
+        result = subprocess.run(
+            ["psql", "-h", db_host, "-p", db_port, "-U", db_user, "-d", db_name,
+             "-f", migration_sql, "--quiet", "-v", "ON_ERROR_STOP=0"],
+            env=env,
+            capture_output=True,
+            text=True,
+            timeout=60,
+        )
+        if result.returncode == 0:
+            logger.info("市场分析表结构自检完成")
+        else:
+            logger.warning("市场分析建表有警告（可忽略）: %s",
+                           result.stderr[:200] if result.stderr else "")
+    except Exception as e:  # noqa: BLE001
+        logger.warning("市场分析建表失败（不影响启动）: %s", e)
 
 
 def _ensure_database_schema_python():
