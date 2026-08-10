@@ -543,8 +543,10 @@ docker compose up -d
 # 4. 下载数据
 # 从 Releases 下载数据文件并解压到 db/
 
-# 5. 初始化数据库
-docker exec quantmind python -c "from backend.shared.db_manager import DatabaseManager; DatabaseManager().init_tables()"
+# 5. 初始化数据库（首次启动自动完成）
+# quantmind 容器启动时自动执行 backend/shared/db_init.sql 建表，
+# 并自动创建默认 admin 账号。如需手动确认：
+docker exec quantmind python -c "from backend.shared.database_manager_v2 import get_session; print('DB OK')"
 
 # 6. 构建股票索引
 docker exec quantmind python backend/services/api/scripts/build_stock_index.py

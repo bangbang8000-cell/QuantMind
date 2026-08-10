@@ -50,7 +50,13 @@ COPY requirements/ai.txt /tmp/requirements-ai.txt
 COPY docker/torch_wheels/ /tmp/torch_wheels/
 
 RUN python -m pip install --upgrade pip setuptools wheel cython \
-    && python -m pip install --no-cache-dir --root-user-action=ignore /tmp/torch_wheels/*.whl \
+    && if ls /tmp/torch_wheels/*.whl >/dev/null 2>&1; then \
+         echo "安装本地 torch wheel"; \
+         python -m pip install --no-cache-dir --root-user-action=ignore /tmp/torch_wheels/*.whl; \
+       else \
+         echo "未找到本地 torch wheel，从 PyPI 安装（首次需联网）"; \
+         python -m pip install --no-cache-dir --root-user-action=ignore "torch==2.9.1"; \
+       fi \
     && python -m pip install --no-cache-dir --root-user-action=ignore -r /tmp/requirements.txt \
     && python -m pip install --no-cache-dir --root-user-action=ignore -r /tmp/requirements-production.txt \
     && python -m pip install --no-cache-dir --root-user-action=ignore -r /tmp/requirements-ai.txt \

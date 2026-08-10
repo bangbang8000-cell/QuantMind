@@ -123,6 +123,9 @@ config/runtime.env
 *.key
 .ssh/
 /db/*.sql
+!/db/sql/
+/db/sql/*
+!/db/sql/*.sql
 /redis
 /data/ai_ide/tmp_run
 /electron/icon.iconset
@@ -161,7 +164,10 @@ db/db.zip
 
 # Large data / model / experiment directories — too big for git
 /data/
-/db/
+/db/*
+!/db/sql/
+/db/sql/*
+!/db/sql/*.sql
 /models/
 /mlruns/
 /results/

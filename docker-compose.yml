@@ -92,7 +92,7 @@ services:
       - DB_NAME=${DB_NAME:-quantmind}
       - DB_USER=${DB_USER:-quantmind}
       - DB_PASSWORD=${DB_PASSWORD:-quantmind2026}
-      - DATABASE_URL=postgresql+asyncpg://quantmind:quantmind2026@db:5432/quantmind
+      - DATABASE_URL=postgresql+asyncpg://${DB_USER:-quantmind}:${DB_PASSWORD:-quantmind2026}@db:5432/${DB_NAME:-quantmind}
 
       # 远程数据源配置（用于从官方数据库拉取增量数据）
       - SOURCE_DATABASE_URL=${SOURCE_DATABASE_URL:-postgresql://user:pass@localhost:5432/quantmind}
@@ -312,7 +312,7 @@ services:
       - DB_NAME=${DB_NAME:-quantmind}
       - DB_USER=${DB_USER:-quantmind}
       - DB_PASSWORD=${DB_PASSWORD:-quantmind2026}
-      - DATABASE_URL=postgresql+asyncpg://quantmind:quantmind2026@db:5432/quantmind
+      - DATABASE_URL=postgresql+asyncpg://${DB_USER:-quantmind}:${DB_PASSWORD:-quantmind2026}@db:5432/${DB_NAME:-quantmind}
 
       # Redis 配置
       - REDIS_HOST=redis
@@ -610,7 +610,7 @@ services:
       - DB_NAME=${DB_NAME:-quantmind}
       - DB_USER=${DB_USER:-quantmind}
       - DB_PASSWORD=${DB_PASSWORD:-quantmind2026}
-      - DATABASE_URL=postgresql+asyncpg://quantmind:quantmind2026@db:5432/quantmind
+      - DATABASE_URL=postgresql+asyncpg://${DB_USER:-quantmind}:${DB_PASSWORD:-quantmind2026}@db:5432/${DB_NAME:-quantmind}
       - REDIS_HOST=redis
       - REDIS_PORT=6379
       - REDIS_PASSWORD=
