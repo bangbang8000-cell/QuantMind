@@ -61,6 +61,8 @@ class RemoteSSHOrchestrator(TrainingOrchestrator):
         self.api_base = _env_or("QUANTMIND_API_BASE_URL", "http://quantmind-api:8000")
         self.internal_secret = _env_or("INTERNAL_CALL_SECRET", "")
         self.log_stream = TrainingRunLogStream()
+        self._tenant_id = _env_or("TRAINING_DEFAULT_TENANT", "default")
+        self._user_id = _env_or("TRAINING_DEFAULT_USER", "admin")
 
         if not self.host:
             raise ValueError(
@@ -130,7 +132,7 @@ class RemoteSSHOrchestrator(TrainingOrchestrator):
         cmd = self._auth_prefix() + [
             "scp", "-o", "StrictHostKeyChecking=no",
             "-o", "ConnectTimeout=15",
-            "-p", str(self.port),
+            "-P", str(self.port),
         ]
         if self.ssh_key:
             cmd += ["-i", self.ssh_key]
@@ -142,24 +144,127 @@ class RemoteSSHOrchestrator(TrainingOrchestrator):
         )
         await proc.wait()
 
+    async def _scp_push(self, local_file: str, remote_path: str) -> None:
+        """scp 推送本地单个文件到远端指定路径（可指定目标文件名）。"""
+        cmd = self._auth_prefix() + [
+            "scp", "-o", "StrictHostKeyChecking=no",
+            "-o", "ConnectTimeout=15",
+            "-P", str(self.port),
+        ]
+        if self.ssh_key:
+            cmd += ["-i", self.ssh_key]
+        cmd += [local_file, f"{self.user}@{self.host}:{remote_path}"]
+        proc = await asyncio.create_subprocess_exec(
+            *cmd,
+            stdout=asyncio.subprocess.DEVNULL,
+            stderr=asyncio.subprocess.PIPE,
+        )
+        await proc.wait()
+
+
     async def launch_multi_horizon_job(
         self, parent_run_id: str, child_run_ids: list[str], payload: dict | None = None
     ) -> None:
-        """远端多周期训练：串行跑各子任务（每周期一次远端训练），全部成功后融合。
+        """远端多周期训练：串行跑各周期子任务（每次远端训练），全部成功后 ICIR 融合。
 
-        简化实现：逐个子任务走 launch_training_job，融合逻辑复用本地编排器。
+        每个 child 走自身的 launch_training_job（远端训练 + 产物回传 + 注册），
+        全部完成后在本地 register_ensemble_model 创建融合模型（产物已回传，可直接融合）。
         """
-        from backend.services.engine.training.local_docker_orchestrator import LocalDockerOrchestrator
+        import time
 
-        # 多周期融合需要本地聚合产物；远端各子任务模型先各自注册，
-        # 融合模型由 LocalDockerOrchestrator.launch_multi_horizon_job 编排。
-        # 这里退化：远端只跑单周期，多周期走本地（避免远端融合复杂度）。
-        logger.warning(
-            "[%s] 多周期训练当前仅支持本地节点，回退到本地编排（node=%s）",
-            parent_run_id, self.node_id,
-        )
-        local = LocalDockerOrchestrator()
-        await local.launch_multi_horizon_job(parent_run_id, child_run_ids, payload)
+        from backend.shared.database_manager_v2 import get_session
+        from backend.services.api.routers.admin.db import TrainingJobRecord
+        from backend.shared.model_registry import model_registry_service
+
+        payload = payload or {}
+        tenant_id = str(payload.get("_tenant_id") or "")
+        user_id = str(payload.get("_user_id") or "")
+        if not tenant_id or not user_id:
+            try:
+                async with get_session() as db:
+                    parent_rec = await db.get(TrainingJobRecord, parent_run_id)
+                    if parent_rec:
+                        tenant_id = str(parent_rec.tenant_id or "default")
+                        user_id = str(parent_rec.user_id or "")
+            except Exception:
+                pass
+        self._tenant_id = tenant_id or "default"
+        self._user_id = user_id or "admin"
+        display_name = str(payload.get("display_name") or "multi_horizon")
+
+        async def _set_parent(status: str, progress: int, log_line: str) -> None:
+            try:
+                async with get_session() as db:
+                    r = await db.get(TrainingJobRecord, parent_run_id)
+                    if r:
+                        r.status = status
+                        r.progress = progress
+                        r.logs = (r.logs or "") + log_line
+                        await db.commit()
+                self._log(parent_run_id, log_line.strip(), status=status, progress=progress)
+            except Exception:
+                pass
+
+        try:
+            await _set_parent("provisioning", 5, f"[MH] 多周期远程训练启动，共 {len(child_run_ids)} 个周期\n")
+            completed_model_ids: list[str] = []
+            horizon_labels: list[str] = []
+            n_total = len(child_run_ids)
+
+            for idx, child_run_id in enumerate(child_run_ids):
+                async with get_session() as db:
+                    child_rec = await db.get(TrainingJobRecord, child_run_id)
+                    if child_rec is None:
+                        raise RuntimeError(f"child run not found: {child_run_id}")
+                    child_payload = (
+                        child_rec.request_payload
+                        if isinstance(child_rec.request_payload, dict)
+                        else {}
+                    )
+                horizon = int(child_payload.get("target_horizon_days") or 0)
+                horizon_labels.append(f"T{horizon}")
+                base_progress = 5 + int((idx / n_total) * 90)
+                await _set_parent("running", base_progress, f"[MH] ({idx + 1}/{n_total}) 训练 T+{horizon} 模型…\n")
+
+                # 每个 child 走远端训练（内部：推送数据 → 远端 docker run → 拉产物 → 注册）
+                await self.launch_training_job(run_id=child_run_id, payload=child_payload)
+
+                child_deadline = time.time() + 7200
+                while time.time() < child_deadline:
+                    await asyncio.sleep(self._POLL_INTERVAL)
+                    async with get_session(read_only=True) as db:
+                        r = await db.get(TrainingJobRecord, child_run_id)
+                        if r is None:
+                            break
+                        st = str(r.status or "")
+                        if st == "completed":
+                            completed_model_ids.append(
+                                model_registry_service.build_model_id_from_run(child_run_id)
+                            )
+                            break
+                        if st == "failed":
+                            raise RuntimeError(
+                                f"child T+{horizon} training failed: {(r.result or {}).get('error') or (r.logs or '')[-300:]}"
+                            )
+                if child_run_id not in completed_model_ids:
+                    raise RuntimeError(f"child T+{horizon} timed out waiting for completion")
+                await _set_parent("running", 5 + int(((idx + 1) / n_total) * 90), f"[MH] T+{horizon} 模型训练完成（{idx + 1}/{n_total}）\n")
+
+            if len(completed_model_ids) < 2:
+                raise RuntimeError("multi-horizon requires at least 2 completed models")
+
+            fusion_name = f"{display_name}_MultiHorizon"
+            fusion = await model_registry_service.register_ensemble_model(
+                tenant_id=tenant_id,
+                user_id=user_id,
+                source_model_ids=completed_model_ids,
+                display_name=fusion_name,
+                weight_strategy="icir",
+            )
+            await _set_parent("completed", 100, f"[MH] 多周期融合模型已创建: {fusion.get('model_id', '')}\n")
+        except Exception as exc:  # noqa: BLE001
+            logger.error("[%s] 多周期远程训练失败: %s", parent_run_id, exc, exc_info=True)
+            await _set_parent("failed", 0, f"[MH] 多周期远程训练失败: {exc}\n")
 
     async def test_connection(self) -> dict:
         """测试 SSH 连接 + 远端 docker 可用性。"""
@@ -179,12 +284,25 @@ class RemoteSSHOrchestrator(TrainingOrchestrator):
     async def launch_training_job(self, run_id: str, payload: dict | None = None) -> None:
         """编排远端训练：推送数据 → 启动容器 → 轮询 → 拉取产物 → 注册。"""
         payload = payload or {}
+        # 从 DB 读取 tenant/user（与本地编排一致），供日志写入
+        try:
+            from backend.shared.database_manager_v2 import get_session
+            from backend.services.api.routers.admin.db import TrainingJobRecord
+
+            async with get_session() as _db:
+                _record = await _db.get(TrainingJobRecord, run_id)
+                if _record:
+                    self._tenant_id = str(_record.tenant_id or "default")
+                    self._user_id = str(_record.user_id or "admin")
+        except Exception:
+            pass
         self._log(run_id, "[SYSTEM] 远程训练启动（AutoDL），开始同步数据...", status="provisioning", progress=5)
 
         try:
-            # 1. 生成配置（复用本地逻辑，但 local_dir 指向远端挂载点）
+            # 1. 生成配置（local_dir 指向容器内挂载点 /tmp/feature_snapshots，
+            #    与 docker run -v {work_dir}/feature_snapshots:/tmp/feature_snapshots 一致）
             config = self._build_config_yaml(run_id, payload)
-            config["data"]["local_dir"] = f"{self.work_dir}/feature_snapshots"
+            config["data"]["local_dir"] = "/tmp/feature_snapshots"
             config["callback"]["url"] = f"{self.api_base}/api/v1/models/training-runs/{run_id}/complete"
 
             # 2. 确保远端工作目录结构
@@ -201,12 +319,12 @@ class RemoteSSHOrchestrator(TrainingOrchestrator):
             else:
                 self._log(run_id, "[SYNC] 未匹配到特征快照文件，跳过", progress=15)
 
-            # 4. 推送 config.yaml + train.py（写临时文件再 rsync）
+            # 4. 推送 config.yaml + train.py（写临时文件再 scp 到固定名）
             self._log(run_id, "[SYNC] 推送训练配置与训练脚本...", progress=18)
             with tempfile.NamedTemporaryFile(mode="w", suffix=".yaml", delete=False) as tf:
                 yaml.safe_dump(config, tf, allow_unicode=True)
                 config_local = tf.name
-            await self._rsync_push(config_local, f"{self.work_dir}/")
+            await self._scp_push(config_local, f"{self.work_dir}/config.yaml")
             os.unlink(config_local)
 
             # 训练脚本 train.py 每次训练都推送最新版并挂载覆盖镜像内置版，
@@ -252,7 +370,7 @@ class RemoteSSHOrchestrator(TrainingOrchestrator):
                         continue
                     seen_lines.add(line)
                     progress = max(progress, LocalDockerProgress.infer(line, progress))
-                    self.log_stream.append_log(run_id=run_id, line=line, progress=progress)
+                    self._log(run_id, line, progress=progress)
 
                 # 检查容器状态
                 code2, status_out, _ = await self._ssh_exec(
@@ -421,10 +539,14 @@ class RemoteSSHOrchestrator(TrainingOrchestrator):
         return config
 
     def _resolve_feature_files(self, payload: dict) -> list[str]:
-        """根据训练区间解析需要的特征快照年份文件。"""
-        from backend.services.engine.training.local_docker_orchestrator import (
-            _LOCAL_DATA_PATH,
-        )
+        """根据训练区间解析需要的特征快照年份文件（容器内路径）。"""
+        # 容器内特征快照实际位置（与 LocalDockerOrchestrator 挂载一致）
+        feature_dir = Path("/app/db/feature_snapshots")
+        if not feature_dir.is_dir():
+            feature_dir = Path("/data/feature_snapshots")
+        if not feature_dir.is_dir():
+            logger.warning("特征快照目录不存在: %s", feature_dir)
+            return []
 
         train_start = str(payload.get("train_start") or "2022-01-01")
         train_end = str(payload.get("train_end") or "2024-12-31")
@@ -433,7 +555,6 @@ class RemoteSSHOrchestrator(TrainingOrchestrator):
             end_year = int(train_end[:4])
         except (ValueError, TypeError):
             return []
-        feature_dir = Path(_LOCAL_DATA_PATH)
         files = []
         for y in range(max(start_year, 2010), end_year + 1):
             f = feature_dir / f"model_features_{y}.parquet"
@@ -469,7 +590,14 @@ class RemoteSSHOrchestrator(TrainingOrchestrator):
 
     def _log(self, run_id: str, line: str, *, status: str | None = None, progress: int | None = None) -> None:
         try:
-            self.log_stream.append_log(run_id=run_id, line=line, status=status, progress=progress)
+            self.log_stream.append_log(
+                run_id=run_id,
+                tenant_id=self._tenant_id,
+                user_id=self._user_id,
+                line=line,
+                status=status,
+                progress=progress,
+            )
         except Exception:  # noqa: BLE001
             logger.warning("append_log failed for %s: %s", run_id, line)
 

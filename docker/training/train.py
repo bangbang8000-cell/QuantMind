@@ -1231,7 +1231,9 @@ def _train_lgb(cfg: dict, features: list[str], X_train: np.ndarray, y_train: np.
     ]
     # 补充监控 rank_ic（不影响早停，仅日志），帮助判断是否只优化 l2 而 rank_ic 停滞
     if str(model_cfg.get("monitor_rank_ic", "true")).lower() in ("1", "true", "yes", "on"):
-        callbacks.append(lgb.record_evaluation(ds_val))
+        # lightgbm 4.x 的 record_evaluation(eval_result) 需要 dict 而非 Dataset，
+        # 传空 dict，feval 返回的 rank_ic 会被自动写入。
+        callbacks.append(lgb.record_evaluation({}))
     model = lgb.train(
         params, ds_train,
         num_boost_round=num_boost_round,
