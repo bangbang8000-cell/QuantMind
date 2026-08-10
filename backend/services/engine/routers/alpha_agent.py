@@ -7,6 +7,7 @@ import asyncio
 import logging
 import os
 import sys
+from pathlib import Path
 from typing import Optional
 
 from fastapi import APIRouter, HTTPException, Query, Request
@@ -315,8 +316,13 @@ async def backtest_factor(
     start_date: Optional[str] = None,
     end_date: Optional[str] = None,
     universe: Optional[str] = Query("csi300", description="回测股票池: csi300, csi500, csi1000, sse50, gem, star, csi800, all_a"),
+    data_source: Optional[str] = Query("qlib_bin", description="回测数据源: qlib_bin(默认) | h5"),
 ):
-    """对因子发起轻量验证"""
+    """对因子发起轻量验证（多市场 + 数据源可选）
+
+    data_source=qlib_bin (默认): 用 Qlib 二进制 (5 个市场均支持)；
+    data_source=h5: 走 RD-Agent daily_pv.h5，仅 A 股 / 美股 / 港股有预生成 H5，其他市场自动回退。
+    """
     factor = await _require_owned_factor(factor_id, request, for_write=True)
 
     if not factor.get("factor_code"):
@@ -332,11 +338,20 @@ async def backtest_factor(
             },
         }
 
+    market = factor.get("market") or "a_share"
     await persistence.update_factor_metrics(factor_id, status="backtesting")
     _running_backtests.add(factor_id)
 
     asyncio.create_task(
-        _run_lightweight_backtest(factor_id, factor.get("factor_code") or "", start_date, end_date, universe)
+        _run_factor_backtest(
+            factor_id,
+            factor.get("factor_code") or "",
+            market=market,
+            data_source=data_source or "qlib_bin",
+            start_date=start_date,
+            end_date=end_date,
+            universe=universe or "csi300",
+        )
     )
 
     return {
@@ -344,9 +359,27 @@ async def backtest_factor(
         "data": {
             "factor_id": factor_id,
             "status": "backtesting",
-            "message": f"快速验证已触发: {factor.get('factor_name')}",
+            "message": f"快速验证已触发: {factor.get('factor_name')} (market={market}, data_source={data_source})",
         },
     }
+
+
+@router.post("/factors/{factor_id}/cancel")
+async def cancel_backtest(factor_id: str, request: Request):
+    """取消一个正在进行的回测（标记为 cancelled；subprocess 自带 600s 超时会自然结束）"""
+    factor = await _require_owned_factor(factor_id, request)
+    if factor_id not in _running_backtests:
+        return {"code": 200, "data": {"factor_id": factor_id, "status": factor.get("status"), "message": "回测未在运行"}}
+    _running_backtests.discard(factor_id)
+    try:
+        await persistence.update_factor_metrics(
+            factor_id,
+            status="cancelled",
+            metadata={"backtest_error": "cancelled_by_user"},
+        )
+    except Exception:
+        pass
+    return {"code": 200, "data": {"factor_id": factor_id, "status": "cancelled"}}
 
 
 @router.post("/factors/{factor_id}/export")
@@ -493,6 +526,479 @@ async def get_universes():
         return {"code": 200, "data": {"universes": {}}}
 
 
+_MARKET_TO_QLIB: dict[str, str] = {
+    "a_share": "CN",
+    "hong_kong": "HK",
+    "us_stock": "US",
+    "crypto": "CRYPTO",
+    "futures": "FUTURES",
+}
+
+_QLIB_NATIVE_UNIVERSES = ("csi300", "csi500", "csi1000", "csi800")
+
+
+def _detect_factor_kind(factor_code: str) -> str:
+    """AST 预检：判断是 Qlib Factor 类还是 RD-Agent 函数式 (calculate_*)。
+
+    不执行因子代码，只解析语法树。
+    """
+    import ast
+    try:
+        tree = ast.parse(factor_code)
+    except SyntaxError as e:
+        raise RuntimeError(f"因子代码语法错误: {e.msg} (line {e.lineno})") from e
+
+    has_class = False
+    has_calculate = False
+    for node in ast.walk(tree):
+        if isinstance(node, ast.ClassDef):
+            name_lower = node.name.lower()
+            if "factor" in name_lower or any(
+                isinstance(n, ast.Assign) and any(
+                    isinstance(t, ast.Name) and t.id == "name" for t in n.targets
+                )
+                for n in node.body
+            ):
+                has_class = True
+        elif isinstance(node, ast.FunctionDef) and node.name.startswith("calculate_"):
+            has_calculate = True
+
+    if has_calculate:
+        return "functional"
+    if has_class:
+        return "factor_class"
+    return "unknown"
+
+
+def _vectorized_daily_spearman_ic(f: "pd.Series", r: "pd.Series") -> tuple[float, float, float, int]:
+    """向量化计算日度 Spearman IC（秩相关 = 秩的 Pearson）。
+
+    不用每日 spearmanr() 调用，全表 groupby 一次算完。
+    Returns: (ic_mean, rank_ic_median, icir, observations)
+    """
+    import numpy as np
+    import pandas as pd
+
+    if len(f) < 100 or len(r) < 100:
+        return 0.0, 0.0, 0.0, 0
+
+    df = pd.DataFrame({"f": f.values, "r": r.values})
+    # Qlib MultiIndex: [instrument, datetime]
+    df["date"] = f.index.get_level_values(1)
+    df = df[np.isfinite(df["f"]) & np.isfinite(df["r"])]
+    if len(df) < 100:
+        return 0.0, 0.0, 0.0, 0
+
+    # 每日 rank
+    df["f_rank"] = df.groupby("date")["f"].rank(method="average")
+    df["r_rank"] = df.groupby("date")["r"].rank(method="average")
+
+    # 每日去均值（per group, transform 一次算完）
+    g = df.groupby("date")[["f_rank", "r_rank"]]
+    means = g.transform("mean")
+    df["fc"] = df["f_rank"] - means["f_rank"]
+    df["rc"] = df["r_rank"] - means["r_rank"]
+
+    # 每日 sum / (n - 1) = 协方差 / 方差
+    df["fcr"] = df["fc"] * df["rc"]
+    df["fc2"] = df["fc"] ** 2
+    df["rc2"] = df["rc"] ** 2
+    sums = df.groupby("date")[["fcr", "fc2", "rc2"]].transform("sum")
+    counts = df.groupby("date")["fcr"].transform("count")
+    n = (counts - 1).clip(lower=1)
+    cov = sums["fcr"] / n
+    var_f = sums["fc2"] / n
+    var_r = sums["rc2"] / n
+    denom = np.sqrt(var_f * var_r)
+    # 避免除零
+    df["corr"] = np.where(denom > 1e-12, cov / np.where(denom > 1e-12, denom, 1.0), np.nan)
+
+    # 每日的 IC
+    ic_by_date = df.groupby("date")["corr"].first().dropna()
+    ic_by_date = ic_by_date[np.isfinite(ic_by_date)]
+    if len(ic_by_date) == 0:
+        return 0.0, 0.0, 0.0, 0
+
+    ic_mean = float(ic_by_date.mean())
+    rank_ic_median = float(ic_by_date.median())
+    std = float(ic_by_date.std(ddof=1)) if len(ic_by_date) > 1 else 0.0
+    icir = ic_mean / (std + 1e-8)
+    return ic_mean, rank_ic_median, icir, int(len(df))
+
+
+def _resolve_instruments_for_universe(
+    market_upper: str, universe: str
+) -> list[str] | str:
+    """返回 Qlib instruments 选择。
+
+    A 股: Qlib 原生 (csi300/500/1000/800) 直接用 D.instruments(market=...)
+         或 QuantDB 取 (sse50/gem/star/all_a)
+    其他市场: Qlib 原生 (csi300/500/...) 不存在 → 用 D.instruments(market="all")
+    """
+    from qlib.data import D
+
+    if market_upper == "CN":
+        if universe in _QLIB_NATIVE_UNIVERSES:
+            return D.instruments(market=universe)
+        try:
+            from backend.services.engine.data_platform.quantdb_hub import QuantDBDataHub
+            from backend.shared.stock_utils import StockCodeUtil
+            hub = QuantDBDataHub.get_instance()
+            universe_df = hub.fetch_universe_stocks(universe or "csi300")
+            if universe_df is None or universe_df.empty:
+                raise RuntimeError(f"QuantDB returned no constituents for {universe}")
+            return sorted({StockCodeUtil.to_prefix(s) for s in universe_df["symbol"].tolist()[:500]})
+        except Exception as e:
+            logger.warning("QuantDB universe %s unavailable, falling back to csi300: %s", universe, e)
+            return D.instruments(market="csi300")
+    # 非 CN 市场：Qlib cache 的 instruments/all.txt 是全集，universe 仅作过滤
+    # 这里简化: 直接 D.instruments(market="all")
+    return D.instruments(market="all")
+
+
+async def _run_factor_backtest(
+    factor_id: str,
+    factor_code: str,
+    market: str = "a_share",
+    data_source: str = "qlib_bin",
+    start_date: Optional[str] = None,
+    end_date: Optional[str] = None,
+    universe: Optional[str] = "csi300",
+) -> None:
+    """统一回测入口（多市场 + 数据源可选）。
+
+    Args:
+        market: 'a_share' | 'hong_kong' | 'us_stock' | 'crypto' | 'futures'
+        data_source: 'qlib_bin' (默认) | 'h5'
+    """
+    market_upper = _MARKET_TO_QLIB.get(market, "CN")
+    end = end_date or "2024-12-31"
+    start = start_date or "2024-01-01"
+
+    try:
+        kind = _detect_factor_kind(factor_code)
+        if kind == "unknown":
+            raise RuntimeError("因子代码中未找到可调用的 Factor 类或 calculate_* 函数")
+
+        # H5 路径: 多市场 H5 不全，自动回退
+        if data_source == "h5":
+            h5_path = _resolve_factor_h5_path_for_market(market)
+            if not h5_path:
+                logger.warning(
+                    "[alpha-backtest] market=%s H5 不可用，自动回退到 Qlib 二进制",
+                    market,
+                )
+                data_source = "qlib_bin"
+
+        if data_source == "qlib_bin":
+            await _backtest_via_qlib(
+                factor_id, factor_code, kind, market, market_upper, universe, start, end
+            )
+        else:
+            await _backtest_via_h5(
+                factor_id, factor_code, kind, universe, start, end
+            )
+    except Exception as exc:
+        logger.exception("[alpha-backtest] %s failed", factor_id)
+        tb = getattr(exc, "__traceback__", None)
+        tb_text = ""
+        if tb:
+            import traceback as _tb
+            tb_text = "".join(_tb.format_tb(tb))[-1500:]
+        err_msg = f"{type(exc).__name__}: {exc}" + (f"\n{tb_text}" if tb_text else "")
+        try:
+            await persistence.update_factor_metrics(
+                factor_id,
+                status="failed",
+                metadata={"backtest_error": err_msg[-1500:]},
+            )
+        except Exception:
+            pass
+    finally:
+        _running_backtests.discard(factor_id)
+
+
+async def _backtest_via_qlib(
+    factor_id: str,
+    factor_code: str,
+    kind: str,
+    market: str,
+    market_upper: str,
+    universe: str,
+    start: str,
+    end: str,
+) -> None:
+    """Qlib 二进制回测（默认路径，所有 5 个市场支持）。"""
+    import numpy as np
+    import pandas as pd
+    import qlib
+    from qlib.data import D
+    from backend.shared.qlib_paths import resolve_qlib_provider_uri
+
+    provider_uri = resolve_qlib_provider_uri(market_upper)
+    # 幂等 init：qlib.init 多次调用是安全的，第二次会快速返回
+    try:
+        qlib.init(provider_uri=provider_uri, region="cn" if market_upper in ("CN", "HK", "FUTURES", "CRYPTO") else "us")
+    except Exception as e:
+        logger.warning("qlib.init(%s) raised: %s", provider_uri, e)
+
+    instruments = _resolve_instruments_for_universe(market_upper, universe)
+    fields = ["$open", "$high", "$low", "$close", "$volume", "$factor"]
+    df = D.features(instruments, fields, start_time=start, end_time=end, freq="day")
+    if df.empty:
+        raise RuntimeError(f"Qlib 数据为空: market={market}, instruments={instruments}, provider_uri={provider_uri}")
+
+    logger.info(
+        "[alpha-backtest] %s market=%s universe=%s rows=%d cols=%s",
+        factor_id, market, universe, len(df), list(df.columns),
+    )
+
+    # 计算因子值
+    if kind == "functional":
+        # RD-Agent calculate_* 函数式：用 subprocess 跑（隔离 + 捕获 traceback）
+        factor_series = await _run_functional_factor_subprocess(
+            factor_id, factor_code, df
+        )
+    else:
+        # Qlib Factor 类：直接 exec + per-stock 调用
+        factor_series = _run_factor_class_inproc(factor_id, factor_code, df)
+
+    if factor_series is None or len(factor_series) == 0:
+        raise RuntimeError("因子计算无输出，请检查 calculate_* 函数或 Factor 类")
+
+    # 准备收益率（次日收益，Qlib index=(instrument, datetime)，level=0 是股码）
+    close = df["$close"]
+    fwd_ret = close.groupby(level=0).pct_change().shift(-1)
+
+    # 对齐 (datetime, instrument) MultiIndex
+    common_idx = factor_series.index.intersection(fwd_ret.index)
+    if len(common_idx) < 100:
+        raise RuntimeError(f"因子与价格对齐后数据不足 (共 {len(common_idx)} 行)")
+    f = factor_series.loc[common_idx]
+    r = fwd_ret.loc[common_idx]
+    mask = np.isfinite(f.values) & np.isfinite(r.values)
+    if mask.sum() < 100:
+        raise RuntimeError("清洗后有效数据 < 100 行")
+
+    f_clean = pd.Series(f.values[mask], index=f.index[mask])
+    r_clean = pd.Series(r.values[mask], index=r.index[mask])
+
+    # 向量化 IC
+    ic_mean, rank_ic_median, icir, n_obs = _vectorized_daily_spearman_ic(f_clean, r_clean)
+    if n_obs == 0:
+        raise RuntimeError("日度 IC 全部为 NaN，因子可能与价格列不匹配")
+
+    # Sharpe / Annual Return / Max Drawdown: 简单 long-top30% 组合
+    try:
+        df_pair = pd.DataFrame({"f": f_clean, "r": r_clean})
+        df_pair["date"] = df_pair.index.get_level_values(1)  # level 1 = datetime
+        df_pair["f_rank"] = df_pair.groupby("date")["f"].rank(pct=True)
+        # long top 30% 每日收益均值
+        longs = df_pair[df_pair["f_rank"] >= 0.7].groupby("date")["r"].mean().dropna()
+        if len(longs) > 1:
+            daily_ret = longs
+            ann_ret = float(daily_ret.mean() * 252)
+            sharpe = float(daily_ret.mean() / (daily_ret.std(ddof=1) + 1e-8) * np.sqrt(252))
+            cum = (1 + daily_ret).cumprod()
+            peak = cum.cummax()
+            dd = (peak - cum) / peak
+            max_dd = float(dd.max()) if len(dd) else None
+        else:
+            ann_ret = sharpe = max_dd = None
+    except Exception:
+        ann_ret = sharpe = max_dd = None
+
+    await persistence.update_factor_metrics(
+        factor_id,
+        status="completed",
+        ic_value=ic_mean,
+        rank_ic=rank_ic_median,
+        sharpe_ratio=sharpe,
+        annual_return=ann_ret,
+        max_drawdown=max_dd,
+        universe=universe,
+        date_range=f"{start}~{end}",
+        metadata={"data_source": "qlib_bin", "market": market, "icir": icir, "n_obs": n_obs},
+    )
+    logger.info(
+        "[alpha-backtest] %s done market=%s ic=%.4f rank_ic=%.4f icir=%.4f sharpe=%s ann_ret=%s max_dd=%s n=%d",
+        factor_id, market, ic_mean, rank_ic_median, icir,
+        f"{sharpe:.3f}" if sharpe is not None else "N/A",
+        f"{ann_ret:.3f}" if ann_ret is not None else "N/A",
+        f"{max_dd:.3f}" if max_dd is not None else "N/A",
+        n_obs,
+    )
+
+
+async def _run_functional_factor_subprocess(
+    factor_id: str, factor_code: str, df: "pd.DataFrame"
+) -> "pd.Series | None":
+    """对 RD-Agent calculate_* 函数式因子：用 subprocess 跑（隔离错误），主进程读 result.h5。
+
+    准备 daily_pv.h5 在 /tmp（用现有 df 写入，比 337MB 模板小且数据新）。
+    """
+    import subprocess
+    import sys as _sys
+    import shutil
+    import tempfile
+    from pathlib import Path
+
+    h5_path = "/tmp/daily_pv.h5"
+    try:
+        # 把 Qlib 拉的 df 写成 H5 给 subprocess 读（列名与 RD-Agent 模板一致）
+        df.to_hdf(h5_path, key="data", mode="w")
+    except Exception as e:
+        raise RuntimeError(f"准备 daily_pv.h5 失败: {e}") from e
+
+    tb_path = "/tmp/_bt_tb.txt"
+    Path(tb_path).unlink(missing_ok=True)
+    out_path = "/tmp/_bt_result.h5"
+    Path(out_path).unlink(missing_ok=True)
+    Path("/tmp/result.h5").unlink(missing_ok=True)
+
+    script = f"""
+import pandas as pd
+import numpy as np
+import sys, os, tempfile, traceback, shutil
+
+os.chdir(tempfile.gettempdir())
+TB = "/tmp/_bt_tb.txt"
+OUT = "/tmp/_bt_result.h5"
+try:
+    _factor_ns = {{}}
+    exec({repr(factor_code)}, _factor_ns)
+    _calc_fns = [v for k, v in _factor_ns.items() if k.startswith("calculate_") and callable(v)]
+    if not _calc_fns:
+        print("NO_CALC_FN"); sys.exit(1)
+    _result = _calc_fns[0]()
+    # 优先用返回值（DataFrame），否则看 result.h5
+    if _result is not None and hasattr(_result, 'to_hdf'):
+        _result.to_hdf(OUT, key='data', mode='w')
+    elif os.path.exists('result.h5'):
+        shutil.move('result.h5', OUT)
+    else:
+        # 兜底: 找 cwd 下所有 .h5（排除 daily_pv）
+        for f in os.listdir('.'):
+            if f.endswith('.h5') and f != 'daily_pv.h5' and not f.startswith('_bt'):
+                shutil.move(f, OUT)
+                break
+        else:
+            print("NO_RESULT_FILE"); sys.exit(1)
+    print("FACTOR_DONE")
+except Exception as e:
+    with open(TB, "w") as f:
+        traceback.print_exc(file=f)
+    print(f"ERROR: {{e}}")
+    sys.exit(1)
+"""
+    try:
+        proc = await asyncio.to_thread(
+            subprocess.run,
+            [_sys.executable, "-c", script],
+            capture_output=True,
+            text=True,
+            timeout=600,
+        )
+    except subprocess.TimeoutExpired:
+        raise RuntimeError("因子计算超时（>600s），请检查 calculate_* 函数复杂度")
+    except Exception as e:
+        raise RuntimeError(f"subprocess 启动失败: {e}") from e
+
+    if proc.returncode != 0:
+        tb = Path(tb_path).read_text() if Path(tb_path).exists() else ""
+        out = (proc.stdout or "") + "\n" + (proc.stderr or "")
+        raise RuntimeError(
+            f"因子执行失败 (exit={proc.returncode}): {out[-300:]}\n{tb[-1000:]}"
+        )
+
+    # 读 result.h5
+    try:
+        import pandas as _pd
+        result_df = _pd.read_hdf(out_path)
+    except Exception as e:
+        raise RuntimeError(f"读取 result.h5 失败: {e}") from e
+
+    # 转成 MultiIndex(datetime, instrument) 的 Series
+    if isinstance(result_df.index, _pd.MultiIndex) and result_df.index.nlevels >= 2:
+        s = result_df.iloc[:, 0]
+    else:
+        s = result_df.stack()
+    s.index.names = ["instrument", "datetime"]
+    return s
+
+
+def _run_factor_class_inproc(
+    factor_id: str, factor_code: str, df: "pd.DataFrame"
+) -> "pd.Series | None":
+    """Qlib Factor 类因子：在主进程 exec + 逐股调用（结果合并成 Series）。"""
+    import numpy as np
+    import pandas as pd
+
+    ns: dict = {}
+    exec(compile(factor_code, f"<alpha-factor-{factor_id}>", "exec"), ns)
+    factor_cls = None
+    for v in ns.values():
+        if isinstance(v, type) and v.__module__ == "builtins":
+            if getattr(v, "name", None) or v.__name__.lower().endswith("factor"):
+                factor_cls = v
+                break
+    if factor_cls is None:
+        raise RuntimeError("exec 后未找到 Factor 类")
+
+    factor_inst = factor_cls()
+    pieces: list[pd.Series] = []
+    for code, sub in df.groupby(level=0):  # Qlib: level 0 = instrument
+        if len(sub) < 30:
+            continue
+        try:
+            fv = factor_inst(sub.copy())
+            fv_col = fv.iloc[:, 0] if hasattr(fv, "iloc") else pd.Series(fv)
+            pieces.append(pd.Series(fv_col.values, index=sub.index, name="f"))
+        except Exception:
+            continue
+    if not pieces:
+        return None
+    return pd.concat(pieces)
+
+
+async def _backtest_via_h5(
+    factor_id: str,
+    factor_code: str,
+    kind: str,
+    universe: str,
+    start: str,
+    end: str,
+) -> None:
+    """H5 路径（仅 A 股 / 美股 / 港股支持；其他市场回退）。"""
+    h5_path = _resolve_factor_h5_path(universe)
+    if not Path(h5_path).exists():
+        raise RuntimeError(f"H5 数据文件不存在: {h5_path}，请改用 data_source=qlib_bin")
+    # 复制到 /tmp 让因子代码能相对路径读
+    import shutil
+    tmp_h5 = "/tmp/daily_pv.h5"
+    if not Path(tmp_h5).exists() or Path(tmp_h5).stat().st_mtime < Path(h5_path).stat().st_mtime:
+        shutil.copy2(h5_path, tmp_h5)
+    await _backtest_functional_factor(factor_id, factor_code, start, end, universe)
+
+
+def _resolve_factor_h5_path_for_market(market: str) -> str | None:
+    """按市场找 H5 文件；不存在返回 None。"""
+    candidates = {
+        "a_share": [
+            "/app/alphaagent/scenarios/qlib/experiment/factor_data_template/daily_pv_all.h5",
+            "/app/db/cn_data/daily_pv.h5",
+        ],
+        "us_stock": ["/app/db/us_data/daily_pv.h5"],
+        "hong_kong": ["/app/db/hk_data/daily_pv.h5"],
+        "crypto": ["/app/db/crypto_data/5min_pv.h5"],
+        "futures": [],  # H5 未生成
+    }
+    for p in candidates.get(market, []):
+        if Path(p).exists():
+            return p
+    return None
+
+
 async def _run_lightweight_backtest(
     factor_id: str,
     factor_code: str,
@@ -514,23 +1020,34 @@ async def _run_lightweight_backtest(
             tmp_path = tmp.name
 
         try:
-            result = subprocess.run(
+            result = await asyncio.to_thread(
+                subprocess.run,
                 [sys.executable, "-c", f"""
-import importlib, sys, json
-exec(open({repr(tmp_path)}).read())
-ns = dict(locals())
-factor_cls = None
-for v in ns.values():
-    if isinstance(v, type) and hasattr(v, '__call__') and v.__module__ == 'builtins':
-        if getattr(v, 'name', None) or v.__name__.lower().endswith('factor'):
-            factor_cls = v
-            break
-if factor_cls:
-    print(json.dumps({{"found": True, "name": factor_cls.__name__}}))
+import ast, json, sys
+with open({repr(tmp_path)}) as f:
+    tree = ast.parse(f.read())
+# 找 Factor 类（类名含 factor 或定义 name 属性）
+found_class = None
+found_func = None
+for node in ast.walk(tree):
+    if isinstance(node, ast.ClassDef) and ("factor" in node.name.lower() or any(
+        isinstance(n, ast.Assign) and any(isinstance(t, ast.Name) and t.id == "name" for t in n.targets)
+        for n in node.body
+    )):
+        found_class = node.name
+        break
+    if isinstance(node, ast.FunctionDef) and node.name.startswith("calculate_"):
+        found_func = node.name
+if found_class:
+    print(json.dumps({{"found": True, "kind": "class", "name": found_class}}))
+elif found_func:
+    print(json.dumps({{"found": True, "kind": "function", "name": found_func}}))
 else:
     print(json.dumps({{"found": False}}))
 """],
-                capture_output=True, text=True, timeout=30,
+                capture_output=True,
+                text=True,
+                timeout=30,
             )
             import json as _json
             check = _json.loads(result.stdout.strip().splitlines()[-1]) if result.stdout.strip() else {"found": False}
@@ -544,12 +1061,22 @@ else:
         ns: dict = {}
         exec(compile(factor_code, f"<alpha-factor-{factor_id}>", "exec"), ns)
 
+        # 因子识别：优先 Qlib Factor 类；否则 RD-Agent 函数式（calculate_* 返回 DataFrame）
         factor_cls = None
         for v in ns.values():
             if isinstance(v, type) and callable(v) and v.__module__ == "builtins":
                 if getattr(v, "name", None) or v.__name__.lower().endswith("factor"):
                     factor_cls = v
                     break
+
+        # RD-Agent 函数式因子（无 Factor 类，含 calculate_* 函数）→ 走 H5 数据回测
+        if factor_cls is None and any(
+            name.startswith("calculate_") and callable(ns[name])
+            for name in ns
+        ):
+            await _backtest_functional_factor(factor_id, factor_code, start_date, end_date, universe)
+            return
+
         if factor_cls is None:
             raise RuntimeError("因子代码中未找到可调用的 Factor 类")
 
@@ -680,3 +1207,194 @@ else:
             pass
     finally:
         _running_backtests.discard(factor_id)
+
+
+async def _backtest_functional_factor(
+    factor_id: str,
+    factor_code: str,
+    start_date: Optional[str],
+    end_date: Optional[str],
+    universe: Optional[str] = "csi300",
+) -> None:
+    """回测 RD-Agent 函数式因子（calculate_* 返回 DataFrame，读 daily_pv.h5）。
+
+    与 run_rd_agent.py.compute_factor_ic 同一套逻辑：subprocess 执行因子代码
+    写 result.h5，再与价格数据对齐算 IC/RankIC/ICIR。
+    """
+    try:
+        import subprocess
+        import tempfile
+        import sys as _sys
+        from pathlib import Path
+
+        end = end_date or "2024-12-31"
+        start = start_date or "2024-01-01"
+
+        # 市场 → H5 数据文件（因子代码读 daily_pv.h5，subprocess chdir 到 /tmp）
+        data_path = _resolve_factor_h5_path(universe)
+        # 复制到 /tmp/daily_pv.h5，因子代码用相对路径 daily_pv.h5 能读到
+        import shutil
+        tmp_h5 = "/tmp/daily_pv.h5"
+        try:
+            if Path(data_path).exists() and (
+                not Path(tmp_h5).exists()
+                or Path(tmp_h5).stat().st_mtime < Path(data_path).stat().st_mtime
+            ):
+                shutil.copy2(data_path, tmp_h5)
+        except Exception:
+            pass
+
+        script = f"""
+import pandas as pd
+import numpy as np
+import sys, os, tempfile, traceback
+
+os.chdir(tempfile.gettempdir())
+try:
+    # 用 exec 定义因子函数（__name__ != __main__，不触发 main 块），再调用 calculate_* 执行
+    _factor_ns = {{}}
+    exec({repr(factor_code)}, _factor_ns)
+    _calc_fns = [v for k, v in _factor_ns.items() if k.startswith("calculate_") and callable(v)]
+    if not _calc_fns:
+        print("NO_CALC_FN"); sys.exit(1)
+    _calc_fns[0]()
+    result_files = [f for f in os.listdir('.') if f.endswith('.h5') and 'result' in f.lower()]
+    if not result_files:
+        result_files = [f for f in os.listdir('.') if f.endswith('.h5') and f != 'daily_pv.h5']
+    if not result_files:
+        print("NO_RESULT_FILE"); sys.exit(1)
+    factor_df = pd.read_hdf(result_files[0])
+    if factor_df.empty:
+        print("EMPTY_FACTOR"); sys.exit(1)
+    price_df = pd.read_hdf({repr(str(data_path))})
+    if 'close' in price_df.columns.get_level_values(0):
+        close = price_df['close']
+    elif '$close' in price_df.columns.get_level_values(0):
+        close = price_df['$close']
+    else:
+        close = price_df.iloc[:, 0]
+    returns = close.groupby(level=1).pct_change().shift(-1)
+    # 因子结果 → 对齐 (datetime, instrument)
+    # factor_df 已是 MultiIndex(datetime,instrument) 单列 → 直接用；
+    # 若单 index 则 stack 成 MultiIndex
+    if isinstance(factor_df.index, pd.MultiIndex) and factor_df.index.nlevels >= 2:
+        factor_values = factor_df.iloc[:, 0]
+    else:
+        factor_values = factor_df.stack()
+    # 统一 index 名（若已有正确的 MultiIndex 则跳过，避免 "Length of names" 报错）
+    try:
+        factor_values.index.names = ['datetime', 'instrument']
+    except Exception:
+        pass
+    returns.index.names = ['datetime', 'instrument']
+    common_idx = factor_values.index.intersection(returns.index)
+    if len(common_idx) < 100:
+        print("INSUFFICIENT_DATA"); sys.exit(1)
+    f = factor_values.loc[common_idx]; r = returns.loc[common_idx]
+    mask = np.isfinite(f) & np.isfinite(r)
+    f = f[mask]; r = r[mask]
+    if len(f) < 100:
+        print("INSUFFICIENT_CLEAN_DATA"); sys.exit(1)
+    from scipy import stats
+    # 向量化逐日 IC（groupby 避免逐日 loc 全表扫描，显著提速）
+    df_ic = pd.DataFrame({'f': f, 'r': r})
+    df_ic['dt'] = df_ic.index.get_level_values(0)
+    ic_values = []
+    for dt, g in df_ic.groupby('dt'):
+        if len(g) > 5:
+            corr, _ = stats.spearmanr(g['f'], g['r'])
+            if np.isfinite(corr):
+                ic_values.append(corr)
+    if not ic_values:
+        print("NO_IC_VALUES"); sys.exit(1)
+    ic = np.mean(ic_values)
+    rank_ic = np.median(ic_values)
+    icir = np.mean(ic_values) / (np.std(ic_values) + 1e-8)
+    print(f"IC={{ic:.4f}}"); print(f"RANK_IC={{rank_ic:.4f}}")
+    print(f"ICIR={{icir:.4f}}"); print(f"OBSERVATIONS={{len(f)}}")
+except Exception as e:
+    print(f"ERROR: {{e}}")
+    traceback.print_exc()
+    sys.exit(1)
+"""
+        # 用 asyncio.to_thread 执行同步 subprocess，避免阻塞 engine 事件循环
+        proc = await asyncio.to_thread(
+            subprocess.run,
+            [_sys.executable, "-c", script],
+            capture_output=True,
+            text=True,
+            timeout=600,
+        )
+        # 合并 stdout + stderr（因子脚本异常用 stderr 输出 traceback）
+        out = (proc.stdout or "") + "\n" + (proc.stderr or "")
+        ic_mean = rank_ic_mean = None
+        for line in out.splitlines():
+            if line.startswith("IC="):
+                try:
+                    ic_mean = float(line.split("=")[1])
+                except Exception:
+                    pass
+            elif line.startswith("RANK_IC="):
+                try:
+                    rank_ic_mean = float(line.split("=")[1])
+                except Exception:
+                    pass
+
+        if ic_mean is None:
+            raise RuntimeError(f"因子回测失败: {out[-500:]}")
+
+        await persistence.update_factor_metrics(
+            factor_id,
+            status="completed",
+            ic_value=ic_mean,
+            rank_ic=rank_ic_mean,
+            sharpe_ratio=None,
+            annual_return=None,
+            max_drawdown=None,
+            universe=universe,
+            date_range=f"{start}~{end}",
+        )
+        logger.info("[alpha-backtest-fn] %s done ic=%.4f rank_ic=%s", factor_id, ic_mean,
+                    f"{rank_ic_mean:.4f}" if rank_ic_mean is not None else "N/A")
+    except Exception as exc:
+        logger.exception("[alpha-backtest-fn] %s failed", factor_id)
+        try:
+            await persistence.update_factor_metrics(
+                factor_id,
+                status="failed",
+                metadata={"backtest_error": str(exc)[:500]},
+            )
+        except Exception:
+            pass
+    finally:
+        _running_backtests.discard(factor_id)
+
+
+def _resolve_factor_h5_path(universe: str = "csi300") -> str:
+    """解析因子回测用 H5 数据文件路径（RD-Agent daily_pv.h5）。"""
+    base = "/app/alphaagent/scenarios/qlib/experiment/factor_data_template/daily_pv_all.h5"
+    if Path(base).exists():
+        return base
+    return "/tmp/daily_pv.h5"
+
+
+async def _startup_recover_stuck_factors() -> None:
+    """模块加载时启动一次性恢复任务：把超时的 backtesting 状态清理为 failed。
+
+    在事件循环里 schedule 一个后台协程，等 3s DB 就绪后执行一次。
+    """
+    try:
+        await asyncio.sleep(3)
+        count = await persistence.recover_stuck_factors(max_age_min=15)
+        if count:
+            logger.info("[alpha-agent startup] recovered %d stuck backtests", count)
+    except Exception as e:
+        logger.debug("[alpha-agent startup] recovery skipped: %s", e)
+
+
+# 模块加载时自动注册启动恢复任务（如果事件循环已运行）
+try:
+    _loop = asyncio.get_running_loop()
+    _loop.create_task(_startup_recover_stuck_factors())
+except RuntimeError:
+    pass  # 事件循环未运行（导入阶段），跳过；下次请求时会懒触发（如果有的话）

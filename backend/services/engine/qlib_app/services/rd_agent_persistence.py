@@ -256,3 +256,38 @@ class RDAgentFactorPersistence:
                     """),
                 {**fields, "factor_id": factor_id},
             )
+
+    async def recover_stuck_factors(
+        self, max_age_min: int = 15, target_status: str = "backtesting"
+    ) -> int:
+        """恢复卡死超过 max_age_min 分钟的因子（默认 backtesting 状态）。
+
+        把超时的 status 改成 failed，并在 metadata.backtest_error 写入原因。
+        用于引擎进程崩溃 / 600s subprocess timeout 后清理。
+
+        Returns: 受影响的行数。
+        """
+        async with get_session() as session:
+            result = await session.execute(
+                text("""
+                    UPDATE rd_agent_factors
+                    SET status = 'failed',
+                        metadata_json = jsonb_set(
+                            COALESCE(metadata_json, '{}'::jsonb),
+                            '{backtest_error}',
+                            to_jsonb('timeout_or_engine_crash'::text),
+                            true
+                        ),
+                        updated_at = now()
+                    WHERE status = :s
+                      AND updated_at < now() - (:max_age_min || ' minutes')::interval
+                    """),
+                {"s": target_status, "max_age_min": str(max_age_min)},
+            )
+            count = result.rowcount or 0
+            if count:
+                logger.warning(
+                    "Recovered %d stuck factors (status=%s, older than %d min)",
+                    count, target_status, max_age_min,
+                )
+            return count

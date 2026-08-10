@@ -16,7 +16,9 @@ import {
   Calendar,
   BarChart3,
   AlertCircle,
+  Play,
 } from 'lucide-react';
+import { useTaskContext } from '../context-v2/TaskContext';
 
 const MARKET_LABELS: Record<string, string> = {
   a_share: 'A股',
@@ -32,7 +34,8 @@ const MARKET_COLORS: Record<string, string> = {
   us_stock: 'bg-green-500/15 text-green-400 border-green-500/30',
 };
 
-export const FactorLibraryPage: React.FC = () => {
+export const FactorLibraryPage: React.FC<{ onNavigate?: (page: string) => void }> = ({ onNavigate }) => {
+  const { startBacktestTask } = useTaskContext();
   const [factors, setFactors] = useState<Factor[]>([]);
   const [filteredFactors, setFilteredFactors] = useState<Factor[]>([]);
   const [searchQuery, setSearchQuery] = useState('');
@@ -449,6 +452,28 @@ export const FactorLibraryPage: React.FC = () => {
                   <span className="text-muted-foreground">RankICIR: </span>
                   <span className="font-mono font-medium">{formatNumber(factor.rankIcir, 3)}</span>
                 </div>
+              </div>
+              {/* Action buttons */}
+              <div className="flex items-center gap-2 pt-1 border-t border-border/30">
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  className="h-7 text-xs flex-1"
+                  onClick={async (e) => {
+                    e.stopPropagation();
+                    try {
+                      await startBacktestTask({
+                        factorId: factor.factorId,
+                        universe: factor.universe || 'csi300',
+                      });
+                      onNavigate?.('backtest');
+                    } catch (err) {
+                      console.error('Backtest failed:', err);
+                    }
+                  }}
+                >
+                  <Play className="h-3 w-3 mr-1" /> 回测
+                </Button>
               </div>
               {factor.createdAt && (
                 <div className="flex items-center gap-2 text-xs text-muted-foreground">

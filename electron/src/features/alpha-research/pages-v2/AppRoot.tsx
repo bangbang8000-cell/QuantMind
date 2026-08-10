@@ -35,7 +35,7 @@ const AppContent: React.FC = () => {
       {currentPage === 'mining_dashboard' && <MiningDashboardPage onNavigate={setCurrentPage} />}
       {currentPage === 'library' && (
         <Layout currentPage={currentPage} onNavigate={setCurrentPage}>
-          <FactorLibraryPage />
+          <FactorLibraryPage onNavigate={setCurrentPage} />
         </Layout>
       )}
       {currentPage === 'backtest' && (

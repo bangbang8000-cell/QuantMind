@@ -140,6 +140,7 @@ export const BacktestPage: React.FC = () => {
   const [selectedLibrary, setSelectedLibrary] = useState(localStorage.getItem('quantaalpha_active_library') || '');
   const [factorSource, setFactorSource] = useState<'custom' | 'combined'>('custom');
   const [universe, setUniverse] = useState<UniverseId>('csi300');
+  const [dataSource, setDataSource] = useState<'qlib_bin' | 'h5'>('qlib_bin');
   const [universes, setUniverses] = useState<UniverseInfo[]>([]);
   const [factorCount, setFactorCount] = useState(0);
   const [isStarting, setIsStarting] = useState(false);
@@ -203,6 +204,7 @@ export const BacktestPage: React.FC = () => {
         factorId: selectedLibrary,
         factorSource,
         universe,
+        dataSource,
       });
     } catch (err: any) {
       console.error('Failed to start backtest:', err);
@@ -387,7 +389,7 @@ export const BacktestPage: React.FC = () => {
           </div>
 
           {/* Fixed display fields */}
-          <div className="grid grid-cols-1 md:grid-cols-3 gap-4 pt-2 border-t border-border/50">
+          <div className="grid grid-cols-1 md:grid-cols-4 gap-4 pt-2 border-t border-border/50">
             <div className="text-sm">
               <span className="text-muted-foreground">市场：</span>
               <span className="font-medium ml-1">CSI 300（沪深300）</span>
@@ -399,6 +401,29 @@ export const BacktestPage: React.FC = () => {
             <div className="text-sm">
               <span className="text-muted-foreground">基准：</span>
               <span className="font-medium ml-1">SH000300（沪深300指数）</span>
+            </div>
+            {/* 数据源切换 */}
+            <div className="text-sm">
+              <span className="text-muted-foreground mr-2">数据源：</span>
+              <div className="inline-flex items-center rounded-md border border-border/50 overflow-hidden">
+                {(['qlib_bin', 'h5'] as const).map((ds) => (
+                  <button
+                    key={ds}
+                    disabled={isRunning}
+                    onClick={() => setDataSource(ds)}
+                    className={`px-2.5 py-1 text-xs font-medium transition-colors ${
+                      dataSource === ds
+                        ? 'bg-primary/15 text-primary'
+                        : 'text-muted-foreground hover:bg-muted/50'
+                    }`}
+                  >
+                    {ds === 'qlib_bin' ? 'Qlib' : 'H5'}
+                  </button>
+                ))}
+              </div>
+              {dataSource === 'h5' && (
+                <p className="text-[10px] text-amber-400 mt-1">H5 预生成数据，可能不覆盖最新行情</p>
+              )}
             </div>
           </div>
 

@@ -105,6 +105,7 @@ export interface RealtimeMetrics {
   
   // Top 10 factors list
   top10Factors?: Array<{
+    factorId: string;
     factorName: string;
     factorExpression: string;
     rankIc: number;
@@ -115,6 +116,7 @@ export interface RealtimeMetrics {
     sharpeRatio?: number;
     maxDrawdown?: number;
     calmarRatio?: number;
+    market?: string;
     cumulativeCurve?: Array<{date: string, value: number}>;
   }>;
 

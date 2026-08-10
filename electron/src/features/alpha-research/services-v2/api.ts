@@ -440,6 +440,7 @@ export interface BacktestStartParams {
   factorSource?: string;
   configPath?: string;
   universe?: string;
+  dataSource?: 'qlib_bin' | 'h5';
 }
 
 export async function startBacktest(
@@ -454,6 +455,7 @@ export async function startBacktest(
   }
   const qs = new URLSearchParams();
   if (params.universe) qs.set('universe', params.universe);
+  if (params.dataSource) qs.set('data_source', params.dataSource);
   const query = qs.toString();
   const res = await apiClient.post(
     `/alpha-agent/factors/${factorId}/backtest${query ? `?${query}` : ''}`,

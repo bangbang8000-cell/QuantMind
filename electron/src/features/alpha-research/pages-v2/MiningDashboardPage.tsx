@@ -79,7 +79,7 @@ export const MiningDashboardPage: React.FC<MiningDashboardPageProps> = ({ onNavi
            />
         </div>
         <div className="lg:col-span-4">
-           <FactorList metrics={task.metrics || null} />
+           <FactorList metrics={task.metrics || null} onNavigate={onNavigate} />
         </div>
       </div>
 

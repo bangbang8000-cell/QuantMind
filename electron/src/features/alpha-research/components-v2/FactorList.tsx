@@ -8,15 +8,22 @@ import { Card, CardContent, CardHeader, CardTitle } from './ui/Card';
 import { HoverCard, HoverCardContent, HoverCardTrigger } from "./ui/HoverCard";
 import { RealtimeMetrics } from '../types-v2';
 import { formatNumber, formatPercent } from '../utils-v2';
-import { TrendingUp, Zap, Check, Loader2, Sparkles, FileUp } from 'lucide-react';
+import { TrendingUp, Zap, Check, Loader2, Sparkles, FileUp, Play } from 'lucide-react';
 import { alphaAgentService } from '../services/alphaAgentService';
 import { explainFactor, exportFactorToIde } from '../services-v2/api';
+import { useTaskContext } from '../context-v2/TaskContext';
 
 interface FactorListProps {
   metrics: RealtimeMetrics | null;
+  onNavigate?: (page: string) => void;
 }
 
-export const FactorList: React.FC<FactorListProps> = ({ metrics }) => {
+const MARKET_LABELS: Record<string, string> = {
+  a_share: 'A股', crypto: '加密货币', hong_kong: '港股', us_stock: '美股', futures: '期货',
+};
+
+export const FactorList: React.FC<FactorListProps> = ({ metrics, onNavigate }) => {
+  const { startBacktestTask } = useTaskContext();
   const [promoting, setPromoting] = useState<Record<string, 'loading' | 'done' | 'error'>>({});
   const [exporting, setExporting] = useState<Record<string, 'loading' | 'done' | 'error'>>({});
   const [explanations, setExplanations] = useState<Record<string, { loading: boolean; text?: string; error?: string }>>({});
@@ -98,6 +105,7 @@ export const FactorList: React.FC<FactorListProps> = ({ metrics }) => {
               <tr className="border-b border-border/50">
                 <th className="py-3 px-4 text-left font-medium text-muted-foreground w-1/6">因子名</th>
                 <th className="py-3 px-4 text-left font-medium text-muted-foreground w-1/4">公式</th>
+                <th className="py-3 px-4 text-left font-medium text-muted-foreground">市场</th>
                 <th className="py-3 px-4 text-right font-medium text-muted-foreground">IC</th>
                 <th className="py-3 px-4 text-right font-medium text-muted-foreground">RankIC</th>
                 <th className="py-3 px-4 text-right font-medium text-muted-foreground">ICIR</th>
@@ -119,6 +127,15 @@ export const FactorList: React.FC<FactorListProps> = ({ metrics }) => {
                         </td>
                         <td className="py-3 px-4 font-mono text-xs text-muted-foreground max-w-[200px] truncate">
                           {truncate(factor.factorExpression, 30)}
+                        </td>
+                        <td className="py-3 px-4">
+                          {factor.market ? (
+                            <span className="inline-flex items-center rounded-md border px-1.5 py-0.5 text-[10px] font-medium bg-secondary/30 text-muted-foreground">
+                              {MARKET_LABELS[factor.market] || factor.market}
+                            </span>
+                          ) : (
+                            <span className="text-muted-foreground/40 text-xs">—</span>
+                          )}
                         </td>
                         <td className="py-3 px-4 text-right font-mono">{formatMetric(factor.ic)}</td>
                         <td className="py-3 px-4 text-right font-mono font-bold text-primary">{formatMetric(factor.rankIc)}</td>
@@ -171,6 +188,24 @@ export const FactorList: React.FC<FactorListProps> = ({ metrics }) => {
                                 <FileUp size={12} /> 导出IDE
                               </button>
                             )}
+                            <button
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                try {
+                                  startBacktestTask({
+                                    factorId: factor.factorId,
+                                    universe: (factor as any).universe || 'csi300',
+                                  });
+                                  onNavigate?.('backtest');
+                                } catch (err) { console.error(err); }
+                              }}
+                              className="inline-flex items-center gap-1 px-2 py-1 text-xs rounded-md
+                                         bg-emerald-500/10 text-emerald-400 hover:bg-emerald-500/20
+                                         border border-emerald-500/20 transition-colors"
+                              title="回测此因子"
+                            >
+                              <Play size={12} /> 回测
+                            </button>
                           </div>
                         </td>
                       </tr>
