@@ -94,13 +94,13 @@ body,
 
 html,
 #root {
-  background: transparent !important; /* 保持外层透明，由 body/app-root 承载实际浅色基底 */
+  background: transparent !important; /* 保持外层透明，由 .app-main 承载实际浅色基底（底部 Dock 透出浏览器底色） */
 }
 
 body {
   color: var(--slate-900);
   overflow: hidden;
-  background: var(--bg-main) !important;
+  background: transparent !important; /* 背景由 .app-main 承载，让底部 Dock 区域透出浏览器底色 */
 }
 
 /* Windows 10 圆角需要 body 透明 */
@@ -133,6 +133,7 @@ html.platform-win32.os-win10 body {
   position: relative;
   display: flex;
   flex-direction: column;
+  background: var(--bg-main); /* 背景由内容区承载，让底部 Dock 区域透出浏览器底色 */
 }
 
 .app-main > * {
@@ -447,7 +448,7 @@ html.platform-win32.os-win10.qm-rounded .app-root {
   height: 100%;
   border-radius: 16px;
   overflow: hidden;
-  background: var(--bg-main);
+  background: transparent; /* 背景已迁移到 .app-main，让底部 Dock 区域透出浏览器底色 */
   box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.08);
 }
 
