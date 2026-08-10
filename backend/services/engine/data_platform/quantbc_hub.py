@@ -28,7 +28,20 @@ _QUANTBC_DEFAULT_DATA_DIRS = [
 ]
 
 
+def _crypto_enabled() -> bool:
+    """生产环境通过 ENABLE_CRYPTO=false 屏蔽区块链（默认开启，与 market_adapters 一致）。"""
+    raw = os.getenv("ENABLE_CRYPTO", "").strip().lower()
+    if raw in ("1", "true", "yes", "on"):
+        return True
+    if raw in ("0", "false", "no", "off"):
+        return False
+    return True
+
+
 def _resolve_quantbc_data_dir() -> Path:
+    # Docker 层屏蔽：ENABLE_CRYPTO=false 时返回不存在路径，quantbc 不可用
+    if not _crypto_enabled():
+        return Path(_QUANTBC_DATA_DIR_ENV)  # 非目录，不可用
     env_val = os.getenv(_QUANTBC_DATA_DIR_ENV, "").strip()
     if env_val:
         p = Path(env_val)
