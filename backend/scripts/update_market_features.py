@@ -406,28 +406,94 @@ def load_hk_parquet(start_year: int | None = None) -> pd.DataFrame:
     return df
 
 
-def compute_market_features(df: pd.DataFrame, market: str) -> pd.DataFrame:
-    """为所有标的计算特征。"""
+def _coerce_batch_types(df: pd.DataFrame) -> None:
+    """统一分类列类型，避免 parquet 写入 mixed type 报错（is_st 空串→int）。"""
+    for col in ("is_st", "listing_market"):
+        if col in df.columns:
+            df[col] = pd.to_numeric(df[col], errors="coerce").fillna(0).astype(int)
+
+
+def compute_market_features(df: pd.DataFrame, market: str, batch_size: int = 100) -> pd.DataFrame:
+    """为所有标的计算特征。
+
+    分批计算（每 batch_size 个标的写一次临时 parquet），避免全量累积
+    导致 OOM —— 港股 2200+ 标的 × 全历史时内存峰值极大。
+    """
     from backend.scripts.update_feature_parquet import compute_features_for_group
 
     instruments = df["instrument"].unique()
     total = len(instruments)
-    _log(f"  计算特征（{total} 个标的）...")
+    _log(f"  计算特征（{total} 个标的，批大小 {batch_size}）...")
 
-    results = []
+    temp_files: list[Path] = []
+    results: list[pd.DataFrame] = []
     for i, (sym, group) in enumerate(df.groupby("instrument"), 1):
         try:
             feat = compute_features_for_group(group)
             results.append(feat)
         except Exception as e:
             _log(f"    跳过 {sym}: {e}")
+
+        # 每批写盘释放内存
+        if len(results) >= batch_size:
+            try:
+                batch_df = pd.concat(results, ignore_index=True)
+                _coerce_batch_types(batch_df)
+                tmp = FEATURE_SNAPSHOT_DIR / f".{market}_features_tmp_{len(temp_files)}.parquet"
+                batch_df.to_parquet(str(tmp), index=False, engine="pyarrow")
+                temp_files.append(tmp)
+                _log(f"    批 {len(temp_files)}: 已写 {len(batch_df):,} 行")
+            finally:
+                results.clear()
+
         if i % 50 == 0:
             _log(f"    进度: {i}/{total}")
 
-    if not results:
+    # 收尾：剩余批次写盘
+    if results:
+        try:
+            batch_df = pd.concat(results, ignore_index=True)
+            _coerce_batch_types(batch_df)
+            tmp = FEATURE_SNAPSHOT_DIR / f".{market}_features_tmp_{len(temp_files)}.parquet"
+            batch_df.to_parquet(str(tmp), index=False, engine="pyarrow")
+            temp_files.append(tmp)
+            _log(f"    尾批: 已写 {len(batch_df):,} 行")
+        finally:
+            results.clear()
+
+    if not temp_files:
         return pd.DataFrame()
 
-    all_feat = pd.concat(results, ignore_index=True)
+    # 合并所有临时文件：流式写入，避免全量 pd.concat 导致 OOM
+    # （27 个 ~300MB 临时文件 concat 时内存峰值可达 50GB+）
+    _log(f"  合并 {len(temp_files)} 个临时文件（流式写入）...")
+    import pyarrow as pa
+    import pyarrow.parquet as pq_writer
+
+    merged_path = FEATURE_SNAPSHOT_DIR / f".{market}_features_merged.parquet"
+    writer = None
+    try:
+        for idx, t in enumerate(temp_files):
+            chunk = pd.read_parquet(str(t), engine="pyarrow")
+            _coerce_batch_types(chunk)
+            table = pa.Table.from_pandas(chunk, preserve_index=False)
+            if writer is None:
+                writer = pq_writer.ParquetWriter(str(merged_path), table.schema)
+            writer.write_table(table)
+            del chunk, table
+            _log(f"    合并 {idx + 1}/{len(temp_files)}: {t.stat().st_size / 1024 / 1024:.0f}MB")
+    finally:
+        if writer is not None:
+            writer.close()
+
+    # 清理临时文件
+    for t in temp_files:
+        try:
+            t.unlink(missing_ok=True)
+        except Exception:  # noqa: BLE001
+            pass
+
+    all_feat = pd.read_parquet(str(merged_path), engine="pyarrow")
 
     # 确保分类列类型一致（避免 parquet 写入时 mixed type 报错）
     if "is_st" in all_feat.columns:
@@ -529,7 +595,12 @@ def main():
     else:
         combined = new_data
 
-    combined = combined.sort_values(["trade_date", "instrument"]).reset_index(drop=True)
+    # 大表（港股全量数百万行）避免 sort_values 全量重排导致 OOM：
+    # 跳过排序，写入阶段按需分组即可。
+    if len(combined) > 2_000_000:
+        _log(f"  跳过 sort_values（{len(combined):,} 行大表，避免 OOM）")
+    else:
+        combined = combined.sort_values(["trade_date", "instrument"]).reset_index(drop=True)
 
     # 宏观因子合并（美股全市场共用）
     if market == "us_stock":
@@ -553,9 +624,18 @@ def main():
     _log(f"合并后: {len(combined):,} 行, {len(combined.columns)} 列")
     _log(f"日期: {combined['trade_date'].min()} ~ {combined['trade_date'].max()}")
 
-    # 写入
-    combined.to_parquet(str(parquet_path), index=False, engine="pyarrow")
-    _log(f"已写入: {parquet_path} ({parquet_path.stat().st_size / 1024 / 1024:.1f}MB)")
+    # 写入（大表用 pyarrow 流式写，避免 pandas 全量驻留内存）
+    if len(combined) > 2_000_000:
+        import pyarrow as pa
+        import pyarrow.parquet as pq_writer
+
+        _log(f"  大表 {len(combined):,} 行，用 pyarrow 流式写入...")
+        table = pa.Table.from_pandas(combined, preserve_index=False)
+        pq_writer.write_table(table, str(parquet_path), compression="snappy")
+        _log(f"已写入: {parquet_path} ({parquet_path.stat().st_size / 1024 / 1024:.1f}MB)")
+    else:
+        combined.to_parquet(str(parquet_path), index=False, engine="pyarrow")
+        _log(f"已写入: {parquet_path} ({parquet_path.stat().st_size / 1024 / 1024:.1f}MB)")
 
     # 验证
     verify = pd.read_parquet(str(parquet_path), engine="pyarrow")
