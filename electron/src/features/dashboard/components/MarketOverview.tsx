@@ -2,6 +2,7 @@ import React, { useEffect, useState } from 'react';
 import { Card, Row, Col, Statistic, Spin, Tag } from 'antd';
 import { ArrowUpOutlined, ArrowDownOutlined } from '@ant-design/icons';
 import { dataDashboardService, RealtimeQuote } from '../services/dataDashboardService';
+import { isMarketEnabled } from '../../../config/marketFlags';
 
 interface IndexItem {
     symbol: string;
@@ -33,6 +34,13 @@ const MARKET_INDICES: Record<string, IndexItem[]> = {
         { symbol: 'CL.FUT', name: 'WTI原油', market: 'FUTURES' },
     ],
 };
+
+// 屏蔽区块链时移除 CRYPTO 条目
+Object.keys(MARKET_INDICES).forEach((k) => {
+    if (!isMarketEnabled(k)) {
+        delete (MARKET_INDICES as Record<string, IndexItem[]>)[k];
+    }
+});
 
 const MARKET_LABELS: Record<string, string> = {
     CN: 'A股',

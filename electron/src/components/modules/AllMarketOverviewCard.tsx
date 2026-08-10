@@ -4,14 +4,17 @@ import { MarketOverviewSkeleton } from '../common/CardSkeletons';
 import { useMarketData } from '../../hooks/useMarketData';
 import { MARKET_INDICES, type MarketId } from '../../services/marketService';
 import type { MarketIndex } from '../../services/marketService';
+import { isMarketEnabled } from '../../config/marketFlags';
 
-const MARKETS: { id: MarketId; label: string }[] = [
-  { id: 'CN', label: 'A股' },
-  { id: 'HK', label: '港股' },
-  { id: 'US', label: '美股' },
-  { id: 'CRYPTO', label: '区块链' },
-  { id: 'FUTURES', label: '期货' },
-];
+const MARKETS: { id: MarketId; label: string }[] = (
+  [
+    { id: 'CN', label: 'A股' },
+    { id: 'HK', label: '港股' },
+    { id: 'US', label: '美股' },
+    { id: 'CRYPTO', label: '区块链' },
+    { id: 'FUTURES', label: '期货' },
+  ] as { id: MarketId; label: string }[]
+).filter((m) => isMarketEnabled(m.id));
 
 const MarketMiniPanel: React.FC<{ market: MarketId; label: string }> = ({ market, label }) => {
   const { data, loading } = useMarketData({ market });
