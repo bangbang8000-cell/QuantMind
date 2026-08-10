@@ -77,6 +77,9 @@ class RDLoopWrapper:
         env.setdefault("QLIB_FACTOR_TEST_END", os.getenv("QLIB_FACTOR_TEST_END", "2025-12-31"))
         # 因子处理并行数
         env.setdefault("MULTI_PROC_N", os.getenv("MULTI_PROC_N", "4"))
+        # 补齐 RD-Agent litellm 后端需要的 LITELLM_ 前缀变量（deepseek 优先）
+        from backend.services.engine.rd_agent.llm_env import build_llm_env
+        build_llm_env(env)
         return env
 
     # 需要注入中文/研究方向指令的 prompt key（RD-Agent prompts.yaml 中的顶层键）

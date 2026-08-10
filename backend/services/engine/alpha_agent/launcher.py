@@ -348,6 +348,10 @@ class AlphaAgentLauncher:
         if chat_model:
             env["CHAT_MODEL"] = chat_model
 
+        # 补齐 RD-Agent litellm 后端需要的 LITELLM_ 前缀变量（deepseek 优先）
+        from backend.services.engine.rd_agent.llm_env import build_llm_env
+        build_llm_env(env)
+
         # Add market adapter env overrides
         if task.market != "a_share" or True:  # Always use RD-Agent runner for all markets
             try:

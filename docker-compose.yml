@@ -178,6 +178,8 @@ services:
       - QWEN_API_KEY=${QWEN_API_KEY:-mock-api-key-not-configured}
       # DeepSeek API (用于 TradingAgents 等)
       - DEEPSEEK_API_KEY=${DEEPSEEK_API_KEY:-your-deepseek-api-key}
+      - DEEPSEEK_BASE_URL=${DEEPSEEK_BASE_URL:-https://api.deepseek.com}
+      - DEEPSEEK_MODEL=${DEEPSEEK_MODEL:-deepseek-chat}
       # 选股意图解析复用 AI_IDE LLM 配置（OpenAI 兼容）
       - AI_IDE_LLM_API_KEY=${AI_IDE_LLM_API_KEY:-mock-api-key-not-configured}
       - AI_IDE_LLM_BASE_URL=${AI_IDE_LLM_BASE_URL:-https://token-plan-cn.xiaomimimo.com/v1}
@@ -362,6 +364,8 @@ services:
       - QWEN_API_KEY=${QWEN_API_KEY:-mock-api-key-not-configured}
       # DeepSeek API (用于 TradingAgents 等)
       - DEEPSEEK_API_KEY=${DEEPSEEK_API_KEY:-your-deepseek-api-key}
+      - DEEPSEEK_BASE_URL=${DEEPSEEK_BASE_URL:-https://api.deepseek.com}
+      - DEEPSEEK_MODEL=${DEEPSEEK_MODEL:-deepseek-chat}
 
       # AI-IDE Chat LLM 配置（OpenAI 兼容；默认 MiMo）
       - AI_IDE_LLM_BASE_URL=${AI_IDE_LLM_BASE_URL:-https://token-plan-cn.xiaomimimo.com/v1}
