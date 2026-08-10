@@ -33,6 +33,7 @@ _MARKET_SDL_TABLE: dict[str, str] = {
     "HK": "stock_daily_latest_hk",
     "US": "stock_daily_latest_us",
     "CRYPTO": "stock_daily_latest_crypto",
+    "FUTURES": "stock_daily_latest_futures",
 }
 
 

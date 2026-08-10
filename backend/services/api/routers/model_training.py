@@ -372,6 +372,7 @@ _MARKET_QLIB_DATA_PATH: dict[str, str] = {
     "HK": resolve_qlib_provider_uri("HK"),
     "US": resolve_qlib_provider_uri("US"),
     "CRYPTO": resolve_qlib_provider_uri("CRYPTO"),
+    "FUTURES": resolve_qlib_provider_uri("FUTURES"),
 }
 
 _MARKET_CALENDAR: dict[str, str] = {
@@ -379,6 +380,7 @@ _MARKET_CALENDAR: dict[str, str] = {
     "HK": "HKEX",
     "US": "NYSE",
     "CRYPTO": "24/7",
+    "FUTURES": "CME",
 }
 
 

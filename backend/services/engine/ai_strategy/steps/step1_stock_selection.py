@@ -240,6 +240,7 @@ MARKET_TABLE_MAP: dict[str, str] = {
     "HK": "stock_daily_latest_hk",
     "US": "stock_daily_latest_us",
     "CRYPTO": "stock_daily_latest_crypto",
+    "FUTURES": "stock_daily_latest_futures",
 }
 
 

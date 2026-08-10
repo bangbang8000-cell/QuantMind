@@ -320,6 +320,92 @@ def load_us_parquet() -> pd.DataFrame:
     return df
 
 
+def load_hk_parquet(start_year: int | None = None) -> pd.DataFrame:
+    """从 QuantHK dt 分区 parquet 加载港股日线（替代旧 H5）。
+
+    QuantHK parquet 与 QuantUS 结构相同：dt 分区"每日期截面"
+    （symbol × time 全市场），symbol 如 0823.HK。转成长表 (instrument, trade_date)。
+
+    start_year: 仅读取该年份及之后的分区（如 2010 只读 2010 起），
+                避免 1980 年起全量读导致内存/耗时过大。
+    """
+    from backend.services.engine.data_platform.quanthk_hub import QuantHKDataHub
+
+    hub = QuantHKDataHub()
+    data_dir = hub.data_dir
+    fwd_dir = data_dir / "1_kline_data" / "daily_forward"
+    if not fwd_dir.is_dir():
+        raise FileNotFoundError(f"QuantHK 数据目录不可用: {fwd_dir}")
+
+    _log(f"读取 QuantHK parquet: {fwd_dir}")
+    import glob as _glob
+
+    files = sorted(_glob.glob(str(fwd_dir / "dt=*" / "data.parquet")))
+    if not files:
+        raise FileNotFoundError(f"QuantHK 无日K分区: {fwd_dir}")
+    _log(f"  日K分区: {len(files)} 个, {files[0].split('=')[-1]} ~ {files[-1].split('=')[-1]}")
+
+    if start_year:
+        before = len(files)
+        files = [f for f in files if int(f.split("dt=")[-1].split("/")[0][:4]) >= start_year]
+        _log(f"  过滤 {start_year} 起: {before} -> {len(files)} 个分区")
+
+    frames = []
+    for f in files:
+        try:
+            chunk = pd.read_parquet(f, engine="pyarrow")
+            frames.append(chunk)
+        except Exception as e:  # noqa: BLE001
+            _log(f"  跳过分区 {f}: {e}")
+    if not frames:
+        raise RuntimeError("QuantHK 日K 全部读取失败")
+
+    df = pd.concat(frames, ignore_index=True)
+    _log(f"  合并 {len(df):,} 行")
+
+    # symbol -> instrument（港股 symbol 保留 .HK 后缀，如 0823.HK）
+    if "symbol" in df.columns:
+        df = df.rename(columns={"symbol": "instrument"})
+    elif "instrument" not in df.columns:
+        raise RuntimeError("QuantHK parquet 缺少 symbol/instrument 列")
+
+    # time -> trade_date
+    if "time" in df.columns:
+        df["trade_date"] = pd.to_datetime(df["time"], errors="coerce").dt.date
+        df = df.drop(columns=["time"])
+    if "trade_date" not in df.columns:
+        raise RuntimeError("QuantHK parquet 缺少 time/trade_date 列")
+
+    df = df.dropna(subset=["trade_date", "close"])
+
+    # amount 兜底
+    if "amount" not in df.columns:
+        df["amount"] = df["close"] * df["volume"]
+    if "adj_factor" not in df.columns:
+        df["adj_factor"] = 1.0
+    if "turnover_rate" not in df.columns:
+        df["turnover_rate"] = 0.0
+
+    # A 股特有列填 0 / NaN
+    for col in ["pe_ttm", "pb", "roe", "bp", "ep_ttm", "float_mv", "total_mv"]:
+        if col not in df.columns:
+            df[col] = 0.0
+    if "ln_mv_total" not in df.columns:
+        df["ln_mv_total"] = np.log(df["amount"].clip(lower=1))
+    for col in ["industry", "is_st", "listing_market"]:
+        if col not in df.columns:
+            df[col] = ""
+    for col in ["return_1d", "return_5d", "return_20d", "ma5", "ma20", "ma60",
+                "rsi_14", "kdj_k", "macd_hist", "vol_std_20", "vol_atr_14",
+                "beta_20", "flow_net_amount", "volume_ma_5", "amount_ma_5"]:
+        if col not in df.columns:
+            df[col] = np.nan
+
+    _log(f"  加载 {len(df):,} 行, {df['instrument'].nunique()} 个标的")
+    _log(f"  日期范围: {df['trade_date'].min()} ~ {df['trade_date'].max()}")
+    return df
+
+
 def compute_market_features(df: pd.DataFrame, market: str) -> pd.DataFrame:
     """为所有标的计算特征。"""
     from backend.scripts.update_feature_parquet import compute_features_for_group
@@ -371,6 +457,8 @@ def main():
                         help="市场: crypto, hong_kong, us_stock, futures")
     parser.add_argument("--rebuild", action="store_true", help="重建全部特征")
     parser.add_argument("--dry-run", action="store_true", help="仅检查不写入")
+    parser.add_argument("--start-year", type=int, default=None,
+                        help="仅处理该年份及之后的数据（港股默认 2010 起，避免 1980 全量）")
     args = parser.parse_args()
 
     market = args.market
@@ -380,11 +468,15 @@ def main():
     _log(f"市场: {market}")
     _log(f"输出: {parquet_path}")
 
-    # 加载数据（期货走 QuantFutures parquet，美股走 QuantUS parquet，其他走 H5）
+    # 加载数据（期货/港股/美股走各自 parquet 单源，其他走 H5）
     if market == "futures":
         df = load_futures_parquet()
     elif market == "us_stock":
         df = load_us_parquet()
+    elif market == "hong_kong":
+        # 港股默认 2010 起，避免 1980 全量读取
+        hk_start = args.start_year or 2010
+        df = load_hk_parquet(start_year=hk_start)
     else:
         df = load_h5_data(market)
 

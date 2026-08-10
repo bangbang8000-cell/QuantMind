@@ -73,38 +73,34 @@ _QUANTDB_NAMES_CACHE: dict[str, dict[str, str]] = {}
 _QUANTDB_NAMES_TTL_SECONDS = 600
 
 
-def _load_quantdb_stock_names() -> dict[str, str]:
-    """加载 QuantDB instrument_detail 的股票简称映射（suffix symbol -> name）。
+def _market_from_table(table_name: str | None) -> str:
+    """从市场专属表名反推市场（stock_daily_latest_hk -> HK，缺省 CN）。"""
+    name = str(table_name or "").lower()
+    for m, suffix in (("FUTURES", "_futures"), ("CRYPTO", "_crypto"), ("US", "_us"), ("HK", "_hk")):
+        if suffix in name:
+            return m
+    return "CN"
 
-    结果带缓存，避免每次查询都读 parquet。
+
+def _load_quantdb_stock_names(market: str | None = None) -> dict[str, str]:
+    """按市场加载标的简称映射（suffix symbol -> name）。
+
+    通过 market_hub 解析当前市场的 DataHub（A股/港股/美股/区块链/期货），
+    避免硬编码 QuantDB（A 股）。结果带缓存，避免每次查询都读 parquet。
     """
+    market_upper = str(market or "CN").upper()
     now = time.monotonic()
-    cached = _QUANTDB_NAMES_CACHE.get("names")
+    cached = _QUANTDB_NAMES_CACHE.get(market_upper)
     if cached and cached[0] > now - _QUANTDB_NAMES_TTL_SECONDS:
         return cached[1]
     try:
-        from backend.services.engine.data_platform.quantdb_hub import QuantDBDataHub
+        from backend.services.engine.data_platform.market_hub import fetch_stock_list_for_market
 
-        hub = QuantDBDataHub.get_instance()
-        if not hub.available:
-            return {}
-        df = hub.fetch_stock_list()
-        if df is None or df.empty:
-            return {}
-        symbol_col = "Symbol" if "Symbol" in df.columns else "symbol"
-        name_col = "Name" if "Name" in df.columns else ("stock_name" if "stock_name" in df.columns else None)
-        if symbol_col not in df.columns or name_col is None:
-            return {}
-        mapping: dict[str, str] = {}
-        for _, row in df[[symbol_col, name_col]].dropna().iterrows():
-            sym = str(row[symbol_col]).strip()
-            nm = str(row[name_col]).strip()
-            if sym and nm:
-                mapping[sym] = nm
-        _QUANTDB_NAMES_CACHE["names"] = (now, mapping)
+        mapping = fetch_stock_list_for_market(market_upper)
+        _QUANTDB_NAMES_CACHE[market_upper] = (now, mapping)
         return mapping
     except Exception as exc:  # noqa: BLE001
-        logger.debug("QuantDB stock names load failed: %s", exc)
+        logger.debug("市场 %s 标的名称加载失败: %s", market_upper, exc)
         return {}
 
 
@@ -112,8 +108,9 @@ def _resolve_stock_name(
     row_dict: dict[str, Any] | None,
     raw_symbol: str,
     fallback: Any = None,
+    market: str | None = None,
 ) -> Any:
-    """解析股票简称：优先 SQL 查询出的 name，其次 QuantDB 权威简称，最后回退代码/None。"""
+    """解析股票简称：优先 SQL 查询出的 name，其次按市场 hub 简称，最后回退代码/None。"""
     name = row_dict.get("name") if row_dict else fallback
     if name:
         return name
@@ -121,7 +118,7 @@ def _resolve_stock_name(
         suffix = StockCodeUtil.to_suffix(raw_symbol)
     except Exception:  # noqa: BLE001
         suffix = raw_symbol
-    quantdb_names = _load_quantdb_stock_names()
+    quantdb_names = _load_quantdb_stock_names(market=market)
     return quantdb_names.get(suffix) or quantdb_names.get(raw_symbol) or name or raw_symbol
 
 
@@ -389,7 +386,7 @@ def _execute_raw_selection_sql(sql: str, table_name: str | None = None) -> tuple
 
                 if row_dict:
                     symbol = str(row_dict.get("symbol") or row_dict.get("code") or "")
-                    name = _resolve_stock_name(row_dict, symbol)
+                    name = _resolve_stock_name(row_dict, symbol, market=_market_from_table(market_table))
 
                     market_cap = row_dict.get("market_cap")
                     if market_cap is None:
@@ -613,7 +610,7 @@ def _query_stock_pool(
 
                 if row_dict:
                     symbol = str(row_dict.get("symbol") or "")
-                    name = _resolve_stock_name(row_dict, symbol)
+                    name = _resolve_stock_name(row_dict, symbol, market=_market_from_table(market_table))
 
                     # 兼容不同可能的字段名
                     market_cap = row_dict.get("market_cap")

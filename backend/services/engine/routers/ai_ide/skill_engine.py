@@ -14,11 +14,18 @@ from typing import Optional
 logger = logging.getLogger(__name__)
 
 # Per-market Qlib configuration (mirrors frontend marketConfig.ts)
+# HK/US 用 qlib_paths 统一解析（优先 parquet 派生 .qlib_cache）；CN/CRYPTO 保持原路径
+def _resolve_market_qlib(market: str) -> str:
+    from backend.shared.qlib_paths import resolve_qlib_provider_uri
+
+    return resolve_qlib_provider_uri(market)
+
 MARKET_QLIB_CONFIG = {
-    "CN": {"provider_uri": "/app/db/qlib_data", "region": "cn", "region_upper": "CN"},
-    "HK": {"provider_uri": "/app/db/qlib_data/hk_data", "region": "cn", "region_upper": "CN"},
-    "US": {"provider_uri": "/app/db/qlib_data/us_data", "region": "us", "region_upper": "US"},
-    "CRYPTO": {"provider_uri": "/app/db/qlib_data/crypto_data", "region": "cn", "region_upper": "CN"},
+    "CN": {"provider_uri": _resolve_market_qlib("CN"), "region": "cn", "region_upper": "CN"},
+    "HK": {"provider_uri": _resolve_market_qlib("HK"), "region": "cn", "region_upper": "CN"},
+    "US": {"provider_uri": _resolve_market_qlib("US"), "region": "us", "region_upper": "US"},
+    "CRYPTO": {"provider_uri": _resolve_market_qlib("CRYPTO"), "region": "cn", "region_upper": "CN"},
+    "FUTURES": {"provider_uri": _resolve_market_qlib("FUTURES"), "region": "cn", "region_upper": "CN"},
 }
 
 
