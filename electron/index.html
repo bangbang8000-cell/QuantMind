@@ -25,9 +25,10 @@
         animation: qmGradientShift 15s ease infinite;
       }
 
-      /* React 挂载后由 main.tsx 给 body 加上 .qm-loaded，让底部 Dock 区域透出浏览器/Electron 底色 */
+      /* React 挂载后由 main.tsx 给 body 加上 .qm-loaded，让底部 Dock 区域承接页面底色
+         （与 .app-main 渐变末端 #e2e8f0 保持一致，避免浏览器视口白色从透明层透出） */
       body.qm-loaded {
-        background: transparent;
+        background: #e2e8f0;
         animation: none;
       }
 
