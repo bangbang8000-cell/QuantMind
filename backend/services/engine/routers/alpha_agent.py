@@ -845,8 +845,17 @@ async def _run_functional_factor_subprocess(
 
     h5_path = "/tmp/daily_pv.h5"
     try:
-        # 把 Qlib 拉的 df 写成 H5 给 subprocess 读（列名与 RD-Agent 模板一致）
-        df.to_hdf(h5_path, key="data", mode="w")
+        # 把 Qlib 拉的 df 写成 H5 给 subprocess 读。
+        # Qlib D.features() 的列名带 "$" 前缀 (如 $close, $volume)，
+        # 但 RD-Agent 因子代码通常用不带前缀的列名 (如 close, volume)。
+        # 同时写入两组列名，兼容两种命名约定。
+        df_out = df.copy()
+        for col in list(df_out.columns):
+            if col.startswith("$"):
+                plain = col[1:]
+                if plain not in df_out.columns:
+                    df_out[plain] = df_out[col]
+        df_out.to_hdf(h5_path, key="data", mode="w")
     except Exception as e:
         raise RuntimeError(f"准备 daily_pv.h5 失败: {e}") from e
 
