@@ -47,30 +47,31 @@ _DEFAULT_DATA_DIR = "/app/db/feature_snapshots"
 # 1. 配置
 # ═══════════════════════════════════════════════════════════════════════════
 
-def load_ensemble_config(model_dir: Path) -> dict:
-    """加载集成配置。如果不存在，自动扫描子目录发现模型。"""
+def load_ensemble_config(model_dir: Path, market: str = "CN") -> dict:
+    """加载集成配置。如果不存在，自动扫描子目录发现模型。
+
+    market: 目标市场。自动发现时只选取与市场匹配的模型
+    （模型 metadata 中 context.market 或顶层 market 字段）。
+    """
     config_path = model_dir / "ensemble_config.json"
     if config_path.exists():
-        with open(config_path, encoding="utf-8") as f:
-            return json.load(f)
+        return json.load(open(config_path, encoding="utf-8"))
 
     # 自动发现：扫描 MODEL_DIR 的父目录下所有模型
     # 每个 horizon 选特征数最多的模型
     models_base = Path(os.getenv("MODELS_USERS_DIR", "/app/models/users/default/10000001"))
     best_per_horizon = {}
 
+    # 扫描两级目录结构：
+    #   {models_base}/{model}/*/metadata.json              （CN 市场 + 老模型）
+    #   {models_base}/{market}/{model}/metadata.json        （非 CN 市场分段存储）
     for meta_path in sorted(models_base.glob("*/metadata.json")):
-        m = json.load(open(meta_path, encoding="utf-8"))
-        ctx = m.get("context", {})
-        h = m.get("target_horizon_days", ctx.get("target_horizon_days"))
-        ms = ctx.get("market", m.get("market", ""))
-        if ms != "CN" or h is None:
+        _discover_model(meta_path, market, best_per_horizon)
+    for sub_dir in sorted(models_base.iterdir()):
+        if not sub_dir.is_dir():
             continue
-        h = int(h)
-        n = len(m.get("feature_columns", m.get("features", [])))
-        d = meta_path.parent.name
-        if h not in best_per_horizon or n > best_per_horizon[h]["features"]:
-            best_per_horizon[h] = {"dir": d, "features": n}
+        for meta_path in sorted(sub_dir.glob("*/metadata.json")):
+            _discover_model(meta_path, market, best_per_horizon)
 
     if not best_per_horizon:
         return {"models": []}
@@ -82,7 +83,7 @@ def load_ensemble_config(model_dir: Path) -> dict:
         "models": [
             {
                 "horizon": h,
-                "model_dir": str(models_base / info["dir"]),
+                "model_dir": info["dir"],
                 "weight": default_weights.get(h, 0.15),
                 "features": info["features"],
             }
@@ -92,6 +93,31 @@ def load_ensemble_config(model_dir: Path) -> dict:
     logger.info("自动发现 %d 个周期模型: %s", len(config["models"]),
                 ["T+" + str(m["horizon"]) for m in config["models"]])
     return config
+
+
+def _discover_model(meta_path: Path, market: str, best_per_horizon: dict) -> None:
+    """把单个 metadata.json 的模型按周期并入 best_per_horizon（若市场匹配）。"""
+    try:
+        m = json.load(open(meta_path, encoding="utf-8"))
+    except Exception:
+        return
+    ctx = m.get("context", {})
+    h = m.get("target_horizon_days", ctx.get("target_horizon_days"))
+    ms = ctx.get("market", m.get("market", ""))
+    if h is None:
+        return
+    try:
+        h = int(h)
+    except Exception:
+        return
+    # 市场匹配：未标注市场的老模型默认视为 CN
+    model_market = str(ms or "CN").upper()
+    if market.upper() != model_market:
+        return
+    n = len(m.get("feature_columns", m.get("features", [])))
+    d = str(meta_path.parent.resolve())
+    if h not in best_per_horizon or n > best_per_horizon[h]["features"]:
+        best_per_horizon[h] = {"dir": d, "features": n}
 
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -165,7 +191,7 @@ def predict_single(
 
 def _resolve_parquet_path(data_dir: Path, trade_date: str, market: str = "CN") -> Path | None:
     """解析 parquet 文件路径。"""
-    _MARKET_PARQUET = {"HK": "model_features_hk.parquet", "US": "model_features_us.parquet", "CRYPTO": "model_features_crypto.parquet"}
+    _MARKET_PARQUET = {"HK": "model_features_hk.parquet", "US": "model_features_us.parquet", "CRYPTO": "model_features_crypto.parquet", "FUTURES": "model_features_futures.parquet"}
     if market in _MARKET_PARQUET:
         p = data_dir / _MARKET_PARQUET[market]
         if p.exists():
@@ -180,9 +206,9 @@ def _resolve_parquet_path(data_dir: Path, trade_date: str, market: str = "CN") -
     return p if p.exists() else None
 
 
-def load_day_data(trade_date: str, data_dir: Path) -> pd.DataFrame | None:
+def load_day_data(trade_date: str, data_dir: Path, market: str = "CN") -> pd.DataFrame | None:
     """加载指定日期的特征数据。"""
-    parquet_path = _resolve_parquet_path(data_dir, trade_date)
+    parquet_path = _resolve_parquet_path(data_dir, trade_date, market=market)
     if parquet_path is None:
         logger.warning("找不到 parquet 文件 (data_dir=%s)", data_dir)
         return None
@@ -295,6 +321,9 @@ def parse_args():
     p.add_argument("--output", "-o", type=str, required=True)
     p.add_argument("--model-dir", type=str, default=os.getenv("MODEL_DIR", str(Path(__file__).parent)))
     p.add_argument("--data-dir", type=str, default=os.getenv("MODEL_TRAINING_DATA_DIR", _DEFAULT_DATA_DIR))
+    p.add_argument("--market", type=str, default=os.getenv("MARKET", "CN"),
+                   choices=["CN", "US", "HK", "CRYPTO", "FUTURES"],
+                   help="目标市场，用于选择对应 parquet 数据与模型")
     return p.parse_args()
 
 
@@ -309,24 +338,26 @@ def main():
     model_dir = Path(args.model_dir)
     data_dir = Path(args.data_dir)
     out_path = Path(args.output)
+    market = (args.market or "CN").upper().strip()
 
     logger.info("=== 多周期集成推理 ===")
     logger.info("  date     : %s", trade_date)
+    logger.info("  market   : %s", market)
     logger.info("  model_dir: %s", model_dir)
     logger.info("  data_dir : %s", data_dir)
 
     # 1. 加载配置
-    config = load_ensemble_config(model_dir)
+    config = load_ensemble_config(model_dir, market=market)
     model_configs = config.get("models", [])
     if not model_configs:
-        logger.error("无可用模型配置")
+        logger.error("无可用模型配置（市场=%s）", market)
         sys.exit(1)
 
     logger.info("集成 %d 个周期: %s", len(model_configs),
                 ["T+" + str(m["horizon"]) for m in model_configs])
 
     # 2. 加载数据
-    day_df = load_day_data(trade_date, data_dir)
+    day_df = load_day_data(trade_date, data_dir, market=market)
     if day_df is None:
         msg = f"日期 {trade_date} 无数据"
         logger.warning(msg)

@@ -4,6 +4,14 @@ import React from 'react';
 import type { AnalysisHistoryItem } from '../types';
 import { getDownloadUrl } from '../services/tradingAgentsService';
 
+const MARKET_LABELS: Record<string, string> = {
+  CN: 'A股',
+  HK: '港股',
+  US: '美股',
+  CRYPTO: '区块链',
+  FUTURES: '期货',
+};
+
 interface HistoryListProps {
   history: AnalysisHistoryItem[];
   onSelect: (item: AnalysisHistoryItem) => void;
@@ -65,6 +73,18 @@ export const HistoryList: React.FC<HistoryListProps> = ({ history, onSelect }) =
             }}
           >
             <span style={{ fontWeight: 600 }}>{item.ticker}</span>
+            {item.market && (
+              <span style={{
+                color: '#94a3b8',
+                fontSize: 10,
+                fontWeight: 600,
+                background: '#f1f5f9',
+                padding: '1px 6px',
+                borderRadius: 4,
+              }}>
+                {MARKET_LABELS[item.market.toUpperCase()] || item.market}
+              </span>
+            )}
             <span style={{ color: '#94a3b8', fontSize: 12 }}>{item.trade_date}</span>
             {item.signal && (
               <span style={{

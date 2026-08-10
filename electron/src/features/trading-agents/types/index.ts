@@ -17,6 +17,7 @@ export interface AnalysisProgress {
   completed_stages: string[];
   stage_reports: Record<string, string>;
   signal?: string;
+  final_state?: Record<string, any>;
   stats: {
     llm_calls: number;
     tool_calls: number;
@@ -32,6 +33,7 @@ export interface AnalysisReport {
   signal: string;
   final_state: Record<string, any>;
   stage_reports: Record<string, string>;
+  market?: string;
   stats: {
     llm_calls: number;
     tool_calls: number;
@@ -48,6 +50,7 @@ export interface AnalysisHistoryItem {
   signal: string;
   elapsed: number;
   source: 'memory' | 'disk';
+  market?: string;
 }
 
 export interface LLMProvider {

@@ -60,6 +60,8 @@ export const MODEL_TYPE_OPTIONS: ModelTypeOption[] = [
 export interface TrainingTarget {
   mode: TargetMode;
   horizonDays: number;
+  /** 多周期训练：非空数组时一次产出多个周期模型（如 [1,3,5,10]），horizonDays 仅作主显示周期 */
+  horizonDaysList?: number[];
 }
 
 export type EnsembleMethod = 'none' | 'stacking';
@@ -114,7 +116,7 @@ export interface TrainingContext {
   commissionRate: number;
   slippage: number;
   dealPrice: DealPrice;
-  market?: 'CN' | 'US' | 'HK' | 'CRYPTO';
+  market?: 'CN' | 'US' | 'HK' | 'CRYPTO' | 'FUTURES';
   industry_as_feature?: boolean;
 }
 
@@ -212,6 +214,7 @@ export interface TrainingResult {
     benchmark: string;
     objective: string;
     metric: string;
+    market?: string;
     generated_at: string;
   };
   metrics?: {
@@ -234,6 +237,17 @@ export interface TrainingResult {
   };
   wfa?: WfaDiagnosticResult;
   drift?: PsiDriftResult;
+  multiHorizon?: {
+    horizons: string[];
+    child_run_ids: string[];
+    child_model_ids: string[];
+    fusion_model_id: string;
+    child_results?: Array<{
+      run_id: string;
+      target_horizon_days: number;
+      result: any;
+    }>;
+  };
   completedAt: string;
 }
 
@@ -419,6 +433,16 @@ export const MARKET_DEFAULT_FEATURES: Record<string, string[]> = {
   ],
   CRYPTO: [
     // 加密货币没有基本面，纯技术+资金流
+    'mom_ret_1d', 'mom_ret_5d', 'mom_ret_20d',
+    'mom_ma_gap_5', 'mom_ma_gap_20', 'mom_rsi_14',
+    'vol_std_20', 'vol_atr_20', 'vol_parkinson_20',
+    'flow_vpin', 'flow_vpin_ma_5', 'flow_vpin_ma_20',
+    'liq_volume_ma_5', 'liq_amihud_20', 'ma_gap_20',
+    'volume_ma_5', 'vol_downside_20', 'style_beta_20',
+    'mom_breakout_20d', 'vol_jump_zadj',
+  ],
+  FUTURES: [
+    // 期货无基本面，纯技术+波动率+流动性
     'mom_ret_1d', 'mom_ret_5d', 'mom_ret_20d',
     'mom_ma_gap_5', 'mom_ma_gap_20', 'mom_rsi_14',
     'vol_std_20', 'vol_atr_20', 'vol_parkinson_20',
@@ -669,7 +693,8 @@ export const buildEffectiveTradeDate = (target: TrainingTarget, referenceDate: D
 
 export const buildAutoDisplayName = (referenceDate: Dayjs, target: TrainingTarget, featureCount: number, version = DEFAULT_MODEL_VERSION, market?: string) => {
   const dateToken = referenceDate.format('DD');
-  const returnToken = `T${target.horizonDays}`;
+  const horizons = target.horizonDaysList?.filter((h) => h >= 1) ?? [];
+  const returnToken = horizons.length >= 2 ? `T${horizons.join('_')}` : `T${target.horizonDays}`;
   const dimensionToken = `Alpha${Math.max(1, featureCount)}`;
   const marketSuffix = market ? `_${market.toUpperCase()}` : '';
   return `${dateToken}_${returnToken}_${dimensionToken}_${version}${marketSuffix}`;
@@ -823,8 +848,7 @@ export const buildBackendTrainingPayload = (
     effective_trade_date: request.effectiveTradeDate,
     training_window: request.trainingWindow,
     generated_at: request.generatedAt,
-    context: {
-      initial_capital: request.context.initialCapital,
+    context: {      initial_capital: request.context.initialCapital,
       benchmark: request.context.benchmark,
       commission_rate: request.context.commissionRate,
       slippage: request.context.slippage,
@@ -888,6 +912,14 @@ export const buildBackendTrainingPayload = (
       val_months: request.wfa.valMonths,
       step_months: request.wfa.stepMonths,
     };
+  }
+
+  // 多周期训练：一次产出 T+1/T+3/T+5/T+10 等周期的模型（编排器按周期展开为多个任务）
+  const horizons = request.target.horizonDaysList?.filter((h) => h >= 1) ?? [];
+  if (horizons.length >= 2) {
+    payload.horizons = horizons;
+    // 多周期下 WFA 成本 4×4=16 次训练，禁用避免超时
+    delete payload.wfa;
   }
 
   return payload;
@@ -1006,6 +1038,7 @@ export const parseTrainingResult = (
     },
     wfa: (rawResult.wfa as WfaDiagnosticResult) || undefined,
     drift: (rawResult.drift as PsiDriftResult) || undefined,
+    multiHorizon: (rawResult.multi_horizon as TrainingResult['multiHorizon']) || undefined,
     completedAt: new Date().toISOString(),
   };
 };

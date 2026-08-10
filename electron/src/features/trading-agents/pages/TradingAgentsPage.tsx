@@ -14,6 +14,9 @@ import {
   stopAnalysis,
 } from '../services/tradingAgentsService';
 import type { AnalysisProgress, AnalysisHistoryItem } from '../types';
+import { useAppSelector } from '../../../store';
+import { selectCurrentMarket } from '../../../store/slices/uiSlice';
+import { getMarketConfig } from '../../../config/marketConfig';
 
 type ViewState = 'idle' | 'running' | 'complete' | 'error';
 
@@ -40,6 +43,13 @@ const TradingAgentsPage: React.FC = () => {
       .then((data) => setHistory(data.history))
       .catch(() => {});
   }, []);
+
+  const currentMarket = useAppSelector(selectCurrentMarket);
+  const marketCfg = getMarketConfig(currentMarket);
+  // 历史按当前市场过滤：无 market 标记的历史视为 CN（老数据）
+  const filteredHistory = history.filter(
+    (item) => (item.market ? item.market.toUpperCase() === currentMarket : currentMarket === 'CN'),
+  );
 
   // Poll progress when running
   useEffect(() => {
@@ -87,6 +97,7 @@ const TradingAgentsPage: React.FC = () => {
         llm_provider: provider,
         quick_think_llm: quickModel,
         deep_think_llm: deepModel,
+        market: currentMarket,
       });
 
       setAnalysisId(result.analysis_id);
@@ -94,7 +105,7 @@ const TradingAgentsPage: React.FC = () => {
       setErrorMsg(err.message || '启动失败');
       setViewState('error');
     }
-  }, [ticker, tradeDate, provider, quickModel, deepModel]);
+  }, [ticker, tradeDate, provider, quickModel, deepModel, currentMarket]);
 
   const handleStop = useCallback(async () => {
     if (!analysisId) return;
@@ -167,7 +178,7 @@ const TradingAgentsPage: React.FC = () => {
               <span style={{ color: '#1e293b' }}>Agents</span>
             </div>
             <div style={{ fontSize: 12, color: '#64748b', marginTop: 2 }}>
-              A股多Agent投研分析
+              {marketCfg.label}多Agent投研分析
             </div>
           </div>
 
@@ -179,8 +190,11 @@ const TradingAgentsPage: React.FC = () => {
             padding: 16,
             backdropFilter: 'blur(8px)',
           }}>
-            <div style={{ fontSize: 14, fontWeight: 600, marginBottom: 14, color: '#1e293b' }}>
+            <div style={{ fontSize: 14, fontWeight: 600, marginBottom: 14, color: '#1e293b', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
               新建分析
+              <span style={{ fontSize: 11, fontWeight: 500, color: '#64748b', background: '#f1f5f9', padding: '2px 8px', borderRadius: 6 }}>
+                当前市场：{marketCfg.label}
+              </span>
             </div>
             <StockInput
               ticker={ticker}
@@ -251,7 +265,7 @@ const TradingAgentsPage: React.FC = () => {
             <div style={{ fontSize: 14, fontWeight: 600, marginBottom: 12, color: '#1e293b' }}>
               历史记录
             </div>
-            <HistoryList history={history} onSelect={handleHistorySelect} />
+            <HistoryList history={filteredHistory} onSelect={handleHistorySelect} />
           </div>
 
           <div style={{ fontSize: 11, color: '#94a3b8', textAlign: 'center', marginTop: 'auto' }}>

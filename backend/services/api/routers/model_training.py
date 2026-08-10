@@ -493,12 +493,12 @@ async def get_model_feature_catalog(
 ):
     _ = current_user
     try:
-        catalog = await _load_feature_catalog_from_db()
+        catalog = await _load_feature_catalog_from_db(market=market)
     except Exception:
         catalog = None
 
     if not catalog:
-        catalog = _load_feature_catalog_from_file()
+        catalog = _load_feature_catalog_from_file(market=market)
 
     if not catalog:
         raise HTTPException(status_code=404, detail="未找到可用的特征字典（DB/文件均不可用）")
@@ -567,6 +567,7 @@ async def get_training_run(
 @router.get("", summary="获取当前用户模型列表（用户态）")
 async def list_user_models(
     include_archived: bool = False,
+    market: str | None = None,
     current_user: dict[str, Any] = Depends(get_current_user),
 ):
     tenant_id = str(current_user.get("tenant_id") or "default")
@@ -575,6 +576,7 @@ async def list_user_models(
         tenant_id=tenant_id,
         user_id=user_id,
         include_archived=include_archived,
+        market=market,
     )
     return {"items": models, "total": len(models)}
 

@@ -26,8 +26,9 @@ exit code：
 
 from __future__ import annotations
 
-import json
+# 并发推理时，多个 worker 会同时执行 _persist_and_publish 写 engine_signal_scores
 import logging
+import json
 import math
 import os
 import re
@@ -366,6 +367,7 @@ class InferenceScriptRunner:
             "HK": "model_features_hk.parquet",
             "US": "model_features_us.parquet",
             "CRYPTO": "model_features_crypto.parquet",
+            "FUTURES": "model_features_futures.parquet",
         }
 
         parquet_path = None
@@ -938,6 +940,10 @@ class InferenceScriptRunner:
                 "--output",
                 str(out_file),
             ]
+            # 把 legacy "A" 归一化为 "CN"，其余市场原样传给推理脚本
+            cli_market = model_market if model_market != "A" else "CN"
+            if cli_market in ("US", "HK", "CRYPTO", "FUTURES"):
+                cmd += ["--market", cli_market]
             proc = subprocess.run(
                 cmd,
                 capture_output=True,
@@ -1093,29 +1099,22 @@ class InferenceScriptRunner:
     @staticmethod
     def _resolve_signal_sides(
         scores: list[float],
+        consensus_list: list[int] | None = None,
         buy_pct: float = 0.20,
         sell_pct: float = 0.20,
-        min_buy_score: float = 0.0,
-        max_sell_score: float = 0.0,
+        min_buy_score: float = 0.2,
+        max_sell_score: float = -0.2,
+        min_consensus: int = 4,
     ) -> list[str]:
-        """百分位排名信号逻辑：用当天分数分布自适应生成信号，并加绝对方向闸门。
+        """双指标信号逻辑：百分比排名 + 共识度 + 绝对方向闸门。
 
-        逻辑：按分数排名，取 top/bottom 百分位；并要求方向一致。
-        - Top buy_pct 且 score > min_buy_score → BUY
-        - Bottom sell_pct 且 score < max_sell_score → SELL
+        逻辑：
+        - Top buy_pct 百分位 AND score > min_buy_score AND consensus >= min_consensus → BUY
+        - Bottom sell_pct 百分位 AND score < max_sell_score AND consensus >= min_consensus → SELL
+        - 分歧太大 (consensus < min_consensus) → HOLD
         - 其余 → HOLD
 
-        加绝对闸门的原因：
-        - 模型预测整体偏负的日子（普跌行情），仅靠百分位会把"跌得相对少"的股票标 BUY，
-          但实际预测值仍是负，前端展示"建议做多"是误导。
-        - 反之，整体偏正的日子，"涨得相对少"也不应该标 SELL。
-
-        Args:
-            scores: 当日所有股票的预测分数
-            buy_pct: 买入信号百分位（默认 top 20%）
-            sell_pct: 卖出信号百分位（默认 bottom 20%）
-            min_buy_score: BUY 要求 score 不低于此（默认 0.0，即必须正向预测）
-            max_sell_score: SELL 要求 score 不高于此（默认 0.0，即必须负向预测）
+        当 consensus_list 为 None 时退化为纯百分位逻辑（兼容旧版JSON输出）。
         """
         import numpy as np
 
@@ -1129,12 +1128,17 @@ class InferenceScriptRunner:
         buy_threshold = np.percentile(arr, (1 - buy_pct) * 100)
         sell_threshold = np.percentile(arr, sell_pct * 100)
 
-        # 生成信号（百分位 + 方向双重约束）
+        # 生成信号（百分位 + 方向 + 共识度 三重约束）
+        has_consensus = consensus_list is not None and len(consensus_list) == n
         sides = []
-        for s in scores:
-            if s >= buy_threshold and s > min_buy_score:
+        for i, s in enumerate(scores):
+            is_buy = s >= buy_threshold and s > min_buy_score
+            is_sell = s <= sell_threshold and s < max_sell_score
+            if has_consensus and consensus_list[i] < min_consensus:
+                sides.append("HOLD")  # 分歧太大
+            elif is_buy:
                 sides.append("BUY")
-            elif s <= sell_threshold and s < max_sell_score:
+            elif is_sell:
                 sides.append("SELL")
             else:
                 sides.append("HOLD")
@@ -1144,7 +1148,7 @@ class InferenceScriptRunner:
         sell_count = sides.count("SELL")
         hold_count = sides.count("HOLD")
         logger.info(
-            f"[SignalLogic] 百分位+方向信号: BUY={buy_count}({buy_count/n*100:.1f}%), "
+            f"SignalLogic] 双指标+方向信号: BUY={buy_count}({buy_count/n*100:.1f}%), "
             f"SELL={sell_count}({sell_count/n*100:.1f}%), HOLD={hold_count}({hold_count/n*100:.1f}%), "
             f"buy_threshold={buy_threshold:.4f} (min_buy={min_buy_score}), "
             f"sell_threshold={sell_threshold:.4f} (max_sell={max_sell_score}), "
@@ -1262,7 +1266,13 @@ class InferenceScriptRunner:
                         continue
 
                     valid.append(
-                        {"symbol": str(item["symbol"]), "score": float(item["score"])}
+                        {
+                            "symbol": str(item["symbol"]),
+                            "score": float(item["score"]),
+                            "consensus": int(item.get("consensus", 0)),
+                            "zfusion": float(item.get("zfusion", 0.0)),
+                            "detail": item.get("detail", {}),
+                        }
                     )
                 except (ValueError, TypeError):
                     pass
@@ -1303,6 +1313,9 @@ class InferenceScriptRunner:
         signals_sorted = sorted(signals, key=lambda x: x["score"], reverse=True)
         symbols = [s["symbol"] for s in signals_sorted]
         scores = [s["score"] for s in signals_sorted]
+        consensus_list = [s.get("consensus", 0) for s in signals_sorted]
+        zfusion_list = [s.get("zfusion", 0.0) for s in signals_sorted]
+        detail_list = [s.get("detail", {}) for s in signals_sorted]
         feature_dim = max(1, self._resolve_expected_feature_dim())
         model_name = str(active_model_id or self.primary_model_id or "inference_script")
         feature_version = self._resolve_feature_version(model_name)
@@ -1333,11 +1346,14 @@ class InferenceScriptRunner:
                     signals=signals,
                     symbols=symbols,
                     scores=scores,
+                    consensus_list=consensus_list,
+                    zfusion_list=zfusion_list,
+                    detail_list=detail_list,
                     feature_dim=feature_dim,
                     model_name=model_name,
                     feature_version=feature_version,
                     inference_date=inference_date,
-                    signal_sides=self._resolve_signal_sides(scores),
+                    signal_sides=self._resolve_signal_sides(scores, consensus_list),
                 )
         except Exception as exc:
             logger.error(f"[InferenceScriptRunner] 写库失败: {exc}")
@@ -1400,6 +1416,9 @@ class InferenceScriptRunner:
         feature_version: str,
         inference_date: str,
         signal_sides: list[str],
+        consensus_list: list[int] | None = None,
+        zfusion_list: list[float] | None = None,
+        detail_list: list[dict] | None = None,
     ) -> None:
         """写库逻辑（在 _INFER_PERSIST_LOCK 保护下执行）。
 
@@ -1545,22 +1564,33 @@ class InferenceScriptRunner:
                 run_id, tenant_id, user_id, trade_date, symbol,
                 model_version, feature_version,
                 light_score, tft_score, fusion_score, risk_weight, regime,
-                signal_side, expected_price, created_at
+                signal_side, expected_price, quality, created_at
             ) VALUES (
                 :run_id, :tenant_id, :user_id, :trade_date, :symbol,
                 'inference_script', :feature_version,
                 NULL, NULL, :score, 1.0, 'normal',
-                :signal_side, :expected_price, NOW()
+                :signal_side, :expected_price, :quality::jsonb, NOW()
             )
             ON CONFLICT (tenant_id, user_id, trade_date, symbol, model_version, feature_version, run_id)
             DO UPDATE SET
                 fusion_score = EXCLUDED.fusion_score,
                 signal_side = EXCLUDED.signal_side,
-                expected_price = EXCLUDED.expected_price
+                expected_price = EXCLUDED.expected_price,
+                quality = EXCLUDED.quality
         """)
+        has_consensus = consensus_list is not None and len(consensus_list) == len(symbols)
+        has_zfusion = zfusion_list is not None and len(zfusion_list) == len(symbols)
+        has_detail = detail_list is not None and len(detail_list) == len(symbols)
         for idx, (sym, score) in enumerate(zip(symbols, scores, strict=True)):
             expected_price = None
             signal_side = signal_sides[idx]
+            # 构建 quality JSONB
+            quality_parts = {"consensus": consensus_list[idx]} if has_consensus else {}
+            if has_zfusion:
+                quality_parts["zfusion"] = round(zfusion_list[idx], 6)
+            if has_detail:
+                quality_parts["detail"] = detail_list[idx]
+            quality = json.dumps(quality_parts) if quality_parts else None
             if quote_redis:
                 try:
                     raw_sym = (
@@ -1593,6 +1623,7 @@ class InferenceScriptRunner:
                     "score": score,
                     "signal_side": signal_side,
                     "expected_price": expected_price,
+                    "quality": quality,
                 },
             )
         if quote_redis:

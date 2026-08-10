@@ -9,7 +9,7 @@
  */
 
 import React, { useState, useMemo } from 'react';
-import { Card, Button, Space, Alert, Empty, Divider } from 'antd';
+import { Card, Button, Space, Alert, Empty, Divider, Tag } from 'antd';
 import { ArrowLeftOutlined, DownloadOutlined, ReloadOutlined } from '@ant-design/icons';
 import { useNavigate } from 'react-router-dom';
 import { StrategySelector } from '../components/StrategySelector';
@@ -17,6 +17,9 @@ import { ComparisonTable } from '../components/ComparisonTable';
 import { ComparisonCharts } from '../components/ComparisonCharts';
 import type { StrategyComparisonItem, BestPerformers, StrategyRanking } from '../../../shared/types/strategyComparison';
 import { useAuth } from '../../auth/hooks';
+import { useAppSelector } from '../../../store';
+import { selectCurrentMarket } from '../../../store/slices/uiSlice';
+import { getMarketConfig } from '../../../config/marketConfig';
 
 /**
  * 策略对比页面组件
@@ -24,6 +27,8 @@ import { useAuth } from '../../auth/hooks';
 export const StrategyComparisonPage: React.FC = () => {
   const navigate = useNavigate();
   const { user } = useAuth();
+  const currentMarket = useAppSelector(selectCurrentMarket);
+  const marketCfg = getMarketConfig(currentMarket);
 
   const [selectedStrategies, setSelectedStrategies] = useState<StrategyComparisonItem[]>([]);
 
@@ -147,6 +152,7 @@ export const StrategyComparisonPage: React.FC = () => {
               返回
             </Button>
             <h2 style={{ margin: 0 }}>策略对比分析</h2>
+            <Tag color="blue" style={{ marginLeft: 8 }}>{marketCfg.label}</Tag>
           </Space>
 
           <Space>

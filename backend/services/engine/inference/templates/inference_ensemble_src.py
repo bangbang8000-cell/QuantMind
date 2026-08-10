@@ -88,8 +88,24 @@ def load_ensemble_config(model_dir: Path) -> dict:
 # 2. 数据加载
 # ═══════════════════════════════════════════════════════════════════════════
 
-def _resolve_parquet_path(data_dir: Path, trade_date: str) -> Path | None:
-    """解析年度/市场 parquet 文件路径（A股市场）。"""
+def _resolve_parquet_path(data_dir: Path, trade_date: str, market: str = "CN") -> Path | None:
+    """解析年度/市场 parquet 文件路径。
+
+    market 非 CN 时优先取各市场汇总文件（model_features_{market}.parquet），
+    CN 回退到按年拆分文件。
+    """
+    _MARKET_PARQUET = {
+        "HK": "model_features_hk.parquet",
+        "US": "model_features_us.parquet",
+        "CRYPTO": "model_features_crypto.parquet",
+        "FUTURES": "model_features_futures.parquet",
+    }
+    market_upper = str(market or "CN").upper()
+    if market_upper in _MARKET_PARQUET:
+        p = data_dir / _MARKET_PARQUET[market_upper]
+        if p.exists():
+            return p
+
     year = int(trade_date[:4])
     p = data_dir / f"model_features_{year}.parquet"
     if p.exists():
@@ -98,9 +114,9 @@ def _resolve_parquet_path(data_dir: Path, trade_date: str) -> Path | None:
     return p if p.exists() else None
 
 
-def load_day_data(trade_date: str, data_dir: Path) -> pd.DataFrame | None:
+def load_day_data(trade_date: str, data_dir: Path, market: str = "CN") -> pd.DataFrame | None:
     """加载指定交易日的全市场特征数据。"""
-    parquet_path = _resolve_parquet_path(data_dir, trade_date)
+    parquet_path = _resolve_parquet_path(data_dir, trade_date, market=market)
     if parquet_path is None:
         logger.warning("找不到 parquet 文件 (data_dir=%s)", data_dir)
         return None
@@ -304,7 +320,12 @@ def predict_with_model(model, meta: dict, day_df: pd.DataFrame) -> dict[str, flo
     if is_stacking:
         scores = model.predict(X_values)
     elif hasattr(model, "get_dump") or str(type(model).__name__) == "Booster":
-        scores = model.predict(X_values, num_iteration=best_iter)
+        # LightGBM Booster 支持 num_iteration；XGBoost 3.x Booster 需要 DMatrix
+        if str(type(model).__module__).startswith("xgboost"):
+            dmat = xgb.DMatrix(X_values, feature_names=list(feature_cols)) if xgb else None
+            scores = model.predict(dmat)
+        else:
+            scores = model.predict(X_values, num_iteration=best_iter)
     else:
         # sklearn / pickle 模型
         if hasattr(model, "predict_proba"):
@@ -330,70 +351,91 @@ def predict_with_model(model, meta: dict, day_df: pd.DataFrame) -> dict[str, flo
 # 5. 融合逻辑
 # ═══════════════════════════════════════════════════════════════════════════
 
+_Z_CLIP = 3.0  # Winsorize: 单模型 z-score 截尾到 ±3σ, 防单点劫持
+
+
 def fuse_scores(
     all_scores: dict[str, dict[str, float]],
     weights: dict[str, float],
 ) -> list[dict]:
-    """多源模型分数融合（按源模型 id）。
+    """多源模型分数融合（Winsorized z-score + 共识度门控）。
 
     融合策略：
-    1. 每个源模型的分数做截面排名百分位（0~1，0.5=中位数）
-    2. 加权平均得融合百分位
-    3. 转对称分数 (pct - 0.5) * 2 → [-1, 1]
-    4. 共识度 = 与多数方向一致的源模型数
+    1. 每个源模型的原始分做 z-score 标准化（保留偏度/峰度/尾部信息）
+    2. Winsorize: 单模型 z-score 截尾到 ±_Z_CLIP, 防极端值劫持融合分
+    3. 加权平均 → 融合 z-score（score）
+    4. 共识度 = 独立看多的模型数 (z_i > 0), 不与融合方向比较
+       — 防止高权重模型(T3)垄断"共识"定义
+    5. 不再对 score 做共识放大 — 共识度只做下游门控, 不参与排序
 
     Returns:
-        [{"symbol": "...", "score": 0.15, "consensus": 3, "horizons": 3, "detail": {...}}, ...]
+        [{"symbol": "...", "score": <fused_z>, "consensus": n, "zfusion": <fused_z>,
+          "detail": {...}}, ...]
     """
     all_symbols = set()
     for scores in all_scores.values():
         all_symbols.update(scores.keys())
 
-    # 预计算每个源模型的排名百分位
-    rank_pcts: dict[str, dict[str, float]] = {}
+    # 1. 每个源模型独立 z-score 标准化
+    z_scores: dict[str, dict[str, float]] = {}
     for mid, scores in all_scores.items():
         if not scores:
             continue
-        sorted_syms = sorted(scores.keys(), key=lambda s: scores[s])
-        n = len(sorted_syms)
-        rank_pcts[mid] = {sym: (i + 1) / n for i, sym in enumerate(sorted_syms)}
+        vals = list(scores.values())
+        n = len(vals)
+        if n < 2:
+            continue
+        mu = sum(vals) / n
+        variance = sum((v - mu) ** 2 for v in vals) / n
+        sigma = variance ** 0.5
+        if sigma < 1e-12:
+            z_scores[mid] = {sym: 0.0 for sym in scores}
+        else:
+            z_scores[mid] = {sym: (s - mu) / sigma for sym, s in scores.items()}
 
-    if not rank_pcts:
+    if not z_scores:
         return []
 
+    n_models = len(z_scores)
     results = []
+
     for sym in all_symbols:
-        raw_scores = {}
-        pct_scores = {}
+        per_model: dict[str, dict] = {}
+        z_vals: list[float] = []
+        w_vals: list[float] = []
 
-        for mid, pcts in rank_pcts.items():
-            if sym in pcts:
-                raw_scores[mid] = all_scores[mid][sym]
-                pct_scores[mid] = pcts[sym]
+        for mid in sorted(z_scores):
+            if sym in z_scores[mid]:
+                raw = all_scores[mid][sym]
+                z = z_scores[mid][sym]
+                # 2. Winsorize: 截尾到 ±_Z_CLIP
+                z_clipped = max(-_Z_CLIP, min(_Z_CLIP, z))
+                w = weights.get(mid, 1.0 / n_models)
+                per_model[mid] = {
+                    "raw": round(raw, 6),
+                    "z": round(z, 4),
+                    "z_clipped": round(z_clipped, 4),
+                }
+                z_vals.append(z_clipped)
+                w_vals.append(w)
 
-        if not pct_scores:
+        if not z_vals:
             continue
 
-        total_weight = sum(weights.get(m, 0.1) for m in pct_scores)
-        fused_pct = sum(pct_scores[m] * weights.get(m, 0.1) for m in pct_scores) / total_weight
-        fused = (fused_pct - 0.5) * 2
+        # 3. 加权平均 (Winsorized z-score, 无共识放大)
+        total_w = sum(w_vals)
+        fused_z = sum(z * w for z, w in zip(z_vals, w_vals)) / total_w
 
-        directions = {m: 1 if p > 0.5 else -1 for m, p in pct_scores.items()}
-        majority_dir = 1 if sum(directions.values()) > 0 else -1
-        consensus = sum(1 for d in directions.values() if d == majority_dir)
+        # 4. 共识度: 独立看多模型数 (z_i > 0)
+        consensus = sum(1 for mid in per_model if per_model[mid]["z"] > 0)
 
+        # 5. score = 纯 fused_z (共识度是下游门控, 不是放大器)
         results.append({
             "symbol": sym,
-            "score": float(fused),
+            "score": round(float(fused_z), 6),
             "consensus": int(consensus),
-            "horizons": len(pct_scores),
-            "detail": {
-                m: {
-                    "raw": round(raw_scores.get(m, 0), 6),
-                    "pct": round(pct_scores.get(m, 0.5), 4),
-                }
-                for m in pct_scores
-            },
+            "zfusion": round(float(fused_z), 6),
+            "detail": per_model,
         })
 
     return results
@@ -409,6 +451,9 @@ def parse_args():
     p.add_argument("--output", "-o", type=str, required=True)
     p.add_argument("--model-dir", type=str, default=os.getenv("MODEL_DIR", ""))
     p.add_argument("--data-dir", type=str, default=os.getenv("MODEL_TRAINING_DATA_DIR", _DEFAULT_DATA_DIR))
+    p.add_argument("--market", type=str, default=os.getenv("MARKET", "CN"),
+                   choices=["CN", "US", "HK", "CRYPTO", "FUTURES"],
+                   help="目标市场，用于选择对应 parquet 数据")
     return p.parse_args()
 
 
@@ -423,9 +468,11 @@ def main():
     model_dir = Path(args.model_dir)
     data_dir = Path(args.data_dir)
     out_path = Path(args.output)
+    market = (args.market or "CN").upper().strip()
 
     logger.info("=== 融合模型推理 ===")
     logger.info("  date     : %s", trade_date)
+    logger.info("  market   : %s", market)
     logger.info("  model_dir: %s", model_dir)
     logger.info("  data_dir : %s", data_dir)
 
@@ -436,7 +483,7 @@ def main():
                 [m.get("model_id", "?") for m in model_configs])
 
     # 2. 加载当日数据
-    day_df = load_day_data(trade_date, data_dir)
+    day_df = load_day_data(trade_date, data_dir, market=market)
     if day_df is None:
         msg = f"日期 {trade_date} 无数据"
         logger.warning(msg)

@@ -270,6 +270,27 @@ export const NaturalTextInput: React.FC<{ onNext: () => void }> = ({ onNext }) =
         { label: '巨鲸持仓', value: '巨鲸地址持仓集中度大于50%' },
       ],
     },
+    FUTURES: {
+      板块分类: [
+        { label: '全部期货', value: '全市场活跃期货主力合约，剔除流动性不足品种' },
+        { label: '贵金属', value: '黄金、白银等贵金属期货' },
+        { label: '有色金属', value: '铜、铝、锌、镍等有色金属期货' },
+        { label: '能源化工', value: '原油、燃油、PTA、甲醇等能源化工期货' },
+        { label: '黑色系', value: '螺纹钢、铁矿石、焦炭、焦煤等黑色系期货' },
+        { label: '农产品', value: '豆粕、玉米、白糖、棉花等农产品期货' },
+        { label: '金融期货', value: '股指、国债等金融期货' },
+      ],
+      规模与流动性: [
+        { label: '主力合约', value: '各品种主力连续合约' },
+        { label: '高流动性', value: '日均成交额大于50亿元的高流动性品种' },
+        { label: '低流动性', value: '剔除日均成交额低于5亿元的品种，注意流动性风险' },
+      ],
+      波动特征: [
+        { label: '高波动', value: '近20日年化波动率大于40%的品种' },
+        { label: '低波动', value: '近20日年化波动率小于20%的品种' },
+        { label: '趋势品种', value: '近60日趋势强度高的品种' },
+      ],
+    },
   };
 
   const templateGroups = useMemo(() => MARKET_TEMPLATES[currentMarket] || MARKET_TEMPLATES.CN, [currentMarket]);

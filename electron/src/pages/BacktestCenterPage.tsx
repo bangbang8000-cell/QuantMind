@@ -10,11 +10,16 @@ import type { BacktestResult } from '../services/backtestService';
 import { useBacktestStore } from '../stores/backtestStore';
 import ReactECharts from 'echarts-for-react';
 import { PAGE_LAYOUT } from '../config/pageLayout';
+import { useAppSelector } from '../store';
+import { selectCurrentMarket } from '../store/slices/uiSlice';
+import { getMarketConfig } from '../config/marketConfig';
 
 export const BacktestCenterPage: React.FC = () => {
   const [selectedBacktest, setSelectedBacktest] = useState<BacktestResult | null>(null);
   const { config } = useBacktestStore();
   const userId = config.user_id || 'default_user';
+  const currentMarket = useAppSelector(selectCurrentMarket);
+  const marketCfg = getMarketConfig(currentMarket);
 
   return (
     <div className={PAGE_LAYOUT.outerClass}>
@@ -25,7 +30,7 @@ export const BacktestCenterPage: React.FC = () => {
               <TrendingUp className="w-5 h-5 text-white" />
             </div>
             <div>
-              <h1 className="text-lg font-bold text-gray-800 leading-tight">回测中心</h1>
+              <h1 className="text-lg font-bold text-gray-800 leading-tight">回测中心 · {marketCfg.label}</h1>
               <p className="text-[10px] text-gray-400 uppercase tracking-wider font-semibold">Backtest & Analysis</p>
             </div>
           </div>

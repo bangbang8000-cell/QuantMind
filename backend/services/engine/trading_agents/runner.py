@@ -94,6 +94,7 @@ def _save_to_database(
                     "tool_calls": tracker.tool_calls,
                     "tokens_in": tracker.tokens_in,
                     "tokens_out": tracker.tokens_out,
+                    "market": getattr(tracker, "market", "CN"),
                 }, ensure_ascii=False),
                 "elapsed": tracker.elapsed,
                 "error": error,
@@ -216,10 +217,12 @@ def run_analysis_in_thread(
     config: dict,
     tracker: ProgressTracker,
     analysis_id: str = "",
+    market: str = "CN",
 ) -> threading.Thread:
     """Launch the pipeline in a daemon thread. Returns the thread handle."""
     tracker.ticker = ticker
     tracker.trade_date = trade_date
+    tracker.market = market
     tracker.is_running = True
     tracker.mark_stage_active("market")
 

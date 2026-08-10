@@ -24,6 +24,14 @@ import {
 
 const { Text } = Typography;
 
+const MARKET_LABELS: Record<string, string> = {
+  CN: 'A股',
+  HK: '港股',
+  US: '美股',
+  CRYPTO: '区块链',
+  FUTURES: '期货',
+};
+
 interface TrainingResultViewProps {
   result: TrainingResult | null;
   resultError: string;
@@ -193,6 +201,11 @@ export const TrainingResultView: React.FC<TrainingResultViewProps> = ({
                 >
                   {result.modelRegistration?.status || 'unknown'}
                 </Tag>
+                {result.metadata.market ? (
+                  <Tag className="m-0 rounded-full border-0 bg-blue-50 px-3 py-1 text-blue-600">
+                    {MARKET_LABELS[result.metadata.market.toUpperCase()] || result.metadata.market}
+                  </Tag>
+                ) : null}
                 <Text className="text-xs text-slate-600">
                   model_id: {result.modelRegistration?.modelId || result.modelId}
                 </Text>
@@ -462,6 +475,58 @@ export const TrainingResultView: React.FC<TrainingResultViewProps> = ({
 
                 <Text className="block mt-2 text-[10px] text-slate-400 leading-relaxed">
                   对比 {result.drift.train_start} ~ {result.drift.train_end}（训练）与 {result.drift.recent_start} ~ {result.drift.recent_end}（最近实盘）的特征分布。PSI &lt; 0.1 无显著漂移，0.1~0.25 中等，&gt; 0.25 显著。若严重漂移，建议重新训练以适应市场结构变化。
+                </Text>
+              </div>
+            )}
+
+            {result.multiHorizon && result.multiHorizon.horizons?.length > 0 && (
+              <div className="rounded-2xl border border-indigo-200 bg-white p-4">
+                <div className="mb-3 flex items-center justify-between">
+                  <div className="flex items-center gap-2">
+                    <Activity size={14} className="text-indigo-500" />
+                    <div className="text-[10px] font-black uppercase tracking-[0.18em] text-slate-400">
+                      多周期训练结果
+                    </div>
+                  </div>
+                  <Tag className="m-0 rounded-full border-0 px-2.5 py-0.5 bg-indigo-50 text-indigo-600">
+                    融合模型已创建
+                  </Tag>
+                </div>
+
+                <div className="grid grid-cols-2 gap-2 mb-3">
+                  <div className="rounded-xl bg-slate-50 px-3 py-2 text-center">
+                    <div className="text-[9px] font-semibold uppercase tracking-wider text-slate-400">训练周期</div>
+                    <div className="mt-0.5 text-sm font-bold text-slate-700">
+                      {result.multiHorizon.horizons.map((h) => `T+${h.replace('T', '')}`).join(' / ')}
+                    </div>
+                  </div>
+                  <div className="rounded-xl bg-slate-50 px-3 py-2 text-center">
+                    <div className="text-[9px] font-semibold uppercase tracking-wider text-slate-400">融合模型 ID</div>
+                    <div className="mt-0.5 text-[11px] font-mono font-bold text-indigo-600 break-all">
+                      {result.multiHorizon.fusion_model_id || '—'}
+                    </div>
+                  </div>
+                </div>
+
+                {result.multiHorizon.child_results?.length > 0 && (
+                  <div className="space-y-1.5">
+                    {result.multiHorizon.child_results.map((cr) => {
+                      const m = cr.result?.metrics?.val || {};
+                      return (
+                        <div key={cr.run_id} className="flex items-center gap-2 px-2 py-1.5 bg-slate-50/60 rounded-lg border border-slate-100/50">
+                          <Text className="text-[9px] font-black text-slate-500 font-mono w-10">T+{cr.target_horizon_days}</Text>
+                          <Text className="text-[9px] font-mono text-slate-400 flex-1 truncate">{cr.run_id}</Text>
+                          <Text className="text-[9px] text-slate-500 font-mono">
+                            IC {Number(m.ic ?? '0').toFixed(4)} · ICIR {Number(m.rank_icir ?? '0').toFixed(3)}
+                          </Text>
+                        </div>
+                      );
+                    })}
+                  </div>
+                )}
+
+                <Text className="block mt-2 text-[10px] text-slate-400 leading-relaxed">
+                  已按各周期验证集 ICIR 加权创建融合模型，可在模型管理页查看源模型权重，并用融合模型进行推理/选股/回测。
                 </Text>
               </div>
             )}

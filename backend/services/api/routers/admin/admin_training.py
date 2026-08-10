@@ -28,6 +28,7 @@ async def admin_list_user_models(
     tenant_id: str | None = None,
     user_id: str | None = None,
     include_archived: bool = False,
+    market: str | None = None,
     current_user: dict[str, Any] = Depends(require_admin),
 ):
     scope_tenant, scope_user = _resolve_admin_scope(
@@ -39,6 +40,7 @@ async def admin_list_user_models(
         tenant_id=scope_tenant,
         user_id=scope_user,
         include_archived=include_archived,
+        market=market,
     )
     return {"tenant_id": scope_tenant, "user_id": scope_user, "items": items, "total": len(items)}
 

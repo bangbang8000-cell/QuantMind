@@ -461,12 +461,17 @@ class ModelRegistryService:
                 },
             )
 
-    async def list_models(self, *, tenant_id: str, user_id: str, include_archived: bool = False) -> list[dict[str, Any]]:
+    async def list_models(self, *, tenant_id: str, user_id: str, include_archived: bool = False, market: str | None = None) -> list[dict[str, Any]]:
         tenant, user = self._normalize_owner(tenant_id=tenant_id, user_id=user_id)
         await self._ensure_system_default_record(tenant_id=tenant, user_id=user)
         # 同时确保 fallback 模型（如 alpha158）也被注册
         await self._ensure_fallback_model_record(tenant_id=tenant, user_id=user)
         where_extra = "" if include_archived else "AND status <> 'archived'"
+        params: dict[str, Any] = {"tenant_id": tenant, "user_id": user}
+        if market:
+            market_upper = str(market).upper().strip()
+            where_extra += " AND COALESCE(metadata_json->>'market', '') = :market"
+            params["market"] = market_upper
         async with get_session(read_only=True) as session:
             rows = (
                 await session.execute(
@@ -479,7 +484,7 @@ class ModelRegistryService:
                         ORDER BY is_default DESC, updated_at DESC, created_at DESC
                         """
                     ),
-                    {"tenant_id": tenant, "user_id": user},
+                    params,
                 )
             ).mappings().all()
         return [self._row_to_model(dict(row)) for row in rows]
@@ -1223,14 +1228,27 @@ class ModelRegistryService:
         ).to_dict()
 
     @staticmethod
-    def build_model_id_from_run(run_id: str) -> str:
+    def build_model_id_from_run(run_id: str, market: str = "CN") -> str:
         raw = str(run_id or "").strip()
         if not raw:
             raw = datetime.now().strftime("%Y%m%d%H%M%S")
         digest = hashlib.sha1(raw.encode("utf-8")).hexdigest()[:8]
         normalized = "".join(c if c.isalnum() or c in {"_", "-"} else "_" for c in raw)
         normalized = normalized[:88].strip("_") or "train_run"
-        return f"mdl_{normalized}_{digest}"
+        market_prefix = str(market or "CN").upper().strip()[:4] or "CN"
+        return f"mdl_{market_prefix.lower()}_{normalized}_{digest}"
+
+    @staticmethod
+    def _infer_market_from_benchmark(benchmark: Any) -> str:
+        """从 benchmark 推断市场，与 admin_training_utils._resolve_market 保持一致。"""
+        raw = str(benchmark or "").upper().strip()
+        _BENCHMARK_MARKET = {
+            "HSI": "HK", "HSCEI": "HK", "HSTECH": "HK",
+            "SPX": "US", "NDX": "US", "DJI": "US", "IXIC": "US",
+            "BTC": "CRYPTO", "ETH": "CRYPTO",
+            "CL": "FUTURES", "RB": "FUTURES", "AU": "FUTURES", "CU": "FUTURES",
+        }
+        return _BENCHMARK_MARKET.get(raw, "CN")
 
     async def register_model_from_training_run(
         self,
@@ -1243,18 +1261,31 @@ class ModelRegistryService:
     ) -> dict[str, Any]:
         tenant, user = self._normalize_owner(tenant_id=tenant_id, user_id=user_id)
         await self.ensure_tables()
-        model_id = self.build_model_id_from_run(run_id)
+
+        # 先解析目标市场（显式 context.market 或 benchmark 推断），
+        # 用于 model_id 前缀与存储路径市场分段
+        req_context = request_payload.get("context") if isinstance(request_payload.get("context"), dict) else {}
+        market_str = str(req_context.get("market") or "").upper().strip()
+        if not market_str:
+            market_str = self._infer_market_from_benchmark(req_context.get("benchmark"))
+        market_str = market_str or "CN"
+
+        model_id = self.build_model_id_from_run(run_id, market=market_str)
         now = datetime.now(timezone.utc)
+        # 非 CN 市场模型按市场子目录分段，避免与 A 股模型混放
         model_dir = self.user_models_root / tenant / user / model_id
+        if market_str and market_str != "CN":
+            model_dir = self.user_models_root / tenant / user / market_str.lower() / model_id
         model_dir.mkdir(parents=True, exist_ok=True)
 
         metrics = result_payload.get("metrics") if isinstance(result_payload.get("metrics"), dict) else {}
         metadata = result_payload.get("metadata") if isinstance(result_payload.get("metadata"), dict) else {}
 
         # Propagate context (market, benchmark, etc.) from request to metadata
-        req_context = request_payload.get("context") if isinstance(request_payload.get("context"), dict) else {}
         existing_context = metadata.get("context") if isinstance(metadata.get("context"), dict) else {}
         merged_context = {**existing_context, **req_context}
+        if "market" not in merged_context or not str(merged_context.get("market") or "").strip():
+            merged_context["market"] = market_str
 
         # Resolve display_name, appending market suffix if missing
         raw_display_name = str(
@@ -1263,7 +1294,6 @@ class ModelRegistryService:
             or request_payload.get("job_name")
             or run_id
         )
-        market_str = str(merged_context.get("market") or "").upper().strip()
         if market_str and not raw_display_name.upper().endswith(f"_{market_str}"):
             raw_display_name = f"{raw_display_name}_{market_str}"
 
@@ -1498,11 +1528,21 @@ class ModelRegistryService:
         else:
             weights = {str(s["model_id"]): 1.0 / len(sources) for s in sources}
 
+        # 从源模型 context 汇总市场（取出现最多的），用于 model_id 与存储分段
+        benchmark = "SH000300"
+        context: dict[str, Any] = {}
+        for src in sources:
+            meta = self._parse_json_field(src.get("metadata_json"))
+            ctx = meta.get("context")
+            if isinstance(ctx, dict):
+                context.update(ctx)
+        market = str(context.get("market") or "CN").upper()
+
         # 生成 model_id
         now = datetime.now(timezone.utc)
         ts = now.strftime("%Y%m%d%H%M%S")
         digest = hashlib.sha1("|".join(sorted(source_model_ids)).encode("utf-8")).hexdigest()[:8]
-        model_id = f"mdl_ensemble_{ts}_{digest}"
+        model_id = f"mdl_{market.lower()}_ensemble_{ts}_{digest}"
 
         # 构建元数据
         source_meta_list = []
@@ -1529,15 +1569,6 @@ class ModelRegistryService:
                 if f not in unified_features:
                     unified_features.append(f)
         feature_count = len(unified_features)
-
-        benchmark = "SH000300"
-        context: dict[str, Any] = {}
-        for src in sources:
-            meta = self._parse_json_field(src.get("metadata_json"))
-            ctx = meta.get("context")
-            if isinstance(ctx, dict):
-                context.update(ctx)
-        market = str(context.get("market") or "CN").upper()
 
         raw_display_name = str(display_name or "").strip() or "Ensemble"
         if not raw_display_name.upper().endswith(f"_{market}"):
@@ -1572,8 +1603,10 @@ class ModelRegistryService:
             },
         }
 
-        # 创建模型目录
+        # 创建模型目录（非 CN 市场按市场子目录分段）
         model_dir = self.user_models_root / tenant / user / model_id
+        if market and market != "CN":
+            model_dir = self.user_models_root / tenant / user / market.lower() / model_id
         model_dir.mkdir(parents=True, exist_ok=True)
 
         # 写入 ensemble_config.json（源模型用绝对路径）

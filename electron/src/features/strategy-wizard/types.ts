@@ -65,7 +65,7 @@ export interface QlibParams {
   min_score?: number;
   max_weight?: number;
   // 市场标识
-  market?: 'CN' | 'US' | 'HK' | 'CRYPTO';
+  market?: 'CN' | 'US' | 'HK' | 'CRYPTO' | 'FUTURES';
 }
 
 // 仓位管理配置（保留兼容，不再在向导中使用）

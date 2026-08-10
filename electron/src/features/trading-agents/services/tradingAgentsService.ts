@@ -23,7 +23,8 @@ export async function startAnalysis(params: {
   llm_provider?: string;
   deep_think_llm?: string;
   quick_think_llm?: string;
-}): Promise<{ analysis_id: string; ticker: string; trade_date: string }> {
+  market?: string;
+}): Promise<{ analysis_id: string; ticker: string; trade_date: string; market?: string }> {
   return request('/analyze', {
     method: 'POST',
     body: JSON.stringify(params),

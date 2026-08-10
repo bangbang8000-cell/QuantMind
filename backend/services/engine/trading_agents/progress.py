@@ -32,6 +32,7 @@ class ProgressTracker:
 
     ticker: str = ""
     trade_date: str = ""
+    market: str = "CN"
     start_time: float = field(default_factory=time.time)
 
     is_running: bool = False
@@ -101,6 +102,7 @@ class ProgressTracker:
             return {
                 "ticker": self.ticker,
                 "trade_date": self.trade_date,
+                "market": self.market,
                 "is_running": self.is_running,
                 "is_complete": self.is_complete,
                 "error": self.error,

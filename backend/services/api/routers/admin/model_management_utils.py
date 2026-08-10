@@ -92,8 +92,49 @@ def _file_sha256(path: str) -> str | None:
         return None
 
 
-def _load_feature_catalog_from_file(path: str = FEATURE_CATALOG_FALLBACK) -> dict[str, Any] | None:
-    """从本地 JSON 回退加载特征字典（用于 DB 未初始化场景）。"""
+def _feature_market_declarations(path: str = FEATURE_CATALOG_FALLBACK) -> dict[str, list[str]]:
+    """从文件目录构建 {feature_key: [market,...]} 映射，供市场过滤使用。"""
+    raw = _read_json_safe(path)
+    if not isinstance(raw, dict):
+        return {}
+    mapping: dict[str, list[str]] = {}
+    categories_raw = raw.get("categories")
+    if not isinstance(categories_raw, list):
+        return {}
+    for cat in categories_raw:
+        if not isinstance(cat, dict):
+            continue
+        features_raw = cat.get("features") if isinstance(cat.get("features"), list) else []
+        for feat in features_raw:
+            if not isinstance(feat, dict):
+                continue
+            key = str(feat.get("key") or "").strip()
+            if not key:
+                continue
+            markets = feat.get("markets")
+            mapping[key] = (
+                [str(m).upper() for m in markets if str(m).strip()]
+                if isinstance(markets, list)
+                else []
+            )
+    return mapping
+
+
+def _market_allows_feature(market: str | None, declared: list[str]) -> bool:
+    """特征是否适用于目标市场。declared 为空（未声明/未收录）时放行，避免误伤。"""
+    market_upper = str(market or "").upper()
+    if not market_upper:
+        return True
+    if not declared:
+        return True
+    return market_upper in declared
+
+
+def _load_feature_catalog_from_file(path: str = FEATURE_CATALOG_FALLBACK, market: str | None = None) -> dict[str, Any] | None:
+    """从本地 JSON 回退加载特征字典（用于 DB 未初始化场景）。
+
+    market 提供时按特征 markets 声明过滤；未提供返回全量。
+    """
     raw = _read_json_safe(path)
     if not isinstance(raw, dict):
         return None
@@ -102,6 +143,7 @@ def _load_feature_catalog_from_file(path: str = FEATURE_CATALOG_FALLBACK) -> dic
         return None
 
     categories: list[dict[str, Any]] = []
+    market_map = _feature_market_declarations(path)
     for cat in categories_raw:
         if not isinstance(cat, dict):
             continue
@@ -118,6 +160,8 @@ def _load_feature_catalog_from_file(path: str = FEATURE_CATALOG_FALLBACK) -> dic
             f_key = str(feat.get("key") or "").strip()
             if not f_key:
                 continue
+            if not _market_allows_feature(market, market_map.get(f_key, [])):
+                continue
             features.append(
                 {
                     "feature_id": str(feat.get("feature_id") or ""),
@@ -130,6 +174,8 @@ def _load_feature_catalog_from_file(path: str = FEATURE_CATALOG_FALLBACK) -> dic
                     "default_selected": bool(feat.get("default_selected", False)),
                 }
             )
+        if not features:
+            continue
         categories.append(
             {
                 "id": cid,
@@ -151,8 +197,11 @@ def _load_feature_catalog_from_file(path: str = FEATURE_CATALOG_FALLBACK) -> dic
     }
 
 
-async def _load_feature_catalog_from_db() -> dict[str, Any] | None:
-    """从特征注册表读取当前生效版本。表不存在或无数据时返回 None。"""
+async def _load_feature_catalog_from_db(market: str | None = None) -> dict[str, Any] | None:
+    """从特征注册表读取当前生效版本。表不存在或无数据时返回 None。
+
+    market 提供时按文件 catalog 的 markets 声明过滤（qm_feature_definition 无 market 字段）。
+    """
     async with get_session(read_only=True) as session:
         version_row = (
             await session.execute(
@@ -200,9 +249,13 @@ async def _load_feature_catalog_from_db() -> dict[str, Any] | None:
         if not rows:
             return None
 
+        market_map = _feature_market_declarations()
         cat_map: dict[str, dict[str, Any]] = {}
         for r in rows:
             cid = str(r["category_id"])
+            f_key = str(r["feature_key"] or "").strip()
+            if not _market_allows_feature(market, market_map.get(f_key, [])):
+                continue
             if cid not in cat_map:
                 cat_map[cid] = {
                     "id": cid,
@@ -214,8 +267,8 @@ async def _load_feature_catalog_from_db() -> dict[str, Any] | None:
             cat_map[cid]["features"].append(
                 {
                     "feature_id": str(r["feature_id"] or ""),
-                    "key": str(r["feature_key"] or ""),
-                    "feature_name": str(r["feature_name"] or r["feature_key"] or ""),
+                    "key": f_key,
+                    "feature_name": str(r["feature_name"] or f_key or ""),
                     "formula": str(r["formula"] or ""),
                     "source_table_fields": str(r["source_table_fields"] or ""),
                     "enabled": bool(r["enabled"]),
@@ -356,13 +409,70 @@ async def _get_feature_snapshot_coverage_cached_async() -> dict[str, Any] | None
     return payload
 
 
+# 市场 → 单体快照 parquet 文件名（非 A 股，由 update_market_features.py 生成）
+_MARKET_SNAPSHOT_PARQUET: dict[str, str] = {
+    "crypto": "model_features_crypto.parquet",
+    "hong_kong": "model_features_hk.parquet",
+    "us_stock": "model_features_us.parquet",
+    "futures": "model_features_futures.parquet",
+}
+
+
+def _scan_single_market_snapshot(parquet_name: str) -> dict[str, Any] | None:
+    """读取非 A 股单体快照 parquet 的元数据（行数/标的/日期范围/特征数）。"""
+    p = FEATURE_SNAPSHOT_DIR / parquet_name
+    if not p.exists():
+        return None
+    try:
+        import pyarrow.parquet as pq
+
+        pf = pq.ParquetFile(str(p))
+        total_rows = pf.metadata.num_rows
+        # 读取日期范围与标的大致统计：仅读最小/最大分区避免全量加载
+        schema = pf.schema_arrow
+        date_col = "trade_date" if "trade_date" in schema.names else ("date" if "date" in schema.names else None)
+        sym_col = "instrument" if "instrument" in schema.names else ("symbol" if "symbol" in schema.names else None)
+
+        min_date = max_date = None
+        symbol_count = 0
+        if date_col:
+            import pyarrow as pa
+
+            dates = pf.read(columns=[date_col], use_threads=True).column(0).combine_chunks()
+            try:
+                d_arr = dates.cast(pa.string())
+                min_date = str(pa.compute.min(d_arr).as_py())[:10]
+                max_date = str(pa.compute.max(d_arr).as_py())[:10]
+            except Exception:
+                pass
+            del dates
+        if sym_col:
+            syms = pf.read(columns=[sym_col], use_threads=True).column(0)
+            symbol_count = int(len(syms.unique()))
+            del syms
+
+        return {
+            "year": None,
+            "start_date": min_date,
+            "end_date": max_date,
+            "row_count": int(total_rows),
+            "feature_dim": len(schema.names),
+            "symbol_count": symbol_count,
+            "filename": p.name,
+        }
+    except Exception:
+        return None
+
+
 def _scan_feature_snapshots_status(
     target_date: str | None = None,
     topn: int = 20,
     market: str | None = None,
 ) -> dict[str, Any]:
     """
-    重构：直接读取 11 个年份的 metadata.json 文件，提取关键信息。
+    按市场扫描特征快照：
+    - a_share / 默认: 11 个年份的 model_features_YYYY.metadata.json
+    - crypto/hong_kong/us_stock/futures: 单体 model_features_{market}.parquet
     """
     result: dict[str, Any] = {
         "exists": False,
@@ -393,7 +503,34 @@ def _scan_feature_snapshots_status(
 
     result["exists"] = True
 
-    # 1. 扫描所有的 metadata.json 文件
+    # 非 A 股市场：读取单体快照 parquet
+    market_key = (market or "a_share").lower()
+    if market_key != "a_share":
+        parquet_name = _MARKET_SNAPSHOT_PARQUET.get(market_key)
+        if parquet_name:
+            result["file_count"] = 1
+            result["scanned_files"] = 1
+            snapshot = _scan_single_market_snapshot(parquet_name)
+            if snapshot:
+                result["metadata_files"] = [snapshot]
+                result["total_rows"] = snapshot["row_count"]
+                result["min_date"] = snapshot["start_date"]
+                result["max_date"] = snapshot["end_date"]
+                if snapshot["start_date"] and snapshot["end_date"]:
+                    try:
+                        min_d = date.fromisoformat(snapshot["start_date"])
+                        max_d = date.fromisoformat(snapshot["end_date"])
+                        result["suggested_periods"] = _build_suggested_periods(min_d, max_d)
+                    except Exception:
+                        pass
+                if target_date and snapshot["end_date"]:
+                    if snapshot["end_date"] >= target_date:
+                        result["latest_date_coverage"]["at_target_count"] = snapshot["symbol_count"]
+                    else:
+                        result["latest_date_coverage"]["older_count"] = snapshot["symbol_count"]
+        return result
+
+    # A 股：扫描所有的 metadata.json 文件
     json_files = sorted(FEATURE_SNAPSHOT_DIR.glob("*.metadata.json"), reverse=True)
     result["file_count"] = len(json_files)
 

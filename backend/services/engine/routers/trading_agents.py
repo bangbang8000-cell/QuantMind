@@ -25,15 +25,26 @@ _RESULTS_DIR = Path("/app/db/trading_agents_results")
 
 
 class AnalyzeRequest(BaseModel):
-    ticker: str = Field(..., description="A股代码，如 300750")
+    ticker: str = Field(..., description="股票/标的代码，如 300750")
     trade_date: str = Field(default_factory=lambda: date.today().isoformat(), description="分析日期 YYYY-MM-DD")
     llm_provider: str = Field(default="minimax", description="LLM 供应商")
     deep_think_llm: str = Field(default="MiniMax-M2.7", description="深度思考模型")
     quick_think_llm: str = Field(default="MiniMax-M2.7-highspeed", description="快速思考模型")
+    market: str = Field(default="CN", description="市场: CN(默认)/US/HK/CRYPTO/FUTURES")
 
 
 class StopRequest(BaseModel):
     analysis_id: str
+
+
+# 市场 → 数据供应商。quantmind_local 读本地 parquet，各市场网络回退源不同。
+_MARKET_VENDOR_FALLBACK = {
+    "CN": "a_stock",
+    "HK": "hk_stock",
+    "US": "us_stock",
+    "CRYPTO": "crypto",
+    "FUTURES": "futures",
+}
 
 
 def _build_config(req: AnalyzeRequest) -> dict:
@@ -57,17 +68,20 @@ def _build_config(req: AnalyzeRequest) -> dict:
     config["llm_provider"] = req.llm_provider
     config["deep_think_llm"] = req.deep_think_llm
     config["quick_think_llm"] = req.quick_think_llm
+    market_upper = str(req.market or "CN").upper()
+    fallback_vendor = _MARKET_VENDOR_FALLBACK.get(market_upper, "a_stock")
+    config["market"] = market_upper
     config["data_vendors"] = {
-        # quantmind_local reads local QuantDB parquet; a_stock is the network fallback
+        # quantmind_local reads local QuantDB parquet; <fallback> is the network fallback
         # used whenever the local store has no data for the symbol/date.
-        "core_stock_apis": "quantmind_local,a_stock",
-        "technical_indicators": "quantmind_local,a_stock",
-        "fundamental_data": "quantmind_local,a_stock",
-        "news_data": "a_stock",
-        "signal_data": "a_stock",
+        "core_stock_apis": f"quantmind_local,{fallback_vendor}",
+        "technical_indicators": f"quantmind_local,{fallback_vendor}",
+        "fundamental_data": f"quantmind_local,{fallback_vendor}",
+        "news_data": fallback_vendor,
+        "signal_data": fallback_vendor,
     }
     config["tool_vendors"] = {
-        "get_industry_comparison": "quantmind_local,a_stock",
+        "get_industry_comparison": f"quantmind_local,{fallback_vendor}",
     }
     config["max_debate_rounds"] = 1
     config["max_risk_discuss_rounds"] = 1
@@ -93,6 +107,7 @@ async def start_analysis(req: AnalyzeRequest):
         config=config,
         tracker=tracker,
         analysis_id=analysis_id,
+        market=config.get("market", "CN"),
     )
     _threads[analysis_id] = thread
 
@@ -102,6 +117,7 @@ async def start_analysis(req: AnalyzeRequest):
             "analysis_id": analysis_id,
             "ticker": req.ticker,
             "trade_date": req.trade_date,
+            "market": config.get("market", "CN"),
             "message": "分析已启动",
         },
     }
@@ -288,6 +304,7 @@ async def list_history(
                 "llm_provider": r[4] or "",
                 "model": r[5] or r[6] or "",
                 "stats": stats,
+                "market": str(stats.get("market") or "CN").upper(),
                 "elapsed": r[8] or 0,
                 "error": r[9],
                 "created_at": str(r[10]) if r[10] else "",
@@ -307,6 +324,7 @@ async def list_history(
                 "ticker": tracker.ticker,
                 "trade_date": tracker.trade_date,
                 "signal": tracker.signal,
+                "market": str(getattr(tracker, "market", "") or "CN").upper(),
                 "elapsed": tracker.elapsed,
                 "source": "memory",
             })

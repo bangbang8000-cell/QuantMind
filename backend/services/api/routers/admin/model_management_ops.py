@@ -167,12 +167,12 @@ async def get_model_feature_catalog(
     """
     _ = current_user
     try:
-        catalog = await _load_feature_catalog_from_db()
+        catalog = await _load_feature_catalog_from_db(market=market)
     except Exception:
         catalog = None
 
     if not catalog:
-        catalog = _load_feature_catalog_from_file()
+        catalog = _load_feature_catalog_from_file(market=market)
 
     if not catalog:
         raise HTTPException(

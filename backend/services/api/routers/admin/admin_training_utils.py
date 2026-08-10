@@ -127,7 +127,56 @@ def _coerce_float(value: Any) -> float | None:
         return None
 
 
-def _load_allowed_features_from_file() -> list[str]:
+def _feature_market_declarations() -> dict[str, list[str]]:
+    """从文件目录构建 {feature_key: [market, ...]} 映射，供市场过滤使用。
+
+    catalog 中每个特征带 "markets" 数组；未收录于 catalog 的特征（如 DB 独有）
+    返回空列表，表示不限制市场（向后兼容）。
+    """
+    if not _FEATURE_CATALOG_FALLBACK.exists():
+        return {}
+    try:
+        raw = json.loads(_FEATURE_CATALOG_FALLBACK.read_text(encoding="utf-8"))
+    except Exception:
+        return {}
+
+    mapping: dict[str, list[str]] = {}
+    categories = raw.get("categories") if isinstance(raw, dict) else []
+    if not isinstance(categories, list):
+        return {}
+    for category in categories:
+        features = category.get("features") if isinstance(category, dict) else []
+        if not isinstance(features, list):
+            continue
+        for feature in features:
+            if not isinstance(feature, dict):
+                continue
+            key = str(feature.get("key") or "").strip()
+            if not key:
+                continue
+            markets = feature.get("markets")
+            if isinstance(markets, list):
+                declared = [str(m).upper() for m in markets if str(m).strip()]
+            else:
+                declared = []
+            mapping[key] = declared
+    return mapping
+
+
+def _market_allows_feature(market: str | None, declared: list[str]) -> bool:
+    """特征是否适用于目标市场。
+
+    declared 为空（catalog 未声明/未收录）时放行，避免误伤 DB 独有特征。
+    """
+    market_upper = str(market or "").upper()
+    if not market_upper:
+        return True
+    if not declared:
+        return True
+    return market_upper in declared
+
+
+def _load_allowed_features_from_file(market: str | None = None) -> list[str]:
     if not _FEATURE_CATALOG_FALLBACK.exists():
         return []
     try:
@@ -149,12 +198,21 @@ def _load_allowed_features_from_file() -> list[str]:
             if feature.get("enabled", True) is False:
                 continue
             key = str(feature.get("key") or "").strip()
-            if key and key not in keys:
-                keys.append(key)
+            if not key or key in keys:
+                continue
+            markets = feature.get("markets")
+            declared = (
+                [str(m).upper() for m in markets if str(m).strip()]
+                if isinstance(markets, list)
+                else []
+            )
+            if not _market_allows_feature(market, declared):
+                continue
+            keys.append(key)
     return keys
 
 
-async def _load_allowed_features_from_db() -> list[str]:
+async def _load_allowed_features_from_db(market: str | None = None) -> list[str]:
     sql = text(
         """
         WITH active_version AS (
@@ -176,19 +234,24 @@ async def _load_allowed_features_from_db() -> list[str]:
             rows = (await session.execute(sql)).mappings().all()
     except Exception:
         return []
+    # DB 的 qm_feature_set_item 无 market 字段，用文件 catalog 的 markets 声明过滤
+    market_map = _feature_market_declarations()
     keys: list[str] = []
     for row in rows:
         key = str(row.get("feature_key") or "").strip()
-        if key and key not in keys:
-            keys.append(key)
+        if not key or key in keys:
+            continue
+        if not _market_allows_feature(market, market_map.get(key, [])):
+            continue
+        keys.append(key)
     return keys
 
 
-async def _load_allowed_features() -> list[str]:
-    db_keys = await _load_allowed_features_from_db()
+async def _load_allowed_features(market: str | None = None) -> list[str]:
+    db_keys = await _load_allowed_features_from_db(market=market)
     if db_keys:
         return db_keys
-    return _load_allowed_features_from_file()
+    return _load_allowed_features_from_file(market=market)
 
 
 def _normalize_context(context: dict[str, Any]) -> dict[str, Any]:
@@ -220,16 +283,7 @@ def _normalize_context(context: dict[str, Any]) -> dict[str, Any]:
     if deal_price not in _ALLOWED_DEAL_PRICE:
         raise HTTPException(status_code=422, detail="context.deal_price must be one of: open, close")
 
-    market = str(context.get("market") or "").strip().upper()
-    if market not in ("CN", "US", "HK", "CRYPTO"):
-        # 从 benchmark 推断 market（前端可能未传 market 字段）
-        _BENCHMARK_MARKET = {
-            "HSI": "HK", "HSCEI": "HK", "HSTECH": "HK",
-            "SPX": "US", "NDX": "US", "DJI": "US", "IXIC": "US",
-            "BTC": "CRYPTO", "ETH": "CRYPTO",
-        }
-        market = _BENCHMARK_MARKET.get(benchmark.upper(), "CN")
-
+    market = _resolve_market(context.get("market"), benchmark)
     return {
         "initial_capital": initial_capital,
         "benchmark": benchmark,
@@ -239,6 +293,24 @@ def _normalize_context(context: dict[str, Any]) -> dict[str, Any]:
         "market": market,
         "industry_as_feature": bool(context.get("industry_as_feature", False)),
     }
+
+
+def _resolve_market(raw_market: Any, benchmark: str) -> str:
+    """解析目标市场。
+
+    优先使用显式 market 字段；缺失或非法时从 benchmark 推断，
+    最终回退到 CN（A股），保持向后兼容。
+    """
+    market = str(raw_market or "").strip().upper()
+    if market in ("CN", "US", "HK", "CRYPTO", "FUTURES"):
+        return market
+    _BENCHMARK_MARKET = {
+        "HSI": "HK", "HSCEI": "HK", "HSTECH": "HK",
+        "SPX": "US", "NDX": "US", "DJI": "US", "IXIC": "US",
+        "BTC": "CRYPTO", "ETH": "CRYPTO",
+        "CL": "FUTURES", "RB": "FUTURES", "AU": "FUTURES", "CU": "FUTURES",
+    }
+    return _BENCHMARK_MARKET.get(str(benchmark or "").upper(), "CN")
 
 
 def _normalize_payload(payload: dict[str, Any], allowed_features: list[str]) -> dict[str, Any]:
@@ -359,6 +431,28 @@ def _normalize_payload(payload: dict[str, Any], allowed_features: list[str]) -> 
     if not (1 <= target_horizon_days <= 30):
         raise HTTPException(status_code=422, detail="target_horizon_days must be between 1 and 30")
 
+    # 多周期训练：一次训练产出多个周期的模型（T+1/3/5/10…）
+    horizons: list[int] | None = None
+    raw_horizons = payload.get("horizons")
+    if raw_horizons is not None:
+        if not isinstance(raw_horizons, list) or not raw_horizons:
+            raise HTTPException(status_code=422, detail="horizons must be a non-empty array of integers")
+        horizons = []
+        for h in raw_horizons:
+            try:
+                hv = int(h)
+            except Exception:
+                raise HTTPException(status_code=422, detail=f"horizons contains non-integer value: {h}")
+            if not (1 <= hv <= 30):
+                raise HTTPException(status_code=422, detail=f"horizons value must be between 1 and 30: {hv}")
+            if hv not in horizons:
+                horizons.append(hv)
+        horizons.sort()
+        if len(horizons) < 2:
+            raise HTTPException(status_code=422, detail="horizons must contain at least 2 distinct periods")
+        # 多周期主显示周期取第一个
+        target_horizon_days = horizons[0]
+
     target_mode = str(payload.get("target_mode", "return")).strip().lower()
     if target_mode not in _ALLOWED_TARGET_MODE:
         raise HTTPException(status_code=422, detail="target_mode must be one of: return, classification")
@@ -405,6 +499,8 @@ def _normalize_payload(payload: dict[str, Any], allowed_features: list[str]) -> 
         "dl_params": dl_params,
         "ensemble": ensemble_method,
     }
+    if horizons:
+        normalized["horizons"] = horizons
     # 训练时长预算（分钟），默认 120
     normalized["max_time_minutes"] = _clamp_int(payload.get("max_time_minutes"), 120, 10, 1440)
     if wfa_config:
@@ -668,6 +764,12 @@ def _normalize_training_result_payload(
     elif isinstance(metadata.get("drift"), dict):
         normalized["drift"] = metadata["drift"]
 
+    # 多周期训练结果：透传到顶层，供前端训练结果页展示周期明细 + 融合模型
+    if isinstance(raw.get("multi_horizon"), dict):
+        normalized["multi_horizon"] = raw["multi_horizon"]
+    elif isinstance(metadata.get("multi_horizon"), dict):
+        normalized["multi_horizon"] = metadata["multi_horizon"]
+
     return normalized, validation_error
 
 
@@ -694,41 +796,98 @@ async def submit_training_job(
     background_tasks: BackgroundTasks,
     current_user: dict[str, Any],
 ) -> dict[str, Any]:
-    allowed_features = await _load_allowed_features()
+    # 先解析目标市场（显式字段或 benchmark 推断），再按市场过滤可用特征
+    context_raw = payload.get("context", {})
+    context = context_raw if isinstance(context_raw, dict) else {}
+    benchmark_hint = str(context.get("benchmark") or "SH000300").strip()
+    market = _resolve_market(context.get("market"), benchmark_hint)
+    allowed_features = await _load_allowed_features(market=market)
     normalized_payload = _normalize_payload(payload, allowed_features)
     run_id = f"train_{datetime.utcnow().strftime('%Y%m%d%H%M%S')}_{uuid.uuid4().hex[:8]}"
 
     tenant_id = str(current_user.get("tenant_id") or "default")
     user_id = str(current_user.get("user_id") or current_user.get("sub") or "unknown")
 
+    # ── 多周期训练：创建 parent job + 每周期一个 child job ──
+    horizons = normalized_payload.get("horizons")
+    multi_horizon = bool(horizons and isinstance(horizons, list) and len(horizons) >= 2)
+
     async with get_session() as session:
-        record = TrainingJobRecord(
+        parent_record = TrainingJobRecord(
             id=run_id,
             tenant_id=tenant_id,
             user_id=user_id,
             status="pending",
-            request_payload=normalized_payload,
+            request_payload={**normalized_payload, "_parent": True},
             progress=0,
         )
-        session.add(record)
+        session.add(parent_record)
+
+        if multi_horizon:
+            child_run_ids: list[str] = []
+            for i, h in enumerate(horizons):
+                child_run_id = f"{run_id}_t{h}"
+                # 子任务固定单周期，display_name 追加 _T{h}
+                child_payload = {
+                    **normalized_payload,
+                    "target_horizon_days": int(h),
+                    "display_name": f"{normalized_payload.get('display_name', 'unnamed')}_T{h}",
+                    "horizons": None,
+                    "_parent_run_id": run_id,
+                    "_multi_horizon_index": i,
+                    "max_time_minutes": max(
+                        30,
+                        int(normalized_payload.get("max_time_minutes") or 120)
+                        // max(1, len(horizons)),
+                    ),
+                }
+                child_payload.pop("wfa", None)
+                child_record = TrainingJobRecord(
+                    id=child_run_id,
+                    tenant_id=tenant_id,
+                    user_id=user_id,
+                    status="pending",
+                    request_payload=child_payload,
+                    progress=0,
+                )
+                session.add(child_record)
+                child_run_ids.append(child_run_id)
+            parent_record.request_payload = {
+                **parent_record.request_payload,
+                "_child_run_ids": child_run_ids,
+                "_tenant_id": tenant_id,
+                "_user_id": user_id,
+            }
         await session.commit()
+
     _training_log_stream.append_log(
         run_id=run_id,
         tenant_id=tenant_id,
         user_id=user_id,
-        line=f"[SYSTEM] 训练任务已创建: {run_id}",
+        line=f"[SYSTEM] 训练任务已创建: {run_id}"
+        + (f"（多周期 ×{len(horizons)}: " + ", ".join(f"T{h}" for h in horizons) + "）" if multi_horizon else ""),
         status="pending",
         progress=0,
     )
 
     orchestrator = LocalDockerOrchestrator()
     logger.warning(f"[SYSTEM] Dispatching training job {run_id}. payload_keys={list(normalized_payload.keys())}")
-    # 使用 asyncio.create_task 代替 BackgroundTasks，避免 anyio cancel scope 在同步阻塞调用
-    # （COS 上传、Docker API）期间静默取消任务
-    asyncio.create_task(
-        orchestrator.launch_training_job(run_id=run_id, payload=normalized_payload),
-        name=f"training-{run_id}",
-    )
+    if multi_horizon:
+        # 多周期：编排器串行跑各 child，全部成功后自动创建融合模型
+        asyncio.create_task(
+            orchestrator.launch_multi_horizon_job(
+                parent_run_id=run_id,
+                child_run_ids=child_run_ids,
+                payload=normalized_payload,
+            ),
+            name=f"training-mh-{run_id}",
+        )
+    else:
+        # 单周期：直接跑
+        asyncio.create_task(
+            orchestrator.launch_training_job(run_id=run_id, payload=normalized_payload),
+            name=f"training-{run_id}",
+        )
 
     # 预检特征可用性，告知前端哪些特征在 parquet 中不存在
     valid_features, missing_features = LocalDockerOrchestrator._filter_features_by_parquet(
@@ -738,11 +897,13 @@ async def submit_training_job(
     return {
         "runId": run_id,
         "status": "pending",
+        "multiHorizon": multi_horizon,
         "payload": normalized_payload,
         "validFeatureCount": len(valid_features),
         "missingFeatureCount": len(missing_features),
         "missingFeatures": missing_features[:30],
     }
+
 
 
 async def get_training_run_for_owner(run_id: str, current_user: dict[str, Any]) -> dict[str, Any]:

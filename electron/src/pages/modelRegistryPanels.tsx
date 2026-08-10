@@ -35,6 +35,14 @@ import {
 } from './modelRegistryUtils';
 const { Text } = Typography;
 
+const MARKET_LABELS: Record<string, string> = {
+  CN: 'A股',
+  HK: '港股',
+  US: '美股',
+  CRYPTO: '区块链',
+  FUTURES: '期货',
+};
+
 const formatPanelDateTime = (raw?: string | null, fallback = '—') => {
   const value = String(raw || '').trim();
   if (!value) return fallback;
@@ -171,6 +179,14 @@ export const ModelCard: React.FC<{
       </div>
       <div className="flex items-center gap-1.5 mt-1 opacity-70">
         <Text className="text-[9px] text-slate-400 font-mono font-bold">{mt}</Text>
+        {getMeta(model).market && (
+          <Tag className="m-0 rounded-md border-0 px-1.5 py-0 text-[8px] font-black bg-slate-100 text-slate-500">
+            {MARKET_LABELS[getMeta(model).market.toUpperCase()] || getMeta(model).market}
+          </Tag>
+        )}
+        {getMeta(model).is_ensemble && (
+          <Tag className="m-0 rounded-md border-0 px-1.5 py-0 text-[8px] font-black bg-indigo-50 text-indigo-600">多周期</Tag>
+        )}
         {fc && <><span className="inline-block h-2 w-px bg-slate-300 mx-1" /><Text className="text-[9px] text-slate-400 font-mono font-bold">{fc}维</Text></>}
       </div>
     </div>
@@ -342,7 +358,11 @@ export const ModelDetailPanel: React.FC<{ model: UserModelRecord }> = ({ model }
             <div className="space-y-4">
               <div className="flex items-center justify-between">
                 <div className="flex items-center gap-2 text-slate-500"><Calendar size={13} /><Text className="text-xs font-medium">预测周期</Text></div>
-                <Text className="text-sm font-black text-slate-800">T + {horizonDays || '—'}</Text>
+                {meta.is_ensemble && (meta.source_models?.length ?? 0) > 0 ? (
+                  <Tag className="m-0 bg-indigo-50 text-indigo-600 border-0 font-black rounded-md px-2 py-0.5">多周期融合</Tag>
+                ) : (
+                  <Text className="text-sm font-black text-slate-800">T + {horizonDays || '—'}</Text>
+                )}
               </div>
               <div className="flex items-center justify-between">
                 <div className="flex items-center gap-2 text-slate-500"><Zap size={13} /><Text className="text-xs font-medium">任务类型</Text></div>
@@ -466,6 +486,45 @@ export const ModelDetailPanel: React.FC<{ model: UserModelRecord }> = ({ model }
 
               {/* 判断解读 */}
               <WfaInterpretation wfa={meta.wfa} />
+            </div>
+          )}
+
+          {/* 多周期融合：源模型权重 + 各周期指标 */}
+          {meta.is_ensemble && Array.isArray(meta.source_models) && meta.source_models.length > 0 && (
+            <div className="glass-panel rounded-3xl p-5 border border-indigo-100/60 bg-gradient-to-br from-indigo-50/30 to-white">
+              <div className="flex items-center gap-2 mb-4">
+                <Layers2 size={13} className="text-indigo-500" />
+                <Text className="text-[10px] font-black text-slate-400 uppercase tracking-widest">多周期融合源模型</Text>
+                <Tag className="m-0 rounded-full border-0 px-2 py-0.5 bg-indigo-50 text-indigo-600 text-[9px] font-black">
+                  {String(meta.weight_strategy || 'icir').toUpperCase()} 加权
+                </Tag>
+              </div>
+
+              <div className="space-y-1.5">
+                {meta.source_models.map((src: any, i: number) => {
+                  const horizon = Number(src.target_horizon_days ?? 0);
+                  const weightPct = Math.round(Number(src.weight ?? 0) * 100);
+                  return (
+                    <div key={src.model_id} className="flex items-center gap-2 px-2 py-1.5 bg-white/60 rounded-lg border border-slate-100/50">
+                      <Text className="text-[9px] font-black text-indigo-600 font-mono w-12">
+                        {horizon > 0 ? `T+${horizon}` : '—'}
+                      </Text>
+                      <Text className="text-[9px] font-mono text-slate-500 flex-1 truncate">{src.model_id}</Text>
+                      <Text className="text-[9px] font-mono text-slate-400">
+                        ICIR {Number(src.metrics?.val_rank_icir ?? src.metrics?.val_icir ?? 0).toFixed(3)}
+                      </Text>
+                      <div className="w-14 h-1.5 rounded-full bg-slate-100 overflow-hidden flex-shrink-0">
+                        <div className="h-full bg-indigo-500 rounded-full" style={{ width: `${weightPct}%` }} />
+                      </div>
+                      <Text className="text-[9px] font-black text-indigo-600 font-mono w-9 text-right">{weightPct}%</Text>
+                    </div>
+                  );
+                })}
+              </div>
+
+              <Text className="block mt-2 text-[10px] text-slate-400 leading-relaxed">
+                融合模型推理时对每个周期模型预测做 z-score 归一化后按权重加权平均，跨周期一致确认的信号权重更高。
+              </Text>
             </div>
           )}
 
