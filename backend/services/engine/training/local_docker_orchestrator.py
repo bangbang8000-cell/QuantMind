@@ -17,7 +17,7 @@ import json
 import logging
 import os
 import time
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List
 
@@ -161,7 +161,7 @@ class LocalDockerOrchestrator(TrainingOrchestrator):
                 json.dumps(
                     {
                         "run_id": run_id,
-                        "paused_at": datetime.utcnow().isoformat(timespec="seconds"),
+                        "paused_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
                         "containers": paused,
                         "protected_prefixes": list(_PROTECTED_PREFIXES),
                     },
@@ -212,7 +212,7 @@ class LocalDockerOrchestrator(TrainingOrchestrator):
 
         # 标记为已处理：保留文件但加 resumed_at，便于事后排查
         try:
-            data["resumed_at"] = datetime.utcnow().isoformat(timespec="seconds")
+            data["resumed_at"] = datetime.now(timezone.utc).isoformat(timespec="seconds")
             data["resumed"] = resumed
             state_path.write_text(
                 json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8"

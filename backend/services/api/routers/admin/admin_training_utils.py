@@ -3,7 +3,7 @@ import json
 import logging
 import os
 import uuid
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -677,7 +677,10 @@ def _build_default_metadata(request_payload: dict[str, Any], run_id: str) -> dic
         "benchmark": str(context.get("benchmark") or "SH000300"),
         "objective": str(lgb_params.get("objective") or "regression"),
         "metric": str(lgb_params.get("metric") or "l2"),
-        "generated_at": str(request_payload.get("generated_at") or datetime.utcnow().isoformat()),
+        "generated_at": str(
+            request_payload.get("generated_at")
+            or datetime.now(timezone.utc).isoformat()
+        ),
     }
 
 
@@ -804,7 +807,7 @@ async def submit_training_job(
     market = _resolve_market(context.get("market"), benchmark_hint)
     allowed_features = await _load_allowed_features(market=market)
     normalized_payload = _normalize_payload(payload, allowed_features)
-    run_id = f"train_{datetime.utcnow().strftime('%Y%m%d%H%M%S')}_{uuid.uuid4().hex[:8]}"
+    run_id = f"train_{datetime.now(timezone.utc).strftime('%Y%m%d%H%M%S')}_{uuid.uuid4().hex[:8]}"
 
     tenant_id = str(current_user.get("tenant_id") or "default")
     user_id = str(current_user.get("user_id") or current_user.get("sub") or "unknown")
