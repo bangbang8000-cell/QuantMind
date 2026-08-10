@@ -25,6 +25,12 @@
         animation: qmGradientShift 15s ease infinite;
       }
 
+      /* React 挂载后由 main.tsx 给 body 加上 .qm-loaded，让底部 Dock 区域透出浏览器/Electron 底色 */
+      body.qm-loaded {
+        background: transparent;
+        animation: none;
+      }
+
       .qm-boot {
         min-height: 100%;
         display: flex;

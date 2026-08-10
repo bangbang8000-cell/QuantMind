@@ -67,5 +67,11 @@ ReactDOM.createRoot(document.getElementById('root') as HTMLElement).render(
         </HashRouter>
       </QueryProvider>
     </Provider>
-  </React.StrictMode>
+  </React.StrictMode>,
 );
+
+// 首屏挂载后移除 body 上的加载期渐变，让 .app-main 承载内容区背景，
+// 底部 Dock 区域（位于 .app-main 之外）透出真正的浏览器/Electron 窗口底色
+requestAnimationFrame(() => {
+  document.body.classList.add('qm-loaded');
+});

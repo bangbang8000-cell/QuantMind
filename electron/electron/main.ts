@@ -186,17 +186,15 @@ function createWindow() {
     minimizable: true,
     closable: true,
     frame: false, // 全平台使用无边框，Windows 依赖自定义 TitleBar
-    // Windows 11 使用系统圆角，需要 transparent: false 和 backgroundColor
-    // Windows 10 使用 CSS 圆角，需要 transparent: true
-    transparent: process.platform === 'win32' && !windowsVersion.isWin11,
+    // 桌面端开启 BrowserWindow 透明，让底部 Dock 区域（非 .app-main 范围）透出桌面底色
+    // roundedCorners: true 仍由系统/Chromium 负责圆角裁剪
+    transparent: true,
     roundedCorners: true,
     titleBarStyle: process.platform === 'darwin' ? 'hiddenInset' : 'hidden', // macOS 保持 hiddenInset，其他平台使用 hidden
     // trafficLightPosition 仅在 macOS 生效，其他平台设置会产生警告
     ...(process.platform === 'darwin' && { trafficLightPosition: { x: 14, y: 14 } }),
-    // 背景色设置
-    backgroundColor: process.platform === 'win32' 
-      ? (windowsVersion.isWin11 ? '#f1f5f9' : undefined)
-      : (nativeTheme.shouldUseDarkColors ? '#1e1e1e' : '#f8fafc'),
+    // 背景色：透明模式下置空，由 .app-main 承载实际内容区底色
+    backgroundColor: undefined,
     // macOS 使用 .icns，Windows 使用 .ico，Linux 使用 .png
     icon: process.platform === 'darwin'
       ? path.join(__dirname, 'logo.icns')
