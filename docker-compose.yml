@@ -170,6 +170,7 @@ services:
       - TRAINING_AUTODL_WORK_DIR=${TRAINING_AUTODL_WORK_DIR:-/workspace}
       - TRAINING_AUTODL_DOCKER_IMAGE=${TRAINING_AUTODL_DOCKER_IMAGE:-quantmind-oss:latest}
       - TRAINING_AUTODL_NODE_NAME=${TRAINING_AUTODL_NODE_NAME:-AutoDL GPU}
+      - TRAINING_MASTER_HOST=${TRAINING_MASTER_HOST:-}
 
       # Qwen/DashScope API (用于 AI 策略功能)
       # 使用 mock key 允许服务启动，用户需在个人中心配置真实 API key
@@ -351,6 +352,7 @@ services:
       - TRAINING_AUTODL_WORK_DIR=${TRAINING_AUTODL_WORK_DIR:-/workspace}
       - TRAINING_AUTODL_DOCKER_IMAGE=${TRAINING_AUTODL_DOCKER_IMAGE:-quantmind-oss:latest}
       - TRAINING_AUTODL_NODE_NAME=${TRAINING_AUTODL_NODE_NAME:-AutoDL GPU}
+      - TRAINING_MASTER_HOST=${TRAINING_MASTER_HOST:-}
 
       # 回测进度回调地址（OSS 模式使用 quantmind 容器名）
       - BACKTEST_PROGRESS_URL=http://quantmind:8001

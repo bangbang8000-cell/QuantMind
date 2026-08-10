@@ -59,6 +59,8 @@ class RemoteSSHOrchestrator(TrainingOrchestrator):
         self.work_dir = _env_or("TRAINING_AUTODL_WORK_DIR", "/workspace")
         self.docker_image = _env_or("TRAINING_AUTODL_DOCKER_IMAGE", "quantmind-oss:latest")
         self.api_base = _env_or("QUANTMIND_API_BASE_URL", "http://quantmind-api:8000")
+        # 主节点局域网地址（供远端容器回调）；为空则回退 api_base（可能不可达）
+        self.master_host = _env_or("TRAINING_MASTER_HOST", "")
         self.internal_secret = _env_or("INTERNAL_CALL_SECRET", "")
         self.log_stream = TrainingRunLogStream()
         self._tenant_id = _env_or("TRAINING_DEFAULT_TENANT", "default")
@@ -303,10 +305,14 @@ class RemoteSSHOrchestrator(TrainingOrchestrator):
             #    与 docker run -v {work_dir}/feature_snapshots:/tmp/feature_snapshots 一致）
             config = self._build_config_yaml(run_id, payload)
             config["data"]["local_dir"] = "/tmp/feature_snapshots"
-            config["callback"]["url"] = f"{self.api_base}/api/v1/models/training-runs/{run_id}/complete"
+            config["callback"]["url"] = self._callback_url(run_id)
 
             # 2. 确保远端工作目录结构
-            await self._ssh_exec(f"mkdir -p {self.work_dir}/feature_snapshots {self.work_dir}/quantdb/2_base_sector")
+            await self._ssh_exec(
+                f"mkdir -p {self.work_dir}/feature_snapshots "
+                f"{self.work_dir}/quantdb/2_base_sector "
+                f"{self.work_dir}/templates"
+            )
 
             # 3. 推送特征快照（按训练区间选年）
             feature_files = self._resolve_feature_files(payload)
@@ -333,6 +339,15 @@ class RemoteSSHOrchestrator(TrainingOrchestrator):
             if train_script:
                 await self._rsync_push(train_script, f"{self.work_dir}/train.py")
                 self._log(run_id, "[SYNC] train.py 已同步（覆盖镜像内置版）")
+
+            # 统一推理模板 inference_parquet.py 也推送并挂载，
+            # 保证远端训练产出与本地一致的完整 inference.py（而非简化 fallback）。
+            template = self._resolve_inference_template()
+            if template:
+                await self._scp_push(
+                    template, f"{self.work_dir}/templates/inference_parquet.py"
+                )
+                self._log(run_id, "[SYNC] inference_parquet.py 模板已同步")
 
             # 5. 远端启动训练容器
             self._log(run_id, "[SYSTEM] 在 AutoDL 启动训练容器...", progress=20)
@@ -414,18 +429,34 @@ class RemoteSSHOrchestrator(TrainingOrchestrator):
             self._log(run_id, f"[ERROR] 容器结束处理失败: {exc}", status="failed", progress=0)
 
     async def _pull_artifacts(self, run_id: str) -> None:
-        """scp 拉取模型产物到本地工作目录 /data/training_jobs/{run_id}（跳过 pred.* 大文件）。"""
+        """拉取模型产物到本地工作目录 /data/training_jobs/{run_id}。
+
+        用 rsync 整目录同步，包含全部产物（model.*、metadata、inference.py、
+        pred.parquet/pred.pkl、result.json、shap_summary.csv 等）。
+        """
         # 本地训练工作目录（与 LocalDockerOrchestrator 一致，注册流程从这里找产物）
         work_dir = Path("/data") / "training_jobs" / run_id
         work_dir.mkdir(parents=True, exist_ok=True)
-        artifacts = [
-            "model.lgb", "model.xgb", "model.cbm", "model.pkl", "model.pth",
-            "model_xgb.xgb", "model_xgb.pkl", "model_lgb.lgb", "model_lgb.txt",
-            "model_cbm.cbm", "model_lin.pkl", "meta_model.pkl", "ensemble_config.json",
-            "metadata.json", "config.yaml", "result.json", "inference.py", "shap_summary.csv",
+        # rsync 整目录：远端 {work_dir}/ 同步到本地 work_dir/，含隐藏文件
+        cmd = [
+            "rsync", "-avz", "--partial",
+            "-e", f"ssh -o StrictHostKeyChecking=no -p {self.port}"
+            + (f" -i {self.ssh_key}" if self.ssh_key else ""),
         ]
-        for artifact in artifacts:
-            await self._scp_pull(f"{self.work_dir}/{artifact}", work_dir)
+        if self.ssh_password:
+            cmd = [
+                "rsync", "-avz", "--partial",
+                "-e", f"sshpass -p {self.ssh_password} ssh -o StrictHostKeyChecking=no -p {self.port}",
+            ]
+        cmd += [f"{self.user}@{self.host}:{self.work_dir.rstrip('/')}/", f"{work_dir}/"]
+        proc = await asyncio.create_subprocess_exec(
+            *cmd,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+        )
+        _, stderr = await proc.communicate()
+        if proc.returncode != 0:
+            logger.warning("[%s] rsync 拉取产物失败: %s", run_id, stderr.decode(errors="replace")[:300])
         self._log(run_id, f"[SYNC] 模型产物已拉取到 {work_dir}")
 
     async def _trigger_registration(self, run_id: str) -> None:
@@ -562,17 +593,27 @@ class RemoteSSHOrchestrator(TrainingOrchestrator):
                 files.append(str(f))
         return files
 
+    def _callback_url(self, run_id: str) -> str:
+        """构建训练回调 URL。
+
+        优先用主节点局域网地址（TRAINING_MASTER_HOST），使远端容器能直接回调；
+        否则回退 api_base（容器内服务名，远端可能不可达，主节点仍会自拉产物兜底）。
+        """
+        base = f"http://{self.master_host}:8000" if self.master_host else self.api_base
+        return f"{base}/api/v1/models/training-runs/{run_id}/complete"
+
     def _build_docker_run_cmd(self, container_name: str) -> str:
         """构造远端 docker run 命令字符串。
 
-        train.py 已 rsync 到 {work_dir}/train.py 并挂载覆盖镜像内置版，
-        保证 train.py 更新不需要重新打包/上传 AutoDL 镜像。
+        train.py 与 inference 模板已 rsync 到工作目录并挂载覆盖镜像内置版，
+        保证 train.py/模板更新不需要重新打包/上传 AutoDL 镜像。
         """
         return (
             f"docker run -d --name {container_name} "
             f"-v {self.work_dir}:/workspace "
             f"-v {self.work_dir}/feature_snapshots:/tmp/feature_snapshots:ro "
             f"-v {self.work_dir}/train.py:/app/train.py:ro "
+            f"-v {self.work_dir}/templates:/app/backend/services/engine/inference/templates:ro "
             f"{self.docker_image} python /app/train.py --config /workspace/config.yaml"
         )
 
@@ -582,6 +623,18 @@ class RemoteSSHOrchestrator(TrainingOrchestrator):
             str(Path(__file__).resolve().parents[3] / "docker" / "training" / "train.py"),
             "/app/docker/training/train.py",
             "/app/train.py",
+        ]
+        for p in candidates:
+            if Path(p).exists():
+                return p
+        return None
+
+    def _resolve_inference_template(self) -> str | None:
+        """定位本地统一推理模板 inference_parquet.py。"""
+        candidates = [
+            str(Path(__file__).resolve().parents[3]
+                / "backend" / "services" / "engine" / "inference" / "templates" / "inference_parquet.py"),
+            "/app/backend/services/engine/inference/templates/inference_parquet.py",
         ]
         for p in candidates:
             if Path(p).exists():
