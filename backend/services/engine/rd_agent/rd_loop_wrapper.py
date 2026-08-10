@@ -310,13 +310,19 @@ class RDLoopWrapper:
         qlib_source = market_cfg["qlib_source"]
         qlib_target_name = market_cfg["qlib_target_name"]
 
-        # A 股：优先使用 QuantDB parquet 构建的 Qlib 缓存
-        if self.market == "a_share":
-            quantdb_dir = self._resolve_quantdb_dir()
-            if quantdb_dir:
-                qlib_cache = os.path.join(quantdb_dir, ".qlib_cache", "cn_data")
-                if os.path.isdir(qlib_cache):
-                    qlib_source = qlib_cache
+        # parquet 单源市场：优先使用各市场本地 parquet 派生的 .qlib_cache 缓存
+        market_cache = {
+            "a_share": ("/data/quantdb", ".qlib_cache", "cn_data"),
+            "hong_kong": ("/data/quanthk", ".qlib_cache", "hk_data"),
+            "us_stock": ("/data/quantus", ".qlib_cache", "us_data"),
+        }
+        if self.market in market_cache:
+            base_dir_cfg, cache_sub, leaf = market_cache[self.market]
+            for candidate in (Path(base_dir_cfg) / cache_sub / leaf,
+                              self._resolve_market_data_dir(base_dir_cfg) / cache_sub / leaf):
+                if candidate.is_dir():
+                    qlib_source = str(candidate)
+                    break
 
         qlib_target = os.path.expanduser(f"~/.qlib/qlib_data/{qlib_target_name}")
         if os.path.isdir(qlib_source):
@@ -390,6 +396,28 @@ class RDLoopWrapper:
             if d and os.path.isdir(d):
                 return d
         return None
+
+    @staticmethod
+    def _resolve_market_data_dir(container_path: str) -> Path:
+        """解析市场本地 parquet 数据目录（容器挂载 /data/quantX）。
+
+        支持 env 覆盖（QM_QUANTHK_DATA_DIR 等）；容器内为 /data/quantX，
+        宿主机构回退到项目 data/quantX。返回不存在的候选也不报错，
+        由调用方用 .is_dir() 判断。
+        """
+        env_map = {
+            "/data/quanthk": "QM_QUANTHK_DATA_DIR",
+            "/data/quantus": "QM_QUANTUS_DATA_DIR",
+            "/data/quantbc": "QM_QUANTBC_DATA_DIR",
+            "/data/quantdb": "QM_QUANTDB_DATA_DIR",
+        }
+        env_name = env_map.get(container_path)
+        if env_name:
+            env_val = os.getenv(env_name, "").strip()
+            if env_val:
+                return Path(env_val)
+        project_data = Path(__file__).resolve().parents[4] / "data" / Path(container_path).name
+        return project_data
 
     def _generate_h5_from_parquet(self, quantdb_dir: str, output_path: str, *, debug: bool = False) -> bool:
         """从 QuantDB parquet 生成 RD-Agent 期望的 daily_pv.h5 文件。

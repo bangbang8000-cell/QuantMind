@@ -23,16 +23,22 @@ from .model_management_utils import _scan_feature_snapshots_status
 
 
 # 市场 → Qlib 子目录
-# A 股：QuantDB 派生缓存（single source of truth），HK/US：legacy qlib_data
+# parquet 单源市场（A股/HK/US/期货）读各自 .qlib_cache；crypto 仍用 legacy 5min
 _QDB_DATA_DIR = Path(os.getenv("QM_QUANTDB_DATA_DIR", str(Path(os.getcwd()) / "data" / "quantdb")))
+_QUANTHK_DATA_DIR = Path(
+    os.getenv("QM_QUANTHK_DATA_DIR", str(Path(os.getcwd()) / "data" / "quanthk"))
+)
+_QUANTUS_DATA_DIR = Path(
+    os.getenv("QM_QUANTUS_DATA_DIR", str(Path(os.getcwd()) / "data" / "quantus"))
+)
 _QUANTFUTURES_DATA_DIR = Path(
     os.getenv("QM_QUANTFUTURES_DATA_DIR", str(Path(os.getcwd()) / "data" / "quantfutures"))
 )
 _MARKET_QLIB_DIRS: dict[str, Path] = {
     "a_share": _QDB_DATA_DIR / ".qlib_cache" / "cn_data",
     "crypto": Path(os.getcwd()) / "db" / "qlib_data" / "crypto_data",
-    "hong_kong": Path(os.getcwd()) / "db" / "qlib_data" / "hk_data",
-    "us_stock": Path(os.getcwd()) / "db" / "qlib_data" / "us_data",
+    "hong_kong": _QUANTHK_DATA_DIR / ".qlib_cache" / "hk_data",
+    "us_stock": _QUANTUS_DATA_DIR / ".qlib_cache" / "us_data",
     "futures": _QUANTFUTURES_DATA_DIR / ".qlib_cache" / "futures_data",
 }
 

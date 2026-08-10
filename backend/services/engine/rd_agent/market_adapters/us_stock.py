@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+from pathlib import Path
 
 from . import register_adapter
 from .base import BacktestConfig, DataConfig, MarketAdapter
@@ -77,6 +78,15 @@ class USStockAdapter(MarketAdapter):
         )
 
     def get_qlib_provider_uri(self) -> str:
+        # 优先 QuantUS parquet 派生的 Qlib 缓存（与 QlibDataBuilder.for_market("US") 输出一致），
+        # 回退到旧 H5 管线路径（兼容）
+        from backend.services.engine.data_platform.quantus_hub import (
+            _resolve_quantus_data_dir,
+        )
+
+        cache = Path(_resolve_quantus_data_dir()) / ".qlib_cache" / "us_data"
+        if cache.exists():
+            return str(cache)
         container_path = "/app/db/qlib_data/us_data"
         if os.path.isdir(container_path):
             return container_path
@@ -117,15 +127,12 @@ class USStockAdapter(MarketAdapter):
         }
 
     def prepare_data(self) -> bool:
-        """下载并转换美股数据"""
-        from ..data_pipeline.us_data import (
-            convert_h5_to_qlib_format,
-            download_all_us,
-        )
+        """从 QuantUS parquet 构建 Qlib 二进制缓存（parquet 单源）。"""
+        from backend.services.engine.qlib_data_builder import QlibDataBuilder
 
         try:
-            h5_path = download_all_us()
-            convert_h5_to_qlib_format(h5_path, self.get_qlib_provider_uri())
+            builder = QlibDataBuilder.for_market("US")
+            builder.build_all(incremental=True)
             return True
         except Exception as e:
             logger = __import__("logging").getLogger(__name__)

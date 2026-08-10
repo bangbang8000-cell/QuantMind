@@ -944,20 +944,20 @@ export const AdminDataManagement: React.FC = () => {
                                             '生成日历、标的列表、特征文件',
                                             '支持 33 个主流加密货币交易对',
                                         ] : selectedMarket === 'hong_kong' ? [
-                                            'akshare：日线 + 估值/财务指标/公司资料 + 指数',
-                                            'CCASS 机构持仓 + 南向/北向资金',
-                                            '覆盖 2000+ 只港股（本地 parquet）',
-                                            '支持增量更新和全量重下',
+                                            'QuantHK parquet 单源（本地 daily_forward 分区）',
+                                            'Qlib 缓存从 parquet 构建（.qlib_cache/hk_data）',
+                                            '覆盖 3000+ 只港股，1980 年起历史数据',
+                                            '支持增量更新和全量重建',
                                         ] : selectedMarket === 'futures' ? [
                                             'akshare：国际期货 + 国内商品 + 上金所贵金属',
                                             '本地 parquet 存储（QuantFutures 数据中枢）',
                                             '覆盖 36 个主力/贵金属合约（CL.FUT / RB0.CN / Au99.99）',
                                             '支持增量更新和全量重下',
                                         ] : [
-                                            'akshare：日线 + 指数（纳指/标普/道指）',
-                                            'Yahoo：财务三表/分析师预期/期权链',
-                                            '覆盖 490+ 只美股（本地 parquet）',
-                                            '支持增量更新和全量重下',
+                                            'QuantUS parquet 单源（本地 daily_forward 分区）',
+                                            'Qlib 缓存从 parquet 构建（.qlib_cache/us_data）',
+                                            '覆盖 500+ 只美股，2001 年起历史数据',
+                                            '支持增量更新和全量重建',
                                         ].map((text, i) => (
                                             <li key={i} className="flex items-start text-xs text-slate-500 font-medium">
                                                 <CheckCircleFilled className="text-emerald-500 mt-0.5 mr-2" />
@@ -1207,10 +1207,10 @@ export const AdminDataManagement: React.FC = () => {
                                             : selectedMarket === 'crypto'
                                                 ? '加密货币数据从 Binance 公开 API 下载 5 分钟 K 线，转换为 Qlib bin 格式。数据量较大，首次同步需要 20-30 分钟。'
                                                 : selectedMarket === 'hong_kong'
-                                                    ? '港股数据源按勾选分发：akshare（日线/估值/财务/指数）+ CCASS 机构持仓 + 南向/北向资金，落盘本地 parquet。'
+                                                    ? '港股数据从 QuantHK parquet 单源读取，Qlib 缓存由 parquet 构建（.qlib_cache/hk_data），覆盖 3000+ 标的、1980 年起历史。'
                                                     : selectedMarket === 'futures'
                                                         ? '期货数据源按勾选分发：akshare（国际期货/国内商品/上金所贵金属），落盘本地 parquet，Qlib 缓存从 parquet 构建。'
-                                                        : '美股数据源按勾选分发：akshare（日线/指数）+ Yahoo（财务/分析师），落盘本地 parquet。'
+                                                        : '美股数据从 QuantUS parquet 单源读取，Qlib 缓存由 parquet 构建（.qlib_cache/us_data），覆盖 500+ 标的、2001 年起历史。'
                                         }
                                     </Text>
                                 </div>

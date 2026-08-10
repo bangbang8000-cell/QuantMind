@@ -34,30 +34,42 @@ def _now_iso() -> str:
     return datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
 
 
-# Alpha Agent 市场 → PostgreSQL 表名（list_alpha_agent_markets 用）
-_ALPHA_AGENT_PG_TABLE_MAP: dict[str, str] = {
-    "a_share": "stock_daily_latest",
-    "crypto": "stock_daily_latest_crypto",
-    "hong_kong": "stock_daily_latest_hk",
-    "us_stock": "stock_daily_latest_us",
-}
-
-# Alpha Agent 市场 → H5 数据文件路径（fallback，仅当无 PG 统计时读取）
+# Alpha Agent 市场 → H5 数据文件路径（仅 crypto 5min 仍用 H5）
 _ALPHA_AGENT_H5_MAP: dict[str, str] = {
-    "a_share": "/app/alphaagent/scenarios/qlib/experiment/factor_data_template/daily_pv_all.h5",
     "crypto": "/app/db/crypto_data/5min_pv.h5",
-    "hong_kong": "/app/db/hk_data/daily_pv.h5",
-    "us_stock": "/app/db/us_data/daily_pv.h5",
 }
 
 
-def _futures_local_stats() -> dict | None:
-    """从 QuantFuturesDataHub 读取期货本地 parquet 统计（行数/标的/日期范围）。"""
-    try:
-        from backend.services.engine.data_platform.quantfutures_hub import QuantFuturesDataHub
-        import duckdb
+def _market_local_stats(market: str) -> dict | None:
+    """从各市场本地 parquet 读取统计（行数/标的/日期范围）。
 
-        hub = QuantFuturesDataHub.get_instance()
+    支持 parquet 单源市场：a_share / futures / hong_kong / us_stock。
+    """
+    hub_cls_map = {
+        "a_share": "quantdb_hub.QuantDBDataHub",
+        "futures": "quantfutures_hub.QuantFuturesDataHub",
+        "hong_kong": "quanthk_hub.QuantHKDataHub",
+        "us_stock": "quantus_hub.QuantUSDataHub",
+    }
+    hub_ref = hub_cls_map.get(market)
+    if not hub_ref:
+        return None
+    try:
+        import duckdb
+        from backend.services.engine.data_platform import (
+            quantus_hub,
+            quantbc_hub,
+            quantdb_hub,
+            quantfutures_hub,
+            quanthk_hub,
+        )
+
+        hub = {
+            "quantus_hub.QuantUSDataHub": quantus_hub.QuantUSDataHub,
+            "quanthk_hub.QuantHKDataHub": quanthk_hub.QuantHKDataHub,
+            "quantfutures_hub.QuantFuturesDataHub": quantfutures_hub.QuantFuturesDataHub,
+            "quantdb_hub.QuantDBDataHub": quantdb_hub.QuantDBDataHub,
+        }[hub_ref].get_instance()
         fwd = hub.data_dir / "1_kline_data" / "daily_forward"
         if not fwd.is_dir():
             return None
@@ -860,46 +872,8 @@ async def list_alpha_agent_markets(current_user: dict = Depends(require_admin)):
         from pathlib import Path
         from backend.services.engine.rd_agent.market_adapters import list_markets, get_adapter
 
-        # 市场 → PostgreSQL 表名
-        table_map = _ALPHA_AGENT_PG_TABLE_MAP
-        # 市场 → H5 数据文件路径（fallback）
+        # 市场 → H5 数据文件路径（仅 crypto 5min 用）
         h5_map = _ALPHA_AGENT_H5_MAP
-
-        # 查询 PostgreSQL 获取各市场实时数据统计
-        from backend.shared.database_manager_v2 import get_session
-        from sqlalchemy import text as sql_text
-
-        pg_stats: dict[str, dict] = {}
-        for mid, tbl in table_map.items():
-            try:
-                async with get_session(read_only=True) as session:
-                    result = await session.execute(sql_text(f"""
-                        SELECT COUNT(*) AS rows,
-                               COUNT(DISTINCT symbol) AS symbols,
-                               MIN(trade_date) AS start_date,
-                               MAX(trade_date) AS end_date,
-                               (
-                                   -- 分区表的数据在子分区里，父表 pg_total_relation_size 为 0，
-                                   -- 必须把所有子分区一并累加，否则体积显示成 0。
-                                   SELECT pg_total_relation_size('{tbl}') + COALESCE(SUM(
-                                              pg_total_relation_size(i.inhrelid)
-                                          ), 0)
-                                   FROM pg_inherits i
-                                   WHERE i.inhparent = '{tbl}'::regclass
-                               ) AS table_bytes
-                        FROM {tbl}
-                    """))
-                    row = result.mappings().first()
-                    if row and row["rows"] and row["rows"] > 0:
-                        pg_stats[mid] = {
-                            "rows": int(row["rows"]),
-                            "symbols": int(row["symbols"]),
-                            "start_date": str(row["start_date"]),
-                            "end_date": str(row["end_date"]),
-                            "file_size_mb": round(int(row["table_bytes"] or 0) / 1024 / 1024, 1),
-                        }
-            except Exception:
-                pass
 
         markets = list_markets()
         for m in markets:
@@ -910,37 +884,32 @@ async def list_alpha_agent_markets(current_user: dict = Depends(require_admin)):
             except Exception:
                 m["data_ready"] = False
 
-            # 优先使用 PostgreSQL 实时数据
-            if mid in pg_stats:
-                m["h5_info"] = pg_stats[mid]
-                m["data_source"] = "postgresql"
+            # parquet 单源市场（A股/期货/港股/美股）：数据统一从本地 Quant parquet 读取，
+            # 不依赖 PostgreSQL。
+            if mid in ("a_share", "futures", "hong_kong", "us_stock"):
+                m["h5_info"] = _market_local_stats(mid)
+                m["data_source"] = "parquet" if m["h5_info"] else None
             else:
-                # 期货：数据在本地 QuantFutures parquet（无 PG 表 / H5），
-                # 直接从数据中枢读取统计。
-                if mid == "futures":
-                    m["h5_info"] = _futures_local_stats()
-                    m["data_source"] = "parquet" if m["h5_info"] else None
-                else:
-                    # Fallback: 读取 H5 文件
-                    h5_path = h5_map.get(mid)
-                    if h5_path and Path(h5_path).exists():
-                        try:
-                            import pandas as pd
-                            df = pd.read_hdf(h5_path, key="data")
-                            dates = df.index.get_level_values("datetime")
-                            instruments = df.index.get_level_values("instrument")
-                            m["h5_info"] = {
-                                "rows": len(df),
-                                "symbols": int(instruments.nunique()),
-                                "start_date": str(dates.min().date()),
-                                "end_date": str(dates.max().date()),
-                                "file_size_mb": round(Path(h5_path).stat().st_size / 1024 / 1024, 1),
-                            }
-                            m["data_source"] = "h5"
-                        except Exception:
-                            m["h5_info"] = None
-                    else:
+                # crypto 5min：仍用 H5 管线（无 5min parquet）
+                h5_path = h5_map.get(mid)
+                if h5_path and Path(h5_path).exists():
+                    try:
+                        import pandas as pd
+                        df = pd.read_hdf(h5_path, key="data")
+                        dates = df.index.get_level_values("datetime")
+                        instruments = df.index.get_level_values("instrument")
+                        m["h5_info"] = {
+                            "rows": len(df),
+                            "symbols": int(instruments.nunique()),
+                            "start_date": str(dates.min().date()),
+                            "end_date": str(dates.max().date()),
+                            "file_size_mb": round(Path(h5_path).stat().st_size / 1024 / 1024, 1),
+                        }
+                        m["data_source"] = "h5"
+                    except Exception:
                         m["h5_info"] = None
+                else:
+                    m["h5_info"] = None
 
             # 读取 Qlib 目录详情（路径统一由市场适配器解析，消除硬编码漂移）
             qlib_dir = None
