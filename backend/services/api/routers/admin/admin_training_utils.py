@@ -15,6 +15,7 @@ from sqlalchemy import select, text
 from backend.services.api.routers.admin.db import TrainingJobRecord
 from backend.services.api.training_explain import normalize_explain
 from backend.services.api.user_app.middleware.auth import require_admin
+from backend.services.engine.training.orchestrator_base import get_orchestrator
 from backend.services.engine.training.local_docker_orchestrator import LocalDockerOrchestrator
 from backend.services.engine.training.training_log_stream import TrainingRunLogStream
 from backend.shared.database_manager_v2 import get_session
@@ -870,8 +871,10 @@ async def submit_training_job(
         progress=0,
     )
 
-    orchestrator = LocalDockerOrchestrator()
-    logger.warning(f"[SYSTEM] Dispatching training job {run_id}. payload_keys={list(normalized_payload.keys())}")
+    # 训练节点选择（payload.node_id: "local" 或 "autodl-xxx"，默认本地）
+    node_id = str(normalized_payload.get("node_id") or payload.get("node_id") or "local")
+    orchestrator = get_orchestrator(node_id=node_id)
+    logger.warning(f"[SYSTEM] Dispatching training job {run_id}. node={node_id} payload_keys={list(normalized_payload.keys())}")
     if multi_horizon:
         # 多周期：编排器串行跑各 child，全部成功后自动创建融合模型
         asyncio.create_task(

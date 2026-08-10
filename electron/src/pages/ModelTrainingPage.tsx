@@ -17,6 +17,7 @@ import { selectCurrentMarket } from '../store/slices/uiSlice';
 import { getMarketConfig } from '../config/marketConfig';
 import { TrainingTarget, TrainingParams, TrainingContext, TrainingStatus, TrainingDraft, SplitKey, TimePeriodMap, FeatureCategory, STORAGE_KEY, DEFAULT_FEATURE_CATEGORIES, PRESET_DEFAULT_FEATURES, MARKET_DEFAULT_FEATURES, getDefaultFeaturesForMarket, resolveDefaultSelectedFeatures, DEFAULT_TIME_PERIODS, DEFAULT_TARGET, DEFAULT_PARAMS, DEFAULT_CONTEXT, buildAutoDisplayName, buildLabelFormula, buildEffectiveTradeDate, daysBetween, toISOStringRange, restoreRange, shouldMigrateLegacyDraftPeriods, buildTrainingRequest, formatRange, toDynamicCategories, TrainingResult, buildBackendTrainingPayload, parseTrainingResult, parseSuggestedTimePeriods, MODEL_DL_DEFAULTS, WfaConfig } from './training/trainingUtils';
 import { AdminModelFeatureDataCoverage } from '../features/admin/types';
+import { adminService } from '../features/admin/services/adminService';
 import { FeatureSelector } from './training/FeatureSelector';
 import { TrainingTargetConfig } from './training/TrainingTargetConfig';
 import { ParameterConfig } from './training/ParameterConfig';
@@ -74,6 +75,9 @@ export const ModelTrainingPage: React.FC = () => {
   const [settingDefaultModel, setSettingDefaultModel] = useState(false);
   const [draftSavedAt, setDraftSavedAt] = useState<string>('');
   const [draftHydrated, setDraftHydrated] = useState(false);
+  const [trainingNodes, setTrainingNodes] = useState<any[]>([]);
+  const [selectedNode, setSelectedNode] = useState<string>('local');
+  const [nodesLoading, setNodesLoading] = useState(false);
   
   const timersRef = useRef<number[]>([]);
   const pollTimerRef = useRef<number | null>(null);
@@ -119,6 +123,23 @@ export const ModelTrainingPage: React.FC = () => {
       setDisplayName(autoDisplayName);
     }
   }, [autoDisplayName, displayName, displayNameMode]);
+
+  useEffect(() => {
+    let active = true;
+    const loadNodes = async () => {
+      setNodesLoading(true);
+      try {
+        const resp = await adminService.listTrainingNodes();
+        if (active && resp?.nodes) {
+          setTrainingNodes(resp.nodes);
+        }
+      } catch { /* silent */ } finally {
+        if (active) setNodesLoading(false);
+      }
+    };
+    loadNodes();
+    return () => { active = false; };
+  }, []);
 
   useEffect(() => {
     let active = true;
@@ -251,7 +272,7 @@ export const ModelTrainingPage: React.FC = () => {
     pushLog(`正在提交训练请求：${displayName}`);
     
     try {
-      const payload = buildBackendTrainingPayload(requestPreview, timePeriods);
+      const payload = buildBackendTrainingPayload(requestPreview, timePeriods, { nodeId: selectedNode });
       const { runId } = await modelTrainingService.runTraining(payload);
       pushLog(`提交成功，Run ID: ${runId}`);
       
@@ -386,6 +407,34 @@ export const ModelTrainingPage: React.FC = () => {
                   <div className="text-[10px] uppercase font-bold text-slate-400 mb-1">当前配置摘要</div>
                   <div className="text-xs font-semibold text-slate-700">T+{target.horizonDays} · {target.mode === 'classification' ? '分类' : '回归'}</div>
                   <div className="text-[10px] text-slate-400 mt-1 truncate">{labelFormula}</div>
+               </div>
+               <div className="rounded-xl bg-slate-50 p-3 border border-slate-100">
+                  <div className="text-[10px] uppercase font-bold text-slate-400 mb-2">训练节点</div>
+                  <div className="flex gap-2">
+                    {trainingNodes.length > 0
+                      ? trainingNodes.map((n) => (
+                          <button
+                            key={n.id}
+                            onClick={() => setSelectedNode(n.id)}
+                            className={clsx(
+                              'flex-1 rounded-lg px-2 py-1.5 text-xs font-semibold border transition-all',
+                              selectedNode === n.id
+                                ? n.type === 'remote'
+                                  ? 'bg-orange-50 border-orange-300 text-orange-700'
+                                  : 'bg-blue-50 border-blue-300 text-blue-700'
+                                : 'bg-white border-gray-200 text-gray-500 hover:border-gray-300'
+                            )}
+                          >
+                            {n.name}
+                          </button>
+                        ))
+                      : <div className="text-[11px] text-slate-400 w-full text-center py-1">仅本地训练</div>}
+                  </div>
+                  {selectedNode !== 'local' && (
+                    <div className="mt-2 text-[10px] text-orange-600 leading-relaxed">
+                      将推送特征快照到 AutoDL，远程 GPU 训练完成后模型自动回传本机。
+                    </div>
+                  )}
                </div>
                <div className="flex gap-2">
                  <Button size="small" block className="rounded-lg" onClick={() => message.success('草稿已保存')}>保存草稿</Button>

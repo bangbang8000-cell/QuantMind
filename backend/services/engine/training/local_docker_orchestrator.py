@@ -26,6 +26,7 @@ from docker import DockerClient
 import yaml
 
 from backend.services.engine.training.training_log_stream import TrainingRunLogStream
+from backend.services.engine.training.orchestrator_base import TrainingOrchestrator
 from backend.services.api.training_explain import DEFAULT_EXPLAIN_CFG
 
 logger = logging.getLogger(__name__)
@@ -108,7 +109,7 @@ else:
 _TRAINING_SCRIPT_HOST_PATH = str(_HOST_PROJECT_PATH / "docker" / "training" / "train.py")
 
 
-class LocalDockerOrchestrator:
+class LocalDockerOrchestrator(TrainingOrchestrator):
     def __init__(self):
         self.docker = DockerClient.from_env()
         self.api_base = (

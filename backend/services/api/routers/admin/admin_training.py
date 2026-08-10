@@ -208,6 +208,52 @@ async def run_training(
     return await submit_training_job(payload, background_tasks, current_user)
 
 
+@router.get("/training-nodes", summary="列出可用的训练节点")
+async def list_training_nodes(current_user: dict[str, Any] = Depends(require_admin)):
+    """列出训练节点（本地 Docker + 已配置的 AutoDL 远程节点）。"""
+    import os
+
+    nodes = [{
+        "id": "local",
+        "type": "local",
+        "name": "本地 Docker",
+        "description": "本机 GPU 训练（Docker-in-Docker）",
+        "available": True,
+    }]
+    host = os.getenv("TRAINING_AUTODL_HOST", "").strip()
+    if host:
+        nodes.append({
+            "id": "autodl-1",
+            "type": "remote",
+            "name": os.getenv("TRAINING_AUTODL_NODE_NAME", "AutoDL GPU"),
+            "host": host,
+            "description": f"AutoDL 远程 GPU 训练节点（{host}）",
+            "available": True,
+        })
+    return {"nodes": nodes}
+
+
+@router.post("/training-nodes/test", summary="测试训练节点连接")
+async def test_training_node(
+    body: dict[str, Any],
+    current_user: dict[str, Any] = Depends(require_admin),
+):
+    """测试 AutoDL 远程节点 SSH 连接 + docker 可用性。
+
+    body: {"node_id": "autodl-1"}，连接配置从环境变量读取。
+    """
+    node_id = str((body or {}).get("node_id") or "autodl-1")
+    if node_id == "local":
+        return {"success": True, "node": node_id, "ssh": True, "docker": True}
+    try:
+        from backend.services.engine.training.remote_ssh_orchestrator import RemoteSSHOrchestrator
+
+        orch = RemoteSSHOrchestrator(node_id=node_id)
+        return {"success": True, "node": node_id, **await orch.test_connection()}
+    except Exception as exc:  # noqa: BLE001
+        return {"success": False, "node": node_id, "error": str(exc)}
+
+
 @router.get("/training-runs/{run_id}", summary="获取训练任务状态")
 async def get_training_run(
     run_id: str,

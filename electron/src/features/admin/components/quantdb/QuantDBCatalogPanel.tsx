@@ -265,7 +265,11 @@ export function QuantDBCatalogPanel({ connected, onPreview }: QuantDBCatalogPane
             key: 'action',
             width: 90,
             render: (_, row) => (
-                <Button size="small" icon={<EyeOutlined />} onClick={() => onPreview(row)}>
+                <Button
+                    size="small"
+                    icon={<EyeOutlined />}
+                    onClick={(e) => { e.stopPropagation(); onPreview(row); }}
+                >
                     预览
                 </Button>
             ),
@@ -335,6 +339,10 @@ export function QuantDBCatalogPanel({ connected, onPreview }: QuantDBCatalogPane
                                 size="small"
                                 pagination={false}
                                 scroll={{ x: 'max-content' }}
+                                onRow={(record) => ({
+                                    onClick: () => onPreview(record),
+                                    style: { cursor: 'pointer' },
+                                })}
                                 rowSelection={{
                                     selectedRowKeys: selected.filter((n) => names.includes(n)),
                                     onChange: (keys) => {

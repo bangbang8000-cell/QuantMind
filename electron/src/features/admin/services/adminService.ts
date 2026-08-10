@@ -403,6 +403,16 @@ class AdminService {
         return resp.data;
     }
 
+    public async listTrainingNodes(): Promise<any> {
+        const resp = await this.axiosInstance.get<any>('/admin/models/training-nodes');
+        return resp.data;
+    }
+
+    public async testTrainingNode(nodeId: string): Promise<any> {
+        const resp = await this.axiosInstance.post<any>('/admin/models/training-nodes/test', { node_id: nodeId });
+        return resp.data;
+    }
+
     public async getTrainingRun(runId: string): Promise<any> {
         const resp = await this.axiosInstance.get<any>(`/admin/models/training-runs/${runId}`);
         return resp.data;

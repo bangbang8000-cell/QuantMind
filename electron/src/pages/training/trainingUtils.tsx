@@ -811,6 +811,7 @@ export const buildTrainingRequest = (
 export const buildBackendTrainingPayload = (
   request: TrainingRequestPayload,
   timePeriods: TimePeriodMap,
+  options?: { nodeId?: string },
 ): any => {
   const features = Array.from(new Set(request.selectedFeatures));
   const trainStart = dayjs(request.timePeriods.train[0]).format('YYYY-MM-DD');
@@ -920,6 +921,11 @@ export const buildBackendTrainingPayload = (
     payload.horizons = horizons;
     // 多周期下 WFA 成本 4×4=16 次训练，禁用避免超时
     delete payload.wfa;
+  }
+
+  // 训练节点（local=本机 Docker，autodl-xxx=AutoDL 远程 GPU）
+  if (options?.nodeId) {
+    payload.node_id = options.nodeId;
   }
 
   return payload;

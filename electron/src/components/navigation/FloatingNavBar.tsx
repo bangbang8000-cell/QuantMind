@@ -14,7 +14,8 @@ import {
   ShieldCheck,
   SquareTerminal,
   TestTube2,
-  Brain
+  Brain,
+  BarChart3
 } from 'lucide-react';
 import { motion } from 'framer-motion';
 import { useSelector } from 'react-redux';
@@ -40,6 +41,7 @@ export const FloatingNavBar: React.FC<FloatingNavBarProps> = ({ current, onChang
 
   const navItems: NavItemConfig[] = [
     { id: 'dashboard', label: marketLabel, icon: LayoutDashboard },
+    { id: 'market-analysis', label: '市场分析', icon: BarChart3 },
     { id: 'strategy', label: '智能策略', icon: LineChart },
     { id: 'ai-ide', label: 'AI-IDE', icon: SquareTerminal },
     { id: 'backtest', label: '回测中心', icon: FlaskConical },
@@ -59,7 +61,7 @@ export const FloatingNavBar: React.FC<FloatingNavBarProps> = ({ current, onChang
   }
 
   const groupedNavItems: NavItemConfig[][] = [
-    navItems.filter((item) => ['dashboard', 'strategy', 'ai-ide', 'backtest', 'agent'].includes(item.id)),
+    navItems.filter((item) => ['dashboard', 'market-analysis', 'strategy', 'ai-ide', 'backtest', 'agent'].includes(item.id)),
     navItems.filter((item) => ['model-training', 'model-registry', 'research', 'trading', 'rss-news', 'alpha-research', 'trading-agents'].includes(item.id)),
     navItems.filter((item) => ['profile', 'admin'].includes(item.id))
   ].filter((group) => group.length > 0);

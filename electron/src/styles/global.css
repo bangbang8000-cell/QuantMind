@@ -122,7 +122,7 @@ html.platform-win32.os-win10 body {
 
 /* 有底部 Dock 时：Dock 在文档流底部，不遮挡内容 */
 .app-root.has-dock {
-  --dock-height: 52px;
+  --dock-height: 60px;
 }
 
 /* 内容区：吃掉除 Dock 以外的全部高度（TitleBar 为 absolute，不占流） */
@@ -613,7 +613,7 @@ html.platform-win32.os-win10 .module-grid-container {
 .status-indicator { animation: pulse 2s infinite; }
 
 
-/* 底部 Dock 导航栏 - 文档流底部居中胶囊，不遮挡内容 */
+/* 底部 Dock 导航栏 - 完全透明，图标分散浮于页面背景，无长条 */
 .bottom-dock {
   flex: 0 0 auto;
   height: var(--dock-height);
@@ -621,31 +621,27 @@ html.platform-win32.os-win10 .module-grid-container {
   display: flex;
   align-items: center;
   justify-content: center;
-  padding: 0 16px;
+  padding: 6px 0;
   box-sizing: border-box;
+  background: transparent;
   z-index: 1050;
 }
 
-/* 胶囊本体 */
+/* 图标容器 - 透明，不包裹长条 */
 .bottom-dock-inner {
   display: flex;
-  align-items: stretch;
+  align-items: center;
   justify-content: center;
-  gap: 6px;
-  height: calc(100% - 12px);
+  gap: 4px;
+  height: 100%;
   max-width: 100%;
   padding: 0 10px;
   overflow-x: auto;
   overflow-y: hidden;
   scrollbar-width: none;
-  background: rgba(255, 255, 255, 0.82);
-  backdrop-filter: blur(24px) saturate(180%);
-  -webkit-backdrop-filter: blur(24px) saturate(180%);
-  border: 1px solid rgba(226, 232, 240, 0.9);
-  border-radius: 16px;
-  box-shadow:
-    0 12px 32px rgba(15, 23, 42, 0.12),
-    inset 0 1px 0 rgba(255, 255, 255, 0.9);
+  background: transparent;
+  border: none;
+  box-shadow: none;
 }
 
 .bottom-dock-inner::-webkit-scrollbar {
@@ -673,33 +669,39 @@ html.platform-win32.os-win10 .module-grid-container {
   align-items: center;
   justify-content: center;
   gap: 3px;
-  min-width: 58px;
-  padding: 0 8px;
-  background: transparent;
-  border: none;
-  border-radius: 10px;
+  width: 54px;
+  height: 44px;
+  padding: 0;
+  background: rgba(255, 255, 255, 0.4);
+  border: 1px solid rgba(226, 232, 240, 0.5);
+  border-radius: 12px;
   cursor: pointer;
   flex: 0 0 auto;
-  transition: background-color 0.18s ease;
+  box-shadow: 0 1px 4px rgba(15, 23, 42, 0.04);
+  transition: background-color 0.18s ease, box-shadow 0.18s ease, transform 0.18s ease;
 }
 
 .dock-item:hover {
-  background: rgba(255, 255, 255, 0.62);
+  background: rgba(255, 255, 255, 0.7);
+  box-shadow: 0 4px 12px rgba(15, 23, 42, 0.08);
+  transform: translateY(-1px);
 }
 
 .dock-item.active {
-  background: rgba(219, 234, 254, 0.5);
+  background: rgba(219, 234, 254, 0.7);
+  border-color: rgba(59, 130, 246, 0.35);
 }
 
 .dock-active-indicator {
   position: absolute;
-  top: 0;
-  left: 12px;
-  right: 12px;
-  height: 2px;
-  border-radius: 0 0 2px 2px;
+  bottom: 3px;
+  left: 50%;
+  transform: translateX(-50%);
+  width: 4px;
+  height: 4px;
+  border-radius: 50%;
   background: var(--primary-blue);
-  box-shadow: 0 0 8px rgba(37, 99, 235, 0.45);
+  box-shadow: 0 0 6px rgba(37, 99, 235, 0.5);
 }
 
 .dock-icon {

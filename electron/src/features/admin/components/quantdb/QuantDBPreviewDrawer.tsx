@@ -1,6 +1,6 @@
 import React, { useCallback, useEffect, useState } from 'react';
 import {
-    Alert, AutoComplete, Button, Drawer, Empty, InputNumber, Space, Table, Tag,
+    Alert, AutoComplete, Button, Empty, InputNumber, Modal, Space, Table, Tag,
     Typography, message,
 } from 'antd';
 import type { ColumnsType } from 'antd/es/table';
@@ -86,21 +86,13 @@ export function QuantDBPreviewDrawer({ dataset, onClose }: QuantDBPreviewDrawerP
     const supportsSymbol = dataset?.layout === 'symbol';
 
     return (
-        <Drawer
+        <Modal
             open={dataset !== null}
-            onClose={onClose}
-            width="85%"
+            onCancel={onClose}
+            width="88%"
             title={dataset ? `${dataset.name} · ${dataset.dataset}` : ''}
-            extra={
-                <Space>
-                    <Button icon={<ReloadOutlined />} onClick={() => load()} loading={loading}>
-                        刷新
-                    </Button>
-                    <Button icon={<CloudDownloadOutlined />} onClick={fetchRemote} loading={loading}>
-                        远端预览
-                    </Button>
-                </Space>
-            }
+            footer={null}
+            destroyOnClose
         >
             <Space direction="vertical" className="w-full" size="middle">
                 <Space wrap>
@@ -129,6 +121,12 @@ export function QuantDBPreviewDrawer({ dataset, onClose }: QuantDBPreviewDrawerP
                     </Space>
                     <Button type="primary" onClick={() => load()} loading={loading}>
                         查询
+                    </Button>
+                    <Button icon={<ReloadOutlined />} onClick={() => load()} loading={loading}>
+                        刷新
+                    </Button>
+                    <Button icon={<CloudDownloadOutlined />} onClick={fetchRemote} loading={loading}>
+                        远端预览
                     </Button>
                 </Space>
 
@@ -178,7 +176,7 @@ export function QuantDBPreviewDrawer({ dataset, onClose }: QuantDBPreviewDrawerP
                     )
                 )}
             </Space>
-        </Drawer>
+        </Modal>
     );
 }
 

@@ -38,6 +38,7 @@ import './styles/ai-strategy-theme.css';
 const UserCenterPage = lazy(() => import('./features/user-center/pages/UserCenterPage'));
 const StrategyComparisonPage = lazy(() => import('./features/strategy-comparison/pages/StrategyComparisonPage'));
 const StrategyWizardPage = lazy(() => import('./features/strategy-wizard/components/SmartStrategyStudioV2'));
+const MarketAnalysisPage = lazy(() => import('./features/market-analysis/pages/MarketAnalysisPage').then(m => ({ default: m.MarketAnalysisPage })));
 const QuantBotPage = lazy(() => import('./features/quantbot/pages/QuantBotPage'));
 const AIIDEPage = lazy(() => import('./pages/AIIDEPage'));
 const ModelTrainingPage = lazy(() => import('./pages/ModelTrainingPage'));
@@ -147,6 +148,7 @@ export default function App() {
     const routeMap: Record<string, string> = {
       'agent': '/quantbot',
       'strategy': '/strategy-wizard',
+      'market-analysis': '/market-analysis',
       'ai-ide': '/ai-ide',
       'model-training': '/model-training',
       'model-registry': '/model-registry',
@@ -180,6 +182,8 @@ export default function App() {
       dispatch(setCurrentTab('profile' as DashboardTab));
     } else if (location.pathname.startsWith('/strategy-wizard')) {
       dispatch(setCurrentTab('strategy' as DashboardTab));
+    } else if (location.pathname.startsWith('/market-analysis')) {
+      dispatch(setCurrentTab('market-analysis' as DashboardTab));
     } else if (location.pathname.startsWith('/quantbot')) {
       dispatch(setCurrentTab('agent' as DashboardTab));
     } else if (location.pathname.startsWith('/ai-ide')) {
@@ -515,6 +519,16 @@ export default function App() {
                     element={
                       <ProtectedRoute>
                         <StrategyComparisonPage />
+                      </ProtectedRoute>
+                    }
+                  />
+
+                  {/* 市场分析平台受保护路由 */}
+                  <Route
+                    path="/market-analysis"
+                    element={
+                      <ProtectedRoute>
+                        <MarketAnalysisPage />
                       </ProtectedRoute>
                     }
                   />

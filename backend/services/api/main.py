@@ -25,6 +25,7 @@ from backend.services.api.routers.qwenpaw_proxy import router as qwenpaw_proxy_r
 from backend.services.api.routers.qwenpaw_ui_proxy import router as qwenpaw_ui_proxy_router
 from backend.services.api.routers.engine_proxy import router as engine_proxy_router
 from backend.services.api.routers.files import router as files_router
+from backend.services.api.market_analysis.router import router as market_analysis_router
 from backend.services.api.routers.market_kline import router as market_kline_router
 from backend.services.api.routers.model_training import router as model_training_router
 from backend.services.api.routers.news import router as news_router
@@ -130,6 +131,7 @@ app.include_router(trading_calendar.router)
 app.include_router(api_keys_router, prefix="/api/v1")
 app.include_router(asset_router, prefix="/api/v1/asset", tags=["Asset"])
 app.include_router(market_kline_router)
+app.include_router(market_analysis_router)
 app.include_router(
     subscriptions_router, prefix="/api/v1/subscription", tags=["Subscriptions"]
 )
