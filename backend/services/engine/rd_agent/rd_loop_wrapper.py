@@ -188,6 +188,20 @@ class RDLoopWrapper:
             # 确保 daily_pv.h5 数据文件可用
             self._ensure_data_file(task_log_dir)
 
+            # RD-Agent workspace / 数据目录对齐：设绝对路径 env 变量 + 切 cwd。
+            # RD-Agent 的 FACTOR_COSTEER_SETTINGS.data_folder 与 workspace_path 默认用
+            # Path.cwd() 相对解析（import 时冻结），必须显式指到 task_log_dir，
+            # 否则因子执行时找不到 daily_pv.h5（默认 workspace 在 /tmp/git_ignore_folder/...）。
+            if task_log_dir:
+                os.environ["WORKSPACE_PATH"] = task_log_dir
+                os.environ["FACTOR_CoSTEER_data_folder"] = os.path.join(
+                    task_log_dir, "git_ignore_folder", "factor_implementation_source_data"
+                )
+                os.environ["FACTOR_CoSTEER_data_folder_debug"] = os.path.join(
+                    task_log_dir, "git_ignore_folder", "factor_implementation_source_data_debug"
+                )
+                os.chdir(task_log_dir)
+
             logger.info("[%s] RDLoop starting: market=%s, loops=%d, log_dir=%s",
                         self.market, self.adapter.market_name, loop_n, task_log_dir)
 
@@ -274,6 +288,12 @@ class RDLoopWrapper:
                 "source_debug": "/app/db/us_data/daily_pv.h5",
                 "qlib_source": "/app/db/qlib_data/us_data",
                 "qlib_target_name": "us_data",
+            },
+            "futures": {
+                "source_all": "/app/db/futures_data/daily_pv.h5",
+                "source_debug": "/app/db/futures_data/daily_pv.h5",
+                "qlib_source": "/data/quantfutures/.qlib_cache/futures_data",
+                "qlib_target_name": "futures_data",
             },
         }
 

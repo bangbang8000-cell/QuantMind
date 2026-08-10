@@ -9,6 +9,7 @@ const MARKET_LABELS: Record<string, string> = {
   crypto: '加密货币',
   hong_kong: '港股',
   us_stock: '美股',
+  futures: '期货',
 };
 
 interface ChatInputProps {
@@ -70,6 +71,7 @@ export const ChatInput: React.FC<ChatInputProps> = ({ onSubmit, onStop, isRunnin
         { id: 'crypto', name: '加密货币', ready: true },
         { id: 'hong_kong', name: '港股', ready: false },
         { id: 'us_stock', name: '美股', ready: false },
+        { id: 'futures', name: '期货', ready: false },
       ];
 
   const selectedNotReady = marketList.find(m => m.id === miningMarket)?.ready === false;

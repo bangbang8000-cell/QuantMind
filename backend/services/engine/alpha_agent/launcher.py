@@ -368,6 +368,7 @@ class AlphaAgentLauncher:
 
         cmd = [
             sys.executable,
+            "-X", "faulthandler",  # 段错误时输出 Python traceback 便于定位
             runner_script,
             "--task-id", task.task_id,
             "--user-id", task.user_id,
@@ -394,7 +395,9 @@ class AlphaAgentLauncher:
                 stderr=subprocess.STDOUT,
                 env=env,
                 cwd=str(task_log_dir),
-                preexec_fn=os.setsid,
+                # start_new_session 等价于 setsid（进程组隔离，取消时可 killpg），
+                # 但比 preexec_fn=os.setsid 安全（preexec_fn 在多线程 asyncio 环境会段错误 -11）
+                start_new_session=True,
             )
             task.process = process
             self._persist_task(task)
