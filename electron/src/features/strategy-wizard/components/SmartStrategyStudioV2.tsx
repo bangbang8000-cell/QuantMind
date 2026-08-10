@@ -1,6 +1,5 @@
 import React, { useState, useEffect, useRef, useMemo, useCallback } from 'react';
 import { Layout, Steps, theme, Button, Space, Typography, Card, Divider, Breadcrumb, message, Alert, Modal, Tag } from 'antd';
-import { HelpCircle } from 'lucide-react';
 import {
   BulbOutlined,
   ExperimentOutlined,
@@ -13,7 +12,6 @@ import {
 import { motion, AnimatePresence } from 'framer-motion';
 import { NaturalTextInput } from './NaturalTextInput';
 import { PoolPreview, type PoolPreviewHandle } from './PoolPreview';
-import { ContextAwareAssistant } from './ContextAwareAssistant';
 import QlibParamsConfig from './QlibParamsConfig';
 import QlibValidatorAndSave from './QlibValidatorAndSave';
 import { useWizardV2Store } from '../store/wizardV2Store';
@@ -24,74 +22,8 @@ import { selectCurrentMarket } from '../../../store/slices/uiSlice';
 import { getWizardUserId } from '../utils/userId';
 import { resolveRebalanceDays } from '../../../shared/qlib/rebalance';
 
-const { Header, Content, Sider, Footer } = Layout;
+const { Header, Content, Footer } = Layout;
 const { Title, Text } = Typography;
-
-interface StepFlowProps {
-  steps: Array<{ title: string; icon: React.ReactNode; description: string }>;
-  currentStep: number;
-  setCurrentStep: (step: number) => void;
-}
-
-const StepFlow = React.memo(({ steps, currentStep, setCurrentStep }: StepFlowProps) => {
-  return (
-    <div className="relative py-8 px-5">
-      <div className="flex flex-col gap-4 relative">
-        {steps.map((step, index) => {
-          const isActive = currentStep === index;
-          return (
-            <motion.div 
-              layout
-              key={index}
-              onClick={() => setCurrentStep(index)}
-              className={`
-                relative group cursor-pointer p-4 rounded-2xl
-                ${isActive ? 'bg-gradient-to-br from-blue-100/60 via-blue-50/30 to-white shadow-[0_10px_30px_rgba(59,130,246,0.18)] border border-blue-200/60' : 'hover:bg-slate-50 border border-transparent'}
-              `}
-              transition={{ duration: 0.35, ease: [0.4, 0, 0.2, 1] }}
-            >
-              {/* 活跃状态的侧边指示器 - 仅在活跃时显示，不使用 layoutId 以减少渲染开销 */}
-              {isActive && (
-                <div className="absolute left-0 top-4 bottom-4 w-1 bg-blue-500 rounded-r-full" />
-              )}
-
-              <div className="flex-1 min-w-0 pt-0.5">
-                <div className={`
-                  text-[10px] font-bold uppercase tracking-wider mb-1 transition-colors
-                  ${isActive ? 'text-blue-500' : 'text-slate-300'}
-                `}>
-                  Step 0{index + 1}
-                </div>
-                <div className={`
-                  text-sm font-bold transition-all
-                  ${isActive ? 'text-slate-900' : 'text-slate-500'}
-                `}>
-                  {step.title}
-                </div>
-                
-                <AnimatePresence initial={false}>
-                  {isActive && (
-                    <motion.div
-                      initial={{ height: 0, opacity: 0 }}
-                      animate={{ height: 'auto', opacity: 1 }}
-                      exit={{ height: 0, opacity: 0 }}
-                      transition={{ duration: 0.3, ease: [0.4, 0, 0.2, 1] }}
-                      className="overflow-hidden"
-                    >
-                      <div className="text-[11px] text-slate-400 mt-2 leading-relaxed">
-                        {step.description}
-                      </div>
-                    </motion.div>
-                  )}
-                </AnimatePresence>
-              </div>
-            </motion.div>
-          );
-        })}
-      </div>
-    </div>
-  );
-});
 
 const SmartStrategyStudioV2: React.FC = () => {
   const { token } = theme.useToken();
@@ -327,63 +259,7 @@ const SmartStrategyStudioV2: React.FC = () => {
         </Header>
 
         <Layout style={{ flex: 1, overflow: 'hidden', minHeight: 0 }}>
-          {/* 左侧导航栏 - 模拟 Sidebar */}
-          <Sider
-            width={280}
-            theme="light"
-            style={{
-              borderRight: '1px solid #e2e8f0',
-              background: '#fff',
-              flexShrink: 0
-            }}
-          >
-            <div 
-              className="flex flex-col overflow-hidden m-3 shadow-xl"
-              style={{
-                height: 'calc(100% - 24px)',
-                background: 'rgba(255, 255, 255, 0.4)',
-                backdropFilter: 'blur(20px) saturate(160%)',
-                WebkitBackdropFilter: 'blur(20px) saturate(160%)',
-                borderRadius: '32px',
-                border: '1px solid rgba(148, 163, 184, 0.35)',
-                boxShadow: '0 8px 32px 0 rgba(0, 0, 0, 0.05)'
-              }}
-            >
-              {/* 1. 流程图区域 - 自适应高度 */}
-              <div style={{ flex: '1 1 auto', overflowY: 'auto', borderBottom: '1px solid #f1f5f9' }} className="no-scrollbar">
-                <StepFlow steps={steps} currentStep={currentStep} setCurrentStep={setCurrentStep} />
-              </div>
-              
-              {/* 2. 智能助手与帮助区域 - 保持合理占比 */}
-              <div style={{ flex: '0 0 auto', maxHeight: '45%', overflowY: 'auto', background: 'rgba(250, 250, 250, 0.3)' }} className="no-scrollbar">
-                <div style={{ padding: '16px 12px 24px' }}>
-                  <ContextAwareAssistant step={currentStep} />
-                  
-                  {currentStep === 3 && (
-                    <Alert
-                      type="info"
-                      showIcon
-                      className="mt-4 rounded-xl border-blue-100 bg-blue-50/50"
-                      message="当前只执行语法检测，如需评估量化效果，请前往“回测中心”模块"
-                    />
-                  )}
-
-                  {/* 移动到此处的帮助链接 */}
-                  <div className="mt-6 px-1">
-                    <a
-                      href="https://www.quantmindai.cn/help"
-                      target="_blank"
-                      rel="noopener noreferrer"
-                      className="flex items-center gap-2.5 text-gray-400 hover:text-blue-600 transition-all group"
-                    >
-                      <HelpCircle className="w-3.5 h-3.5 text-gray-300 group-hover:text-blue-500" />
-                      <span className="text-[11px] font-semibold tracking-wide">帮助文档</span>
-                    </a>
-                  </div>
-                </div>
-              </div>
-            </div>
-          </Sider>
+          {/* 左侧导航已移除，改用顶部 Steps 导航，内容区占满全宽 */}
 
           <Layout style={{ background: '#f8fafc', padding: '0', display: 'flex', flexDirection: 'column', overflow: 'hidden', minHeight: 0, minWidth: 0 }}>
             <div className="px-8 py-6 flex items-center justify-between bg-white border-b border-slate-50">

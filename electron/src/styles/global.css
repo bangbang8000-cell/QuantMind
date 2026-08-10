@@ -120,9 +120,9 @@ html.platform-win32.os-win10 body {
   --app-h: calc(100vh - var(--dock-height));
 }
 
-/* 有底部 Dock 时，为其保留真实高度，页面内容据此收缩 */
+/* 有底部 Dock 时：Dock 为 fixed 浮动胶囊，不占流，无需为它预留底部空间 */
 .app-root.has-dock {
-  --dock-height: 50px;
+  --dock-height: 0px;
 }
 
 /* 内容区：吃掉除 Dock 以外的全部高度（TitleBar 为 absolute，不占流） */
@@ -613,19 +613,26 @@ html.platform-win32.os-win10 .module-grid-container {
 .status-indicator { animation: pulse 2s infinite; }
 
 
-/* 底部 Dock 导航栏 - 全宽贴底、占位不遮挡内容 */
+/* 底部 Dock 导航栏 - 居中浮动胶囊，占位不遮挡内容 */
 .bottom-dock {
-  flex: 0 0 auto;
-  height: var(--dock-height);
-  width: 100%;
-  background: linear-gradient(180deg, rgba(255, 255, 255, 0.82), rgba(241, 245, 249, 0.72));
+  position: fixed;
+  left: 50%;
+  transform: translateX(-50%);
+  bottom: 14px;
+  z-index: 1050;
+  display: flex;
+  align-items: center;
+  height: calc(var(--dock-height) - 4px);
+  max-width: calc(100vw - 32px);
+  padding: 0 10px;
+  background: rgba(255, 255, 255, 0.82);
   backdrop-filter: blur(24px) saturate(180%);
   -webkit-backdrop-filter: blur(24px) saturate(180%);
-  border-top: 1px solid var(--nav-border);
+  border: 1px solid rgba(226, 232, 240, 0.9);
+  border-radius: 16px;
   box-shadow:
-    0 -8px 24px rgba(15, 23, 42, 0.06),
+    0 12px 32px rgba(15, 23, 42, 0.12),
     inset 0 1px 0 rgba(255, 255, 255, 0.9);
-  z-index: 1050;
 }
 
 .bottom-dock-inner {
@@ -634,7 +641,7 @@ html.platform-win32.os-win10 .module-grid-container {
   justify-content: center;
   gap: 6px;
   height: 100%;
-  padding: 0 12px;
+  padding: 0 4px;
   overflow-x: auto;
   overflow-y: hidden;
   scrollbar-width: none;
@@ -736,8 +743,8 @@ html.platform-win32.os-win10 .module-grid-container {
   }
 
   .bottom-dock-inner {
-    justify-content: flex-start;
-    padding: 0 8px;
+    justify-content: center;
+    padding: 0 4px;
   }
 
   .dock-item {

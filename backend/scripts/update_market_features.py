@@ -487,6 +487,7 @@ def compute_market_features(df: pd.DataFrame, market: str, batch_size: int = 100
     _log(f"  统一列序: {len(all_columns)} 列")
 
     writer = None
+    first_schema = None
     try:
         for idx, t in enumerate(temp_files):
             chunk = pd.read_parquet(str(t), engine="pyarrow")
@@ -498,7 +499,15 @@ def compute_market_features(df: pd.DataFrame, market: str, batch_size: int = 100
             _coerce_batch_types(chunk)
             table = pa.Table.from_pandas(chunk, preserve_index=False)
             if writer is None:
+                first_schema = table.schema
                 writer = pq_writer.ParquetWriter(str(merged_path), table.schema)
+            else:
+                # 各批列类型可能不一致（int64 vs double），统一 cast 到首批 schema
+                try:
+                    table = table.cast(first_schema, safe=False)
+                except Exception:
+                    # cast 失败则逐列转 string 兜底
+                    table = table.cast(pa.schema([pa.field(n, pa.string()) for n in all_columns]), safe=False)
             writer.write_table(table)
             del chunk, table
             _log(f"    合并 {idx + 1}/{len(temp_files)}: {t.stat().st_size / 1024 / 1024:.0f}MB")

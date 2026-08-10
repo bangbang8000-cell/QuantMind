@@ -4,7 +4,7 @@ import logging
 import os
 import re
 import time
-from datetime import date
+from datetime import date, timedelta
 from typing import Any, Dict, List, Optional
 
 import pandas as pd
@@ -767,6 +767,105 @@ def _to_suffix_symbol(sym: str) -> str:
     return s
 
 
+def _suffix_matches_exchange(symbol: str, exchange: str) -> bool:
+    """判断后缀格式 symbol 是否属于指定交易所（如 .HK 后缀 / 代码前缀）。"""
+    s = str(symbol or "").upper()
+    exch = str(exchange or "").upper()
+    if not exch:
+        return True
+    # 后缀格式：700.HK / 600036.SH
+    if "." in s:
+        suffix = s.rsplit(".", 1)[-1]
+        if exch in ("SH", "SSE") and suffix in ("SH", "CN"):
+            return True
+        if exch == "SZ" and suffix in ("SZ", "CN"):
+            return True
+        if exch == "HK" and suffix == "HK":
+            return True
+        if exch == "US" and suffix == "US":
+            return True
+        return False
+    # 前缀格式：SH600036 / HK00700
+    for prefix in ("SH", "SZ", "BJ", "HK"):
+        if s.startswith(prefix):
+            return prefix == exch
+    return True
+
+
+def _load_market_pool_from_hub(market: str, dsl: str = "") -> tuple[list[PoolItem], date | None]:
+    """非 A 股市场：从本地 parquet hub 读取最新交易日标的池，替代不存在的 PG latest 表。
+
+    返回 (items, as_of_date)。支持"全部市场"类 DSL，也支持简单条件（pe_ttm>0 等
+    会退化为取全部，因为 parquet 无这些 PG 字段过滤）。
+    """
+    from backend.services.engine.data_platform.market_hub import get_hub_for_market
+
+    market_upper = str(market or "").upper()
+    if market_upper in ("", "CN", "A"):
+        return [], None
+
+    hub = get_hub_for_market(market_upper)
+    if hub is None:
+        logger.warning("market %s hub 不可用，无法加载标的池", market_upper)
+        return [], None
+
+    # 读取最新一天的 daily_forward 截面（symbol + close + volume + amount）
+    try:
+        end = date.today()
+        start = end - timedelta(days=10)
+        # 各 hub 的 fetch_daily_kline 需要单个 symbol；这里直接读 daily_forward 最新分区
+        fwd_dir = hub.data_dir / "1_kline_data" / "daily_forward"
+        if not fwd_dir.is_dir():
+            logger.warning("market %s daily_forward 目录不存在: %s", market_upper, fwd_dir)
+            return [], None
+
+        import glob as _glob
+
+        parts = sorted(_glob.glob(str(fwd_dir / "dt=*" / "data.parquet")))
+        if not parts:
+            return [], None
+        latest_part = parts[-1]
+        latest_dt = latest_part.split("dt=")[-1].split("/")[0]
+        df = pd.read_parquet(latest_part, engine="pyarrow")
+        if df is None or df.empty:
+            return [], None
+
+        # 统一列名：symbol / instrument
+        sym_col = "symbol" if "symbol" in df.columns else ("instrument" if "instrument" in df.columns else None)
+        if sym_col is None or "close" not in df.columns:
+            logger.warning("market %s 最新分区缺 symbol/close 列", market_upper)
+            return [], None
+
+        items: list[PoolItem] = []
+        for _, row in df.iterrows():
+            sym = str(row[sym_col]).strip()
+            if not sym:
+                continue
+            close = float(row.get("close") or 0)
+            if close <= 0:
+                continue
+            metrics: dict[str, Any] = {"close": close}
+            if "volume" in df.columns:
+                metrics["volume"] = float(row.get("volume") or 0)
+            if "amount" in df.columns:
+                metrics["amount"] = float(row.get("amount") or 0)
+            items.append(PoolItem(symbol=sym, name=sym, metrics=metrics))
+
+        as_of_date = None
+        try:
+            as_of_date = date(int(latest_dt[:4]), int(latest_dt[4:6]), int(latest_dt[6:8]))
+        except Exception:
+            pass
+        logger.info(
+            "market %s parquet 标的池: %d 个标的 (date=%s)",
+            market_upper, len(items), latest_dt,
+        )
+        return items, as_of_date
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("market %s parquet 标的池加载失败: %s", market_upper, exc)
+        return [], None
+
+
 def _enrich_with_quantdb_data(symbols: list[str]) -> dict[str, dict]:
     """从 QuantDB 补充关键维度数据（best-effort，不阻塞主查询）。
 
@@ -919,6 +1018,33 @@ async def query_pool(dsl: str, user_id: str, market: str | None = None, exchange
     from .step1_stock_selection import get_latest_table
 
     market_table = get_latest_table(market)
+    market_upper = str(market or "").upper()
+
+    # 非 A 股市场：优先从本地 parquet hub 加载标的池（PG latest 表可能不存在）
+    if market_upper not in ("", "CN", "A"):
+        # 检查 PG 表是否存在；不存在则走 parquet
+        try:
+            with get_db() as session:
+                tbl_exists = session.execute(
+                    text(
+                        "SELECT 1 FROM pg_tables WHERE schemaname='public' AND tablename=:t"
+                    ),
+                    {"t": market_table},
+                ).scalar()
+        except Exception:
+            tbl_exists = None
+
+        if not tbl_exists:
+            items, as_of_date = _load_market_pool_from_hub(market_upper, dsl)
+            if items:
+                # 交易所过滤（港股等）
+                if exchange:
+                    exch = str(exchange).upper()
+                    items = [it for it in items if _suffix_matches_exchange(str(it.symbol), exch)]
+                universe_total = len(items)
+                summary, charts = _build_pool_summary(items, as_of_date, universe_total=universe_total)
+                return QueryPoolResponse(items=items, summary=summary, charts=charts)
+            logger.warning("market %s parquet 标的池为空，回退 PG 表 %s", market_upper, market_table)
 
     # 增加数据就绪性检查
     with get_db() as session:
