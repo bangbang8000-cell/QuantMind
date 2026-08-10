@@ -186,3 +186,8 @@ graphify-out/
 
 # GTJA 原始源码（外部参考，仅作公式对照，不入仓）
 scripts/data_repair/_gtja_191_source.py
+
+# 临时 / 分析 / 备份文件（不提交）
+analysis/top20_tracking/
+df_check.txt
+quantmind-新版/
