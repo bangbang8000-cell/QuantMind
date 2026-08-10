@@ -22,7 +22,7 @@ from typing import Any
 
 import yaml
 
-from backend.services.engine.training.orchestrator_base import TrainingOrchestrator
+from backend.services.engine.training.orchestrator_base import TrainingOrchestrator, REGISTRY
 from backend.services.engine.training.training_log_stream import TrainingRunLogStream
 from backend.services.api.training_explain import DEFAULT_EXPLAIN_CFG
 
@@ -360,9 +360,8 @@ class RemoteSSHOrchestrator(TrainingOrchestrator):
             self._log(run_id, f"[SYSTEM] 训练容器已启动: {container_name} ({container_id})", progress=22)
 
             # 6. 后台轮询训练进度
-            asyncio.create_task(
-                self._poll_remote(run_id, container_name),
-                name=f"training-remote-{run_id}",
+            REGISTRY.register(
+                self._poll_remote(run_id, container_name)
             )
         except Exception as exc:  # noqa: BLE001
             logger.error("[%s] 远程训练编排失败: %s", run_id, exc, exc_info=True)

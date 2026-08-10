@@ -26,7 +26,7 @@ from docker import DockerClient
 import yaml
 
 from backend.services.engine.training.training_log_stream import TrainingRunLogStream
-from backend.services.engine.training.orchestrator_base import TrainingOrchestrator
+from backend.services.engine.training.orchestrator_base import TrainingOrchestrator, REGISTRY
 from backend.services.api.training_explain import DEFAULT_EXPLAIN_CFG
 
 logger = logging.getLogger(__name__)
@@ -623,6 +623,37 @@ class LocalDockerOrchestrator(TrainingOrchestrator):
             logger.warning("[%s] pause others failed (continuing): %s", run_id, pause_err)
 
         try:
+            # P0-2 孤儿容器策略 A：launch 入口先停 + 删除同名旧容器
+            # 场景：API 重启 → recover 重新调度 launch → 旧容器可能仍 Running/Exited
+            # - running: stop(timeout=10) 优雅停 → remove
+            # - exited: 直接 remove
+            # - NotFound: 正常，继续
+            container_name = f"qm-train-{run_id}"
+            try:
+                existing = await asyncio.to_thread(
+                    self.docker.containers.get, container_name
+                )
+                if existing.status == "running":
+                    logger.warning(
+                        "[%s] orphan container %s still running, stopping first",
+                        run_id, container_name,
+                    )
+                    await asyncio.to_thread(existing.stop, timeout=10)
+                await asyncio.to_thread(existing.remove)
+                logger.info(
+                    "[%s] removed orphan container %s (status=%s)",
+                    run_id, container_name, existing.status,
+                )
+            except Exception as get_exc:
+                # NotFound 走这里（容器不存在，正常）；其它异常 warn 但不阻塞
+                if "NotFound" in type(get_exc).__name__ or "not found" in str(get_exc).lower():
+                    pass  # 正常：没有旧容器
+                else:
+                    logger.warning(
+                        "[%s] check orphan container %s failed (continuing): %s",
+                        run_id, container_name, get_exc,
+                    )
+
             # GPU 设备请求：请求所有可用 GPU
             device_requests = [
                 docker.types.DeviceRequest(count=-1, capabilities=[["gpu"]])
@@ -642,7 +673,7 @@ class LocalDockerOrchestrator(TrainingOrchestrator):
                 volumes=volumes,
                 network=_DOCKER_NETWORK,
                 detach=True,
-                name=f"qm-train-{run_id}",
+                name=container_name,
                 device_requests=device_requests,
             )
         except Exception as e:
@@ -701,7 +732,7 @@ class LocalDockerOrchestrator(TrainingOrchestrator):
             container_id=container.id[:12],
         )
 
-        asyncio.create_task(
+        REGISTRY.register(
             self._poll_container(
                 run_id,
                 container.id,

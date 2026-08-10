@@ -15,7 +15,7 @@ from sqlalchemy import select, text
 from backend.services.api.routers.admin.db import TrainingJobRecord
 from backend.services.api.training_explain import normalize_explain
 from backend.services.api.user_app.middleware.auth import require_admin
-from backend.services.engine.training.orchestrator_base import get_orchestrator
+from backend.services.engine.training.orchestrator_base import get_orchestrator, REGISTRY
 from backend.services.engine.training.local_docker_orchestrator import LocalDockerOrchestrator
 from backend.services.engine.training.training_log_stream import TrainingRunLogStream
 from backend.shared.database_manager_v2 import get_session
@@ -880,19 +880,17 @@ async def submit_training_job(
     logger.warning(f"[SYSTEM] Dispatching training job {run_id}. node={node_id} payload_keys={list(normalized_payload.keys())}")
     if multi_horizon:
         # 多周期：编排器串行跑各 child，全部成功后自动创建融合模型
-        asyncio.create_task(
+        REGISTRY.register(
             orchestrator.launch_multi_horizon_job(
                 parent_run_id=run_id,
                 child_run_ids=child_run_ids,
                 payload=normalized_payload,
-            ),
-            name=f"training-mh-{run_id}",
+            )
         )
     else:
         # 单周期：直接跑
-        asyncio.create_task(
-            orchestrator.launch_training_job(run_id=run_id, payload=normalized_payload),
-            name=f"training-{run_id}",
+        REGISTRY.register(
+            orchestrator.launch_training_job(run_id=run_id, payload=normalized_payload)
         )
 
     # 预检特征可用性，告知前端哪些特征在 parquet 中不存在
