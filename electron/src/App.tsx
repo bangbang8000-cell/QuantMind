@@ -17,6 +17,7 @@ import { WebSocketProvider } from './contexts/WebSocketContext';
 import { QueryProvider } from './providers/QueryProvider';
 import { selectCurrentTab, setCurrentTab } from './store/slices/aiStrategySlice';
 import type { DashboardTab } from './store/slices/aiStrategySlice';
+import { selectCurrentMarket } from './store/slices/uiSlice';
 import logger from './utils/safeLogger';
 import { refreshOrchestrator } from './services/refreshOrchestrator';
 import { useTradingModeInitialization } from './hooks/useTradingModeInitialization';
@@ -79,9 +80,40 @@ const defaultModules: DashboardModule[] = [
   { id: 'all-markets', title: '大盘概览', component: 'all-markets', size: 'medium', position: { x: 0, y: 0 }, isVisible: true }
 ];
 
+// 按市场选择默认看板模块组合（未自定义布局时生效）
+const MARKET_DEFAULT_MODULES: Record<string, DashboardModule[]> = {
+  CN: [
+    { id: 'all-markets', title: '大盘概览', component: 'all-markets', size: 'medium', position: { x: 0, y: 0 }, isVisible: true },
+    { id: 'market', title: 'A股概览', component: 'market', size: 'medium', position: { x: 1, y: 0 }, isVisible: true },
+    { id: 'strategy', title: '策略监控', component: 'strategy', size: 'medium', position: { x: 2, y: 0 }, isVisible: true },
+    { id: 'ai-quick', title: '通知中心', component: 'ai-quick', size: 'medium', position: { x: 0, y: 1 }, isVisible: true },
+  ],
+  HK: [
+    { id: 'all-markets', title: '大盘概览', component: 'all-markets', size: 'medium', position: { x: 0, y: 0 }, isVisible: true },
+    { id: 'market', title: '港股概览', component: 'market', size: 'medium', position: { x: 1, y: 0 }, isVisible: true },
+    { id: 'ai-quick', title: '通知中心', component: 'ai-quick', size: 'medium', position: { x: 2, y: 0 }, isVisible: true },
+  ],
+  US: [
+    { id: 'all-markets', title: '大盘概览', component: 'all-markets', size: 'medium', position: { x: 0, y: 0 }, isVisible: true },
+    { id: 'market', title: '美股概览', component: 'market', size: 'medium', position: { x: 1, y: 0 }, isVisible: true },
+    { id: 'ai-quick', title: '通知中心', component: 'ai-quick', size: 'medium', position: { x: 2, y: 0 }, isVisible: true },
+  ],
+  CRYPTO: [
+    { id: 'all-markets', title: '大盘概览', component: 'all-markets', size: 'medium', position: { x: 0, y: 0 }, isVisible: true },
+    { id: 'market', title: '区块链概览', component: 'market', size: 'medium', position: { x: 1, y: 0 }, isVisible: true },
+    { id: 'ai-quick', title: '通知中心', component: 'ai-quick', size: 'medium', position: { x: 2, y: 0 }, isVisible: true },
+  ],
+  FUTURES: [
+    { id: 'all-markets', title: '大盘概览', component: 'all-markets', size: 'medium', position: { x: 0, y: 0 }, isVisible: true },
+    { id: 'market', title: '期货概览', component: 'market', size: 'medium', position: { x: 1, y: 0 }, isVisible: true },
+    { id: 'ai-quick', title: '通知中心', component: 'ai-quick', size: 'medium', position: { x: 2, y: 0 }, isVisible: true },
+  ],
+};
+
 export default function App() {
   const dispatch = useDispatch();
   const tab = useSelector(selectCurrentTab);
+  const currentMarket = useSelector(selectCurrentMarket);
   const navigate = useNavigate();
   const location = useLocation();
   const [modules, setModules] = useState<DashboardModule[]>(defaultModules);
@@ -194,6 +226,22 @@ export default function App() {
       }
     }
   }, []);
+
+  // 切换市场时，若用户未自定义布局，按市场切换看板模块组合
+  const marketModulesApplied = React.useRef(false);
+  React.useEffect(() => {
+    const savedLayout = localStorage.getItem('dashboardLayout');
+    // 有自定义布局则尊重用户设置
+    if (savedLayout) return;
+    const marketDefault = MARKET_DEFAULT_MODULES[currentMarket] || defaultModules;
+    // 首轮应用当前市场默认；之后随市场切换更新
+    if (!marketModulesApplied.current) {
+      marketModulesApplied.current = true;
+      setModules(marketDefault);
+    } else {
+      setModules(marketDefault);
+    }
+  }, [currentMarket]);
 
   // 应用启动时优先恢复用户保存的服务器地址，避免业务页先回落到 localhost。
   React.useEffect(() => {

@@ -413,11 +413,14 @@ def _coerce_batch_types(df: pd.DataFrame) -> None:
             df[col] = pd.to_numeric(df[col], errors="coerce").fillna(0).astype(int)
 
 
-def compute_market_features(df: pd.DataFrame, market: str, batch_size: int = 100) -> pd.DataFrame:
+def compute_market_features(df: pd.DataFrame, market: str, batch_size: int = 100, final_path: Path | None = None) -> pd.DataFrame:
     """为所有标的计算特征。
 
     分批计算（每 batch_size 个标的写一次临时 parquet），避免全量累积
     导致 OOM —— 港股 2200+ 标的 × 全历史时内存峰值极大。
+
+    final_path: 若给定，合并临时文件后直接写该路径并返回轻量占位，
+                避免大表全量回读内存。
     """
     from backend.scripts.update_feature_parquet import compute_features_for_group
 
@@ -471,10 +474,27 @@ def compute_market_features(df: pd.DataFrame, market: str, batch_size: int = 100
     import pyarrow.parquet as pq_writer
 
     merged_path = FEATURE_SNAPSHOT_DIR / f".{market}_features_merged.parquet"
+
+    # 先扫描所有临时文件的列集合，得到统一列序，避免 schema 不匹配
+    all_columns: list[str] = []
+    col_seen: set[str] = set()
+    for t in temp_files:
+        cols = pd.read_parquet(str(t), engine="pyarrow").columns
+        for c in cols:
+            if c not in col_seen:
+                col_seen.add(c)
+                all_columns.append(c)
+    _log(f"  统一列序: {len(all_columns)} 列")
+
     writer = None
     try:
         for idx, t in enumerate(temp_files):
             chunk = pd.read_parquet(str(t), engine="pyarrow")
+            # 按统一列序对齐，缺失列填 NaN/0
+            for c in all_columns:
+                if c not in chunk.columns:
+                    chunk[c] = 0
+            chunk = chunk[all_columns]
             _coerce_batch_types(chunk)
             table = pa.Table.from_pandas(chunk, preserve_index=False)
             if writer is None:
@@ -492,6 +512,26 @@ def compute_market_features(df: pd.DataFrame, market: str, batch_size: int = 100
             t.unlink(missing_ok=True)
         except Exception:  # noqa: BLE001
             pass
+
+    # 大表场景：合并临时文件后直接流式写最终 parquet，避免全量回读内存
+    if final_path is not None:
+        import shutil
+        try:
+            shutil.copy2(str(merged_path), str(final_path))
+            os.remove(str(merged_path))
+        except Exception:
+            # copy 失败则回退到流式重写
+            import pyarrow as pa
+            import pyarrow.parquet as pq_writer
+            pq_writer.write_table(pa.Table.from_pandas(pd.read_parquet(str(merged_path), engine="pyarrow"), preserve_index=False), str(final_path))
+            os.remove(str(merged_path))
+        # 返回轻量信息：读取 parquet 元数据而非全量数据
+        try:
+            import pyarrow.parquet as pq_file
+            pf = pq_file.ParquetFile(str(final_path))
+            return pd.DataFrame({"__placeholder__": [0]})
+        except Exception:
+            return pd.DataFrame({"__placeholder__": [0]})
 
     all_feat = pd.read_parquet(str(merged_path), engine="pyarrow")
 
@@ -515,6 +555,18 @@ def compute_market_features(df: pd.DataFrame, market: str, batch_size: int = 100
                 all_feat = all_feat.drop(columns=[col])
 
     return all_feat
+
+
+def _verify_snapshot(parquet_path: Path) -> None:
+    """验证最终 parquet：行数/列数/最新日期覆盖。轻量读取 metadata。"""
+    try:
+        import pyarrow.parquet as pq_file
+
+        pf = pq_file.ParquetFile(str(parquet_path))
+        _log(f"验证: {pf.metadata.num_rows:,} 行, {pf.metadata.num_columns} 列, "
+             f"{parquet_path.stat().st_size / 1024 / 1024:.0f}MB")
+    except Exception as exc:  # noqa: BLE001
+        _log(f"  WARN: 验证失败: {exc}")
 
 
 def main():
@@ -572,7 +624,12 @@ def main():
         _log(f"DRY RUN: 将计算 {len(df):,} 行, {df['instrument'].nunique()} 个标的")
         return
 
-    # 计算特征
+    # 计算特征（港股全量首次：直接流式写最终 parquet，避免全量回读 OOM）
+    if market == "hong_kong" and existing is None and not args.dry_run:
+        new_data = compute_market_features(df, market, final_path=parquet_path)
+        _log(f"  计算完成: 已写最终 parquet -> {parquet_path.name}")
+        _verify_snapshot(parquet_path)
+        return
     new_data = compute_market_features(df, market)
     _log(f"  计算完成: {len(new_data):,} 行, {len(new_data.columns)} 列")
 

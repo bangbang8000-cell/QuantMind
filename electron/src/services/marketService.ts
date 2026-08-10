@@ -1,4 +1,6 @@
 // 简化版本：仅使用腾讯财经API
+import { SERVICE_URLS } from '../config/services';
+
 export interface ApiResponse<T> {
   success: boolean;
   data?: T;
@@ -16,6 +18,11 @@ export interface MarketIndex {
   volume?: number;
   amount?: number;
   marketCap?: number;
+  high?: number;
+  low?: number;
+  open?: number;
+  preClose?: number;
+  tradeDate?: string;
   timestamp?: string;
 }
 
@@ -23,6 +30,8 @@ export interface MarketOverviewResponse {
   indices: MarketIndex[];
   lastUpdate: string;
   count: number;
+  stats?: { up: number; down: number; flat: number; total: number };
+  sourceUsed?: string;
 }
 
 export interface RealtimeQuote {
@@ -207,6 +216,57 @@ class MarketService {
     }
   }
 
+  // 后端本地 parquet 多市场概览（真实行情，覆盖全部市场）
+  private async getBackendOverview(market: MarketId): Promise<ApiResponse<MarketOverviewResponse>> {
+    try {
+      const base = SERVICE_URLS.API_GATEWAY;
+      const url = `${base}/api/v1/market/overview?market=${market}`;
+      const resp = await fetch(url, { method: 'GET' });
+      if (!resp.ok) {
+        throw new Error(`HTTP ${resp.status}`);
+      }
+      const payload = await resp.json();
+      if (!payload?.success || !payload.data?.indices) {
+        throw new Error(payload?.error || '后端概览无数据');
+      }
+      const data = payload.data;
+      // 后端字段映射到前端 MarketIndex
+      const indices: MarketIndex[] = (data.indices || []).map((x: any) => ({
+        symbol: x.symbol,
+        name: x.name,
+        price: x.price,
+        change: x.change,
+        changePercent: x.change_percent ?? x.changePercent ?? 0,
+        volume: x.volume,
+        amount: x.amount,
+        high: x.high,
+        low: x.low,
+        open: x.open,
+        preClose: x.pre_close,
+        tradeDate: x.trade_date,
+        timestamp: x.trade_date,
+      }));
+      return {
+        success: true,
+        data: {
+          indices,
+          lastUpdate: data.last_update || new Date().toISOString(),
+          count: indices.length,
+          stats: data.stats,
+          sourceUsed: data.source_used,
+        },
+        timestamp: new Date().toISOString(),
+      };
+    } catch (error) {
+      console.warn(`后端概览 ${market} 获取失败:`, error);
+      return {
+        success: false,
+        error: error instanceof Error ? error.message : '后端概览获取失败',
+        timestamp: new Date().toISOString()
+      };
+    }
+  }
+
   // 解析腾讯财经API返回的数据（支持11字段完整解析）
   private parseTencentData(text: string): MarketIndex[] {
     const indices: MarketIndex[] = [];
@@ -358,7 +418,14 @@ class MarketService {
     try {
       console.log(`开始获取${market}市场概览数据...`);
 
-      // A股市场使用腾讯财经API
+      // 优先后端本地 parquet 真实行情（覆盖全部 5 个市场）
+      const backendResp = await this.getBackendOverview(market);
+      if (backendResp.success && backendResp.data && backendResp.data.indices.length > 0) {
+        console.log(`成功获取后端 ${market} 市场概览，共${backendResp.data.indices.length}个品种`);
+        return backendResp;
+      }
+
+      // A股市场使用腾讯财经API（后端不可用时兜底）
       if (market === 'CN') {
         const tencentResponse = await this.getTencentMarketData();
         if (tencentResponse.success && tencentResponse.data && tencentResponse.data.indices.length > 0) {

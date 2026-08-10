@@ -10,6 +10,7 @@ const MARKETS: { id: MarketId; label: string }[] = [
   { id: 'HK', label: '港股' },
   { id: 'US', label: '美股' },
   { id: 'CRYPTO', label: '区块链' },
+  { id: 'FUTURES', label: '期货' },
 ];
 
 const MarketMiniPanel: React.FC<{ market: MarketId; label: string }> = ({ market, label }) => {

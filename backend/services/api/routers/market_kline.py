@@ -435,3 +435,164 @@ async def get_index_kline(
     except Exception as exc:  # noqa: BLE001
         logger.warning("index kline failed: %s", exc)
         return {"success": True, "data": {"dates": [], "close": [], "ma20": [], "below_ma20": None, "source_used": "none", "error": str(exc)}}
+
+
+# ── 多市场指数概览 ─────────────────────────────────────────────────────────────
+# 各市场要展示的指数品种（symbol -> 名称）。优先用本地 parquet 真实行情。
+_MARKET_INDEX_META: dict[str, list[dict[str, str]]] = {
+    "CN": [
+        {"symbol": "000001.SH", "name": "上证指数"},
+        {"symbol": "399001.SZ", "name": "深证成指"},
+        {"symbol": "000300.SH", "name": "沪深300"},
+        {"symbol": "000905.SH", "name": "中证500"},
+        {"symbol": "399006.SZ", "name": "创业板指"},
+        {"symbol": "000688.SH", "name": "科创50"},
+        {"symbol": "000016.SH", "name": "上证50"},
+        {"symbol": "899050.BJ", "name": "北证50"},
+    ],
+    "HK": [
+        {"symbol": "HSI.HK", "name": "恒生指数"},
+        {"symbol": "HSCEI.HK", "name": "恒生国企"},
+        {"symbol": "HSTECH.HK", "name": "恒生科技"},
+        {"symbol": "HSCCI.HK", "name": "恒生红筹"},
+    ],
+    "US": [
+        {"symbol": "DJI.US", "name": "道琼斯"},
+        {"symbol": "IXIC.US", "name": "纳斯达克"},
+        {"symbol": "SPX.US", "name": "标普500"},
+        {"symbol": "NDX.US", "name": "纳斯达克100"},
+        {"symbol": "SOX.US", "name": "费城半导体"},
+    ],
+    "CRYPTO": [
+        {"symbol": "BTCUSDT", "name": "比特币"},
+        {"symbol": "ETHUSDT", "name": "以太坊"},
+        {"symbol": "BNBUSDT", "name": "BNB"},
+        {"symbol": "SOLUSDT", "name": "Solana"},
+        {"symbol": "XRPUSDT", "name": "瑞波币"},
+        {"symbol": "DOGEUSDT", "name": "狗狗币"},
+    ],
+    "FUTURES": [
+        {"symbol": "CL.FUT", "name": "WTI原油"},
+        {"symbol": "GC.FUT", "name": "COMEX黄金"},
+        {"symbol": "SI.FUT", "name": "COMEX白银"},
+        {"symbol": "HG.FUT", "name": "COMEX铜"},
+        {"symbol": "RB0.CN", "name": "螺纹钢主力"},
+        {"symbol": "CU0.CN", "name": "沪铜主力"},
+        {"symbol": "AU0.CN", "name": "沪金主力"},
+        {"symbol": "I0.CN", "name": "铁矿石主力"},
+    ],
+}
+
+# market -> (hub 模块路径, hub 类名, 读取方法)
+_MARKET_HUB_CFG: dict[str, tuple[str, str, str]] = {
+    "CN": ("backend.services.engine.data_platform.quantdb_hub", "QuantDBDataHub", "fetch_index_kline"),
+    "HK": ("backend.services.engine.data_platform.quanthk_hub", "QuantHKDataHub", "fetch_index_kline"),
+    "US": ("backend.services.engine.data_platform.quantus_hub", "QuantUSDataHub", "fetch_index_kline"),
+    "CRYPTO": ("backend.services.engine.data_platform.quantbc_hub", "QuantBCDataHub", "fetch_daily_kline"),
+    "FUTURES": ("backend.services.engine.data_platform.quantfutures_hub", "QuantFuturesDataHub", "fetch_daily_kline"),
+}
+
+
+def _hub_latest_quote(market: str, symbol: str) -> dict[str, Any] | None:
+    """从市场 hub 读取指定标的最近 2 个交易日的日K，计算最新行情。
+
+    返回 {symbol, name, price, change, change_percent, open, high, low,
+          pre_close, volume, amount, trade_date}，无数据返回 None。
+    """
+    import importlib
+
+    entry = _MARKET_HUB_CFG.get(market)
+    if entry is None:
+        return None
+    try:
+        mod = importlib.import_module(entry[0])
+        cls = getattr(mod, entry[1])
+        hub = cls.get_instance()
+        method = getattr(hub, entry[2])
+        end = date.today()
+        start = end - timedelta(days=14)  # 足够覆盖周末/假期
+        df = method(symbol, start, end)
+        if df is None or df.empty:
+            return None
+        df = df.sort_values("trade_date").reset_index(drop=True)
+        latest = df.iloc[-1]
+        prev = df.iloc[-2] if len(df) >= 2 else None
+
+        price = float(latest.get("close", 0))
+        if price <= 0:
+            return None
+        prev_close = float(prev["close"]) if prev is not None else float(latest.get("open", price))
+        if prev_close <= 0:
+            prev_close = price
+        change = price - prev_close
+        change_percent = (change / prev_close * 100) if prev_close else 0.0
+
+        def _f(v, default=0.0) -> float:
+            try:
+                x = float(v)
+                return x if x == x else default  # NaN check
+            except Exception:
+                return default
+
+        return {
+            "symbol": symbol,
+            "name": next((m["name"] for m in _MARKET_INDEX_META.get(market, []) if m["symbol"] == symbol), symbol),
+            "price": round(price, 4),
+            "change": round(change, 4),
+            "change_percent": round(change_percent, 4),
+            "open": round(_f(latest.get("open")), 4),
+            "high": round(_f(latest.get("high")), 4),
+            "low": round(_f(latest.get("low")), 4),
+            "pre_close": round(prev_close, 4),
+            "volume": _f(latest.get("volume")),
+            "amount": _f(latest.get("amount")),
+            "trade_date": str(df["trade_date"].iloc[-1])[:10] if "trade_date" in df.columns else "",
+        }
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("market %s symbol %s quote failed: %s", market, symbol, exc)
+        return None
+
+
+@router.get("/overview")
+async def get_market_overview(
+    market: str = Query("CN", description="CN / HK / US / CRYPTO / FUTURES"),
+    current_user: dict = Depends(get_current_user),
+):
+    """多市场指数/品种最新行情概览。
+
+    从各市场本地 parquet（QuantDB/QuantHK/QuantUS/QuantBC/QuantFutures）
+    读取真实最近交易日行情，替代前端模拟数据。
+
+    返回 {success, data: {market, indices: [...], last_update, source_used}}。
+    """
+    _ = current_user
+    market_upper = str(market or "CN").upper()
+    metas = _MARKET_INDEX_META.get(market_upper, _MARKET_INDEX_META["CN"])
+
+    indices: list[dict[str, Any]] = []
+    for meta in metas:
+        q = _hub_latest_quote(market_upper, meta["symbol"])
+        if q is not None:
+            indices.append(q)
+
+    if not indices:
+        return {
+            "success": False,
+            "data": {"market": market_upper, "indices": [], "last_update": "", "source_used": "none"},
+            "error": f"market {market_upper} 无可用行情数据",
+        }
+
+    # 统计涨跌家数
+    up = sum(1 for x in indices if x["change_percent"] > 0)
+    down = sum(1 for x in indices if x["change_percent"] < 0)
+    flat = len(indices) - up - down
+    return {
+        "success": True,
+        "data": {
+            "market": market_upper,
+            "indices": indices,
+            "last_update": max(x["trade_date"] for x in indices if x["trade_date"]),
+            "stats": {"up": up, "down": down, "flat": flat, "total": len(indices)},
+            "source_used": "local_parquet",
+        },
+    }
