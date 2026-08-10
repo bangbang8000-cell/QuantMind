@@ -159,6 +159,16 @@ services:
       - HOST_PROJECT_PATH=${HOST_PROJECT_PATH:-/opt/quantmind}
       - QUANTMIND_API_BASE_URL=${QUANTMIND_API_BASE_URL:-http://quantmind:8000}
 
+      # AutoDL 远程训练节点
+      - TRAINING_AUTODL_HOST=${TRAINING_AUTODL_HOST:-}
+      - TRAINING_AUTODL_SSH_PORT=${TRAINING_AUTODL_SSH_PORT:-22}
+      - TRAINING_AUTODL_USER=${TRAINING_AUTODL_USER:-root}
+      - TRAINING_AUTODL_SSH_PASSWORD=${TRAINING_AUTODL_SSH_PASSWORD:-}
+      - TRAINING_AUTODL_SSH_KEY=${TRAINING_AUTODL_SSH_KEY:-}
+      - TRAINING_AUTODL_WORK_DIR=${TRAINING_AUTODL_WORK_DIR:-/workspace}
+      - TRAINING_AUTODL_DOCKER_IMAGE=${TRAINING_AUTODL_DOCKER_IMAGE:-quantmind-oss:latest}
+      - TRAINING_AUTODL_NODE_NAME=${TRAINING_AUTODL_NODE_NAME:-AutoDL GPU}
+
       # Qwen/DashScope API (用于 AI 策略功能)
       # 使用 mock key 允许服务启动，用户需在个人中心配置真实 API key
       - DASHSCOPE_API_KEY=${DASHSCOPE_API_KEY:-mock-api-key-not-configured}
@@ -207,6 +217,8 @@ services:
       - QM_QUANTBC_DATA_DIR=/data/quantbc
       # QuantFutures 本地数据中枢（期货/贵金属，akshare 摄取）
       - QM_QUANTFUTURES_DATA_DIR=/data/quantfutures
+      # 生产环境屏蔽区块链（CRYPTO）市场：默认 false 关闭 crypto 适配器，开发可用 ENABLE_CRYPTO=true 开启
+      - ENABLE_CRYPTO=${ENABLE_CRYPTO:-false}
 
       # AlphaAgent 因子编码专家系统提示词
       - ALPHA_AGENT_SYSTEM_PROMPT=${ALPHA_AGENT_SYSTEM_PROMPT:-}
@@ -327,6 +339,16 @@ services:
       - TRAINING_DOCKER_NETWORK=${TRAINING_DOCKER_NETWORK:-quantmind_quantmind-net}
       - HOST_PROJECT_PATH=${HOST_PROJECT_PATH:-/opt/quantmind}
       - QUANTMIND_API_BASE_URL=${QUANTMIND_API_BASE_URL:-http://quantmind:8000}
+
+      # AutoDL 远程训练节点
+      - TRAINING_AUTODL_HOST=${TRAINING_AUTODL_HOST:-}
+      - TRAINING_AUTODL_SSH_PORT=${TRAINING_AUTODL_SSH_PORT:-22}
+      - TRAINING_AUTODL_USER=${TRAINING_AUTODL_USER:-root}
+      - TRAINING_AUTODL_SSH_PASSWORD=${TRAINING_AUTODL_SSH_PASSWORD:-}
+      - TRAINING_AUTODL_SSH_KEY=${TRAINING_AUTODL_SSH_KEY:-}
+      - TRAINING_AUTODL_WORK_DIR=${TRAINING_AUTODL_WORK_DIR:-/workspace}
+      - TRAINING_AUTODL_DOCKER_IMAGE=${TRAINING_AUTODL_DOCKER_IMAGE:-quantmind-oss:latest}
+      - TRAINING_AUTODL_NODE_NAME=${TRAINING_AUTODL_NODE_NAME:-AutoDL GPU}
 
       # 回测进度回调地址（OSS 模式使用 quantmind 容器名）
       - BACKTEST_PROGRESS_URL=http://quantmind:8001

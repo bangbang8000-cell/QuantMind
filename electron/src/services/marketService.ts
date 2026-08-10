@@ -1,5 +1,6 @@
 // 简化版本：仅使用腾讯财经API
 import { SERVICE_URLS } from '../config/services';
+import { isMarketEnabled } from '../config/marketFlags';
 
 export interface ApiResponse<T> {
   success: boolean;
@@ -417,6 +418,16 @@ class MarketService {
   async getMarketOverview(market: MarketId = 'CN'): Promise<ApiResponse<MarketOverviewResponse>> {
     try {
       console.log(`开始获取${market}市场概览数据...`);
+
+      // 生产环境屏蔽区块链时，CRYPTO 直接返回空，避免 CoinGecko/Binance 连接
+      if (market === 'CRYPTO' && !isMarketEnabled(market)) {
+        return {
+          success: false,
+          error: 'CRYPTO market disabled',
+          data: { indices: [], lastUpdate: '', count: 0 },
+          timestamp: new Date().toISOString(),
+        };
+      }
 
       // 优先后端本地 parquet 真实行情（覆盖全部 5 个市场）
       const backendResp = await this.getBackendOverview(market);

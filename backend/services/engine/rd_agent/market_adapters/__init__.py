@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
@@ -36,5 +37,18 @@ def list_markets() -> list[dict[str, str]]:
     ]
 
 
-# 导入适配器以触发注册
-from . import a_share, crypto, futures, hong_kong, us_stock  # noqa: F401, E402
+def _crypto_enabled() -> bool:
+    """生产环境可通过 ENABLE_CRYPTO=false 屏蔽区块链市场（默认开启）。"""
+    raw = os.getenv("ENABLE_CRYPTO", "").strip().lower()
+    if raw in ("1", "true", "yes", "on"):
+        return True
+    if raw in ("0", "false", "no", "off"):
+        return False
+    return True
+
+
+# 导入适配器以触发注册（crypto 按开关注册）
+from . import a_share, futures, hong_kong, us_stock  # noqa: F401, E402
+
+if _crypto_enabled():
+    from . import crypto  # noqa: F401, E402

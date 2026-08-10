@@ -19,6 +19,7 @@ import { dataDashboardService, KlineItem } from '../services/dataDashboardServic
 import { researchService } from '../../../services/researchService';
 import { useAppDispatch, useAppSelector } from '../../../store';
 import { selectCurrentMarket, setMarket, AppMarket } from '../../../store/slices/uiSlice';
+import { isMarketEnabled } from '../../../config/marketFlags';
 
 const { Title, Text } = Typography;
 
@@ -28,7 +29,7 @@ const MARKET_TABS = [
     { key: 'US' as AppMarket, label: '美股', icon: <BarChartOutlined /> },
     { key: 'CRYPTO' as AppMarket, label: '区块链', icon: <AppstoreOutlined /> },
     { key: 'FUTURES' as AppMarket, label: '期货', icon: <StockOutlined /> },
-];
+].filter((t) => isMarketEnabled(t.key));
 
 const DEFAULT_SYMBOLS: Record<string, { symbol: string; name: string }> = {
     CN: { symbol: '600519.SH', name: '贵州茅台' },

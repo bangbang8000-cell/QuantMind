@@ -1,4 +1,5 @@
 import { createSlice, PayloadAction } from '@reduxjs/toolkit';
+import { isMarketEnabled } from '../../config/marketFlags';
 
 export type AppMarket = 'CN' | 'US' | 'HK' | 'CRYPTO' | 'FUTURES';
 
@@ -18,7 +19,7 @@ const initialTradingMode: 'real' | 'simulation' =
   (savedMode === 'real' || savedMode === 'simulation') ? savedMode : 'simulation';
 
 const savedMarket = localStorage.getItem(MARKET_PREF_KEY);
-const validMarkets: AppMarket[] = ['CN', 'US', 'HK', 'CRYPTO', 'FUTURES'];
+const validMarkets: AppMarket[] = (['CN', 'US', 'HK', 'CRYPTO', 'FUTURES'] as AppMarket[]).filter((m) => isMarketEnabled(m));
 const initialMarket: AppMarket =
   validMarkets.includes(savedMarket as AppMarket) ? (savedMarket as AppMarket) : 'CN';
 
@@ -50,8 +51,9 @@ const uiSlice = createSlice({
       state.tradingMode = action.payload;
     },
     setMarket: (state, action: PayloadAction<AppMarket>) => {
-      state.currentMarket = action.payload;
-      localStorage.setItem(MARKET_PREF_KEY, action.payload);
+      const market = isMarketEnabled(action.payload) ? action.payload : 'CN';
+      state.currentMarket = market;
+      localStorage.setItem(MARKET_PREF_KEY, market);
     },
   },
 });

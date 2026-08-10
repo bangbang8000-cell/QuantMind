@@ -2,6 +2,7 @@ import React from 'react';
 import { motion } from 'framer-motion';
 import { useAppDispatch, useAppSelector } from '../../store';
 import { setMarket, selectCurrentMarket, type AppMarket } from '../../store/slices/uiSlice';
+import { isMarketEnabled } from '../../config/marketFlags';
 
 interface MarketOption {
   id: AppMarket;
@@ -11,17 +12,22 @@ interface MarketOption {
   borderColor: string;
 }
 
-const MARKET_OPTIONS: MarketOption[] = [
-  { id: 'CN', label: 'A股', color: 'text-red-600', bgColor: 'bg-red-50', borderColor: 'border-red-200' },
-  { id: 'HK', label: '港股', color: 'text-orange-600', bgColor: 'bg-orange-50', borderColor: 'border-orange-200' },
-  { id: 'US', label: '美股', color: 'text-blue-600', bgColor: 'bg-blue-50', borderColor: 'border-blue-200' },
-  { id: 'CRYPTO', label: '区块链', color: 'text-purple-600', bgColor: 'bg-purple-50', borderColor: 'border-purple-200' },
-  { id: 'FUTURES', label: '期货', color: 'text-amber-600', bgColor: 'bg-amber-50', borderColor: 'border-amber-200' },
-];
+const MARKET_OPTIONS: MarketOption[] = (
+  [
+    { id: 'CN', label: 'A股', color: 'text-red-600', bgColor: 'bg-red-50', borderColor: 'border-red-200' },
+    { id: 'HK', label: '港股', color: 'text-orange-600', bgColor: 'bg-orange-50', borderColor: 'border-orange-200' },
+    { id: 'US', label: '美股', color: 'text-blue-600', bgColor: 'bg-blue-50', borderColor: 'border-blue-200' },
+    { id: 'CRYPTO', label: '区块链', color: 'text-purple-600', bgColor: 'bg-purple-50', borderColor: 'border-purple-200' },
+    { id: 'FUTURES', label: '期货', color: 'text-amber-600', bgColor: 'bg-amber-50', borderColor: 'border-amber-200' },
+  ] as MarketOption[]
+).filter((m) => isMarketEnabled(m.id));
 
 export const MarketSelector: React.FC = () => {
   const dispatch = useAppDispatch();
   const currentMarket = useAppSelector(selectCurrentMarket);
+
+  // 当前市场被屏蔽时，回落 A股（避免选中的 CRYPTO 无高亮）
+  const activeMarket = isMarketEnabled(currentMarket) ? currentMarket : 'CN';
 
   return (
     <motion.div
@@ -35,7 +41,7 @@ export const MarketSelector: React.FC = () => {
         aria-label="市场切换"
       >
         {MARKET_OPTIONS.map((market) => {
-          const isActive = currentMarket === market.id;
+          const isActive = activeMarket === market.id;
           return (
             <button
               key={market.id}
