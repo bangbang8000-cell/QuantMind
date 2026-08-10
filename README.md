@@ -96,6 +96,8 @@ docker compose logs -f quantmind
 - **行情服务**: http://localhost:8003
 - **默认账号**: admin / admin123
 
+> **AI 功能说明**：平台核心（数据/回测/训练/策略）无需 AI key 即可使用。AI 策略生成、因子挖掘、投研分析等 AI 功能需在 `.env` 配置 `AI_IDE_LLM_API_KEY` / `DASHSCOPE_API_KEY` 后才可用（见下方[环境变量配置](#环境变量配置)）。未配置时这些 AI 功能会提示需要 API Key，不影响其他功能。
+
 ### 下载市场数据
 
 市场数据存放在 `data/` 目录（`./data:/data` 挂载进容器），五大市场数据中枢：

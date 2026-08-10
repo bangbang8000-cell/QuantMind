@@ -54,13 +54,15 @@ services:
       context: .
       dockerfile: docker/Dockerfile.oss
     platform: linux/amd64
-    deploy:
-      resources:
-        reservations:
-          devices:
-            - driver: nvidia
-              count: 1
-              capabilities: [gpu]
+    # GPU 可选：无 NVIDIA 驱动的主机请保持注释。
+    # 有 GPU 加速训练需求时取消注释（需安装 nvidia-container-toolkit）。
+    # deploy:
+    #   resources:
+    #     reservations:
+    #       devices:
+    #         - driver: nvidia
+    #           count: 1
+    #           capabilities: [gpu]
     container_name: quantmind
     depends_on:
       db:

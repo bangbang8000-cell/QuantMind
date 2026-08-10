@@ -56,6 +56,19 @@ class MarginStockPoolService:
 
     def refresh(self) -> MarginPoolSnapshot:
         with self._lock:
+            # 文件不存在时返回空池，避免融资融券功能因缺数据崩溃（可降级使用）
+            if not self.source_path.exists():
+                logger.warning(
+                    "融资融券股票池文件不存在，使用空池: %s", self.source_path
+                )
+                snapshot = MarginPoolSnapshot(
+                    symbols=frozenset(),
+                    source_path=str(self.source_path.resolve()),
+                    imported_at=pd.Timestamp.utcnow(),
+                    record_count=0,
+                )
+                self._snapshot = snapshot
+                return snapshot
             symbols = self._load_symbols()
             snapshot = MarginPoolSnapshot(
                 symbols=symbols,
