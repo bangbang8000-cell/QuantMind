@@ -466,7 +466,7 @@ export const NaturalTextInput: React.FC<{ onNext: () => void }> = ({ onNext }) =
                           </Button>
                         </div>
                         <TextArea
-                          rows={4}
+                          rows={2}
                           placeholder="例如：市值在10-100亿之间且ROE小于30的股票"
                           value={text}
                           onChange={(e) => setText(e.target.value)}
@@ -496,10 +496,10 @@ export const NaturalTextInput: React.FC<{ onNext: () => void }> = ({ onNext }) =
                               </button>
                             ))}
                           </div>
-                          {/* 模板按钮（最多 250px 高度，可滚动） */}
+                          {/* 模板按钮（最多 2 行，可滚动） */}
                           <div
                             className="flex flex-wrap gap-2 overflow-y-auto pr-1"
-                            style={{ maxHeight: 250 }}
+                            style={{ maxHeight: 104 }}
                           >
                             {visibleTemplates.map((t) => (
                               <button

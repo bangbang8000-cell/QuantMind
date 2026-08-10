@@ -317,15 +317,16 @@ const SmartStrategyStudioV2: React.FC = () => {
                 minHeight: 0
               }}
             >
-                <div 
-                  className="bg-white overflow-hidden"
+                <div
+                  className="bg-white"
                   style={{
                     margin: '12px 24px 24px 24px',
                     padding: 24,
                     borderRadius: '32px',
                     minHeight: 'calc(100% - 36px)',
                     display: 'flex',
-                    flexDirection: 'column'
+                    flexDirection: 'column',
+                    overflowY: 'auto'
                   }}
                 >
                   <div className="flex-1">
