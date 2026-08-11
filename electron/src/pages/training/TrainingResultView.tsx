@@ -462,8 +462,11 @@ export const TrainingResultView: React.FC<TrainingResultViewProps> = ({
                     {result.drift.top_drift_features.slice(0, 8).map((f, i) => (
                       <div key={i} className="flex items-center gap-2 px-2 py-1 bg-slate-50/60 rounded-lg border border-slate-100/50">
                         <Text className="text-[9px] font-mono text-slate-500 flex-1 truncate">{f.feature}</Text>
+                        {f.benign_scale && (
+                          <Tag className="m-0 rounded-md border-0 px-1.5 py-0 text-[8px] font-black bg-sky-50 text-sky-500">量能</Tag>
+                        )}
                         <Text className={`text-[10px] font-black font-mono ${f.level === 'stable' ? 'text-emerald-600' : f.level === 'medium' ? 'text-amber-600' : 'text-rose-500'}`}>
-                          {Number(f.psi).toFixed(3)}
+                          {Number(f.rank_disp ?? f.psi).toFixed(3)}
                         </Text>
                         <Tag className={`m-0 rounded-md border-0 px-1.5 py-0 text-[8px] font-black ${f.level === 'stable' ? 'bg-emerald-50 text-emerald-600' : f.level === 'medium' ? 'bg-amber-50 text-amber-600' : 'bg-rose-50 text-rose-600'}`}>
                           {f.level === 'stable' ? '稳定' : f.level === 'medium' ? '中' : '重'}
@@ -474,7 +477,7 @@ export const TrainingResultView: React.FC<TrainingResultViewProps> = ({
                 )}
 
                 <Text className="block mt-2 text-[10px] text-slate-400 leading-relaxed">
-                  对比 {result.drift.train_start} ~ {result.drift.train_end}（训练）与 {result.drift.recent_start} ~ {result.drift.recent_end}（最近实盘）的特征分布。PSI &lt; 0.1 无显著漂移，0.1~0.25 中等，&gt; 0.25 显著。若严重漂移，建议重新训练以适应市场结构变化。
+                  对比 {result.drift.train_start} ~ {result.drift.train_end}（训练）与 {result.drift.recent_start} ~ {result.drift.recent_end}（最近实盘）的截面结构。数值为个股截面 rank 位移（0~1），&gt;0.1 结构漂移，&gt;0.2 严重；标记"量能"的是水平膨胀但截面稳定的良性漂移。重训前请结合实盘 RankIC 判断。
                 </Text>
               </div>
             )}

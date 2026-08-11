@@ -170,7 +170,7 @@ export interface PsiDriftResult {
   recent_start?: string;
   recent_end?: string;
   drift?: { stable: number; medium: number; severe: number };
-  top_drift_features?: Array<{ feature: string; psi: number; level: string }>;
+  top_drift_features?: Array<{ feature: string; psi: number; rank_disp?: number; level: string; benign_scale?: boolean; rank_reliable?: boolean }>;
   max_psi?: number;
   overall?: 'stable' | 'warning' | 'severe';
   reason?: string;

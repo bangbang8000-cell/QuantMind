@@ -280,6 +280,81 @@ def _psi_single(a: np.ndarray, b: np.ndarray, n_bins: int = 10) -> float:
     return float(np.sum((pct_b - pct_a) * np.log(pct_b / pct_a)))
 
 
+def _rank_displacement(
+    train_df: pd.DataFrame,
+    recent_df: pd.DataFrame,
+    feat: str,
+) -> float:
+    """每只股票在两个阶段的截面 rank 位移均值（身份级稳定性）。
+
+    对每只股票：训练段内按日截面 rank(pct) 后取均值 → rank_tr[s]；
+    recent 段同理 → rank_rc[s]。位移 = |rank_rc[s] - rank_tr[s]|（0~1）。
+    取全市场均值为该特征的截面结构漂移强度：
+    - ≈0：个股相对位置稳定 → 即使水平值大幅漂移（量能膨胀）也属良性；
+    - 大：大量个股截面位置重排（风格切换/板块轮动）→ 真实结构漂移。
+    比"rank 直方图 PSI"更强的原因：直方图只看宏观 rank 分布（涨跌家数结构），
+    身份重排时分布不变测不出；位移跟踪每只股票的个体位置，身份重排必显形。
+
+    只统计在两端都有足够观测的股票，避免次新/停复牌（仅 1-2 天）的噪声污染均值。
+    若交集为空或任一端的股票数过少 → 返回 nan（不可估计），由调用方保守处理。
+    """
+    min_obs = 5  # 一只股票至少要在该段出现 5 个交易日，均值才有意义
+    tr_rank = train_df.groupby("trade_date")[feat].rank(pct=True)
+    tr_count = train_df.groupby("symbol")[feat].transform("size")
+    tr_keep = tr_count >= min_obs
+    tr_mean = tr_rank[tr_keep].groupby(train_df.loc[tr_keep, "symbol"].to_numpy()).mean()
+
+    rc_rank = recent_df.groupby("trade_date")[feat].rank(pct=True)
+    rc_count = recent_df.groupby("symbol")[feat].transform("size")
+    rc_keep = rc_count >= min_obs
+    rc_mean = rc_rank[rc_keep].groupby(recent_df.loc[rc_keep, "symbol"].to_numpy()).mean()
+
+    common = tr_mean.index.intersection(rc_mean.index)
+    if len(common) < 50:  # 交集过小 → 不可靠，保守返回 nan
+        return float("nan")
+    disp = (rc_mean.loc[common] - tr_mean.loc[common]).abs()
+    return float(disp.mean())
+
+
+def _compute_rank_disp_all(
+    train_df: pd.DataFrame,
+    recent_df: pd.DataFrame,
+    features: list[str],
+) -> dict[str, float]:
+    """批量计算全部特征的 rank_disp，供 compute_psi_drift 使用。
+
+    向量化：一次 groupby.rank 算所有特征的日截面 rank，再按 symbol 聚合均值，
+    避免逐特征重复扫描。与单特征版 `_rank_displacement` 保持一致：过滤掉观测
+    < min_obs 天的股票，避免次新/停复牌（仅 1-2 天）的噪声污染均值。
+    """
+    min_obs = 5
+    if not features:
+        return {}
+    avail = [f for f in features if f in train_df.columns and f in recent_df.columns]
+    missing = {f: float("nan") for f in features if f not in avail}
+
+    def _per_symbol_mean_rank(df: pd.DataFrame) -> pd.DataFrame:
+        keep = df.groupby("symbol")[avail[0]].transform("size") >= min_obs
+        sub = df.loc[keep]
+        if sub.empty:
+            return pd.DataFrame(index=df["symbol"].unique())
+        rank_df = sub.groupby("trade_date")[avail].rank(pct=True)
+        rank_df["symbol"] = sub["symbol"].to_numpy()
+        return rank_df.groupby("symbol")[avail].mean()
+
+    tr_mean = _per_symbol_mean_rank(train_df)
+    rc_mean = _per_symbol_mean_rank(recent_df)
+
+    common = tr_mean.index.intersection(rc_mean.index)
+    out = dict(missing)
+    if len(common) < 50:
+        out.update({f: float("nan") for f in avail})
+        return out
+    disp = (rc_mean.loc[common] - tr_mean.loc[common]).abs()
+    out.update({f: float(disp[f].mean()) for f in avail})
+    return out
+
+
 def compute_psi_drift(
     df: pd.DataFrame,
     features: list[str],
@@ -290,14 +365,26 @@ def compute_psi_drift(
 ) -> dict:
     """数据漂移检测：对比训练区间 vs 最近 n 个交易日的特征分布（PSI）。
 
+    双通道检测，消除"牛市量能膨胀"类伪警：
+    - `level_psi`（原 psi 字段）：原始水平值分箱 PSI（量纲敏感）。成交额/换手等
+      水平特征在牛市中整体抬升时必然重度，但树模型只走 ≤/> 分叉、标签又是截面
+      rank，单纯水平平移对预测力几乎无影响——这类是"良性量纲膨胀"。
+    - `rank_disp`（新增）：每只股票在训练段与 recent 段的截面 rank 位移均值。
+      只反映"个股相对位置是否重排"，对整体水平平移免疫，能抓住真实的风格切换/
+      板块轮动等结构漂移。
+    判级以 `rank_disp` 为主：rank_disp 高 = 真实结构漂移（severe）；rank_disp 低
+    但 level_psi 高 = 良性量纲膨胀（降级到 stable/medium，附 `benign_scale=True`）。
+    rank_disp 不可估计（股票交集过小/观测不足）时按 level_psi 保守判级并标
+    `rank_reliable=False`，绝不静默归 0（否则会掩蔽真实漂移）。
+
     返回:
         {
           "enabled": True,
           "train_start": ..., "train_end": ...,
           "recent_start": ..., "recent_end": ...,
           "drift": {"stable": N, "medium": N, "severe": N},
-          "top_drift_features": [ {feature, psi, level}, ... ],
-          "max_psi": float,
+          "top_drift_features": [ {feature, psi(=level_psi), rank_disp, level, benign_scale, rank_reliable}, ... ],
+          "max_psi": float (最大结构漂移 = max rank_disp),
           "overall": "stable" | "warning" | "severe"
         }
     """
@@ -322,27 +409,62 @@ def compute_psi_drift(
     if train_sample.empty or recent_sample.empty:
         return {"enabled": False, "reason": "empty sample"}
 
+    # 批量算全部特征的截面结构漂移（身份级 rank 位移）
+    rank_disp_map = _compute_rank_disp_all(train_df, recent_df, usable)
+
     results = []
     for f in usable:
         a = train_sample[f].to_numpy()
         b = recent_sample[f].to_numpy()
-        psi = _psi_single(a, b)
-        if not np.isfinite(psi):
+        level_psi = _psi_single(a, b)
+        if not np.isfinite(level_psi):
             continue
-        level = "stable" if psi < 0.1 else ("medium" if psi < 0.25 else "severe")
-        results.append({"feature": f, "psi": round(psi, 4), "level": level})
+        rank_disp = rank_disp_map.get(f)
+        # rank_disp 不可估计（交集过小/数据不足）→ 保守处理：
+        # 不能当良性置 0（会掩蔽真实漂移），按水平 PSI 判级并标记 unreliable
+        rank_reliable = bool(rank_disp is not None and np.isfinite(rank_disp))
+        if not rank_reliable:
+            rank_disp = level_psi  # 用水平 PSI 兜底判级（不静默归 0）
+        else:
+            rank_disp = float(rank_disp)
+        # 判级以 rank_disp 为主；水平高但 rank 稳定 = 良性量能膨胀
+        # 阈值：rank_disp 是位移均值（0~1），0.2 即平均每票位移 1/5 截面宽度
+        benign_scale = rank_reliable and level_psi >= 0.1 and rank_disp < 0.1
+        if rank_disp >= 0.2:
+            level = "severe"
+        elif rank_disp >= 0.1:
+            level = "medium"
+        elif benign_scale:
+            level = "stable"  # 仅水平平移，截面结构未变
+        elif level_psi >= 0.25:
+            level = "medium"  # 水平漂移且 rank 位移未解 → 保守中警
+        elif level_psi >= 0.1:
+            level = "stable"
+        else:
+            level = "stable"
+        results.append({
+            "feature": f,
+            "psi": round(level_psi, 4),      # 兼容原字段（水平 PSI）
+            "rank_disp": round(rank_disp, 4), # 截面结构漂移（身份级 rank 位移）
+            "level": level,
+            "benign_scale": benign_scale,     # 良性量纲膨胀标记
+            "rank_reliable": rank_reliable,   # rank 位移是否可估计
+        })
 
     if not results:
         return {"enabled": False, "reason": "no computable features"}
 
-    results.sort(key=lambda r: r["psi"], reverse=True)
+    results.sort(key=lambda r: (r["rank_disp"], r["psi"]), reverse=True)
     drift_counts = {"stable": 0, "medium": 0, "severe": 0}
     for r in results:
         drift_counts[r["level"]] += 1
 
+    # overall 判定基于 rank_disp（真实结构漂移），而非水平量纲
     severe_count = drift_counts["severe"]
     medium_count = drift_counts["medium"]
-    if severe_count >= 3 or (severe_count + medium_count) >= max(5, len(results) * 0.3):
+    # 单特征重度结构漂移即报警（防止特征少时被总体比例稀释）
+    severe_ratio = severe_count / max(1, len(results))
+    if severe_count >= 3 or severe_ratio >= 0.3 or (severe_count + medium_count) >= max(5, len(results) * 0.3):
         overall = "severe"
     elif severe_count >= 1 or medium_count >= 3:
         overall = "warning"
@@ -357,7 +479,7 @@ def compute_psi_drift(
         "recent_end": str(recent_dates[-1].date()),
         "drift": drift_counts,
         "top_drift_features": results[:top_n],
-        "max_psi": round(max(r["psi"] for r in results), 4),
+        "max_psi": round(max(r["rank_disp"] for r in results), 4),  # 最大结构漂移（rank_disp）
         "overall": overall,
     }
 
@@ -3037,7 +3159,7 @@ def main() -> int:
         )
         if psi_result.get("enabled"):
             logger.info(
-                "Data drift (PSI): overall=%s max_psi=%.4f stable=%d medium=%d severe=%d",
+                "Data drift (PSI): overall=%s max_rank_disp=%.4f stable=%d medium=%d severe=%d",
                 psi_result.get("overall"),
                 psi_result.get("max_psi", float("nan")),
                 psi_result.get("drift", {}).get("stable", 0),

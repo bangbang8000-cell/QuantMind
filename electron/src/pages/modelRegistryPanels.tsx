@@ -542,8 +542,8 @@ export const ModelDetailPanel: React.FC<{ model: UserModelRecord }> = ({ model }
 
               <div className="grid grid-cols-2 gap-2 mb-3">
                 <div className="flex flex-col items-center gap-0.5 p-2 bg-white/70 rounded-xl border border-slate-100/60">
-                  <Text className="text-[8px] text-slate-400 uppercase tracking-wider">最大 PSI</Text>
-                  <Text className={clsx('text-base font-black font-mono', Number(meta.drift.max_psi) < 0.1 ? 'text-emerald-600' : Number(meta.drift.max_psi) < 0.25 ? 'text-amber-600' : 'text-rose-500')}>
+                  <Text className="text-[8px] text-slate-400 uppercase tracking-wider">最大结构漂移</Text>
+                  <Text className={clsx('text-base font-black font-mono', Number(meta.drift.max_psi) < 0.1 ? 'text-emerald-600' : Number(meta.drift.max_psi) < 0.2 ? 'text-amber-600' : 'text-rose-500')}>
                     {Number(meta.drift.max_psi).toFixed(4)}
                   </Text>
                 </div>
@@ -560,8 +560,11 @@ export const ModelDetailPanel: React.FC<{ model: UserModelRecord }> = ({ model }
                   {meta.drift.top_drift_features.slice(0, 6).map((f: any, i: number) => (
                     <div key={i} className="flex items-center gap-2 px-2 py-1 bg-white/60 rounded-lg border border-slate-100/50">
                       <Text className="text-[9px] font-mono text-slate-500 flex-1 truncate">{f.feature}</Text>
+                      {f.benign_scale && (
+                        <Tag className="m-0 rounded-md border-0 px-1.5 py-0 text-[8px] font-black bg-sky-50 text-sky-500">量能</Tag>
+                      )}
                       <Text className={clsx('text-[10px] font-black font-mono', f.level === 'stable' ? 'text-emerald-600' : f.level === 'medium' ? 'text-amber-600' : 'text-rose-500')}>
-                        {Number(f.psi).toFixed(3)}
+                        {Number(f.rank_disp ?? f.psi).toFixed(3)}
                       </Text>
                       <Tag className={clsx('m-0 rounded-md border-0 px-1.5 py-0 text-[8px] font-black', f.level === 'stable' ? 'bg-emerald-50 text-emerald-600' : f.level === 'medium' ? 'bg-amber-50 text-amber-600' : 'bg-rose-50 text-rose-600')}>
                         {f.level === 'stable' ? '稳定' : f.level === 'medium' ? '中' : '重'}
@@ -572,7 +575,7 @@ export const ModelDetailPanel: React.FC<{ model: UserModelRecord }> = ({ model }
               )}
 
               <Text className="block mt-3 text-[10px] text-slate-400 leading-relaxed">
-                训练 {meta.drift.train_start}~{meta.drift.train_end} vs 实盘 {meta.drift.recent_start}~{meta.drift.recent_end}。严重漂移建议重训。
+                训练 {meta.drift.train_start}~{meta.drift.train_end} vs 实盘 {meta.drift.recent_start}~{meta.drift.recent_end}。数值为截面 rank 位移，重训前请结合实盘 RankIC 判断。
               </Text>
             </div>
           )}
