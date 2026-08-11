@@ -1021,6 +1021,7 @@ async def _run_score_calibration(
                     "regions": _dims.get("regions", []),
                     "concepts": _dims.get("concepts", []),
                     "styles": _dims.get("styles", []),
+                    "_day": d,
                 })
             if idx % 20 == 0:
                 _calib_update(task_id, progress=55 + int(40 * (idx + 1) / total_days))
@@ -1627,6 +1628,92 @@ async def _aggregate_calibration(
     # 多维度分数校准：地区/概念/风格 × 分数 → 涨跌概率
     dimension_zones = _compute_dimension_zones(records, horizon_list)
 
+    # ── 方向自检 + 超额收益 ──
+    # 1. 每档超额收益：相对当日全市场均收的 excess_ret（主周期）
+    #    弱市里所有档绝对收益可能为负，超额收益为正说明该档跑赢大盘
+    try:
+        # 每日全市场均收（主周期）
+        main_ret_daily: dict[str, list[float]] = {}
+        for r in records:
+            ret = r["rets"].get(main_h)
+            if ret is not None:
+                main_ret_daily.setdefault(r["score"], []).append(ret)  # placeholder, unused
+        # 直接算：每档 avg_ret - 全市场当日 avg_ret
+        day_avg: dict[str, float] = {}
+        for r in records:
+            ret = r["rets"].get(main_h)
+            if ret is not None:
+                day_avg.setdefault(r.get("_day", ""), []).append(ret)  # noqa
+        # 简化：用全样本主周期均收作市场基准
+        all_main_rets = [r["rets"][main_h] for r in records if main_h in r["rets"]]
+        market_avg_ret = round(sum(all_main_rets) / len(all_main_rets), 4) if all_main_rets else 0.0
+        for s in score_summary:
+            avg = s.get("main_horizon_avg_ret")
+            if avg is not None:
+                s["excess_ret"] = round(float(avg) - market_avg_ret, 4)
+            else:
+                s["excess_ret"] = None
+    except Exception as _exc:  # noqa: BLE001
+        logger.warning("excess_ret calc failed: %s", _exc)
+        for s in score_summary:
+            s.setdefault("excess_ret", None)
+
+    # 2. RankIC：按日算分数排名 vs 主周期收益排名的 Spearman 相关
+    rank_ic = None
+    rank_ic_positive_days = 0
+    rank_ic_total_days = 0
+    direction_ok = None
+    try:
+        import numpy as _np
+
+        _ic_vals = []
+        for r in records:
+            _day = r.get("_day") or r.get("date") or ""
+            _ic_vals.append((_day, r["score"], r["rets"].get(main_h)))
+        # 按日分组
+        _day_groups: dict[str, list[tuple[float, float]]] = {}
+        for _d, _sc, _rt in _ic_vals:
+            if _rt is None:
+                continue
+            _day_groups.setdefault(_d, []).append((_sc, _rt))
+        _ic_list = []
+        for _d, _pairs in _day_groups.items():
+            if len(_pairs) < 20:
+                continue
+            _sc_sorted = sorted(set(p[0] for p in _pairs))
+            _rt_sorted = sorted(set(p[1] for p in _pairs))
+            _rank_map_s = {v: i + 1 for i, v in enumerate(_sc_sorted)}
+            _rank_map_r = {v: i + 1 for i, v in enumerate(_rt_sorted)}
+            _s_ranks = [_rank_map_s[p[0]] for p in _pairs]
+            _r_ranks = [_rank_map_r[p[1]] for p in _pairs]
+            _n = len(_pairs)
+            _d_s = [x - sum(_s_ranks) / _n for x in _s_ranks]
+            _d_r = [x - sum(_r_ranks) / _n for x in _r_ranks]
+            _ss = sum(a * b for a, b in zip(_d_s, _d_s))
+            _rr = sum(a * b for a, b in zip(_d_r, _d_r))
+            _sr = sum(a * b for a, b in zip(_d_s, _d_r))
+            if _ss > 1e-12 and _rr > 1e-12:
+                _ic = _sr / (_ss * _rr) ** 0.5
+                _ic_list.append(_ic)
+                if _ic > 0:
+                    rank_ic_positive_days += 1
+                rank_ic_total_days += 1
+        if _ic_list:
+            rank_ic = round(sum(_ic_list) / len(_ic_list), 4)
+            direction_ok = rank_ic > 0
+    except Exception as _exc:  # noqa: BLE001
+        logger.warning("rank_ic calc failed: %s", _exc)
+
+    # 3. 市场状态：来自 market_signal 的基线（全市场均涨跌）
+    market_state = "unknown"
+    try:
+        _base = (market_signal or {}).get("baseline") or {}
+        _base_avg = _base.get("avg_chg") if isinstance(_base, dict) else None
+        if _base_avg is not None:
+            market_state = "牛" if _base_avg > 0 else "熊"
+    except Exception:  # noqa: BLE001
+        market_state = "unknown"
+
     return {
         "matrix": matrix,
         "score_summary": score_summary,
@@ -1645,6 +1732,14 @@ async def _aggregate_calibration(
             "min": round(score_min, 4),
             "max": round(score_max, 4),
             "band_count": n_real,
+        },
+        "direction_check": {
+            "rank_ic": rank_ic,
+            "direction_ok": direction_ok,
+            "positive_days": rank_ic_positive_days,
+            "total_days": rank_ic_total_days,
+            "market_state": market_state,
+            "market_avg_ret": market_avg_ret,
         },
     }
 

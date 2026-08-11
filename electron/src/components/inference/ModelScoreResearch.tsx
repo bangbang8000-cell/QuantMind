@@ -1,5 +1,5 @@
 import React, { useState, useCallback, useEffect, useRef } from 'react';
-import { Typography, Button, Select, Table, Tag, Spin, Empty, Alert, Progress } from 'antd';
+import { Typography, Button, Select, Table, Tag, Spin, Empty, Alert, Progress, Tooltip } from 'antd';
 import { ReloadOutlined } from '@ant-design/icons';
 import {
   submitScoreCalibration,
@@ -231,10 +231,25 @@ export const ModelScoreResearch: React.FC<Props> = ({ modelId }) => {
         return (
           <Text className="font-mono text-[10px]" style={{ color: numColor(hs.avg_ret) }}>
             {hs.avg_ret > 0 ? '+' : ''}{hs.avg_ret.toFixed(2)}%
-          </Text>
-        );
+          </Text>        );
       },
     }))),
+    {
+      title: '超额收益',
+      key: 'excess',
+      width: 90,
+      render: (_: unknown, r: any) => {
+        const ex = r?.excess_ret;
+        if (ex === null || ex === undefined) return <Text className="text-[10px] text-slate-300">—</Text>;
+        return (
+          <Tooltip title="相对全市场主周期均收的超额收益（跑赢大盘为正）">
+            <Text className="font-mono text-[10px]" style={{ color: numColor(ex) }}>
+              {ex > 0 ? '+' : ''}{ex.toFixed(2)}%
+            </Text>
+          </Tooltip>
+        );
+      },
+    },
   ];
 
   const matrixColumns = [
@@ -285,6 +300,11 @@ export const ModelScoreResearch: React.FC<Props> = ({ modelId }) => {
         {data?.recommended_band && (
           <Tag className="border-0 bg-emerald-50 text-emerald-600 text-[9px] font-bold">
             推荐档 {data.recommended_band.score_band}（T+5均收 {data.recommended_band.main_horizon_avg_ret}%）
+          </Tag>
+        )}
+        {(data as any)?.direction_check && (
+          <Tag className="border-0 bg-indigo-50 text-indigo-600 text-[9px] font-bold">
+            方向{(data as any).direction_check.direction_ok ? '有效' : '存疑'} · RankIC {(data as any).direction_check.rank_ic?.toFixed?.(3) ?? '—'} · 市场{(data as any).direction_check.market_state || '—'}
           </Tag>
         )}
       </div>
