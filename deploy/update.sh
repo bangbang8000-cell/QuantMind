@@ -19,7 +19,7 @@
 set -euo pipefail
 
 PROJECT_DIR="/opt/quantmind"
-REPO_URL="https://github.com/guge199205-byte/QuantMind-oss.git"
+REPO_URL="https://gitee.com/qusong0627/QuantMind.git"
 FORCE_SYNC=false
 HAS_ARGS=false
 
