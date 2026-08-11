@@ -11,11 +11,21 @@ import {
 
 const { Text } = Typography;
 
-/** 分数档颜色：负分红、低分灰、黄金区绿 */
-const bandColor = (band: string): string => {
+/** 分数档颜色：按数值边界动态着色（负分红、高分绿、中间灰），适配任意量级模型 */
+const bandColor = (band: string, nature?: string): string => {
+  // 优先用后端标注的档位性质（基于实际收益，最可靠）
+  if (nature === '最优') return '#10b981';
+  if (nature === '最差') return '#f43f5e';
+  if (nature === '最热') return '#f97316';
+  // 从分数档字符串解析数值边界：如 "≥2.500" / "-2.000~-1.500" / "0.080~0.100"
+  const m = band.match(/^≥\s*(-?[\d.]+)/) || band.match(/^(-?[\d.]+)\s*~\s*(-?[\d.]+)/);
+  if (m) {
+    const a = parseFloat(m[1]);
+    if (a >= 0) return '#10b981';        // 高分区（正分）
+    if (a <= -0.5) return '#f43f5e';     // 低分区（深负）
+    return '#64748b';
+  }
   if (band.includes('-')) return '#f43f5e';
-  if (band === '0.08~0.10' || band === '0.10~0.12') return '#10b981';
-  if (band.startsWith('0.05') || band.startsWith('0.1')) return '#f59e0b';
   return '#64748b';
 };
 
@@ -155,7 +165,7 @@ export const ModelScoreResearch: React.FC<Props> = ({ modelId }) => {
       width: 120,
       render: (v: string, r: any) => (
         <div className="flex items-center gap-1.5">
-          <Text className="font-black" style={{ color: bandColor(v) }}>{v}</Text>
+          <Text className="font-black" style={{ color: bandColor(v, r?.nature) }}>{v}</Text>
           {r?.nature && (
             <Tag className="m-0 border-0 text-[8px] font-bold px-1.5"
               color={r.nature === '最优' ? 'green' : r.nature === '最差' ? 'red' : r.nature === '最热' ? 'orange' : 'default'}>
