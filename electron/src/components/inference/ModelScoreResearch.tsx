@@ -30,11 +30,23 @@ const bandColor = (band: string, nature?: string): string => {
   return '#64748b';
 };
 
-/** 数值颜色：正绿负红 */
+/** 数值颜色：正红负绿（A股习惯：涨红跌绿） */
 const numColor = (v: number | null | undefined): string => {
   if (v === null || v === undefined) return '#94a3b8';
-  return v > 0 ? '#10b981' : v < 0 ? '#f43f5e' : '#64748b';
+  return v > 0 ? '#ef4444' : v < 0 ? '#10b981' : '#64748b';
 };
+
+/** 区块标题：编号徽章 + 标题文字 + 颜色 */
+const SectionTitle: React.FC<{ idx: number; color: string; children: React.ReactNode }> = ({ idx, color, children }) => (
+  <div className="mb-2 flex items-center gap-2">
+    <span className="flex h-4 w-4 items-center justify-center rounded-full text-[9px] font-black text-white" style={{ background: color }}>
+      {idx}
+    </span>
+    <Text className="text-[10px] font-black uppercase tracking-widest" style={{ color }}>
+      {children}
+    </Text>
+  </div>
+);
 
 interface Props {
   modelId?: string;
@@ -351,9 +363,7 @@ export const ModelScoreResearch: React.FC<Props> = ({ modelId }) => {
           <div className="space-y-4">
             {data.score_summary && data.score_summary.length > 0 && (
               <div className="rounded-2xl border border-slate-100 bg-white p-4 shadow-sm">
-                <div className="mb-2 text-[10px] font-black uppercase tracking-widest text-slate-500">
-                  分数档 × 多周期收益
-                </div>
+                <SectionTitle idx={1} color="#0ea5e9">分数档 × 多周期收益</SectionTitle>
                 <Table
                   dataSource={data.score_summary}
                   columns={summaryColumns as any}
@@ -368,9 +378,7 @@ export const ModelScoreResearch: React.FC<Props> = ({ modelId }) => {
             {/* 最优分数区间（按胜率反推） */}
             {(data as any).winrate_zones && (data as any).winrate_zones.status === 'success' && (
               <div className="rounded-2xl border border-emerald-100 bg-emerald-50/30 p-4 shadow-sm">
-                <div className="mb-2 text-[10px] font-black uppercase tracking-widest text-emerald-600">
-                  最优分数区间（先统计胜率 → 反推做多/做空最优段）
-                </div>
+                <SectionTitle idx={2} color="#059669">最优分数区间（先统计胜率 → 反推做多/做空最优段）</SectionTitle>
                 <div className="space-y-1">
                   {((data as any).winrate_zones.zones || []).map((z: any, i: number) => {
                     const isLong = z.label?.includes('做多');
@@ -378,8 +386,8 @@ export const ModelScoreResearch: React.FC<Props> = ({ modelId }) => {
                       <div key={i} className="flex items-center justify-between text-[10px] py-0.5">
                         <div className="flex items-center gap-2">
                           <Tag className="m-0 border-0 text-[9px] font-bold"
-                            color={isLong ? 'green' : 'red'}>
-                            {z.label?.includes('做多') ? '做多' : '做空'}
+                            color={isLong ? 'red' : 'green'}>
+                            {isLong ? '做多' : '做空'}
                           </Tag>
                           <span className="font-black text-slate-700">T+{z.horizon} {z.score_min.toFixed(3)}~{z.score_max.toFixed(3)}</span>
                         </div>
@@ -398,9 +406,7 @@ export const ModelScoreResearch: React.FC<Props> = ({ modelId }) => {
             {/* 多条件组合最优区间（大盘×市值×板块） */}
             {(data as any).condition_zones && (data as any).condition_zones.status === 'success' && (
               <div className="rounded-2xl border border-blue-100 bg-blue-50/30 p-4 shadow-sm">
-                <div className="mb-1 text-[10px] font-black uppercase tracking-widest text-blue-600">
-                  多条件组合最优区间（大盘状态 × 市值 × 板块）
-                </div>
+                <SectionTitle idx={3} color="#2563eb">多条件组合最优区间（大盘状态 × 市值 × 板块）</SectionTitle>
                 {(data as any).condition_zones.metric_note && (
                   <div className="mb-2 text-[9px] text-slate-500">
                     📌 {(data as any).condition_zones.metric_note}
@@ -453,9 +459,7 @@ export const ModelScoreResearch: React.FC<Props> = ({ modelId }) => {
 
             {data.matrix && data.matrix.length > 0 && (
               <div className="rounded-2xl border border-slate-100 bg-white p-4 shadow-sm">
-                <div className="mb-2 text-[10px] font-black uppercase tracking-widest text-slate-500">
-                  分数档 × 市值 × 下跌概率（主周期 T+{data.meta?.main_horizon ?? 5}）
-                </div>
+                <SectionTitle idx={4} color="#0f766e">分数档 × 市值 × 下跌概率（主周期 T+{data.meta?.main_horizon ?? 5}）</SectionTitle>
                 <Table
                   dataSource={data.matrix}
                   columns={matrixColumns as any}
@@ -470,9 +474,7 @@ export const ModelScoreResearch: React.FC<Props> = ({ modelId }) => {
             {/* 多维度 × 分数 涨跌概率（地区/概念/风格） */}
             {(data as any).dimension_zones && (data as any).dimension_zones.status === 'success' && (
               <div className="rounded-2xl border border-violet-100 bg-violet-50/30 p-4 shadow-sm">
-                <div className="mb-2 text-[10px] font-black uppercase tracking-widest text-violet-600">
-                  多维度 × 分数 涨跌概率（地区/概念/风格）
-                </div>
+                <SectionTitle idx={5} color="#7c3aed">多维度 × 分数 涨跌概率（地区/概念/风格）</SectionTitle>
                 <div className="grid grid-cols-1 lg:grid-cols-3 gap-3">
                   {[
                     { label: '地区板块', key: 'region', color: 'text-amber-600' },
@@ -505,10 +507,8 @@ export const ModelScoreResearch: React.FC<Props> = ({ modelId }) => {
 
             <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
               {data.neg_industry_avg && data.neg_industry_avg.length > 0 && (
-                <div className="rounded-2xl border border-slate-100 bg-white p-4 shadow-sm">
-                  <div className="mb-2 text-[10px] font-black uppercase tracking-widest text-slate-500">
-                    负分行业 avg（最新日）
-                  </div>
+                <div className="rounded-2xl border border-rose-100 bg-rose-50/40 p-4 shadow-sm">
+                  <SectionTitle idx={6} color="#e11d48">负分行业 avg（最新日）</SectionTitle>
                   <div className="space-y-1">
                     {data.neg_industry_avg.map(r => (
                       <div key={r.industry} className="flex items-center justify-between text-[10px]">
@@ -522,10 +522,8 @@ export const ModelScoreResearch: React.FC<Props> = ({ modelId }) => {
                 </div>
               )}
               {data.pos_industry_avg && data.pos_industry_avg.length > 0 && (
-                <div className="rounded-2xl border border-slate-100 bg-white p-4 shadow-sm">
-                  <div className="mb-2 text-[10px] font-black uppercase tracking-widest text-slate-500">
-                    正分行业 avg（最新日）
-                  </div>
+                <div className="rounded-2xl border border-emerald-100 bg-emerald-50/40 p-4 shadow-sm">
+                  <SectionTitle idx={7} color="#059669">正分行业 avg（最新日）</SectionTitle>
                   <div className="space-y-1">
                     {data.pos_industry_avg.map(r => (
                       <div key={r.industry} className="flex items-center justify-between text-[10px]">
@@ -539,10 +537,8 @@ export const ModelScoreResearch: React.FC<Props> = ({ modelId }) => {
                 </div>
               )}
               {data.neg_board_avg && data.neg_board_avg.length > 0 && (
-                <div className="rounded-2xl border border-slate-100 bg-white p-4 shadow-sm">
-                  <div className="mb-2 text-[10px] font-black uppercase tracking-widest text-slate-500">
-                    板块负分 avg（最新日）
-                  </div>
+                <div className="rounded-2xl border border-rose-100 bg-rose-50/40 p-4 shadow-sm">
+                  <SectionTitle idx={8} color="#e11d48">板块负分 avg（最新日）</SectionTitle>
                   <div className="space-y-1">
                     {data.neg_board_avg.map(r => (
                       <div key={r.board} className="flex items-center justify-between text-[10px]">
@@ -556,10 +552,8 @@ export const ModelScoreResearch: React.FC<Props> = ({ modelId }) => {
                 </div>
               )}
               {data.pos_board_avg && data.pos_board_avg.length > 0 && (
-                <div className="rounded-2xl border border-slate-100 bg-white p-4 shadow-sm">
-                  <div className="mb-2 text-[10px] font-black uppercase tracking-widest text-slate-500">
-                    板块正分 avg（最新日）
-                  </div>
+                <div className="rounded-2xl border border-emerald-100 bg-emerald-50/40 p-4 shadow-sm">
+                  <SectionTitle idx={9} color="#059669">板块正分 avg（最新日）</SectionTitle>
                   <div className="space-y-1">
                     {data.pos_board_avg.map(r => (
                       <div key={r.board} className="flex items-center justify-between text-[10px]">
@@ -577,9 +571,7 @@ export const ModelScoreResearch: React.FC<Props> = ({ modelId }) => {
             {/* 大盘信号：全市场分数 → 次日指数红绿概率 */}
             {data.market_signal && data.market_signal.status === 'success' && (
               <div className="rounded-2xl border border-slate-100 bg-white p-4 shadow-sm">
-                <div className="mb-2 text-[10px] font-black uppercase tracking-widest text-slate-500">
-                  大盘信号（全市场分数均值 → 次日上证红/绿概率）
-                </div>
+                <SectionTitle idx={10} color="#0ea5e9">大盘信号（全市场分数均值 → 次日上证红/绿概率）</SectionTitle>
                 {data.market_signal.baseline && (
                   <div className="mb-2 text-[10px] text-slate-500">
                     基线：{data.market_signal.baseline.days}天 红盘率 {data.market_signal.baseline.red_prob}% / 次日均涨跌 {data.market_signal.baseline.avg_next_chg}%
@@ -613,9 +605,7 @@ export const ModelScoreResearch: React.FC<Props> = ({ modelId }) => {
       {/* 校准历史 */}
       {history.length > 0 && (
         <div className="rounded-2xl border border-slate-100 bg-white p-4 shadow-sm">
-          <div className="mb-2 text-[10px] font-black uppercase tracking-widest text-slate-500">
-            校准历史（{history.length} 次）
-          </div>
+          <SectionTitle idx={11} color="#64748b">校准历史（{history.length} 次）</SectionTitle>
           <div className="space-y-1">
             {history.map(h => (
               <div key={h.task_id}
