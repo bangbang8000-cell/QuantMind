@@ -39,6 +39,8 @@ export interface CreateEnsembleParams {
   display_name?: string;
   weight_strategy?: 'equal' | 'icir' | 'manual';
   manual_weights?: Record<string, number>;
+  fusion_strategy?: 'linear' | 'majority_vote' | 'periodic_hierarchy' | 'confidence_gate';
+  strategy_config?: Record<string, number>;
 }
 
 export interface ModelShapSummaryItem {

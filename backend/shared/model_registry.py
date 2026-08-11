@@ -1464,6 +1464,8 @@ class ModelRegistryService:
         display_name: str,
         weight_strategy: str = "equal",
         manual_weights: dict[str, float] | None = None,
+        fusion_strategy: str = "linear",
+        strategy_config: dict[str, float] | None = None,
     ) -> dict[str, Any]:
         """创建持久化融合模型（推理时融合多个源模型的预测）。
 
@@ -1582,6 +1584,9 @@ class ModelRegistryService:
             "is_ensemble": True,
             "model_file": "ensemble_config.json",
             "framework": "ensemble",
+            "ensemble_method": "fusion",
+            "fusion_strategy": fusion_strategy,
+            "strategy_config": strategy_config or {},
             "source_models": source_meta_list,
             "source_model_ids": [str(s["model_id"]) for s in sources],
             "weight_strategy": weight_strategy,
@@ -1614,6 +1619,8 @@ class ModelRegistryService:
             "version": 1,
             "created_at": now.isoformat(),
             "weight_strategy": weight_strategy,
+            "fusion_strategy": fusion_strategy,
+            "strategy_config": strategy_config or {},
             "models": [
                 {
                     "model_id": str(s["model_id"]),

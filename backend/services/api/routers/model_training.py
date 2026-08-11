@@ -246,6 +246,14 @@ class EnsembleCreateRequest(BaseModel):
     manual_weights: dict[str, float] | None = Field(
         default=None, description="manual 策略下各源模型权重"
     )
+    fusion_strategy: str = Field(
+        default="linear",
+        description="融合算法: linear / majority_vote / periodic_hierarchy / confidence_gate",
+    )
+    strategy_config: dict[str, float] | None = Field(
+        default=None,
+        description="融合算法参数（如 periodic_boundary / confidence_threshold）",
+    )
 
 
 class SetStrategyBindingRequest(BaseModel):
@@ -2574,6 +2582,8 @@ async def create_ensemble_model(
         raise HTTPException(status_code=422, detail="weight_strategy 应为 equal / icir / manual")
     if payload.weight_strategy == "manual" and not payload.manual_weights:
         raise HTTPException(status_code=422, detail="manual 策略必须提供 manual_weights")
+    if payload.fusion_strategy not in ("linear", "majority_vote", "periodic_hierarchy", "confidence_gate"):
+        raise HTTPException(status_code=422, detail="fusion_strategy 应为 linear / majority_vote / periodic_hierarchy / confidence_gate")
 
     tenant_id, user_id = _owner_scope(current_user)
     try:
@@ -2584,6 +2594,8 @@ async def create_ensemble_model(
             display_name=payload.display_name,
             weight_strategy=payload.weight_strategy,
             manual_weights=payload.manual_weights,
+            fusion_strategy=payload.fusion_strategy,
+            strategy_config=payload.strategy_config,
         )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc))

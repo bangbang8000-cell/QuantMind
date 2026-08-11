@@ -357,21 +357,31 @@ _Z_CLIP = 3.0  # Winsorize: 单模型 z-score 截尾到 ±3σ, 防单点劫持
 def fuse_scores(
     all_scores: dict[str, dict[str, float]],
     weights: dict[str, float],
+    fusion_strategy: str = "linear",
+    strategy_config: dict | None = None,
+    model_horizons: dict[str, int] | None = None,
 ) -> list[dict]:
-    """多源模型分数融合（Winsorized z-score + 共识度门控）。
+    """多源模型分数融合（按 fusion_strategy 选择算法）。
 
-    融合策略：
-    1. 每个源模型的原始分做 z-score 标准化（保留偏度/峰度/尾部信息）
-    2. Winsorize: 单模型 z-score 截尾到 ±_Z_CLIP, 防极端值劫持融合分
-    3. 加权平均 → 融合 z-score（score）
-    4. 共识度 = 独立看多的模型数 (z_i > 0), 不与融合方向比较
-       — 防止高权重模型(T3)垄断"共识"定义
-    5. 不再对 score 做共识放大 — 共识度只做下游门控, 不参与排序
+    公共预处理：
+    1. 每个源模型的原始分做 z-score 标准化
+    2. Winsorize: 单模型 z-score 截尾到 ±_Z_CLIP, 防极端值劫持
+
+    融合算法（fusion_strategy）：
+      - linear            线性加权平均（默认，原逻辑）
+      - majority_vote     方向一致性投票（仅方向一致的模型参与加权，乘一致率）
+      - periodic_hierarchy 周期分层（长周期定方向，短周期定时，按 target_horizon 分界）
+      - confidence_gate   共识度门控（共识不足按阈值降权/丢弃）
 
     Returns:
         [{"symbol": "...", "score": <fused_z>, "consensus": n, "zfusion": <fused_z>,
           "detail": {...}}, ...]
     """
+    strategy_config = strategy_config or {}
+    model_horizons = model_horizons or {}
+    boundary = float(strategy_config.get("periodic_boundary", 10))
+    gate_threshold = float(strategy_config.get("confidence_threshold", 0.6))
+
     all_symbols = set()
     for scores in all_scores.values():
         all_symbols.update(scores.keys())
@@ -401,35 +411,78 @@ def fuse_scores(
 
     for sym in all_symbols:
         per_model: dict[str, dict] = {}
-        z_vals: list[float] = []
-        w_vals: list[float] = []
+        z_clipped_map: dict[str, float] = {}
+        w_map: dict[str, float] = {}
 
         for mid in sorted(z_scores):
             if sym in z_scores[mid]:
                 raw = all_scores[mid][sym]
                 z = z_scores[mid][sym]
-                # 2. Winsorize: 截尾到 ±_Z_CLIP
                 z_clipped = max(-_Z_CLIP, min(_Z_CLIP, z))
                 w = weights.get(mid, 1.0 / n_models)
                 per_model[mid] = {
                     "raw": round(raw, 6),
                     "z": round(z, 4),
                     "z_clipped": round(z_clipped, 4),
+                    "horizon": model_horizons.get(mid),
                 }
-                z_vals.append(z_clipped)
-                w_vals.append(w)
+                z_clipped_map[mid] = z_clipped
+                w_map[mid] = w
 
-        if not z_vals:
+        if not z_clipped_map:
             continue
 
-        # 3. 加权平均 (Winsorized z-score, 无共识放大)
-        total_w = sum(w_vals)
-        fused_z = sum(z * w for z, w in zip(z_vals, w_vals)) / total_w
+        # 公共: 共识度 = 独立看多模型数 (z > 0)
+        consensus = sum(1 for z in z_clipped_map.values() if z > 0)
 
-        # 4. 共识度: 独立看多模型数 (z_i > 0)
-        consensus = sum(1 for mid in per_model if per_model[mid]["z"] > 0)
+        # 按策略计算融合分数
+        if fusion_strategy == "majority_vote":
+            # 方向投票：看涨数 vs 看跌数
+            n_bull = sum(1 for z in z_clipped_map.values() if z > 0)
+            n_bear = sum(1 for z in z_clipped_map.values() if z < 0)
+            majority_dir = 1 if n_bull >= n_bear else -1
+            # 仅方向一致的模型参与加权
+            aligned = {mid: z for mid, z in z_clipped_map.items() if (z > 0) == (majority_dir > 0) and z != 0}
+            if not aligned:
+                fused_z = 0.0
+            else:
+                tot_w = sum(w_map[mid] for mid in aligned)
+                fused_z = sum(z * w_map[mid] for mid, z in aligned.items()) / tot_w if tot_w > 0 else 0.0
+                # 乘一致率（方向一致的模型占比），一致率低则弱化
+                fused_z *= (len(aligned) / n_models)
+        elif fusion_strategy == "periodic_hierarchy":
+            # 长周期(≥boundary)定方向，短周期(<boundary)定时
+            long_z = [z for mid, z in z_clipped_map.items()
+                      if (model_horizons.get(mid) or boundary) >= boundary]
+            short_z = [z for mid, z in z_clipped_map.items()
+                       if (model_horizons.get(mid) or boundary) < boundary]
+            if not short_z:
+                short_z = list(z_clipped_map.values())  # 无短周期则全用
+            fused_z = sum(short_z) / len(short_z) if short_z else 0.0
+            if long_z:
+                long_dir = sum(1 for z in long_z if z > 0) - sum(1 for z in long_z if z < 0)
+                if long_dir > 0:  # 长趋势向上
+                    fused_z *= (1.5 if fused_z > 0 else 0.3)
+                elif long_dir < 0:  # 长趋势向下
+                    fused_z *= (1.5 if fused_z < 0 else 0.3)
+                else:  # 长周期分裂，中立
+                    fused_z *= 0.5
+        elif fusion_strategy == "confidence_gate":
+            # 共识度门控
+            consensus_ratio = consensus / n_models
+            tot_w = sum(w_map.values())
+            fused_z = sum(z * w_map[mid] for mid, z in z_clipped_map.items()) / tot_w if tot_w > 0 else 0.0
+            if consensus_ratio >= gate_threshold:
+                pass  # 高共识，保留
+            elif consensus_ratio >= 0.4:
+                fused_z *= 0.5  # 分歧，降权
+            else:
+                fused_z = 0.0  # 剧烈分歧，丢弃
+        else:
+            # linear（默认）：加权平均
+            tot_w = sum(w_map.values())
+            fused_z = sum(z * w_map[mid] for mid, z in z_clipped_map.items()) / tot_w if tot_w > 0 else 0.0
 
-        # 5. score = 纯 fused_z (共识度是下游门控, 不是放大器)
         results.append({
             "symbol": sym,
             "score": round(float(fused_z), 6),
@@ -490,14 +543,22 @@ def main():
         print(msg, file=sys.stderr)
         sys.exit(2)
 
+    # 融合算法与参数（ensemble_config.json）
+    fusion_strategy = str(config.get("fusion_strategy") or "linear")
+    strategy_config = config.get("strategy_config") or {}
+
     # 3. 逐源模型推理（缺失模型优雅降级）
     all_scores: dict[str, dict[str, float]] = {}
     weights: dict[str, float] = {}
+    model_horizons: dict[str, int] = {}
 
     for mc in model_configs:
         mid = str(mc.get("model_id") or mc.get("name") or "?")
         m_dir = Path(mc.get("model_dir") or "")
         w = float(mc.get("weight", 0.1))
+        h = mc.get("target_horizon_days")
+        if isinstance(h, (int, float)):
+            model_horizons[mid] = int(h)
 
         if not m_dir.exists():
             logger.warning("源模型目录缺失，跳过 %s: %s", mid, m_dir)
@@ -520,9 +581,15 @@ def main():
         sys.exit(1)
 
     # 4. 融合
-    signals = fuse_scores(all_scores, weights)
+    signals = fuse_scores(
+        all_scores,
+        weights,
+        fusion_strategy=fusion_strategy,
+        strategy_config=strategy_config,
+        model_horizons=model_horizons,
+    )
     signals.sort(key=lambda x: x["score"], reverse=True)
-    logger.info("融合完成: %d 条信号", len(signals))
+    logger.info("融合完成: %d 条信号 (strategy=%s)", len(signals), fusion_strategy)
 
     # 5. 输出
     out_path.parent.mkdir(parents=True, exist_ok=True)

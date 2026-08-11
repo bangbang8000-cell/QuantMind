@@ -1,5 +1,5 @@
 import React, { useMemo, useState } from 'react';
-import { Button, Input, Radio, Modal, Slider, message, Tag, Tooltip } from 'antd';
+import { Button, Input, Radio, Modal, Select, Slider, message, Tag, Tooltip } from 'antd';
 import { clsx } from 'clsx';
 import { Layers, Info, TrendingUp } from 'lucide-react';
 import { UserModelRecord, modelTrainingService } from '../services/modelTrainingService';
@@ -36,6 +36,9 @@ export const CreateEnsembleModal: React.FC<CreateEnsembleModalProps> = ({
   const [displayName, setDisplayName] = useState('');
   const [manualWeights, setManualWeights] = useState<Record<string, number>>({});
   const [creating, setCreating] = useState(false);
+  const [fusionStrategy, setFusionStrategy] = useState<'linear' | 'majority_vote' | 'periodic_hierarchy' | 'confidence_gate'>('linear');
+  const [periodicBoundary, setPeriodicBoundary] = useState(10);
+  const [confidenceThreshold, setConfidenceThreshold] = useState(0.6);
 
   const icirs = useMemo(() => extractIcirs(models), [models]);
 
@@ -89,6 +92,12 @@ export const CreateEnsembleModal: React.FC<CreateEnsembleModalProps> = ({
         display_name: displayName.trim() || defaultName,
         weight_strategy: strategy,
         manual_weights: strategy === 'manual' ? { ...manualWeights } : undefined,
+        fusion_strategy: fusionStrategy,
+        strategy_config: fusionStrategy === 'periodic_hierarchy'
+          ? { periodic_boundary: periodicBoundary }
+          : fusionStrategy === 'confidence_gate'
+            ? { confidence_threshold: confidenceThreshold }
+            : undefined,
       });
       message.success(`融合模型已创建: ${created.model_id}`);
       onCreated(created.model_id);
@@ -190,6 +199,52 @@ export const CreateEnsembleModal: React.FC<CreateEnsembleModalProps> = ({
               </Radio.Button>
             </div>
           </Radio.Group>
+        </div>
+
+        {/* 融合算法 */}
+        <div>
+          <div className="text-[10px] font-black text-slate-500 mb-1.5">融合算法</div>
+          <Select
+            size="small"
+            value={fusionStrategy}
+            onChange={setFusionStrategy}
+            className="w-full"
+            options={[
+              { value: 'linear', label: '线性加权 — 加权平均（默认）' },
+              { value: 'majority_vote', label: '投票裁决 — 方向一致才保留，不一致降权' },
+              { value: 'periodic_hierarchy', label: '周期分层 — 长周期定方向，短周期定时' },
+              { value: 'confidence_gate', label: '置信度门控 — 共识不足按阈值降权/丢弃' },
+            ]}
+          />
+          {fusionStrategy === 'periodic_hierarchy' && (
+            <div className="mt-2">
+              <div className="flex justify-between text-[9px] text-slate-400 mb-0.5">
+                <span>短/长周期分界线（≥此天数为长周期）</span>
+                <span className="font-mono font-bold text-blue-600">{periodicBoundary} 天</span>
+              </div>
+              <Slider
+                min={1}
+                max={30}
+                value={periodicBoundary}
+                onChange={setPeriodicBoundary}
+              />
+            </div>
+          )}
+          {fusionStrategy === 'confidence_gate' && (
+            <div className="mt-2">
+              <div className="flex justify-between text-[9px] text-slate-400 mb-0.5">
+                <span>共识阈值（方向一致模型占比）</span>
+                <span className="font-mono font-bold text-blue-600">{confidenceThreshold.toFixed(1)}</span>
+              </div>
+              <Slider
+                min={0.2}
+                max={1.0}
+                step={0.05}
+                value={confidenceThreshold}
+                onChange={setConfidenceThreshold}
+              />
+            </div>
+          )}
         </div>
 
         {/* 手动权重滑块 */}
