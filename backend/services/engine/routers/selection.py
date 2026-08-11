@@ -1482,27 +1482,19 @@ async def _aggregate_calibration(
     """从 records 聚合分数档矩阵与汇总。"""
     import collections
 
-    # 分位数分档：按实际分数分布切分，每档样本数相近
-    # 等宽分档在高分档样本稀疏（如 ≥0.797 仅 5900），分位数分档保证每档统计可靠
+    # 等宽分档：覆盖全分数范围（min~max），高分/低分尾部也细分
+    # 等分位数分档在分数偏斜时只覆盖密集区间，最高分档可能只到 0.867
+    # 而模型实际有 ±3，尾部全部并成一档。等宽保证 ±3 都显示。
     all_scores_sorted = sorted(r["score"] for r in records)
     score_min = min(all_scores_sorted)
     score_max = max(all_scores_sorted)
     n_bands = 12
-    # 分位点：0%, 1/n, 2/n, ..., 100%（用分位数保证每档等样本）
-    edges_pct = [i / n_bands for i in range(n_bands)]
-    # 分位数分档边界（用分位值，可能重复时退化）
-    band_edges_q = []
-    for p in edges_pct:
-        idx = min(len(all_scores_sorted) - 1, int(p * (len(all_scores_sorted) - 1)))
-        band_edges_q.append(all_scores_sorted[idx])
-    # 去重边界
-    uniq = []
-    for e in band_edges_q:
-        if not uniq or abs(e - uniq[-1]) > 1e-9:
-            uniq.append(e)
-    if len(uniq) < 3:
-        uniq = [score_min, (score_min + score_max) / 2, score_max]
-    band_edges = uniq
+    score_span = score_max - score_min
+    if score_span <= 1e-9:
+        band_edges = [score_min, score_max]
+    else:
+        # 等宽边界（含首尾）
+        band_edges = [score_min + score_span * i / n_bands for i in range(n_bands + 1)]
     n_real = len(band_edges) - 1
     band_labels = [f"{band_edges[i]:.3f}~{band_edges[i+1]:.3f}" for i in range(n_real)]
     band_labels[-1] = f"≥{band_edges[-2]:.3f}"
