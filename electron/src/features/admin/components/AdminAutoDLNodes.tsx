@@ -44,6 +44,10 @@ interface NodeStatus {
     cpu_load?: number;
     mem_total_mb?: number;
     mem_used_mb?: number;
+    disk_total_kb?: number;
+    disk_used_kb?: number;
+    net_rx_bytes?: number | null;
+    net_tx_bytes?: number | null;
     gpus?: Array<{
         util: number;
         mem_used_mb: number;
@@ -51,6 +55,7 @@ interface NodeStatus {
         temp_c: number;
         name: string;
     }>;
+    gpu_error?: string;
     containers?: Array<{ name: string; status: string }>;
     training_active?: boolean;
     ping_ms?: number | null;
@@ -58,6 +63,12 @@ interface NodeStatus {
 
 const fmtMB = (mb?: number): string =>
     mb === undefined ? '—' : mb >= 1024 ? `${(mb / 1024).toFixed(1)}GB` : `${mb}MB`;
+
+const fmtKB = (kb?: number): string =>
+    kb === undefined ? '—' : kb >= 1048576 ? `${(kb / 1048576).toFixed(1)}GB` : `${(kb / 1024).toFixed(1)}MB`;
+
+const fmtBytes = (b?: number | null): string =>
+    !b ? '—' : b >= 1073741824 ? `${(b / 1073741824).toFixed(2)}GB` : b >= 1048576 ? `${(b / 1048576).toFixed(1)}MB` : `${(b / 1024).toFixed(0)}KB`;
 
 export const AdminAutoDLNodes: React.FC = () => {
     const [nodes, setNodes] = useState<NodeInfo[]>([]);
@@ -117,7 +128,11 @@ export const AdminAutoDLNodes: React.FC = () => {
 
     const renderGpuInfo = (st: NodeStatus) => {
         if (!st.gpus || st.gpus.length === 0) {
-            return <Text type="secondary" style={{ fontSize: 11 }}>GPU 不可用/未检测到</Text>;
+            return (
+                <Text type="secondary" style={{ fontSize: 11 }}>
+                    {st.gpu_error ? `GPU: ${st.gpu_error}` : 'GPU 不可用/未检测到'}
+                </Text>
+            );
         }
         return (
             <Space size="small" wrap>
@@ -187,6 +202,11 @@ export const AdminAutoDLNodes: React.FC = () => {
                                                 <Text style={{ fontSize: 11 }}>💻 CPU: {st.cpu_cores ?? '—'}核 · 负载 {st.cpu_load ?? '—'}</Text>
                                                 <Text style={{ fontSize: 11 }}>🧠 内存: {fmtMB(st.mem_used_mb)}/{fmtMB(st.mem_total_mb)}</Text>
                                                 {st.ping_ms != null && <Text style={{ fontSize: 11 }}>📡 {st.ping_ms}ms</Text>}
+                                            </Space>
+                                            <Space wrap>
+                                                <Text style={{ fontSize: 11 }}>💾 硬盘: {fmtKB(st.disk_used_kb)}/{fmtKB(st.disk_total_kb)}</Text>
+                                                <Text style={{ fontSize: 11 }}>📥 下行: {fmtBytes(st.net_rx_bytes)}</Text>
+                                                <Text style={{ fontSize: 11 }}>📤 上行: {fmtBytes(st.net_tx_bytes)}</Text>
                                             </Space>
                                             <div>{renderGpuInfo(st)}</div>
                                             {st.training_active && (

@@ -94,10 +94,14 @@ set -e
 echo "===SYS==="
 nproc
 uptime
-free -m | awk '/Mem:/{print $2, $3, $4}'
+echo "mem:$(free -m | grep -iE 'mem|内存' | awk '{print $2, $3}')"
+echo "disk:$(df -P / | awk 'NR==2{print $2, $3}')"
+echo "net:$(cat /proc/net/dev | awk '/eth0|ens|enp/{gsub(/:/,\"\"); rx+=$2; tx+=$10} END{print rx, tx}')"
+echo "rx1:$(cat /sys/class/net/*/statistics/rx_bytes 2>/dev/null | awk '{s+=$1} END{print s+0}')"
+echo "tx1:$(cat /sys/class/net/*/statistics/tx_bytes 2>/dev/null | awk '{s+=$1} END{print s+0}')"
 echo "===GPU==="
 if command -v nvidia-smi >/dev/null 2>&1; then
-  nvidia-smi --query-gpu=utilization.gpu,memory.used,memory.total,temperature.gpu,name --format=csv,noheader,nounits 2>/dev/null || echo "n/a"
+  nvidia-smi --query-gpu=utilization.gpu,memory.used,memory.total,temperature.gpu,name --format=csv,noheader,nounits 2>&1 || echo "gpu-error"
 else
   echo "no-gpu"
 fi
@@ -169,18 +173,36 @@ cat /proc/loadavg 2>/dev/null | awk '{print $1}'
         load_txt = sections.get("NET", "").strip()
         result["cpu_load"] = float(load_txt) if load_txt.replace(".", "", 1).isdigit() else None
 
-        # 内存 free -m: total used free
-        mem_line = next((l for l in sys_lines if l.replace(" ", "").replace("\t", "").isdigit()), None)
+        # 内存 mem:total used（free -m，MB）
+        mem_line = next((l for l in sys_lines if l.startswith("mem:")), None)
         if mem_line:
-            parts = mem_line.split()
+            parts = mem_line.split(":")
             if len(parts) >= 2:
-                result["mem_total_mb"] = int(parts[0])
-                result["mem_used_mb"] = int(parts[1])
+                vals = parts[1].split()
+                if len(vals) >= 2:
+                    result["mem_total_mb"] = int(vals[0]) if vals[0].isdigit() else None
+                    result["mem_used_mb"] = int(vals[1]) if vals[1].isdigit() else None
 
-        # GPU nvidia-smi
-        gpu_lines = [l for l in sections.get("GPU", "").splitlines() if l and l != "n/a"]
+        # 硬盘 disk:total used（df -P /，KB）
+        disk_line = next((l for l in sys_lines if l.startswith("disk:")), None)
+        if disk_line:
+            parts = disk_line.split(":")
+            if len(parts) >= 2:
+                vals = parts[1].split()
+                if len(vals) >= 2:
+                    result["disk_total_kb"] = int(vals[0]) if vals[0].isdigit() else None
+                    result["disk_used_kb"] = int(vals[1]) if vals[1].isdigit() else None
+
+        # 网络累计收发（字节）——用于前端计算速率
+        rx_line = next((l for l in sys_lines if l.startswith("rx1:")), None)
+        tx_line = next((l for l in sys_lines if l.startswith("tx1:")), None)
+        result["net_rx_bytes"] = int(rx_line.split(":")[1]) if rx_line and rx_line.split(":")[1].strip().isdigit() else None
+        result["net_tx_bytes"] = int(tx_line.split(":")[1]) if tx_line and tx_line.split(":")[1].strip().isdigit() else None
+
+        # GPU nvidia-smi（若驱动异常则记录原因）
+        gpu_lines = [l for l in sections.get("GPU", "").splitlines() if l]
         gpu_list = []
-        if gpu_lines and gpu_lines[0] != "no-gpu":
+        if gpu_lines and gpu_lines[0] not in ("no-gpu", "gpu-error"):
             for l in gpu_lines:
                 parts = [p.strip() for p in l.split(",")]
                 if len(parts) >= 4:
@@ -192,6 +214,15 @@ cat /proc/loadavg 2>/dev/null | awk '{print $1}'
                         "name": parts[4] if len(parts) > 4 else "",
                     })
         result["gpus"] = gpu_list
+        if not gpu_list:
+            # 记录 GPU 不可用原因
+            if gpu_lines and gpu_lines[0] == "gpu-error":
+                err = " ".join(gpu_lines[1:]).strip()
+                result["gpu_error"] = err or "nvidia-smi 驱动异常"
+            elif gpu_lines and gpu_lines[0] == "no-gpu":
+                result["gpu_error"] = "未安装 nvidia-smi"
+            else:
+                result["gpu_error"] = "未检测到 GPU"
 
         # Docker 训练容器
         docker_lines = [l for l in sections.get("DOCKER", "").splitlines() if l and l != "no-docker"]
