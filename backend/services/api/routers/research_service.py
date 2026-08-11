@@ -13,6 +13,7 @@ from typing import Any
 from sqlalchemy import text
 
 from backend.shared.database_manager_v2 import get_session
+from backend.shared.inference_stats import compute_score_distribution
 from backend.shared.redis_sentinel_client import get_redis_sentinel_client
 from backend.shared.stock_utils import StockCodeUtil
 
@@ -569,6 +570,33 @@ async def _fetch_summary(
             "lastUpdatedAt": None,
         }
     payload = dict(row)
+    # 当前批次分数分位数（供前端按分数动态着色/自适应 slider）
+    score_dist = {}
+    try:
+        score_res = await session.execute(
+            text(
+                f"SELECT fusion_score FROM qm_research_candidate_snapshot snap "
+                f"WHERE {where} AND fusion_score IS NOT NULL"
+            ),
+            params,
+        )
+        score_vals = [float(r[0]) for r in score_res if r[0] is not None]
+        if score_vals:
+            dist = compute_score_distribution(score_vals)
+            if dist:
+                score_dist = {
+                    "min": dist.get("min"),
+                    "max": dist.get("max"),
+                    "mean": dist.get("mean"),
+                    "median": dist.get("median"),
+                    "p10": dist.get("p10"),
+                    "p25": dist.get("p25"),
+                    "p75": dist.get("p75"),
+                    "p90": dist.get("p90"),
+                }
+    except Exception as exc:  # noqa: BLE001
+        logger.debug("score distribution failed: %s", exc)
+
     return {
         "total": _serialize_int(payload.get("total_count")) or 0,
         "totalMarket": _serialize_int(payload.get("tradable_count")) or 0,
@@ -580,6 +608,7 @@ async def _fetch_summary(
         "highConfidenceCount": _serialize_int(payload.get("high_confidence_count")) or 0,
         "strongCount": _serialize_int(payload.get("strong_count")) or 0,
         "lastUpdatedAt": _serialize_date(payload.get("last_updated_at")),
+        "scoreDistribution": score_dist,
     }
 
 

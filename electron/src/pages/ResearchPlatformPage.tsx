@@ -254,8 +254,10 @@ interface ColumnDef {
 /**
  * 全量列定义表。COLUMN_GROUPS 中的每个列 key 都必须在此登记。
  */
-const COLUMN_DEFS: Record<string, ColumnDef> = {
-  // ---- 标识 ----
+// 当前批次分数分位数（由 overview.summary.scoreDistribution 更新，供 score 列动态着色）
+let currentScoreDist: { p25?: number; p50?: number; p75?: number } | null = null;
+
+const COLUMN_DEFS: Record<string, ColumnDef> = {  // ---- 标识 ----
   rank: {
     title: '排名',
     width: 60,
@@ -275,9 +277,23 @@ const COLUMN_DEFS: Record<string, ColumnDef> = {
   score: {
     title: '模型分数',
     width: 98,
-    render: (value) => (
-      <span className="whitespace-nowrap font-black text-blue-400">{safeNum(value, 0).toFixed(3)}</span>
-    ),
+    render: (value) => {
+      const n = safeNum(value, 0);
+      // 按当前批次分数分位数动态着色（有分布时），否则正负二分
+      let cls = 'text-blue-400';
+      if (currentScoreDist) {
+        const { p25, p50, p75 } = currentScoreDist;
+        if (typeof p25 === 'number' && typeof p75 === 'number') {
+          if (n >= p75) cls = 'text-rose-600';
+          else if (n >= p50) cls = 'text-orange-500';
+          else if (n >= p25) cls = 'text-sky-500';
+          else cls = 'text-emerald-600';
+        }
+      } else {
+        cls = n >= 0 ? 'text-rose-500' : 'text-emerald-500';
+      }
+      return <span className={`whitespace-nowrap font-black ${cls}`}>{n.toFixed(3)}</span>;
+    },
   },
   latestChange: { title: '涨跌幅', width: 96, render: rSigned(2) },
 
@@ -1394,6 +1410,7 @@ export const ResearchPlatformPage: React.FC = () => {
             } as ResearchStockRow;
           })
         );
+        currentScoreDist = result?.summary?.scoreDistribution || null;
         setOverview(result);
       } catch (error) {
         console.error('[ResearchPlatformPage] load universe failed:', error);

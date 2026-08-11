@@ -138,8 +138,18 @@ async function fetchShanghaiIndex(days: number): Promise<{
   }
 }
 
-/** 分数标注逻辑（wide_scale 融合模型分数为 [-1,1]，用分位区间替代硬编码阈值） */
-function annotateScore(score: number, wideScale = false): { label: string; color: string } | null {
+/** 分数标注逻辑：按当前模型分数范围动态分档（融合模型高分如 2.7 也能分层） */
+function annotateScore(score: number, wideScale = false, scoreMin?: number, scoreMax?: number): { label: string; color: string } | null {
+  // 有动态范围时按分位数比例分档（更普适）
+  if (typeof scoreMin === 'number' && typeof scoreMax === 'number' && scoreMax > scoreMin) {
+    const range = scoreMax - scoreMin;
+    const p = (score - scoreMin) / range; // 0~1
+    if (p >= 0.80) return { label: '最高分', color: '#f43f5e' };
+    if (p >= 0.60) return { label: '高分区', color: '#f97316' };
+    if (p >= 0.40) return { label: '中分区', color: '#f59e0b' };
+    if (p >= 0.20) return { label: '中低分', color: '#94a3b8' };
+    return { label: '低分区', color: '#10b981' };
+  }
   if (wideScale) {
     // 融合模型：高分/中高/中低/低分 四档（0.8 分位以上为最高分）
     if (score >= 0.50) return { label: '最高分', color: '#f43f5e' };
@@ -592,6 +602,22 @@ export const StockScoreChart: React.FC<Props> = ({ symbol, name, stockInfo, mark
       });
     }
 
+    // 分数轴范围：按实际分数动态扩展，避免融合模型高分(如 2.7)被固定 [-1,1] 截断
+    const allScores = visibleScores
+      .map(s => Number(s.fusion_score))
+      .filter(v => !Number.isNaN(v) && v !== null && v !== undefined);
+    let scoreMin = wideScale ? -1.0 : -0.3;
+    let scoreMax = wideScale ? 1.0 : 0.3;
+    if (allScores.length > 0) {
+      const dataMin = Math.min(...allScores);
+      const dataMax = Math.max(...allScores);
+      // 融合模型/高分模型：按实际分布扩展（留 10% 边距）
+      if (wideScale || dataMax > 1.0 || dataMin < -1.0) {
+        const pad = Math.max((dataMax - dataMin) * 0.1, 0.05);
+        scoreMin = Math.floor((dataMin - pad) * 2) / 2;
+        scoreMax = Math.ceil((dataMax + pad) * 2) / 2;
+      }
+    }
     return {
       animation: false,
       backgroundColor: '#ffffff',
@@ -608,7 +634,7 @@ export const StockScoreChart: React.FC<Props> = ({ symbol, name, stockInfo, mark
           let html = `<div style="font-size:11px;color:#475569;font-weight:bold">${d}</div>`;
           if (k && k.length >= 4) html += `<div>开 ${k[0]} · 收 ${k[1]} · 低 ${k[2]} · 高 ${k[3]}</div>`;
           if (score !== null && score !== undefined) {
-            const a = annotateScore(Number(score), wideScale);
+            const a = annotateScore(Number(score), wideScale, scoreMin, scoreMax);
             html += `<div>推理分数 <b style="color:${a?.color}">${Number(score).toFixed(4)}</b> <span style="color:${a?.color}">${a?.label || ''}</span></div>`;
             if (s?.score_rank !== null && s?.score_rank !== undefined) {
               html += `<div>当日排名 #${s.score_rank}</div>`;
@@ -635,10 +661,9 @@ export const StockScoreChart: React.FC<Props> = ({ symbol, name, stockInfo, mark
         { type: 'value', scale: true, axisLabel: { fontSize: 10, color: '#64748b' }, splitLine: { lineStyle: { color: '#f1f5f9' } } },
         {
           type: 'value', position: 'right',
-          // 分数轴范围：普通模型固定 [-0.3, 0.3] 保证折线比例稳定；
-          // 融合模型分数为 [-1,1]，固定范围会截断高分，动态扩展
-          min: wideScale ? -1.0 : -0.3,
-          max: wideScale ? 1.0 : 0.3,
+          // 分数轴范围：按实际分数动态扩展（融合模型高分如 2.7 不被截断）
+          min: scoreMin,
+          max: scoreMax,
           axisLabel: { fontSize: 9, color: '#94a3b8', formatter: (v: number) => v.toFixed(1) },
           splitLine: { show: false },
         },

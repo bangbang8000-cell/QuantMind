@@ -698,12 +698,22 @@ export const InferenceRunDetailView: React.FC<Props> = ({ runId, result, loading
                 },
                 {
                   title: '得分', dataIndex: 'score',
-                  render: (s: number) => (
-                    // A股习惯：涨红跌绿
-                    <span className={clsx('font-black text-xs font-mono', s >= 0 ? 'text-rose-600' : 'text-emerald-600')}>
-                      {s >= 0 ? '+' : ''}{s.toFixed(4)}
-                    </span>
-                  ),
+                  render: (s: number) => {
+                    // A股习惯：涨红跌绿；按当前批次分位数分级着色
+                    const dist = result?.summary?.score_distribution as any;
+                    let cls = s >= 0 ? 'text-rose-600' : 'text-emerald-600';
+                    if (dist && typeof dist.p25 === 'number' && typeof dist.p75 === 'number') {
+                      if (s >= dist.p75) cls = 'text-rose-600';
+                      else if (s >= dist.p50) cls = 'text-orange-500';
+                      else if (s >= dist.p25) cls = 'text-sky-600';
+                      else cls = 'text-emerald-600';
+                    }
+                    return (
+                      <span className={clsx('font-black text-xs font-mono', cls)}>
+                        {s >= 0 ? '+' : ''}{s.toFixed(4)}
+                      </span>
+                    );
+                  },
                 },
                 {
                   title: '信号',
