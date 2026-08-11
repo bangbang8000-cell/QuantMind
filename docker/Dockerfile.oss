@@ -47,8 +47,9 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 COPY requirements.txt /tmp/requirements.txt
 COPY requirements/production.txt /tmp/requirements-production.txt
 COPY requirements/ai.txt /tmp/requirements-ai.txt
-COPY docker/torch_wheels/ /tmp/torch_wheels/
 
+# 本地 torch wheel 目录（docker/torch_wheels/）被 .gitignore 忽略、不随代码分发，
+# 统一从 PyPI 安装。需要离线/CUDA 定制 wheel 时自行 COPY 后放开下方分支。
 RUN python -m pip install --upgrade pip setuptools wheel cython \
     && if ls /tmp/torch_wheels/*.whl >/dev/null 2>&1; then \
          echo "安装本地 torch wheel"; \
