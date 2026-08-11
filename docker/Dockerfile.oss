@@ -8,6 +8,10 @@ ARG PIP_INDEX_URL=https://mirrors.aliyun.com/pypi/simple/
 ARG PIP_TRUSTED_HOST=mirrors.aliyun.com
 ARG APT_MIRROR=mirrors.aliyun.com
 
+# torch 版本选择：cpu（默认，构建快、镜像小）或 gpu（含 CUDA，需 GPU 且构建慢、镜像 ~24GB）
+# 用法: docker build --build-arg TORCH_DEVICE=gpu ...
+ARG TORCH_DEVICE=cpu
+
 ENV PYTHONUNBUFFERED=1 \
     PYTHONDONTWRITEBYTECODE=1 \
     PIP_NO_CACHE_DIR=1 \
@@ -48,15 +52,23 @@ COPY requirements.txt /tmp/requirements.txt
 COPY requirements/production.txt /tmp/requirements-production.txt
 COPY requirements/ai.txt /tmp/requirements-ai.txt
 
-# 本地 torch wheel 目录（docker/torch_wheels/）被 .gitignore 忽略、不随代码分发，
-# 统一从 PyPI 安装。需要离线/CUDA 定制 wheel 时自行 COPY 后放开下方分支。
+# 本地 torch wheel 目录（docker/torch_wheels/）被 .gitignore 忽略、不随代码分发。
+# 默认按 TORCH_DEVICE 从 PyPI 安装 torch：
+#   cpu -> torch==2.9.1+cpu（仅 CPU 轮子，构建快、镜像小，无需 GPU）
+#   gpu -> torch==2.9.1（完整 CUDA 轮子，构建慢、镜像大，需 NVIDIA GPU）
+# 需要离线/定制 wheel 时自行 COPY docker/torch_wheels/ 后放开下方本地分支。
 RUN python -m pip install --upgrade pip setuptools wheel cython \
     && if ls /tmp/torch_wheels/*.whl >/dev/null 2>&1; then \
          echo "安装本地 torch wheel"; \
          python -m pip install --no-cache-dir --root-user-action=ignore /tmp/torch_wheels/*.whl; \
-       else \
-         echo "未找到本地 torch wheel，从 PyPI 安装（首次需联网）"; \
+       elif [ "$TORCH_DEVICE" = "gpu" ]; then \
+         echo "构建 GPU 版 torch（完整 CUDA，构建慢）"; \
          python -m pip install --no-cache-dir --root-user-action=ignore "torch==2.9.1"; \
+       else \
+         echo "构建 CPU 版 torch（快速、无需 GPU）"; \
+         python -m pip install --no-cache-dir --root-user-action=ignore "torch==2.9.1+cpu" \
+           --index-url https://download.pytorch.org/whl/cpu \
+           --extra-index-url ${PIP_INDEX_URL}; \
        fi \
     && python -m pip install --no-cache-dir --root-user-action=ignore -r /tmp/requirements.txt \
     && python -m pip install --no-cache-dir --root-user-action=ignore -r /tmp/requirements-production.txt \
