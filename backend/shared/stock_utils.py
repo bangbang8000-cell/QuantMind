@@ -45,7 +45,7 @@ class StockCodeUtil:
                 return f"{symbol}.SH"
             elif symbol.startswith(('00', '30', '20')):
                 return f"{symbol}.SZ"
-            elif symbol.startswith(('83', '43', '87', '88')):
+            elif symbol.startswith(('83', '43', '87', '88', '92')):
                 return f"{symbol}.BJ"
             return code
 
@@ -89,7 +89,7 @@ class StockCodeUtil:
                 return f"SH{symbol}"
             elif symbol.startswith(('00', '30', '20')):
                 return f"SZ{symbol}"
-            elif symbol.startswith(('83', '43', '87', '88')):
+            elif symbol.startswith(('83', '43', '87', '88', '92')):
                 return f"BJ{symbol}"
             return symbol
 

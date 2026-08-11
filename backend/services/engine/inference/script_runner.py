@@ -1245,7 +1245,7 @@ class InferenceScriptRunner:
                     # 2. 排除北交所: BJ 前缀或 .BJ 后缀，或数字开头 (43, 83, 87, 88)
                     if symbol.startswith("BJ") or ".BJ" in symbol:
                         continue
-                    if symbol.startswith(("43", "83", "87", "88")):
+                    if symbol.startswith(("43", "83", "87", "88", "92")):
                         continue
 
                     # 3. 排除指数代码: SH000xxx, SZ399xxx 等
@@ -1569,7 +1569,7 @@ class InferenceScriptRunner:
                 :run_id, :tenant_id, :user_id, :trade_date, :symbol,
                 'inference_script', :feature_version,
                 NULL, NULL, :score, 1.0, 'normal',
-                :signal_side, :expected_price, :quality::jsonb, NOW()
+                :signal_side, :expected_price, CAST(:quality AS jsonb), NOW()
             )
             ON CONFLICT (tenant_id, user_id, trade_date, symbol, model_version, feature_version, run_id)
             DO UPDATE SET

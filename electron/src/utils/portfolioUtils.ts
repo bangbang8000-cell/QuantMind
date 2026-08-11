@@ -54,12 +54,12 @@ export const normalizeStockCode = (raw: string): string => {
     
     // 3. 处理纯 6 位数字 (基于号段尝试自动补全)
     if (/^\d{6}$/.test(s)) {
+        // 北京: 43, 83, 87, 88, 92 (920 为北交所新号段)
+        if (s.startsWith('4') || s.startsWith('8') || s.startsWith('92')) return `BJ${s}`;
         // 上海: 60, 68, 90
         if (s.startsWith('6') || s.startsWith('9')) return `SH${s}`;
         // 深圳: 00, 30, 20
         if (s.startsWith('0') || s.startsWith('2') || s.startsWith('3')) return `SZ${s}`;
-        // 北京: 83, 43, 87, 88
-        if (s.startsWith('4') || s.startsWith('8')) return `BJ${s}`;
     }
     
     return s;

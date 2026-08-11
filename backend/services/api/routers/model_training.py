@@ -1510,7 +1510,7 @@ scored AS (
                 THEN e.symbol || CASE
                     WHEN LEFT(e.symbol, 2) IN ('60', '68', '90') THEN '.SH'
                     WHEN LEFT(e.symbol, 2) IN ('00', '30', '20') THEN '.SZ'
-                    WHEN LEFT(e.symbol, 2) IN ('83', '43', '87', '88') THEN '.BJ'
+                    WHEN LEFT(e.symbol, 2) IN ('83', '43', '87', '88', '92') THEN '.BJ'
                     ELSE ''
                 END
             WHEN e.symbol ~ '^[0-9]{4,5}$'
@@ -1805,7 +1805,7 @@ async def get_model_inference_run_detail(
                                             THEN ess.symbol || CASE
                                                 WHEN LEFT(ess.symbol, 2) IN ('60', '68', '90') THEN '.SH'
                                                 WHEN LEFT(ess.symbol, 2) IN ('00', '30', '20') THEN '.SZ'
-                                                WHEN LEFT(ess.symbol, 2) IN ('83', '43', '87', '88') THEN '.BJ'
+                                                WHEN LEFT(ess.symbol, 2) IN ('83', '43', '87', '88', '92') THEN '.BJ'
                                                 ELSE ''
                                             END
                                         WHEN ess.symbol ~ '^[0-9]{4,5}$'
@@ -1822,7 +1822,7 @@ async def get_model_inference_run_detail(
                                             THEN ess.symbol || CASE
                                                 WHEN LEFT(ess.symbol, 2) IN ('60', '68', '90') THEN '.SH'
                                                 WHEN LEFT(ess.symbol, 2) IN ('00', '30', '20') THEN '.SZ'
-                                                WHEN LEFT(ess.symbol, 2) IN ('83', '43', '87', '88') THEN '.BJ'
+                                                WHEN LEFT(ess.symbol, 2) IN ('83', '43', '87', '88', '92') THEN '.BJ'
                                                 ELSE ''
                                             END
                                         WHEN ess.symbol ~ '^[0-9]{4,5}$'
