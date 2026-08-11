@@ -1,11 +1,11 @@
 {
   "year": 2026,
   "output_start_date": "2026-01-05",
-  "output_end_date": "2026-08-07",
-  "trading_days": 144,
-  "row_count": 790892,
+  "output_end_date": "2026-08-11",
+  "trading_days": 146,
+  "row_count": 801986,
   "symbol_count": 5542,
-  "implemented_feature_count": 382,
+  "implemented_feature_count": 394,
   "feature_columns": [
     "open",
     "high",
@@ -149,7 +149,6 @@
     "concept_leader_score",
     "concept_cross_sector",
     "concept_volume_ratio",
-    "date",
     "micro_liquidity_amihud_5",
     "micro_liquidity_amihud_20",
     "micro_liquidity_ratio",
@@ -388,8 +387,21 @@
     "RANK10",
     "RANK20",
     "RANK30",
-    "RANK60"
+    "RANK60",
+    "gtja_016",
+    "gtja_032",
+    "gtja_062",
+    "gtja_083",
+    "gtja_090",
+    "gtja_099",
+    "gtja_036",
+    "gtja_070",
+    "gtja_095",
+    "gtja_150",
+    "gtja_176",
+    "gtja_042",
+    "gtja_158"
   ],
   "source": "quantdb (daily_forward + features_daily + l1_factors + l2_factors)",
-  "generated_at": "2026-08-09T12:26:38.693041"
+  "generated_at": "2026-08-12T02:50:26.523322"
 }
