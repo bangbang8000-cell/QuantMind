@@ -1159,6 +1159,42 @@ async def _compute_market_signal(
         return {"status": "error", "detail": str(exc)}
 
 
+def _make_equal_bins(
+    pairs: list[tuple[float, float]],
+    n_bins: int = 20,
+) -> list[dict[str, Any]]:
+    """等宽分桶（覆盖全分数范围 min~max）。
+
+    分位数分桶在分数偏斜时只覆盖密集区间，高分/低分尾部被合并。
+    等宽分桶保证 ±3（融合模型）或 ±0.3（普通模型）全范围覆盖，
+    每桶边界均匀，用户能看到完整分数区间下的收益/胜率分布。
+    """
+    if not pairs:
+        return []
+    scores = [p[0] for p in pairs]
+    smin = min(scores)
+    smax = max(scores)
+    span = smax - smin
+    if span <= 1e-12:
+        return [{"score_min": smin, "score_max": smax, "pairs": pairs, "n": len(pairs)}]
+    bins = []
+    for i in range(n_bins):
+        lo = smin + span * i / n_bins
+        hi = smin + span * (i + 1) / n_bins
+        if i == n_bins - 1:
+            seg = [p for p in pairs if p[0] >= lo]
+        else:
+            seg = [p for p in pairs if lo <= p[0] < hi]
+        if seg:
+            bins.append({
+                "score_min": round(lo, 4),
+                "score_max": round(hi, 4),
+                "pairs": seg,
+                "n": len(seg),
+            })
+    return bins
+
+
 def _compute_winrate_zones(
     records: list[dict[str, Any]],
     horizon_list: list[int],
@@ -1190,26 +1226,20 @@ def _compute_winrate_zones(
         pairs.sort(key=lambda x: x[0])
         n = len(pairs)
 
-        # 分成 20 个分位数细档
-        n_bins = 20
-        bin_size = n // n_bins
+        # 等宽分桶（覆盖全分数范围，高分尾部不合并）
+        raw_bins = _make_equal_bins(pairs, n_bins=20)
         bins = []
-        for i in range(n_bins):
-            lo = i * bin_size
-            hi = n if i == n_bins - 1 else (i + 1) * bin_size
-            if hi <= lo:
-                continue
-            seg = pairs[lo:hi]
-            seg_rets = [p[1] for p in seg]
+        for b in raw_bins:
+            seg_rets = [p[1] for p in b["pairs"]]
             wins = sum(1 for x in seg_rets if x > 0)
             downs = sum(1 for x in seg_rets if x < 0)
             bins.append({
-                "score_min": seg[0][0],
-                "score_max": seg[-1][0],
-                "n": len(seg),
-                "win_rate": wins / len(seg),
-                "down_prob": downs / len(seg),
-                "avg_ret": sum(seg_rets) / len(seg),
+                "score_min": b["score_min"],
+                "score_max": b["score_max"],
+                "n": len(seg_rets),
+                "win_rate": wins / len(seg_rets) if seg_rets else 0,
+                "down_prob": downs / len(seg_rets) if seg_rets else 0,
+                "avg_ret": sum(seg_rets) / len(seg_rets) if seg_rets else 0,
                 "horizon": h,
             })
 
@@ -1230,9 +1260,9 @@ def _compute_winrate_zones(
                 "score_min": round(best_min, 4),
                 "score_max": round(best_max, 4),
                 "n": len(seg),
-                "win_rate": round(sum(1 for x in seg_rets if x > 0) / len(seg) * 100.0, 1),
-                "down_prob": round(sum(1 for x in seg_rets if x < 0) / len(seg) * 100.0, 1),
-                "avg_ret": round(sum(seg_rets) / len(seg), 3),
+                "win_rate": round(sum(1 for x in seg_rets if x > 0) / len(seg) * 100.0, 1) if seg else 0,
+                "down_prob": round(sum(1 for x in seg_rets if x < 0) / len(seg) * 100.0, 1) if seg else 0,
+                "avg_ret": round(sum(seg_rets) / len(seg), 3) if seg else 0,
                 "label": "胜率最高(做多)",
             })
 
@@ -1250,9 +1280,9 @@ def _compute_winrate_zones(
                 "score_min": round(worst_min, 4),
                 "score_max": round(worst_max, 4),
                 "n": len(seg),
-                "win_rate": round(sum(1 for x in seg_rets if x > 0) / len(seg) * 100.0, 1),
-                "down_prob": round(sum(1 for x in seg_rets if x < 0) / len(seg) * 100.0, 1),
-                "avg_ret": round(sum(seg_rets) / len(seg), 3),
+                "win_rate": round(sum(1 for x in seg_rets if x > 0) / len(seg) * 100.0, 1) if seg else 0,
+                "down_prob": round(sum(1 for x in seg_rets if x < 0) / len(seg) * 100.0, 1) if seg else 0,
+                "avg_ret": round(sum(seg_rets) / len(seg), 3) if seg else 0,
                 "label": "下跌概率最高(做空)",
             })
 
@@ -1299,24 +1329,23 @@ def _compute_condition_zones(
         for (regime, cap, board), items in combos.items():
             if len(items) < 2000:
                 continue
-            # 该组合下按分数分桶（8 桶）
+            # 该组合下按分数等宽分桶（覆盖全范围）
             items_sorted = sorted(items, key=lambda x: x["score"])
-            n = len(items_sorted)
-            bin_size = max(200, n // 8)
+            raw_pairs = [(x["score"], x["rets"].get(h)) for x in items_sorted]
+            raw_pairs = [(s, r) for s, r in raw_pairs if r is not None]
+            if len(raw_pairs) < 150:
+                continue
+            raw_bins = _make_equal_bins(raw_pairs, n_bins=8)
             bins = []
-            for i in range(0, n, bin_size):
-                seg = items_sorted[i:i + bin_size]
-                if len(seg) < 150:
-                    continue
-                rets_h = [x["rets"].get(h) for x in seg]
-                rets_h = [x for x in rets_h if x is not None]
+            for b in raw_bins:
+                rets_h = [p[1] for p in b["pairs"]]
                 if len(rets_h) < 100:
                     continue
                 wins = sum(1 for x in rets_h if x > 0)
                 downs = sum(1 for x in rets_h if x < 0)
                 bins.append({
-                    "score_min": seg[0]["score"],
-                    "score_max": seg[-1]["score"],
+                    "score_min": b["score_min"],
+                    "score_max": b["score_max"],
                     "n": len(rets_h),
                     "win_rate": wins / len(rets_h),
                     "down_prob": downs / len(rets_h),
