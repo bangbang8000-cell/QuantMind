@@ -143,18 +143,15 @@ if [ "${TRAIN_MODE_CHOICE:-1}" = "2" ]; then
     fi
 
     # 询问是否构建 AutoDL 训练镜像
-    warn "AutoDL 节点是 GPU，训练镜像需基于 GPU 版基础镜像。"
+    warn "AutoDL 节点是 GPU。推荐在 AutoDL 上远程构建（利用远端网络，避免本地推送大镜像）。"
     printf "  是否现在构建 AutoDL 训练镜像 quantmind-train:latest？(y/N，默认 N): "
     read -r BUILD_AUTODL
     if [ "${BUILD_AUTODL:-n}" = "y" ] || [ "${BUILD_AUTODL:-n}" = "Y" ]; then
-        info "构建 AutoDL 训练镜像（需 GPU 版基础镜像，约 5-10 分钟）..."
-        docker build -f docker/autodl/Dockerfile -t quantmind-train:latest .
-        ok "AutoDL 训练镜像构建完成"
-        warn "请将镜像推送到 AutoDL 节点："
-        echo "    docker save quantmind-train:latest | ssh root@<AutoDL-IP> 'docker load'"
-        echo "    或在 AutoDL 节点拉取（若已推到 registry）"
+        # shellcheck source=scripts/setup/build-autodl-remote.sh
+        source "${SCRIPT_DIR}/scripts/setup/build-autodl-remote.sh"
+        build_autodl_remote
     else
-        info "跳过 AutoDL 镜像构建。后续需要时可运行: docker build -f docker/autodl/Dockerfile -t quantmind-train:latest ."
+        info "跳过 AutoDL 镜像构建。后续需要时可运行: source scripts/setup/build-autodl-remote.sh && build_autodl_remote"
     fi
 else
     info "仅本地训练"

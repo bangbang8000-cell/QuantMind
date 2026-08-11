@@ -61,7 +61,15 @@ select_torch_config() {
         )
         local BEST_SPEED=0
         local BEST_SOURCE=""
-        local TORCH_WHEEL_PATH="torch-2.9.1%2Bcpu-cp310-cp310-manylinux_2_28_x86_64.whl"
+        # 根据 CPU 架构选择对应的 torch wheel 文件名（x86_64 / aarch64）
+        local MACH_ARCH
+        MACH_ARCH=$(uname -m 2>/dev/null || echo "x86_64")
+        local WHEEL_ARCH
+        case "$MACH_ARCH" in
+            aarch64|arm64) WHEEL_ARCH="aarch64" ;;
+            *) WHEEL_ARCH="x86_64" ;;
+        esac
+        local TORCH_WHEEL_PATH="torch-2.9.1%2Bcpu-cp310-cp310-manylinux_2_28_${WHEEL_ARCH}.whl"
         local src SPEED SPEED_INT
         for src in "${TORCH_CPU_SOURCES[@]}"; do
             SPEED=$(timeout 8 curl -s -o /dev/null -w "%{speed_download}" \
