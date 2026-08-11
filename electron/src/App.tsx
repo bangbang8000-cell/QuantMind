@@ -57,6 +57,7 @@ const AdminRDAgentFactors = lazy(() => import('./features/admin/components/Admin
 const AdminDataPlatform = lazy(() => import('./features/admin/components/AdminDataPlatform').then(m => ({ default: m.AdminDataPlatform })));
 const AdminTagManagement = lazy(() => import('./features/admin/components/AdminTagManagement').then(m => ({ default: m.AdminTagManagement })));
 const AdminFeatureCatalog = lazy(() => import('./features/admin/components/AdminFeatureCatalog').then(m => ({ default: m.AdminFeatureCatalog })));
+const AdminAutoDLNodes = lazy(() => import('./features/admin/components/AdminAutoDLNodes').then(m => ({ default: m.AdminAutoDLNodes })));
 const ComingSoonPage = lazy(() => import('./features/admin/components/ComingSoonPage').then(m => ({ default: m.ComingSoonPage })));
 const AlphaResearchPage = lazy(() => import('./features/alpha-research/pages/AlphaResearchPage'));
 const TradingAgentsPage = lazy(() => import('./features/trading-agents/pages/TradingAgentsPage'));
@@ -647,6 +648,7 @@ export default function App() {
                     <Route path="tags" element={<Suspense fallback={<Spin size="large" />}><AdminTagManagement /></Suspense>} />
                     <Route path="rd-agent" element={<Suspense fallback={<Spin size="large" />}><AdminRDAgentFactors /></Suspense>} />
                     <Route path="feature-catalog" element={<Suspense fallback={<Spin size="large" />}><AdminFeatureCatalog /></Suspense>} />
+                    <Route path="autodl-nodes" element={<Suspense fallback={<Spin size="large" />}><AdminAutoDLNodes /></Suspense>} />
                     {/* 待开发页面占位 */}
                     <Route path="inference" element={<ComingSoonPage title="推理监控" />} />
                     <Route path="orders" element={<ComingSoonPage title="订单管理" />} />

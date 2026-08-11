@@ -42,15 +42,23 @@ const AdminPage: React.FC = () => {
                 { key: 'strategies', label: '策略仓库' },
             ]
         },
-        { 
-            key: 'engine-service', 
-            icon: <ThunderboltOutlined />, 
+        {
+            key: 'engine-service',
+            icon: <ThunderboltOutlined />,
             label: '推理引擎',
             children: [
                 { key: 'models', label: '模型管理' },
                 { key: 'feature-catalog', label: '特征字典' },
                 { key: 'rd-agent', label: 'AlphaAgent因子' },
                 { key: 'inference', label: '推理监控' },
+            ]
+        },
+        {
+            key: 'training-service',
+            icon: <RocketOutlined />,
+            label: '训练服务',
+            children: [
+                { key: 'autodl-nodes', label: 'AutoDL 节点' },
             ]
         },
         { 

@@ -107,39 +107,82 @@ printf "  请选择 (1/2，默认 1): "
 read -r TRAIN_MODE_CHOICE
 if [ "${TRAIN_MODE_CHOICE:-1}" = "2" ]; then
     ok "启用 AutoDL 远程 GPU 训练"
-    # 追加 AutoDL 配置到 .env（不覆盖已有值）
-    ENV_FILE="${ENV_FILE:-.env}"
-    [ -f "$ENV_FILE" ] || touch "$ENV_FILE"
+    # 多节点配置写入 config/training_nodes.yaml（每台 AutoDL 一条）
+    NODES_YAML="${SCRIPT_DIR}/config/training_nodes.yaml"
+    [ -d "${SCRIPT_DIR}/config" ] || mkdir -p "${SCRIPT_DIR}/config"
 
-    if ! grep -q "^TRAINING_AUTODL_HOST=" "$ENV_FILE" 2>/dev/null; then
-        printf "\n# AutoDL 远程 GPU 训练配置\n" >> "$ENV_FILE"
+    # 已存在则备份（不覆盖已有节点配置）
+    if [ -f "$NODES_YAML" ] && ! grep -q "id: autodl-1" "$NODES_YAML" 2>/dev/null; then
+        warn "发现已有 config/training_nodes.yaml，将追加新节点（不覆盖）"
     fi
-    set_env_default() { # $1=key $2=prompt $3=default
-        local key="$1" prompt="$2" default="$3" val
-        if grep -q "^${key}=" "$ENV_FILE" 2>/dev/null; then return; fi
-        printf "%s（默认 %s）: " "$prompt" "$default"
-        read -r val
-        [ -z "$val" ] && val="$default"
-        echo "${key}=${val}" >> "$ENV_FILE"
-    }
-    set_env_default "TRAINING_AUTODL_HOST" "  AutoDL 节点 IP/域名" ""
-    if grep -q "^TRAINING_AUTODL_HOST=$" "$ENV_FILE" 2>/dev/null; then
-        warn "TRAINING_AUTODL_HOST 为空，跳过剩余配置（前端仅显示本地训练）"
-    else
-        set_env_default "TRAINING_AUTODL_SSH_PORT" "  SSH 端口" "22"
-        set_env_default "TRAINING_AUTODL_USER" "  SSH 用户" "root"
-        printf "  SSH 认证方式 (1=私钥 2=密码，默认 1): "
-        read -r AUTH_CHOICE
-        if [ "${AUTH_CHOICE:-1}" = "2" ]; then
-            set_env_default "TRAINING_AUTODL_SSH_PASSWORD" "  SSH 密码" ""
+
+    # 生成基础 YAML（若不存在）
+    if [ ! -f "$NODES_YAML" ]; then
+        cat > "$NODES_YAML" << 'YAMLHEAD'
+# QuantMind AutoDL 远程 GPU 训练节点配置
+nodes:
+YAMLHEAD
+    fi
+
+    node_idx=0
+    while true; do
+        node_idx=$((node_idx + 1))
+        node_id="autodl-${node_idx}"
+        echo ""
+        info "配置第 ${node_idx} 台 AutoDL 节点（${node_id}）"
+        printf "  节点 IP/域名（留空结束）: "
+        read -r node_host
+        [ -z "$node_host" ] && break
+        printf "  SSH 端口（默认 22）: "
+        read -r node_port; [ -z "$node_port" ] && node_port=22
+        printf "  SSH 用户（默认 root）: "
+        read -r node_user; [ -z "$node_user" ] && node_user=root
+        printf "  SSH 认证方式 (1=密码 2=私钥，默认 1): "
+        read -r node_auth
+        if [ "${node_auth:-1}" = "2" ]; then
+            printf "  SSH 私钥路径: "
+            read -r node_key
+            node_pass=""
         else
-            set_env_default "TRAINING_AUTODL_SSH_KEY" "  SSH 私钥路径" "~/.ssh/id_ed25519"
+            printf "  SSH 密码: "
+            read -r node_pass
+            node_key=""
         fi
-        set_env_default "TRAINING_AUTODL_WORK_DIR" "  远端工作目录" "/workspace"
-        set_env_default "TRAINING_AUTODL_DOCKER_IMAGE" "  远端训练镜像" "quantmind-train:latest"
-        set_env_default "TRAINING_AUTODL_NODE_NAME" "  节点显示名" "AutoDL GPU"
-        set_env_default "TRAINING_AUTODL_GPUS" "  GPU 数量(all/0/1...)" "all"
-        ok "AutoDL 配置已写入 ${ENV_FILE}"
+        printf "  节点显示名（默认 AutoDL GPU ${node_idx}）: "
+        read -r node_name; [ -z "$node_name" ] && node_name="AutoDL GPU ${node_idx}"
+        printf "  远端工作目录（默认 /workspace）: "
+        read -r node_workdir; [ -z "$node_workdir" ] && node_workdir=/workspace
+        printf "  GPU 数量 all/0/1/2（默认 all）: "
+        read -r node_gpus; [ -z "$node_gpus" ] && node_gpus=all
+
+        # 追加节点到 YAML
+        cat >> "$NODES_YAML" << EOF
+  - id: ${node_id}
+    name: "${node_name}"
+    host: "${node_host}"
+    port: ${node_port}
+    user: "${node_user}"
+    ssh_password: "${node_pass}"
+    ssh_key: "${node_key}"
+    work_dir: "${node_workdir}"
+    docker_image: "quantmind-train:latest"
+    gpus: "${node_gpus}"
+EOF
+        ok "已添加节点 ${node_id}（${node_host}）"
+
+        # 兼容单台：第一台也写入 .env（供旧编排器 / 构建脚本读取）
+        if [ "$node_idx" = "1" ]; then
+            ENV_FILE="${ENV_FILE:-.env}"
+            [ -f "$ENV_FILE" ] || touch "$ENV_FILE"
+            grep -q "^TRAINING_AUTODL_HOST=" "$ENV_FILE" 2>/dev/null || \
+                printf "TRAINING_AUTODL_HOST=%s\nTRAINING_AUTODL_SSH_PORT=%s\nTRAINING_AUTODL_USER=%s\nTRAINING_AUTODL_SSH_PASSWORD=%s\nTRAINING_AUTODL_SSH_KEY=%s\nTRAINING_AUTODL_WORK_DIR=%s\nTRAINING_AUTODL_NODE_NAME=%s\nTRAINING_AUTODL_DOCKER_IMAGE=quantmind-train:latest\nTRAINING_AUTODL_GPUS=%s\n" \
+                    "$node_host" "$node_port" "$node_user" "$node_pass" "$node_key" "$node_workdir" "$node_name" "$node_gpus" >> "$ENV_FILE"
+        fi
+    done
+
+    ok "AutoDL 节点配置已写入 ${NODES_YAML}"
+    if [ "$node_idx" = "0" ]; then
+        warn "未配置任何节点，前端仅显示本地训练"
     fi
 
     # 询问是否构建 AutoDL 训练镜像
