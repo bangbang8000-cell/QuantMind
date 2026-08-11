@@ -1,6 +1,7 @@
 import React, { useState, useCallback, useEffect, useRef } from 'react';
 import { Typography, Button, Select, Table, Tag, Spin, Empty, Alert, Progress, Tooltip } from 'antd';
 import { ReloadOutlined } from '@ant-design/icons';
+import clsx from 'clsx';
 import {
   submitScoreCalibration,
   getCalibrationTask,
@@ -275,38 +276,59 @@ export const ModelScoreResearch: React.FC<Props> = ({ modelId }) => {
 
   return (
     <div className="space-y-4">
-      <div className="flex items-center gap-2 flex-wrap">
-        <Select value={days} onChange={setDays} style={{ width: 120 }} className="!text-xs" options={[
-          { value: 60, label: '60 交易日' },
-          { value: 120, label: '120 交易日' },
-          { value: 180, label: '180 交易日' },
-          { value: 365, label: '365 交易日' },
-        ]} />
-        <Select value={horizons} onChange={setHorizons} style={{ width: 140 }} className="!text-xs" options={[
-          { value: '1,3,5,10', label: 'T+1/3/5/10' },
-          { value: '1,5,20', label: 'T+1/5/20' },
-          { value: '5', label: '仅 T+5' },
-          { value: '1,3,5,10,20', label: 'T+1~T+20' },
-        ]} />
-        <Button size="small" icon={<ReloadOutlined />} onClick={() => void load()} loading={loading}
-          className="rounded-lg text-[10px] font-bold h-8 px-3">
-          {loading ? '校准中...' : '重新校准'}
-        </Button>
-        {data?.meta && (
-          <Tag className="border-0 bg-blue-50 text-blue-600 text-[9px] font-bold">
-            {data.meta?.backtest_days ?? '-'}天 / {(data as any)?.total_samples?.toLocaleString() ?? '-'}样本 / 最新{(data as any)?.latest_trade_date ?? '-'}
-          </Tag>
-        )}
-        {data?.recommended_band && (
-          <Tag className="border-0 bg-emerald-50 text-emerald-600 text-[9px] font-bold">
-            推荐档 {data.recommended_band.score_band}（T+5均收 {data.recommended_band.main_horizon_avg_ret}%）
-          </Tag>
-        )}
-        {(data as any)?.direction_check && (
-          <Tag className="border-0 bg-indigo-50 text-indigo-600 text-[9px] font-bold">
-            方向{(data as any).direction_check.direction_ok ? '有效' : '存疑'} · RankIC {(data as any).direction_check.rank_ic?.toFixed?.(3) ?? '—'} · 市场{(data as any).direction_check.market_state || '—'}
-          </Tag>
-        )}
+      {/* 控制栏 */}
+      <div className="rounded-2xl border border-slate-200 bg-gradient-to-br from-slate-50 to-white p-3 shadow-sm">
+        <div className="flex items-center gap-2 flex-wrap">
+          <Select value={days} onChange={setDays} style={{ width: 120 }} className="!text-xs" options={[
+            { value: 60, label: '60 交易日' },
+            { value: 120, label: '120 交易日' },
+            { value: 180, label: '180 交易日' },
+            { value: 365, label: '365 交易日' },
+          ]} />
+          <Select value={horizons} onChange={setHorizons} style={{ width: 140 }} className="!text-xs" options={[
+            { value: '1,3,5,10', label: 'T+1/3/5/10' },
+            { value: '1,5,20', label: 'T+1/5/20' },
+            { value: '5', label: '仅 T+5' },
+            { value: '1,3,5,10,20', label: 'T+1~T+20' },
+          ]} />
+          <Button size="small" icon={<ReloadOutlined />} onClick={() => void load()} loading={loading}
+            className="rounded-lg text-[10px] font-bold h-8 px-3">
+            {loading ? '校准中...' : '重新校准'}
+          </Button>
+          <span className="mx-1 h-4 w-px bg-slate-200" />
+          {data?.meta && (
+            <Tag className="border-0 bg-blue-50 text-blue-600 text-[9px] font-bold">
+              {data.meta?.backtest_days ?? '-'}天 · {(data as any)?.total_samples?.toLocaleString() ?? '-'}样本 · {(data as any)?.latest_trade_date ?? '-'}
+            </Tag>
+          )}
+          {data?.recommended_band && (
+            <Tag color="green" className="rounded-full text-[9px] font-bold">
+              ★ 推荐 {data.recommended_band.score_band}
+            </Tag>
+          )}
+        </div>
+        {/* 方向自检横幅 */}
+        {(data as any)?.direction_check && (() => {
+          const dc = (data as any).direction_check;
+          const ok = dc.direction_ok;
+          return (
+            <div className={clsx(
+              'mt-2.5 rounded-xl border px-3 py-2 flex items-center gap-2',
+              ok ? 'border-emerald-200 bg-emerald-50/60' : 'border-rose-200 bg-rose-50/60',
+            )}>
+              <span className={clsx('w-1.5 h-1.5 rounded-full flex-shrink-0', ok ? 'bg-emerald-500' : 'bg-rose-500')} />
+              <Text className={clsx('text-[10px] font-bold', ok ? 'text-emerald-700' : 'text-rose-700')}>
+                {ok ? '分数方向有效' : '分数方向存疑'}
+              </Text>
+              <Text className="text-[10px] font-mono text-slate-500">
+                RankIC {dc.rank_ic?.toFixed?.(3) ?? '—'} · 正向 {dc.positive_days ?? 0}/{dc.total_days ?? 0} 天
+              </Text>
+              <Text className="text-[10px] text-slate-500">
+                市场 {dc.market_state || '—'} · 全市场均收 {dc.market_avg_ret?.toFixed?.(2) ?? '—'}%
+              </Text>
+            </div>
+          );
+        })()}
       </div>
 
       {loading && (
