@@ -11,6 +11,8 @@ ARG APT_MIRROR=mirrors.aliyun.com
 # torch 版本选择：cpu（默认，构建快、镜像小）或 gpu（含 CUDA，需 GPU 且构建慢、镜像 ~24GB）
 # 用法: docker build --build-arg TORCH_DEVICE=gpu ...
 ARG TORCH_DEVICE=cpu
+# CPU 版 torch 的国内下载源（阿里云 pytorch-wheels，含 +cpu 轮子）
+ARG TORCH_CPU_INDEX_URL=https://mirrors.aliyun.com/pytorch-wheels/cpu
 
 ENV PYTHONUNBUFFERED=1 \
     PYTHONDONTWRITEBYTECODE=1 \
@@ -67,8 +69,7 @@ RUN python -m pip install --upgrade pip setuptools wheel cython \
        else \
          echo "构建 CPU 版 torch（快速、无需 GPU）"; \
          python -m pip install --no-cache-dir --root-user-action=ignore "torch==2.9.1+cpu" \
-           --index-url https://download.pytorch.org/whl/cpu \
-           --extra-index-url ${PIP_INDEX_URL}; \
+           --index-url ${TORCH_CPU_INDEX_URL}; \
        fi \
     && python -m pip install --no-cache-dir --root-user-action=ignore -r /tmp/requirements.txt \
     && python -m pip install --no-cache-dir --root-user-action=ignore -r /tmp/requirements-production.txt \
