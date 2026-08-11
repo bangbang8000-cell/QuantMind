@@ -78,70 +78,13 @@ ok "目录就绪"
 # -------------------------------------------
 # 4. 构建镜像（自动选择 torch 版本与最快源）
 # -------------------------------------------
+# 加载公共 torch 选择函数（CPU/GPU 检测 + 测速选源）
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=scripts/setup/torch_select.sh
+source "${SCRIPT_DIR}/scripts/setup/torch_select.sh"
+
 info "检测 torch 版本（CPU/GPU）..."
-
-# 4.1 检测 NVIDIA GPU
-HAS_GPU=0
-if command -v nvidia-smi &>/dev/null && nvidia-smi >/dev/null 2>&1; then
-    HAS_GPU=1
-    GPU_NAME=$(nvidia-smi --query-gpu=name --format=csv,noheader 2>/dev/null | head -1)
-    ok "检测到 NVIDIA GPU: ${GPU_NAME:-unknown}"
-else
-    warn "未检测到 NVIDIA GPU（若无 GPU，推荐 CPU 版，构建快、镜像小）"
-fi
-
-# 4.2 决定 TORCH_DEVICE（检测到 GPU 时询问用户）
-TORCH_DEVICE=cpu
-if [ "$HAS_GPU" = "1" ]; then
-    warn "检测到 GPU。选择 torch 版本："
-    echo "  [1] GPU 版（完整 CUDA，构建慢、镜像 ~24GB，适合训练/推理加速）"
-    echo "  [2] CPU 版（构建快、镜像 ~15GB，无 GPU 加速）"
-    printf "  请选择 (1/2，默认 2): "
-    read -r GPU_CHOICE
-    if [ "${GPU_CHOICE:-2}" = "1" ]; then
-        TORCH_DEVICE=gpu
-        ok "已选择 GPU 版 torch"
-    else
-        warn "已选择 CPU 版 torch（后续需要 GPU 时可重新构建）"
-    fi
-else
-    TORCH_DEVICE=cpu
-    info "无 GPU，使用 CPU 版 torch"
-fi
-
-# 4.3 测速选择最快的 torch 源（仅 CPU 版需要）
-TORCH_CPU_INDEX_URL=""
-if [ "$TORCH_DEVICE" = "cpu" ]; then
-    info "测速选择最快的 CPU torch 下载源..."
-    # 候选源（用 29KB 的 metadata 文件测速）
-    TORCH_CPU_SOURCES=(
-        "https://download.pytorch.org/whl/cpu"
-        "https://mirrors.aliyun.com/pytorch-wheels/cpu"
-        "https://mirror.sjtu.edu.cn/pytorch-wheels/cpu"
-    )
-    BEST_SPEED=0
-    BEST_SOURCE=""
-    # 用完整 wheel 文件测速（前 6 秒实际下载速度，184MB 文件足够）
-    TORCH_WHEEL_PATH="torch-2.9.1%2Bcpu-cp310-cp310-manylinux_2_28_x86_64.whl"
-    for src in "${TORCH_CPU_SOURCES[@]}"; do
-        SPEED=$(timeout 8 curl -s -o /dev/null -w "%{speed_download}" \
-            --max-time 6 "${src}/${TORCH_WHEEL_PATH}" 2>/dev/null || echo 0)
-        SPEED_INT=$(printf "%.0f" "${SPEED:-0}" 2>/dev/null || echo 0)
-        echo "    ${src} → $(echo "${SPEED:-0}" | awk '{printf "%.1f", $1/1024/1024}') MB/s"
-        if [ "$SPEED_INT" -gt "$BEST_SPEED" ]; then
-            BEST_SPEED=$SPEED_INT
-            BEST_SOURCE=$src
-        fi
-    done
-    if [ -n "$BEST_SOURCE" ]; then
-        TORCH_CPU_INDEX_URL=$BEST_SOURCE
-        ok "最快源: ${BEST_SOURCE} ($(echo "$BEST_SPEED" | awk '{printf "%.1f", $1/1024/1024}') MB/s)"
-    else
-        warn "所有源测速失败，使用默认阿里云源"
-        TORCH_CPU_INDEX_URL="https://mirrors.aliyun.com/pytorch-wheels/cpu"
-    fi
-fi
-
+select_torch_config
 info "构建 Docker 镜像（torch=${TORCH_DEVICE}，首次约 5-15 分钟）..."
 if [ -n "$TORCH_CPU_INDEX_URL" ]; then
     ${COMPOSE_CMD} build --progress=plain \
@@ -152,6 +95,70 @@ else
         --build-arg "TORCH_DEVICE=${TORCH_DEVICE}"
 fi
 ok "镜像构建完成"
+
+# -------------------------------------------
+# 4.5 训练方式选择（本地 / AutoDL 远程 GPU）
+# -------------------------------------------
+info "训练方式选择..."
+warn "请选择模型训练方式："
+echo "  [1] 仅本地训练（默认，无需 AutoDL）"
+echo "  [2] 本地 + AutoDL 远程 GPU 训练（将特征快照推送到 GPU 节点训练，模型回传本机）"
+printf "  请选择 (1/2，默认 1): "
+read -r TRAIN_MODE_CHOICE
+if [ "${TRAIN_MODE_CHOICE:-1}" = "2" ]; then
+    ok "启用 AutoDL 远程 GPU 训练"
+    # 追加 AutoDL 配置到 .env（不覆盖已有值）
+    ENV_FILE="${ENV_FILE:-.env}"
+    [ -f "$ENV_FILE" ] || touch "$ENV_FILE"
+
+    if ! grep -q "^TRAINING_AUTODL_HOST=" "$ENV_FILE" 2>/dev/null; then
+        printf "\n# AutoDL 远程 GPU 训练配置\n" >> "$ENV_FILE"
+    fi
+    set_env_default() { # $1=key $2=prompt $3=default
+        local key="$1" prompt="$2" default="$3" val
+        if grep -q "^${key}=" "$ENV_FILE" 2>/dev/null; then return; fi
+        printf "%s（默认 %s）: " "$prompt" "$default"
+        read -r val
+        [ -z "$val" ] && val="$default"
+        echo "${key}=${val}" >> "$ENV_FILE"
+    }
+    set_env_default "TRAINING_AUTODL_HOST" "  AutoDL 节点 IP/域名" ""
+    if grep -q "^TRAINING_AUTODL_HOST=$" "$ENV_FILE" 2>/dev/null; then
+        warn "TRAINING_AUTODL_HOST 为空，跳过剩余配置（前端仅显示本地训练）"
+    else
+        set_env_default "TRAINING_AUTODL_SSH_PORT" "  SSH 端口" "22"
+        set_env_default "TRAINING_AUTODL_USER" "  SSH 用户" "root"
+        printf "  SSH 认证方式 (1=私钥 2=密码，默认 1): "
+        read -r AUTH_CHOICE
+        if [ "${AUTH_CHOICE:-1}" = "2" ]; then
+            set_env_default "TRAINING_AUTODL_SSH_PASSWORD" "  SSH 密码" ""
+        else
+            set_env_default "TRAINING_AUTODL_SSH_KEY" "  SSH 私钥路径" "~/.ssh/id_ed25519"
+        fi
+        set_env_default "TRAINING_AUTODL_WORK_DIR" "  远端工作目录" "/workspace"
+        set_env_default "TRAINING_AUTODL_DOCKER_IMAGE" "  远端训练镜像" "quantmind-train:latest"
+        set_env_default "TRAINING_AUTODL_NODE_NAME" "  节点显示名" "AutoDL GPU"
+        set_env_default "TRAINING_AUTODL_GPUS" "  GPU 数量(all/0/1...)" "all"
+        ok "AutoDL 配置已写入 ${ENV_FILE}"
+    fi
+
+    # 询问是否构建 AutoDL 训练镜像
+    warn "AutoDL 节点是 GPU，训练镜像需基于 GPU 版基础镜像。"
+    printf "  是否现在构建 AutoDL 训练镜像 quantmind-train:latest？(y/N，默认 N): "
+    read -r BUILD_AUTODL
+    if [ "${BUILD_AUTODL:-n}" = "y" ] || [ "${BUILD_AUTODL:-n}" = "Y" ]; then
+        info "构建 AutoDL 训练镜像（需 GPU 版基础镜像，约 5-10 分钟）..."
+        docker build -f docker/autodl/Dockerfile -t quantmind-train:latest .
+        ok "AutoDL 训练镜像构建完成"
+        warn "请将镜像推送到 AutoDL 节点："
+        echo "    docker save quantmind-train:latest | ssh root@<AutoDL-IP> 'docker load'"
+        echo "    或在 AutoDL 节点拉取（若已推到 registry）"
+    else
+        info "跳过 AutoDL 镜像构建。后续需要时可运行: docker build -f docker/autodl/Dockerfile -t quantmind-train:latest ."
+    fi
+else
+    info "仅本地训练"
+fi
 
 # -------------------------------------------
 # 5. 启动服务

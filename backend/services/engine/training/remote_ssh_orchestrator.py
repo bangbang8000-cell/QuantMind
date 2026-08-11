@@ -58,6 +58,9 @@ class RemoteSSHOrchestrator(TrainingOrchestrator):
         self.ssh_password = _env_or("TRAINING_AUTODL_SSH_PASSWORD", "")
         self.work_dir = _env_or("TRAINING_AUTODL_WORK_DIR", "/workspace")
         self.docker_image = _env_or("TRAINING_AUTODL_DOCKER_IMAGE", "quantmind-oss:latest")
+        # 远端容器挂载的 GPU（all=全部，0/空=不挂载，1/2=指定数量）
+        # AutoDL 节点需安装 nvidia-container-toolkit 才能使用 GPU
+        self.gpus = _env_or("TRAINING_AUTODL_GPUS", "").strip()
         self.api_base = _env_or("QUANTMIND_API_BASE_URL", "http://quantmind-api:8000")
         # 主节点局域网地址（供远端容器回调）；为空则回退 api_base（可能不可达）
         self.master_host = _env_or("TRAINING_MASTER_HOST", "")
@@ -640,9 +643,17 @@ class RemoteSSHOrchestrator(TrainingOrchestrator):
 
         train.py 与 inference 模板已 rsync 到工作目录并挂载覆盖镜像内置版，
         保证 train.py/模板更新不需要重新打包/上传 AutoDL 镜像。
+
+        根据 TRAINING_AUTODL_GPUS 决定是否挂载 GPU：
+          - all / 数字 → 加 --gpus（AutoDL 节点需装 nvidia-container-toolkit）
+          - 空 / 0     → 不加（纯 CPU 训练）
         """
+        gpus_flag = ""
+        if self.gpus and self.gpus != "0":
+            gpus_flag = f"--gpus \"{self.gpus}\" "
         return (
             f"docker run -d --name {container_name} "
+            f"{gpus_flag}"
             f"-v {self.work_dir}:/workspace "
             f"-v {self.work_dir}/feature_snapshots:/tmp/feature_snapshots:ro "
             f"-v {self.work_dir}/train.py:/app/train.py:ro "
