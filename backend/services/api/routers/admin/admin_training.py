@@ -210,8 +210,11 @@ async def run_training(
 
 @router.get("/training-nodes", summary="列出可用的训练节点")
 async def list_training_nodes(current_user: dict[str, Any] = Depends(require_admin)):
-    """列出训练节点（本地 Docker + 已配置的 AutoDL 远程节点）。"""
-    import os
+    """列出训练节点（本地 Docker + 配置的多台 AutoDL 远程节点）。
+
+    远程节点来自 config/training_nodes.yaml（或旧版单节点环境变量）。
+    """
+    from backend.services.engine.training.node_manager import load_training_nodes
 
     nodes = [{
         "id": "local",
@@ -220,14 +223,13 @@ async def list_training_nodes(current_user: dict[str, Any] = Depends(require_adm
         "description": "本机 GPU 训练（Docker-in-Docker）",
         "available": True,
     }]
-    host = os.getenv("TRAINING_AUTODL_HOST", "").strip()
-    if host:
+    for n in load_training_nodes():
         nodes.append({
-            "id": "autodl-1",
+            "id": n["id"],
             "type": "remote",
-            "name": os.getenv("TRAINING_AUTODL_NODE_NAME", "AutoDL GPU"),
-            "host": host,
-            "description": f"AutoDL 远程 GPU 训练节点（{host}）",
+            "name": n.get("name") or n["id"],
+            "host": n.get("host"),
+            "description": f"AutoDL 远程 GPU 训练节点（{n.get('host')}）",
             "available": True,
         })
     return {"nodes": nodes}
@@ -240,18 +242,38 @@ async def test_training_node(
 ):
     """测试 AutoDL 远程节点 SSH 连接 + docker 可用性。
 
-    body: {"node_id": "autodl-1"}，连接配置从环境变量读取。
+    body: {"node_id": "autodl-1"}，连接配置从节点配置表读取。
     """
     node_id = str((body or {}).get("node_id") or "autodl-1")
     if node_id == "local":
         return {"success": True, "node": node_id, "ssh": True, "docker": True}
     try:
-        from backend.services.engine.training.remote_ssh_orchestrator import RemoteSSHOrchestrator
+        from backend.services.engine.training.orchestrator_base import get_orchestrator
 
-        orch = RemoteSSHOrchestrator(node_id=node_id)
+        orch = get_orchestrator(node_id)
         return {"success": True, "node": node_id, **await orch.test_connection()}
     except Exception as exc:  # noqa: BLE001
         return {"success": False, "node": node_id, "error": str(exc)}
+
+
+@router.get("/training-nodes/{node_id}/status", summary="获取 AutoDL 节点实时状态")
+async def get_training_node_status(
+    node_id: str,
+    current_user: dict[str, Any] = Depends(require_admin),
+):
+    """采集单台 AutoDL 节点的实时状态（CPU/GPU/内存/训练容器）。
+
+    供后台「AutoDL 节点」状态面板展示。节点离线或采集失败时返回 offline。
+    """
+    from backend.services.engine.training.node_manager import NodeStatus, get_node_config
+
+    if node_id == "local":
+        return {"id": "local", "name": "本地 Docker", "online": True, "is_local": True}
+
+    node = get_node_config(node_id)
+    if not node:
+        return {"id": node_id, "name": node_id, "online": False, "error": "节点未配置"}
+    return await NodeStatus.collect(node)
 
 
 @router.get("/training-runs/{run_id}", summary="获取训练任务状态")

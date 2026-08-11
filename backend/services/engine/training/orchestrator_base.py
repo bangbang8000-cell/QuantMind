@@ -34,11 +34,15 @@ def get_orchestrator(node_id: str | None = None) -> TrainingOrchestrator:
 
     - node_id 为空 / "local" → LocalDockerOrchestrator（默认，现有逻辑）
     - node_id 以 "autodl" 开头 → RemoteSSHOrchestrator（AutoDL 远程 GPU）
+      按 node_id 从节点配置表（config/training_nodes.yaml）取 SSH 参数，
+      支持多台 AutoDL 各自独立配置。
     """
     if node_id and node_id.startswith("autodl"):
+        from backend.services.engine.training.node_manager import get_node_config
         from backend.services.engine.training.remote_ssh_orchestrator import RemoteSSHOrchestrator
 
-        return RemoteSSHOrchestrator(node_id=node_id)
+        node_config = get_node_config(node_id)
+        return RemoteSSHOrchestrator(node_id=node_id, node_config=node_config)
     from backend.services.engine.training.local_docker_orchestrator import LocalDockerOrchestrator
 
     return LocalDockerOrchestrator()

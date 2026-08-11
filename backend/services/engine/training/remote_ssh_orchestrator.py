@@ -49,18 +49,29 @@ class RemoteSSHOrchestrator(TrainingOrchestrator):
     _POLL_INTERVAL = 10  # 容器状态轮询间隔（秒）
     _LOG_TAIL_LINES = 60
 
-    def __init__(self, node_id: str = "autodl-1"):
+    def __init__(self, node_id: str = "autodl-1", node_config: dict[str, Any] | None = None):
         self.node_id = node_id
-        self.host = _env_or("TRAINING_AUTODL_HOST", "")
-        self.port = int(_env_or("TRAINING_AUTODL_SSH_PORT", "22"))
-        self.user = _env_or("TRAINING_AUTODL_USER", "root")
-        self.ssh_key = _env_or("TRAINING_AUTODL_SSH_KEY", "")
-        self.ssh_password = _env_or("TRAINING_AUTODL_SSH_PASSWORD", "")
-        self.work_dir = _env_or("TRAINING_AUTODL_WORK_DIR", "/workspace")
-        self.docker_image = _env_or("TRAINING_AUTODL_DOCKER_IMAGE", "quantmind-oss:latest")
-        # 远端容器挂载的 GPU（all=全部，0/空=不挂载，1/2=指定数量）
-        # AutoDL 节点需安装 nvidia-container-toolkit 才能使用 GPU
-        self.gpus = _env_or("TRAINING_AUTODL_GPUS", "").strip()
+        # 优先使用传入的节点配置（多节点 YAML）；否则回退单节点环境变量
+        if node_config:
+            self.host = str(node_config.get("host") or "")
+            self.port = int(node_config.get("port") or 22)
+            self.user = str(node_config.get("user") or "root")
+            self.ssh_key = str(node_config.get("ssh_key") or "")
+            self.ssh_password = str(node_config.get("ssh_password") or "")
+            self.work_dir = str(node_config.get("work_dir") or "/workspace")
+            self.docker_image = str(node_config.get("docker_image") or "quantmind-train:latest")
+            self.gpus = str(node_config.get("gpus") or "").strip()
+        else:
+            self.host = _env_or("TRAINING_AUTODL_HOST", "")
+            self.port = int(_env_or("TRAINING_AUTODL_SSH_PORT", "22"))
+            self.user = _env_or("TRAINING_AUTODL_USER", "root")
+            self.ssh_key = _env_or("TRAINING_AUTODL_SSH_KEY", "")
+            self.ssh_password = _env_or("TRAINING_AUTODL_SSH_PASSWORD", "")
+            self.work_dir = _env_or("TRAINING_AUTODL_WORK_DIR", "/workspace")
+            self.docker_image = _env_or("TRAINING_AUTODL_DOCKER_IMAGE", "quantmind-oss:latest")
+            # 远端容器挂载的 GPU（all=全部，0/空=不挂载，1/2=指定数量）
+            # AutoDL 节点需安装 nvidia-container-toolkit 才能使用 GPU
+            self.gpus = _env_or("TRAINING_AUTODL_GPUS", "").strip()
         self.api_base = _env_or("QUANTMIND_API_BASE_URL", "http://quantmind-api:8000")
         # 主节点局域网地址（供远端容器回调）；为空则回退 api_base（可能不可达）
         self.master_host = _env_or("TRAINING_MASTER_HOST", "")
@@ -71,7 +82,7 @@ class RemoteSSHOrchestrator(TrainingOrchestrator):
 
         if not self.host:
             raise ValueError(
-                "TRAINING_AUTODL_HOST 未配置，无法使用远程训练。请先在 .env 设置 AutoDL 节点 IP。"
+                f"训练节点 {node_id} 未配置 host（检查 config/training_nodes.yaml 或 TRAINING_AUTODL_HOST）。"
             )
         # P0-3: 强制 fail-closed，secret 缺失直接抛错
         if not self.internal_secret:
