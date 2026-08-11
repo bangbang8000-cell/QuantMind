@@ -76,10 +76,81 @@ mkdir -p data db models logs strategy_templates user_pools_local
 ok "目录就绪"
 
 # -------------------------------------------
-# 4. 构建镜像
+# 4. 构建镜像（自动选择 torch 版本与最快源）
 # -------------------------------------------
-info "构建 Docker 镜像（首次约 5-15 分钟）..."
-${COMPOSE_CMD} build --progress=plain
+info "检测 torch 版本（CPU/GPU）..."
+
+# 4.1 检测 NVIDIA GPU
+HAS_GPU=0
+if command -v nvidia-smi &>/dev/null && nvidia-smi >/dev/null 2>&1; then
+    HAS_GPU=1
+    GPU_NAME=$(nvidia-smi --query-gpu=name --format=csv,noheader 2>/dev/null | head -1)
+    ok "检测到 NVIDIA GPU: ${GPU_NAME:-unknown}"
+else
+    warn "未检测到 NVIDIA GPU（若无 GPU，推荐 CPU 版，构建快、镜像小）"
+fi
+
+# 4.2 决定 TORCH_DEVICE（检测到 GPU 时询问用户）
+TORCH_DEVICE=cpu
+if [ "$HAS_GPU" = "1" ]; then
+    warn "检测到 GPU。选择 torch 版本："
+    echo "  [1] GPU 版（完整 CUDA，构建慢、镜像 ~24GB，适合训练/推理加速）"
+    echo "  [2] CPU 版（构建快、镜像 ~15GB，无 GPU 加速）"
+    printf "  请选择 (1/2，默认 2): "
+    read -r GPU_CHOICE
+    if [ "${GPU_CHOICE:-2}" = "1" ]; then
+        TORCH_DEVICE=gpu
+        ok "已选择 GPU 版 torch"
+    else
+        warn "已选择 CPU 版 torch（后续需要 GPU 时可重新构建）"
+    fi
+else
+    TORCH_DEVICE=cpu
+    info "无 GPU，使用 CPU 版 torch"
+fi
+
+# 4.3 测速选择最快的 torch 源（仅 CPU 版需要）
+TORCH_CPU_INDEX_URL=""
+if [ "$TORCH_DEVICE" = "cpu" ]; then
+    info "测速选择最快的 CPU torch 下载源..."
+    # 候选源（用 29KB 的 metadata 文件测速）
+    TORCH_CPU_SOURCES=(
+        "https://download.pytorch.org/whl/cpu"
+        "https://mirrors.aliyun.com/pytorch-wheels/cpu"
+        "https://mirror.sjtu.edu.cn/pytorch-wheels/cpu"
+    )
+    BEST_SPEED=0
+    BEST_SOURCE=""
+    # 用完整 wheel 文件测速（前 6 秒实际下载速度，184MB 文件足够）
+    TORCH_WHEEL_PATH="torch-2.9.1%2Bcpu-cp310-cp310-manylinux_2_28_x86_64.whl"
+    for src in "${TORCH_CPU_SOURCES[@]}"; do
+        SPEED=$(timeout 8 curl -s -o /dev/null -w "%{speed_download}" \
+            --max-time 6 "${src}/${TORCH_WHEEL_PATH}" 2>/dev/null || echo 0)
+        SPEED_INT=$(printf "%.0f" "${SPEED:-0}" 2>/dev/null || echo 0)
+        echo "    ${src} → $(echo "${SPEED:-0}" | awk '{printf "%.1f", $1/1024/1024}') MB/s"
+        if [ "$SPEED_INT" -gt "$BEST_SPEED" ]; then
+            BEST_SPEED=$SPEED_INT
+            BEST_SOURCE=$src
+        fi
+    done
+    if [ -n "$BEST_SOURCE" ]; then
+        TORCH_CPU_INDEX_URL=$BEST_SOURCE
+        ok "最快源: ${BEST_SOURCE} ($(echo "$BEST_SPEED" | awk '{printf "%.1f", $1/1024/1024}') MB/s)"
+    else
+        warn "所有源测速失败，使用默认阿里云源"
+        TORCH_CPU_INDEX_URL="https://mirrors.aliyun.com/pytorch-wheels/cpu"
+    fi
+fi
+
+info "构建 Docker 镜像（torch=${TORCH_DEVICE}，首次约 5-15 分钟）..."
+if [ -n "$TORCH_CPU_INDEX_URL" ]; then
+    ${COMPOSE_CMD} build --progress=plain \
+        --build-arg "TORCH_DEVICE=${TORCH_DEVICE}" \
+        --build-arg "TORCH_CPU_INDEX_URL=${TORCH_CPU_INDEX_URL}"
+else
+    ${COMPOSE_CMD} build --progress=plain \
+        --build-arg "TORCH_DEVICE=${TORCH_DEVICE}"
+fi
 ok "镜像构建完成"
 
 # -------------------------------------------

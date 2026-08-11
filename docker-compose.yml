@@ -53,6 +53,9 @@ services:
     build:
       context: .
       dockerfile: docker/Dockerfile.oss
+      args:
+        TORCH_DEVICE: ${TORCH_DEVICE:-cpu}
+        TORCH_CPU_INDEX_URL: ${TORCH_CPU_INDEX_URL:-https://mirrors.aliyun.com/pytorch-wheels/cpu}
     platform: linux/amd64
     # GPU 可选：无 NVIDIA 驱动的主机请保持注释。
     # 有 GPU 加速训练需求时取消注释（需安装 nvidia-container-toolkit）。
