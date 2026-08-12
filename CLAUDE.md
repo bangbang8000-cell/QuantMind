@@ -100,7 +100,13 @@ Required `.env` keys (defaults in `docker-compose.yml`):
 - `REDIS_HOST`, `REDIS_PORT`
 - `SECRET_KEY`, `JWT_SECRET_KEY`
 - `STORAGE_MODE=local` for OSS edition
-- `QM_QUANTDB_DATA_DIR` - QuantDB local parquet data directory (default: `data/quantdb/`)
+- 本地数据目录（由 `docker-compose.yml` 设置，volume `./data:/data` 持久化，默认即容器内 `/data/xxx`）:
+  - `QM_QUANTDB_DATA_DIR` - QuantDB A股 local parquet (default: `data/quantdb/`)
+  - `QM_QUANTUS_DATA_DIR` - QuantUS 美股 (default: `data/quantus/`, Yahoo Finance 摄取)
+  - `QM_QUANTHK_DATA_DIR` - QuantHK 港股 (default: `data/quanthk/`)
+  - `QM_QUANTBC_DATA_DIR` - QuantBC 区块链/加密货币 (default: `data/quantbc/`, Binance 摄取; 生产默认 `ENABLE_CRYPTO=false` 隐藏该市场)
+  - `QM_QUANTFUTURES_DATA_DIR` - QuantFutures 期货/贵金属 (default: `data/quantfutures/`, akshare 摄取)
+- 各市场的后台管理界面在「数据管理」页的 tab：QuantDB A股 / QuantUS 美股 / QuantHK 港股 / QuantBC 区块链 / QuantFutures 期货；同步入口为各 `backend/scripts/*_daily_sync.py`
 
 ## Code Style
 
