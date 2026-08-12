@@ -436,10 +436,6 @@ const ManualTaskPage: React.FC<ManualTaskPageProps> = ({ tradingMode, onBack }) 
             message.warning('请先完成模型、推理批次和策略选择');
             return;
         }
-        if (!isRealMode) {
-            message.warning('引导式手动任务首版仅支持 REAL 模式');
-            return;
-        }
         setPreviewLoading(true);
         try {
             const realTradingService = await loadRealTradingService();
@@ -447,7 +443,7 @@ const ManualTaskPage: React.FC<ManualTaskPageProps> = ({ tradingMode, onBack }) 
                 model_id: effectiveModelId,
                 run_id: selectedRunId,
                 strategy_id: selectedStrategyId,
-                trading_mode: 'REAL',
+                trading_mode: isRealMode ? 'REAL' : 'SIMULATION',
                 note: note.trim() || undefined,
             });
             setPreview(result);
@@ -473,7 +469,7 @@ const ManualTaskPage: React.FC<ManualTaskPageProps> = ({ tradingMode, onBack }) 
                 model_id: effectiveModelId,
                 run_id: selectedRunId,
                 strategy_id: selectedStrategyId,
-                trading_mode: 'REAL',
+                trading_mode: isRealMode ? 'REAL' : 'SIMULATION',
                 preview_hash: preview.preview_hash,
                 note: note.trim() || undefined,
             });
@@ -560,12 +556,6 @@ const ManualTaskPage: React.FC<ManualTaskPageProps> = ({ tradingMode, onBack }) 
                     </div>
                 </div>
             </div>
-
-            {!isRealMode ? (
-                <div className="rounded-2xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-700">
-                    引导式手动任务首版仅支持模拟模式，请切换到模拟后继续。
-                </div>
-            ) : null}
 
             <div className="grid grid-cols-1 lg:grid-cols-5 gap-2 mb-3 px-0.5">
                 {STEP_TITLES.map((title, index) => (

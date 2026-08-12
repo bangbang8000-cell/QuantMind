@@ -12,14 +12,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from ..market_config import settings
 from ..models import Quote
 from ..schemas import QuoteCreate, QuoteResponse
-from .data_source import (
-    DataSourceAdapter,
-    SinaDataSource,
-    TencentDataSource,
-)
-from .eltdx_source import EltdxDataSource
-from .ifind_source import IFindDataSource
-from .opentdx_source import OpentdxDataSource
+from .data_source import DataSourceAdapter
+from .quantdb_source import QuantDBDataSource
 from .remote_redis_source import RemoteRedisDataSource
 
 logger = logging.getLogger(__name__)
@@ -40,11 +34,7 @@ class QuoteService:
 
         # 初始化数据源
         self.data_sources = {
-            "eltdx": EltdxDataSource(),
-            "opentdx": OpentdxDataSource(),
-            "tencent": TencentDataSource(),
-            "sina": SinaDataSource(),
-            "ifind": IFindDataSource(),
+            "quantdb": QuantDBDataSource(),
             "remote_redis": RemoteRedisDataSource(),
         }
         self.default_source = settings.DEFAULT_SOURCE

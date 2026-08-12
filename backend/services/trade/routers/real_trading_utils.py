@@ -1004,9 +1004,31 @@ def _get_stream_series_redis_client():
     return client, host, port
 
 
-def check_stream_series_freshness(redis_client=None) -> dict[str, Any]:
+def _check_quantdb_latest_daily() -> tuple[bool, str]:
+    """检查本地 QuantDB 是否有最近交易日日线（供模拟盘撮合兜底）。"""
+    try:
+        from backend.services.trade.simulation.services.local_market_data import (
+            LocalMarketData,
+        )
+
+        market_data = LocalMarketData()
+        latest_date = market_data.latest_trade_date()
+        if latest_date is None:
+            return False, "QuantDB 无可用日线"
+        return True, latest_date.isoformat()
+    except Exception as exc:
+        return False, f"QuantDB 检查失败: {exc}"
+
+
+def check_stream_series_freshness(
+    redis_client=None, *, allow_quantdb_fallback: bool = False
+) -> dict[str, Any]:
     """
     统一的 Stream 行情时序新鲜度检测逻辑。
+
+    allow_quantdb_fallback=True 时（模拟盘）：当 Redis 时序缺失/不新鲜时，
+    回退检查本地 QuantDB 是否有最近交易日日线。模拟撮合引擎直读 QuantDB，
+    有日线即可撮合，故视为就绪；标记 source=quantdb 供调用方区分。
     返回 {ok, message, details}
     """
     stream_symbols = _resolve_preflight_symbols()
@@ -1055,9 +1077,22 @@ def check_stream_series_freshness(redis_client=None) -> dict[str, Any]:
         )
     )
 
+    source = "stream_series"
+    if not ok and allow_quantdb_fallback:
+        qdb_ok, qdb_detail = _check_quantdb_latest_daily()
+        if qdb_ok:
+            ok = True
+            source = "quantdb_daily"
+            message = (
+                f"Redis 行情时序未接入，回退 QuantDB 日线可用（最近交易日 {qdb_detail}）"
+            )
+        else:
+            message = f"Redis 行情时序未接入且 QuantDB 日线不可用: {qdb_detail}"
+
     return {
         "ok": ok,
         "message": message,
+        "source": source,
         "details": {
             "matched_symbol": matched_symbol,
             "age_seconds": latest_age_sec,
@@ -1067,9 +1102,14 @@ def check_stream_series_freshness(redis_client=None) -> dict[str, Any]:
     }
 
 
-def check_stream_quote_persist_rate(redis_client=None) -> dict[str, Any]:
+def check_stream_quote_persist_rate(
+    redis_client=None, *, allow_quantdb_fallback: bool = False
+) -> dict[str, Any]:
     """
     统一的 Stream 行情落库速率检测逻辑。
+
+    allow_quantdb_fallback=True 时（模拟盘）：落库统计缺失时回退检查 QuantDB
+    最近交易日日线是否可用，模拟撮合引擎直读 QuantDB 可正常撮合。
     """
     try:
         # 获取落库监控 Key (由 stream 服务定时写入)
@@ -1084,6 +1124,23 @@ def check_stream_quote_persist_rate(redis_client=None) -> dict[str, Any]:
             stats_raw = stream_redis.get(key)
 
         if not stats_raw:
+            if allow_quantdb_fallback:
+                qdb_ok, qdb_detail = _check_quantdb_latest_daily()
+                if qdb_ok:
+                    return {
+                        "ok": True,
+                        "message": (
+                            "行情落库统计未接入，回退 QuantDB 日线可用"
+                            f"（最近交易日 {qdb_detail}）"
+                        ),
+                        "source": "quantdb_daily",
+                        "details": {},
+                    }
+                return {
+                    "ok": False,
+                    "message": f"未检测到行情落库统计信息且 QuantDB 日线不可用: {qdb_detail}",
+                    "details": {},
+                }
             return {"ok": False, "message": "未检测到行情落库统计信息", "details": {}}
 
         stats = json.loads(stats_raw)
@@ -1101,6 +1158,7 @@ def check_stream_quote_persist_rate(redis_client=None) -> dict[str, Any]:
         return {
             "ok": ok,
             "message": message,
+            "source": "stream_persist" if ok else "stale",
             "details": stats,
         }
     except Exception as e:

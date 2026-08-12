@@ -325,7 +325,7 @@ const RealTradingPage: React.FC = () => {
             const tradingReadiness = await Promise.race([
                 realTradingService.getTradingPrecheck(mode),
                 new Promise<never>((_, reject) =>
-                    setTimeout(() => reject(new Error('交易准备度检测超时')), 1000)
+                    setTimeout(() => reject(new Error('交易准备度检测超时')), 10000)
                 ),
             ]);
             if (requestSeq !== preflightRequestSeqRef.current) return;
@@ -347,7 +347,7 @@ const RealTradingPage: React.FC = () => {
             const preflight = await Promise.race([
                 realTradingService.preflight(mode, userId, tenantId),
                 new Promise<never>((_, reject) =>
-                    setTimeout(() => reject(new Error('启动前自检超时')), 1000)
+                    setTimeout(() => reject(new Error('启动前自检超时')), 10000)
                 ),
             ]);
             if (requestSeq !== preflightRequestSeqRef.current) return;

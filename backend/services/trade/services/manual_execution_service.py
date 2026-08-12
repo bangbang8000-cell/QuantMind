@@ -83,6 +83,30 @@ def _get_realtime_price(symbol: str) -> float | None:
             return float(price)
     except Exception as e:
         logger.debug(f"[ManualExecution] 获取 {symbol} 实时价格失败: {e}")
+    # 实时快照缺失时回退 QuantDB 本地日线（模拟撮合同源），保证能算出手数
+    return _get_quantdb_last_close(symbol)
+
+
+def _get_quantdb_last_close(symbol: str) -> float | None:
+    """从 QuantDB 本地日线读取最近交易日收盘价（与模拟撮合同源）。"""
+    try:
+        from backend.services.trade.simulation.services.local_market_data import (
+            LocalMarketData,
+        )
+        from backend.shared.stock_utils import StockCodeUtil
+
+        suffix = StockCodeUtil.to_suffix(symbol)
+        if not suffix:
+            return None
+        market_data = LocalMarketData()
+        latest_date = market_data.latest_trade_date()
+        if latest_date is None:
+            return None
+        bar = market_data.get_bar(suffix, latest_date)
+        if bar is not None and bar.close > 0:
+            return float(bar.close)
+    except Exception as e:
+        logger.debug(f"[ManualExecution] 读取 QuantDB 最近收盘价失败 {symbol}: {e}")
     return None
 
 
@@ -566,6 +590,13 @@ def _build_execution_plan_from_signals(
         strategy_params=strategy_params,
         trade_date=trade_date,
     )
+    # 统一 symbol 为 suffix 格式（600036.SH），保证持仓匹配/价格查询/下单一致
+    from backend.shared.stock_utils import StockCodeUtil
+
+    for row in filtered_rows:
+        sym = str(row.get("symbol") or "").strip()
+        if sym:
+            row["symbol"] = StockCodeUtil.to_suffix(sym)
     positions = _normalize_positions((account_snapshot or {}).get("positions"))
     cash = _to_float(
         account_snapshot.get("available_cash") or account_snapshot.get("cash"), 0.0
@@ -659,25 +690,30 @@ def _build_execution_plan_from_signals(
 
         ref_price = row.get("reference_price", 0.0)
         if ref_price <= 0:
-            quantity = 0
-            estimated_notional = 0.0
-            reason = "缺少实时价格，无法估算买入数量"
-        else:
-            lot_size = _resolve_board_lot_size(str(row["symbol"]))
-            quantity = _floor_board_lot(per_slot_budget / ref_price, lot_size)
-            if quantity <= 0:
-                skipped_items.append(
-                    {
-                        "symbol": row["symbol"],
-                        "action": "BUY",
-                        "reason": f"预算不足以买入最小手数 {lot_size} 股",
-                        "source": "buy_signal",
-                    }
-                )
-                continue
-            estimated_notional = round(quantity * ref_price, 2)
-            sequential_budget = max(0.0, sequential_budget - estimated_notional)
-            reason = "按预估可用资金等额分配买入预算"
+            skipped_items.append(
+                {
+                    "symbol": row["symbol"],
+                    "action": "BUY",
+                    "reason": "缺少实时价格，无法估算买入数量",
+                    "source": "buy_signal",
+                }
+            )
+            continue
+        lot_size = _resolve_board_lot_size(str(row["symbol"]))
+        quantity = _floor_board_lot(per_slot_budget / ref_price, lot_size)
+        if quantity <= 0:
+            skipped_items.append(
+                {
+                    "symbol": row["symbol"],
+                    "action": "BUY",
+                    "reason": f"预算不足以买入最小手数 {lot_size} 股",
+                    "source": "buy_signal",
+                }
+            )
+            continue
+        estimated_notional = round(quantity * ref_price, 2)
+        sequential_budget = max(0.0, sequential_budget - estimated_notional)
+        reason = "按预估可用资金等额分配买入预算"
 
         buy_orders.append(
             {
@@ -849,6 +885,37 @@ class ManualExecutionService:
                 tenant_id=tenant_id,
                 user_id=user_id,
             )
+
+    async def _load_simulation_account_snapshot(
+        self, *, tenant_id: str, user_id: str
+    ) -> dict[str, Any] | None:
+        """读取模拟账户快照（simulation:account Redis 缓存），供手动任务模拟模式使用。"""
+        from backend.services.trade.services.simulation_manager import (
+            SimulationAccountManager,
+        )
+
+        uid = str(user_id or "").strip()
+        if not uid.isdigit():
+            return None
+        manager = SimulationAccountManager(get_redis())
+        account = await manager.get_account(int(uid), tenant_id=tenant_id or "default")
+        if not account:
+            return None
+        positions = dict(account.get("positions") or {})
+        cash = _to_float(
+            account.get("available_cash") or account.get("cash"), 0.0
+        )
+        return {
+            "account_id": f"sim-{tenant_id}-{uid}",
+            "snapshot_at": account.get("timestamp"),
+            "total_asset": _to_float(account.get("total_asset"), 0.0),
+            "available_cash": cash,
+            "cash": cash,
+            "market_value": _to_float(account.get("market_value"), 0.0),
+            "position_count": len(positions),
+            "positions": positions,
+            "source": "simulation_account",
+        }
 
     async def _load_user_default_model_record(
         self, *, tenant_id: str, user_id: str
@@ -1120,7 +1187,12 @@ class ManualExecutionService:
                 ),
             }
         latest_model_source = str(latest_run.get("model_source") or "").strip()
+        # 允许的来源：默认模型/显式系统模型，以及"显式指定的恰好就是默认模型"
+        # （用户在前端显式选择默认模型触发推理时 model_source=explicit_model_id，信号来源仍是该默认模型）
         allowed_sources = {"user_default", "explicit_system_model"}
+        run_model_id = str(latest_run.get("model_id") or "").strip()
+        if latest_model_source in {"explicit_model_id", "strategy_binding"} and run_model_id == default_model_id:
+            latest_model_source = "user_default"
         if latest_model_source not in allowed_sources:
             return {
                 "available": False,
@@ -1326,10 +1398,6 @@ class ManualExecutionService:
         note: str | None = None,
     ) -> dict[str, Any]:
         mode = _normalize_trading_mode(trading_mode)
-        if mode != "REAL":
-            raise HTTPException(
-                status_code=400, detail="引导式手动任务首版仅支持 REAL 模式"
-            )
 
         prepared = await self.prepare_manual_execution(
             tenant_id=tenant_id,
@@ -1340,21 +1408,32 @@ class ManualExecutionService:
             trading_mode=mode,
             note=note,
         )
-        async with get_session(read_only=True) as session:
-            from backend.services.trade.routers.real_trading_utils import (
-                _fetch_latest_real_account_snapshot,
-            )
+        if mode == "REAL":
+            async with get_session(read_only=True) as session:
+                from backend.services.trade.routers.real_trading_utils import (
+                    _fetch_latest_real_account_snapshot,
+                )
 
-            account_snapshot = await _fetch_latest_real_account_snapshot(
-                session,
+                account_snapshot = await _fetch_latest_real_account_snapshot(
+                    session,
+                    tenant_id=prepared.tenant_id,
+                    user_id=prepared.user_id,
+                )
+            if not account_snapshot:
+                raise HTTPException(
+                    status_code=400,
+                    detail="未检测到最新实盘账户快照，请先确认 QMT Agent 已上报账户数据",
+                )
+        else:
+            account_snapshot = await self._load_simulation_account_snapshot(
                 tenant_id=prepared.tenant_id,
                 user_id=prepared.user_id,
             )
-        if not account_snapshot:
-            raise HTTPException(
-                status_code=400,
-                detail="未检测到最新实盘账户快照，请先确认 QMT Agent 已上报账户数据",
-            )
+            if not account_snapshot:
+                raise HTTPException(
+                    status_code=400,
+                    detail="未检测到模拟账户，请先启动模拟盘完成账户初始化",
+                )
 
         signal_rows = await self._load_signal_rows(
             tenant_id=prepared.tenant_id,
@@ -2047,56 +2126,92 @@ class ManualExecutionService:
             return
 
         async with get_session() as db:
-            manual_execution_log_stream.append_log(
-                task_id=task_id,
-                tenant_id=tenant_id,
-                user_id=user_id,
-                level="info",
-                stage="validating",
-                line="[链路诊断] 正在检查活跃实盘组合...",
-            )
-
-            stmt = (
-                select(Portfolio)
-                .where(
-                    and_(
-                        Portfolio.tenant_id == tenant_id,
-                        Portfolio.user_id == user_id,
-                        Portfolio.status == "active",
-                        Portfolio.is_deleted.is_(False),
-                    )
-                )
-                .order_by(Portfolio.updated_at.desc())
-                .limit(1)
-            )
-            portfolio = (await db.execute(stmt)).scalar_one_or_none()
-            if not portfolio:
-                error_msg = "当前未发现可用的实盘组合，请先启动实盘策略或完成组合初始化"
+            if trading_mode == "REAL":
                 manual_execution_log_stream.append_log(
                     task_id=task_id,
                     tenant_id=tenant_id,
                     user_id=user_id,
-                    level="error",
+                    level="info",
                     stage="validating",
-                    line=error_msg,
+                    line="[链路诊断] 正在检查活跃实盘组合...",
                 )
-                await manual_execution_persistence.update_task(
-                    task_id=task_id,
-                    status="failed",
-                    stage="validating",
-                    error_stage="portfolio_lookup",
-                    error_message=error_msg,
-                )
-                return
 
-            manual_execution_log_stream.append_log(
-                task_id=task_id,
-                tenant_id=tenant_id,
-                user_id=user_id,
-                level="info",
-                stage="validating",
-                line=f"[链路诊断] 发现活跃组合: {portfolio.name} (ID: {portfolio.id})",
-            )
+                stmt = (
+                    select(Portfolio)
+                    .where(
+                        and_(
+                            Portfolio.tenant_id == tenant_id,
+                            Portfolio.user_id == user_id,
+                            Portfolio.status == "active",
+                            Portfolio.is_deleted.is_(False),
+                        )
+                    )
+                    .order_by(Portfolio.updated_at.desc())
+                    .limit(1)
+                )
+                portfolio = (await db.execute(stmt)).scalar_one_or_none()
+                if not portfolio:
+                    error_msg = "当前未发现可用的实盘组合，请先启动实盘策略或完成组合初始化"
+                    manual_execution_log_stream.append_log(
+                        task_id=task_id,
+                        tenant_id=tenant_id,
+                        user_id=user_id,
+                        level="error",
+                        stage="validating",
+                        line=error_msg,
+                    )
+                    await manual_execution_persistence.update_task(
+                        task_id=task_id,
+                        status="failed",
+                        stage="validating",
+                        error_stage="portfolio_lookup",
+                        error_message=error_msg,
+                    )
+                    return
+            else:
+                # 模拟模式：使用模拟账户，无需实盘组合
+                sim_snapshot = await self._load_simulation_account_snapshot(
+                    tenant_id=tenant_id,
+                    user_id=user_id,
+                )
+                if not sim_snapshot:
+                    error_msg = "未检测到模拟账户，请先启动模拟盘完成账户初始化"
+                    manual_execution_log_stream.append_log(
+                        task_id=task_id,
+                        tenant_id=tenant_id,
+                        user_id=user_id,
+                        level="error",
+                        stage="validating",
+                        line=error_msg,
+                    )
+                    await manual_execution_persistence.update_task(
+                        task_id=task_id,
+                        status="failed",
+                        stage="validating",
+                        error_stage="portfolio_lookup",
+                        error_message=error_msg,
+                    )
+                    return
+                portfolio = None
+
+            if portfolio is not None:
+                manual_execution_log_stream.append_log(
+                    task_id=task_id,
+                    tenant_id=tenant_id,
+                    user_id=user_id,
+                    level="info",
+                    stage="validating",
+                    line=f"[链路诊断] 发现活跃组合: {portfolio.name} (ID: {portfolio.id})",
+                )
+            else:
+                manual_execution_log_stream.append_log(
+                    task_id=task_id,
+                    tenant_id=tenant_id,
+                    user_id=user_id,
+                    level="info",
+                    stage="validating",
+                    line="[链路诊断] 模拟模式使用模拟账户，跳过实盘组合检查",
+                )
 
             execution_plan = (
                 request_json.get("execution_plan")
@@ -2104,19 +2219,27 @@ class ManualExecutionService:
                 else None
             )
             if not execution_plan:
-                async with get_session(read_only=True) as account_session:
-                    from backend.services.trade.routers.real_trading_utils import (
-                        _fetch_latest_real_account_snapshot,
-                    )
+                if trading_mode == "REAL":
+                    async with get_session(read_only=True) as account_session:
+                        from backend.services.trade.routers.real_trading_utils import (
+                            _fetch_latest_real_account_snapshot,
+                        )
 
-                    latest_snapshot = await _fetch_latest_real_account_snapshot(
-                        account_session,
+                        latest_snapshot = await _fetch_latest_real_account_snapshot(
+                            account_session,
+                            tenant_id=tenant_id,
+                            user_id=user_id,
+                        )
+                else:
+                    latest_snapshot = await self._load_simulation_account_snapshot(
                         tenant_id=tenant_id,
                         user_id=user_id,
                     )
                 if not latest_snapshot:
                     error_msg = (
                         "未检测到最新实盘账户快照，请先确认 QMT Agent 已上报账户数据"
+                        if trading_mode == "REAL"
+                        else "未检测到模拟账户，请先启动模拟盘完成账户初始化"
                     )
                     await manual_execution_persistence.update_task(
                         task_id=task_id,
@@ -2341,12 +2464,14 @@ class ManualExecutionService:
                 protect_price_ratio = _manual_task_agent_protect_price_ratio()
                 order_type = "MARKET"
                 quantity = _to_int(row.get("quantity"), 0)
+                # 模拟模式无 QMT Agent 临门查价，直接使用预案参考价成交。
+                order_price = 0.0 if trading_mode == "REAL" else preview_price
 
                 order_payload = {
                     "symbol": symbol,
                     "side": side,
                     "quantity": quantity,
-                    "price": 0.0,
+                    "price": order_price,
                     "client_order_id": f"manual-{task_id[-8:]}-{index:04d}",
                     "order_type": order_type,
                     "trading_mode": trading_mode,
@@ -2514,16 +2639,23 @@ class ManualExecutionService:
                 )
                 snapshot_wait_seconds = 0
 
-                baseline_snapshot = await self._load_latest_account_snapshot(
-                    tenant_id=tenant_id,
-                    user_id=user_id,
+                baseline_snapshot = (
+                    await self._load_latest_account_snapshot(
+                        tenant_id=tenant_id,
+                        user_id=user_id,
+                    )
+                    if trading_mode == "REAL"
+                    else await self._load_simulation_account_snapshot(
+                        tenant_id=tenant_id,
+                        user_id=user_id,
+                    )
                 )
                 baseline_snapshot_at = _parse_iso_datetime(
                     (baseline_snapshot or {}).get("snapshot_at")
                 )
                 next_snapshot: dict[str, Any] | None = baseline_snapshot
 
-                if submitted_sell_orders:
+                if submitted_sell_orders and trading_mode == "REAL":
                     manual_execution_log_stream.append_log(
                         task_id=task_id,
                         tenant_id=tenant_id,
@@ -2654,15 +2786,37 @@ class ManualExecutionService:
                             )
                         )
                 else:
-                    manual_execution_log_stream.append_log(
-                        task_id=task_id,
-                        tenant_id=tenant_id,
-                        user_id=user_id,
-                        level="warning",
-                        stage="dispatching",
-                        status="running",
-                        line="卖单阶段未产生成功提交的卖单，使用当前账户快照继续买单阶段",
-                    )
+                    if trading_mode == "SIMULATION" and submitted_sell_orders:
+                        # 模拟模式：卖单已即时写入模拟账户，无需等待 QMT 上报，
+                        # 直接重新读取模拟账户快照作为买单重算基准。
+                        sim_after_sell = await self._load_simulation_account_snapshot(
+                            tenant_id=tenant_id,
+                            user_id=user_id,
+                        )
+                        if sim_after_sell:
+                            next_snapshot = sim_after_sell
+                            manual_execution_log_stream.append_log(
+                                task_id=task_id,
+                                tenant_id=tenant_id,
+                                user_id=user_id,
+                                level="info",
+                                stage="dispatching",
+                                status="running",
+                                line=(
+                                    "模拟成交已生效，使用最新模拟账户快照继续买单阶段"
+                                    f"（available_cash={_to_float(sim_after_sell.get('available_cash'), 0.0):.2f}）"
+                                ),
+                            )
+                    elif not submitted_sell_orders:
+                        manual_execution_log_stream.append_log(
+                            task_id=task_id,
+                            tenant_id=tenant_id,
+                            user_id=user_id,
+                            level="warning",
+                            stage="dispatching",
+                            status="running",
+                            line="卖单阶段未产生成功提交的卖单，使用当前账户快照继续买单阶段",
+                        )
 
                 if not next_snapshot:
                     error_msg = "未获取到可用账户快照，无法继续买单重算"
@@ -2791,7 +2945,7 @@ class ManualExecutionService:
             buy_cancel_timeout_sec = _manual_task_buy_cancel_timeout_seconds()
             buy_cancel_requested_count = 0
             buy_cancel_targets: list[dict[str, Any]] = []
-            if submitted_buy_orders:
+            if submitted_buy_orders and trading_mode == "REAL":
                 manual_execution_log_stream.append_log(
                     task_id=task_id,
                     tenant_id=tenant_id,

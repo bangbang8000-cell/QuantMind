@@ -256,7 +256,7 @@ class RemoteRedisDataSource(DataSourceAdapter):
             "volume": quote.get("volume"),
             "amount": quote.get("amount"),
             "is_stale": quote.get("is_stale", False),
-            "source": "remote_redis",
+            "source": quote.get("data_source", "remote_redis"),
         }
 
         try:

@@ -28,9 +28,9 @@ export function validateLiveTradeConfig(config: LiveTradeConfig): ValidationIssu
     issues.push({ field: 'buy_time', message: '请选择买入时间' });
   }
 
-  // if (config.sell_time && config.buy_time && config.sell_time >= config.buy_time) {
-  //   issues.push({ field: 'buy_time', message: '买入时间必须晚于卖出时间' });
-  // }
+  if (config.sell_time && config.buy_time && config.sell_time >= config.buy_time) {
+    issues.push({ field: 'buy_time', message: '买入时间必须晚于卖出时间' });
+  }
 
   const enabledSessions = config.enabled_sessions || [];
   if (enabledSessions.length === 0) {

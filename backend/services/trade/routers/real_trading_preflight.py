@@ -421,9 +421,12 @@ async def preflight_check(
 
     # 8~10) Stream 探针：REAL/SHADOW/SIMULATION 均检测行情质量
     if mode in {"REAL", "SHADOW", "SIMULATION"}:
-        # 1. Stream时序序列 (始终阻断)
+        # 1. Stream时序序列 (始终阻断；模拟盘可回退 QuantDB 日线)
         try:
-            res = check_stream_series_freshness(redis_client=redis.client)
+            res = check_stream_series_freshness(
+                redis_client=redis.client,
+                allow_quantdb_fallback=(mode == "SIMULATION"),
+            )
             add_check(
                 "stream_series_freshness",
                 "Stream时序序列",
@@ -441,9 +444,12 @@ async def preflight_check(
                 f"行情检测异常: {e}",
             )
 
-        # 2. Stream行情落库 (始终阻断)
+        # 2. Stream行情落库 (始终阻断；模拟盘可回退 QuantDB 日线)
         try:
-            res = check_stream_quote_persist_rate(redis_client=redis.client)
+            res = check_stream_quote_persist_rate(
+                redis_client=redis.client,
+                allow_quantdb_fallback=(mode == "SIMULATION"),
+            )
             add_check(
                 "stream_quote_persist_rate",
                 "Stream行情落库",
@@ -666,46 +672,23 @@ async def preflight_check(
         )
 
         try:
-            stream_symbols = _resolve_preflight_symbols()
-            stream_redis, stream_redis_host, stream_redis_port = _get_stream_series_redis_client()
-            stream_redis.ping()
-            matched_symbol = None
-            latest_age_sec = None
-            for symbol in stream_symbols:
-                key = f"market:series:{symbol}"
-                latest = stream_redis.zrevrange(key, 0, 0, withscores=True)
-                if latest:
-                    _, score = latest[0]
-                    age = max(0, int(time.time() - float(score)))
-                    if latest_age_sec is None or age < latest_age_sec:
-                        matched_symbol = symbol
-                        latest_age_sec = age
-            stream_ok = latest_age_sec is not None and latest_age_sec < 300
-            threshold_sec = 300
-            # 交易时段（9:15-15:00 工作日）严格检查，非交易时段仅警告
+            # 模拟盘：行情时序缺失/不新鲜时回退 QuantDB 日线兜底
+            res = check_stream_series_freshness(
+                redis_client=redis.client,
+                allow_quantdb_fallback=(mode == "SIMULATION"),
+            )
+            stream_ok = bool(res["ok"])
             is_trading_hours = _is_cn_trading_hours()
             stream_required = is_trading_hours
+            details = dict(res.get("details") or {})
+            details["is_trading_hours"] = is_trading_hours
             add_check(
                 "stream_series_freshness",
                 "实时行情服务",
-                stream_ok if is_trading_hours else True,
+                stream_ok,
                 stream_required,
-                (
-                    f"行情新鲜（{matched_symbol} 延迟 {latest_age_sec}s）"
-                    if stream_ok
-                    else (
-                        f"行情不新鲜（{matched_symbol} 延迟 {latest_age_sec}s > {threshold_sec}s）"
-                        if matched_symbol
-                        else "未发现可用行情序列"
-                    )
-                ),
-                {
-                    "matched_symbol": matched_symbol,
-                    "age_seconds": latest_age_sec,
-                    "threshold_seconds": threshold_sec,
-                    "is_trading_hours": is_trading_hours,
-                    "series_redis": f"{stream_redis_host}:{stream_redis_port}",
-                },
+                res["message"],
+                details,
             )
         except Exception as e:
             is_trading_hours = _is_cn_trading_hours()

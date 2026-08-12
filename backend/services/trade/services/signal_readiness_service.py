@@ -19,6 +19,41 @@ TRADING_PERMISSION_BLOCKED = "blocked"
 class SignalReadinessService:
     """统一判定默认模型最新信号是否可用于自动交易。"""
 
+    @staticmethod
+    def _read_signal_latest_key(
+        redis_key: str,
+        redis_client: Any,
+        *,
+        tenant_id: str,
+        user_id: str,
+    ) -> str:
+        """读取最新信号 Redis 标记。
+
+        标记由 engine 的 EngineSignalStreamPublisher 写入，默认落在 db0
+        （SIGNAL_STREAM_REDIS_DB）。trade 服务传入的 redis_client 可能指向
+        其它 db（如 db2），此时会读不到——降级到 engine 信号流 Redis 读取，
+        保证 DB 权威 run_id 与 Redis 标记对齐。
+        """
+        try:
+            value = str(redis_client.get(redis_key) or "").strip()
+            if value:
+                return value
+        except Exception as exc:
+            logger.warning("读取最新信号 Redis key 失败: %s", exc)
+
+        try:
+            from backend.shared.redis_sentinel_client import get_redis_sentinel_client
+
+            stream_redis = get_redis_sentinel_client()
+            value_raw = stream_redis.get(redis_key)
+            if value_raw is not None:
+                if isinstance(value_raw, bytes):
+                    value_raw = value_raw.decode("utf-8", errors="ignore")
+                return str(value_raw).strip()
+        except Exception as exc:
+            logger.warning("降级读取信号流 Redis 标记失败: %s", exc)
+        return ""
+
     async def evaluate(
         self,
         db: AsyncSession,
@@ -70,25 +105,29 @@ class SignalReadinessService:
             return self._apply_mode_policy(result)
 
         redis_key = f"qm:signal:latest:{tenant}:{uid}"
-        try:
-            redis_latest_run_id = str(redis_client.get(redis_key) or "").strip()
-        except Exception as exc:
-            logger.warning("读取最新信号 Redis key 失败: %s", exc)
-            redis_latest_run_id = ""
+        redis_latest_run_id = self._read_signal_latest_key(
+            redis_key,
+            redis_client,
+            tenant_id=tenant,
+            user_id=uid,
+        )
         result["redis_latest_run_id"] = redis_latest_run_id or None
 
         if redis_latest_run_id and redis_latest_run_id != latest_run_id:
-            result.update(
-                {
-                    "available": False,
-                    "status": "redis_mismatch",
-                    "message": (
-                        "Redis 最新信号批次与默认模型最新完成推理不一致: "
-                        f"redis={redis_latest_run_id}, db={latest_run_id}"
-                    ),
-                }
+            # Redis 标记可能被历史回填推理覆盖（mark_latest_run 无条件更新）。
+            # DB 的 qm_model_inference_runs + engine_signal_scores 才是权威，
+            # 这里把标记同步为 DB 最新 run 后继续正常判定。
+            logger.warning(
+                "Redis 最新信号标记与 DB 不一致，自动同步: redis=%s db=%s",
+                redis_latest_run_id,
+                latest_run_id,
             )
-            return self._apply_mode_policy(result)
+            try:
+                redis_client.set(redis_key, latest_run_id, ex=86400)
+            except Exception as exc:
+                logger.warning("同步 Redis 最新信号标记失败: %s", exc)
+            result["redis_latest_run_id"] = latest_run_id
+            redis_latest_run_id = latest_run_id
 
         if not redis_latest_run_id:
             result.update(

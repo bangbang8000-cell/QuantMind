@@ -470,7 +470,10 @@ async def run_trading_readiness_precheck(
 
         try:
             from backend.services.trade.routers.real_trading_utils import check_stream_series_freshness
-            res = check_stream_series_freshness(redis_client=redis_client)
+            res = check_stream_series_freshness(
+                redis_client=redis_client,
+                allow_quantdb_fallback=(normalized_mode == "SIMULATION"),
+            )
             checks.append(
                 _build_check(
                     "stream_series_freshness",

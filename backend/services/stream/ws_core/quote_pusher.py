@@ -5,6 +5,7 @@ Updated: 2026-02-19 - 接入远程 Redis 行情快照数据源
 """
 
 import asyncio
+import json
 import logging
 import time
 from datetime import datetime, timezone
@@ -17,8 +18,8 @@ from backend.services.stream.market_app.models import Quote
 from backend.services.stream.market_app.services.remote_redis_source import (
     RemoteRedisDataSource,
 )
-from backend.services.stream.market_app.services.opentdx_source import (
-    OpentdxDataSource,
+from backend.services.stream.market_app.services.quantdb_source import (
+    QuantDBDataSource,
 )
 
 from .manager import manager
@@ -27,7 +28,7 @@ logger = logging.getLogger(__name__)
 
 # 全局数据源实例（延迟初始化）
 _remote_redis_source: RemoteRedisDataSource | None = None
-_opentdx_source: OpentdxDataSource | None = None
+_quantdb_source: QuantDBDataSource | None = None
 
 
 def get_remote_redis_source() -> RemoteRedisDataSource:
@@ -37,11 +38,11 @@ def get_remote_redis_source() -> RemoteRedisDataSource:
     return _remote_redis_source
 
 
-def get_opentdx_source() -> OpentdxDataSource:
-    global _opentdx_source
-    if _opentdx_source is None:
-        _opentdx_source = OpentdxDataSource()
-    return _opentdx_source
+def get_quantdb_source() -> QuantDBDataSource:
+    global _quantdb_source
+    if _quantdb_source is None:
+        _quantdb_source = QuantDBDataSource()
+    return _quantdb_source
 
 
 def _as_utc_aware(dt: datetime | None) -> datetime:
@@ -116,10 +117,10 @@ class QuotePusher:
         """
         中心化行情推送循环
         一次性抓取所有被订阅的代码，降低 Redis IO 压力
-        优先 RemoteRedis，缺失时回退 opentdx 直连
+        优先 RemoteRedis 实时快照，缺失时回退 QuantDB 日线兜底
         """
         redis_source = get_remote_redis_source()
-        tdx_source = get_opentdx_source()
+        quantdb_source = get_quantdb_source()
 
         while self.running:
             try:
@@ -128,25 +129,26 @@ class QuotePusher:
                     await asyncio.sleep(1.0)
                     continue
 
-                # 1. 批量抓取行情（优先 Redis）
+                # 1. 批量抓取行情（优先 Redis 实时快照）
                 stock_list = list(self.subscribed_stocks) if self.subscribed_stocks else list(self.warmup_symbols)
                 results = await redis_source.fetch_quotes(stock_list)
 
-                # 2. Redis 未覆盖的标的，用 opentdx 直连补充
+                # 2. Redis 未覆盖的标的，用 QuantDB 本地日线兜底补充
                 fetched_symbols = {r["symbol"] for r in results}
                 missing = [s for s in stock_list if s not in fetched_symbols]
                 if missing:
                     try:
-                        tdx_results = await tdx_source.fetch_quotes(missing)
-                        results.extend(tdx_results)
-                        logger.debug(f"[opentdx] 补充 {len(tdx_results)}/{len(missing)} 只行情")
+                        qdb_results = await quantdb_source.fetch_quotes(missing)
+                        results.extend(qdb_results)
+                        logger.debug(f"[quantdb] 补充 {len(qdb_results)}/{len(missing)} 只行情")
                     except Exception as e:
-                        logger.warning(f"[opentdx] 直连补充行情失败: {e}")
+                        logger.warning(f"[quantdb] 兜底补充行情失败: {e}")
 
                 if self.write_series and results:
                     await self._append_series_points(redis_source, results)
                 if self.persist_to_db and results:
                     await self._persist_quotes(results)
+                    await self._report_persist_stats(len(results))
 
                 # 3. 分发数据
                 for quote in results:
@@ -241,6 +243,38 @@ class QuotePusher:
                 await session.commit()
         except Exception as e:
             logger.error(f"行情落库失败: {e}")
+
+    async def _report_persist_stats(self, count: int) -> None:
+        """更新行情落库速率统计（供模拟盘 preflight 检查行情落库状态）。"""
+        try:
+            redis_client = get_remote_redis_source()._get_client()
+            key = "market:stream:persist_stats"
+            now_ts = time.time()
+            prev_raw = await redis_client.get(key)
+            prev = {}
+            if prev_raw:
+                try:
+                    prev = json.loads(prev_raw)
+                except Exception:
+                    prev = {}
+            prev_ts = float(prev.get("ts", 0) or 0)
+            prev_count = int(prev.get("quotes", 0) or 0)
+            elapsed = max(1.0, now_ts - prev_ts)
+            rps = (count / elapsed) if elapsed > 0 else 0.0
+            await redis_client.set(
+                key,
+                json.dumps(
+                    {
+                        "quotes_per_sec": round(rps, 2),
+                        "quotes": prev_count + count,
+                        "ts": now_ts,
+                        "window": round(elapsed, 1),
+                    }
+                ),
+                ex=1800,
+            )
+        except Exception as e:
+            logger.warning(f"更新行情落库统计失败: {e}")
 
     def _has_quote_changed(self, stock_code: str, new_data: dict[str, Any]) -> bool:
         """

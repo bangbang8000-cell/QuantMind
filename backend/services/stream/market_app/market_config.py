@@ -123,9 +123,9 @@ class Settings(BaseSettings):
     WS_MAX_CONNECTIONS: int = 1000
 
     # Data Sources
-    # 生产环境禁止使用任何模拟/演示数据源；请配置真实数据源（如 eltdx/ifind/tencent/sina）。
-    DATA_SOURCES: list[str] = ["eltdx", "opentdx", "remote_redis", "ifind", "tencent", "sina"]
-    DEFAULT_SOURCE: str = "eltdx"
+    # A 股行情统一走 QuantDB 本地 parquet；remote_redis 保留给后续实时快照接入。
+    DATA_SOURCES: list[str] = ["quantdb", "remote_redis"]
+    DEFAULT_SOURCE: str = "quantdb"
 
     @field_validator("DEFAULT_SOURCE")
     @classmethod
