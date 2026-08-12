@@ -286,19 +286,20 @@ async def _perform_sync(user_id: str):
     svc = get_strategy_storage_service()
     from sqlalchemy import text
 
-    from backend.shared.strategy_storage import get_db
+    from backend.shared.strategy_storage import _ensure_int_user_id, get_db
 
     # 彻底清理残留：如果用户已有"抗下行 Alpha 策略"，则将其移除
     # 避免因名称冲突导致的新模板(多空TopK)无法同步
     def _cleanup_old_templates():
         try:
+            uid_int = _ensure_int_user_id(user_id)
             with get_db() as session:
                 session.execute(
-                    text("DELETE FROM strategies WHERE user_id = :uid AND name = '抗下行 Alpha 策略'"), {"uid": user_id}
+                    text("DELETE FROM strategies WHERE user_id = :uid AND name = '抗下行 Alpha 策略'"), {"uid": uid_int}
                 )
                 session.execute(
                     text("DELETE FROM strategies WHERE user_id = :uid AND parameters->>'strategy_type' = 'downside_alpha'"),
-                    {"uid": user_id},
+                    {"uid": uid_int},
                 )
                 session.commit()
             return True

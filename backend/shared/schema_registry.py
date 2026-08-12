@@ -53,7 +53,6 @@ SCHEMA_SPECS: tuple[SchemaSpec, ...] = (
             "backend.services.api.user_app.models.subscription",
             "backend.services.api.user_app.models.oauth",
             "backend.services.api.user_app.models.payment",
-            "backend.services.api.user_app.models.sms",
             "backend.services.api.user_app.models.notification",
             "backend.services.api.user_app.models.kyc",
             "backend.services.api.user_app.models.rbac",
@@ -85,15 +84,6 @@ SCHEMA_SPECS: tuple[SchemaSpec, ...] = (
             "backend.services.trade.simulation.models.trade",
             "backend.services.trade.simulation.models.fund_snapshot",
             "backend.services.trade.simulation.models.replay",
-        ),
-    ),
-    SchemaSpec(
-        key="engine.core",
-        service="quantmind-engine",
-        base_module="backend.services.engine.models",
-        bootstrap_modules=(
-            "backend.services.engine.models.market_data",
-            "backend.services.engine.models.task",
         ),
     ),
     SchemaSpec(

@@ -462,7 +462,7 @@ class StrategyStorageService:
             """
             params = {"sid": strategy_id}
             if user_id:
-                params["uid"] = user_id
+                params["uid"] = _ensure_int_user_id(user_id)
                 sql += " AND user_id = :uid"
 
             row = session.execute(text(sql), params).fetchone()
@@ -484,10 +484,11 @@ class StrategyStorageService:
             }
 
     async def mark_as_verified(self, strategy_id: str, user_id: str) -> bool:
+        uid_int = _ensure_int_user_id(user_id)
         with get_db() as session:
             session.execute(
                 text("UPDATE strategies SET is_verified = TRUE, updated_at = :now WHERE id = :sid AND user_id = :uid"),
-                {"sid": int(strategy_id), "uid": user_id, "now": datetime.now(timezone.utc)},
+                {"sid": int(strategy_id), "uid": uid_int, "now": datetime.now(timezone.utc)},
             )
             return True
 
@@ -501,6 +502,7 @@ class StrategyStorageService:
             logger.warning("update_lifecycle_status skip non-numeric strategy_id=%s", sid_text)
             return False
         normalized = _normalize_lifecycle_status(status)
+        uid_int = _ensure_int_user_id(user_id)
         with get_db() as session:
             result = session.execute(
                 text("""
@@ -512,7 +514,7 @@ class StrategyStorageService:
                     "status": normalized,
                     "now": datetime.now(timezone.utc),
                     "sid": int(sid_text),
-                    "uid": user_id,
+                    "uid": uid_int,
                     "archived": _STATUS_ARCHIVED,
                 },
             )
@@ -542,10 +544,11 @@ class StrategyStorageService:
                 logger.warning(f"删除COS文件失败 {cos_key}: {e}")
 
         # 3. 从 DB 删除
+        uid_int = _ensure_int_user_id(user_id)
         with get_db() as session:
             session.execute(
                 text("DELETE FROM strategies WHERE id = :sid AND user_id = :uid"),
-                {"sid": int(strategy_id), "uid": user_id}
+                {"sid": int(strategy_id), "uid": uid_int}
             )
         return True
 
@@ -556,7 +559,8 @@ class StrategyStorageService:
         search: str | None = None,
         tags: builtins.list[str] | None = None,
     ) -> builtins.list[dict[str, Any]]:
-        # user_id is already a string (e.g., 'admin'), use directly
+        # strategies.user_id 为整数（users.id），需先解析业务 user_id（如 'admin'）
+        uid_int = _ensure_int_user_id(user_id)
         with get_db() as session:
             has_cos_key = self._has_cos_key_column(session)
             cos_key_expr = "cos_key" if has_cos_key else "NULL::text as cos_key"
@@ -565,7 +569,7 @@ class StrategyStorageService:
                        code_hash, tags, is_verified, execution_config, created_at, updated_at
                 FROM strategies WHERE user_id = :uid AND status != '{_STATUS_ARCHIVED}'
             """
-            rows = session.execute(text(sql), {"uid": user_id}).fetchall()
+            rows = session.execute(text(sql), {"uid": uid_int}).fetchall()
             return [
                 {
                     "id": str(r[0]),

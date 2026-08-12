@@ -466,12 +466,12 @@ def _ensure_database_schema_python():
             sql = f.read()
         with conn.cursor() as cur:
             cur.execute(sql)
-        # 市场分析建表（qm_market_sectors 等，不在 db_init.sql 内）
-        market_sql = "/app/backend/services/api/market_analysis/migrations/001_create_market_analysis.sql"
-        if os.path.isfile(market_sql):
-            with open(market_sql, "r") as f:
-                cur.execute(f.read())
-            logger.info("市场分析表结构自检完成 (Python psycopg2)")
+            # 市场分析建表（qm_market_sectors 等，不在 db_init.sql 内）
+            market_sql = "/app/backend/services/api/market_analysis/migrations/001_create_market_analysis.sql"
+            if os.path.isfile(market_sql):
+                with open(market_sql, "r") as f:
+                    cur.execute(f.read())
+                logger.info("市场分析表结构自检完成 (Python psycopg2)")
         conn.close()
         logger.info("数据库表结构自检完成 (Python psycopg2)")
     except Exception as e:

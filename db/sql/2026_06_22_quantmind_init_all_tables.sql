@@ -121,21 +121,61 @@ CREATE INDEX IF NOT EXISTS idx_sdl_date ON stock_daily_latest (trade_date DESC);
 
 -- ========================
 -- 3. STOCKS (股票主表)
--- NOTE: column names must match seed_a_share_stocks.py: symbol, name, exchange, industry, sector, is_active
+-- NOTE: 兼容 seed_a_share_stocks.py(symbol/name/is_active) 与
+--       stream Symbol / engine StockBasicInfo 模型(stock_code/stock_name/status/market_cap)
 -- ========================
 CREATE TABLE IF NOT EXISTS stocks (
-    symbol          VARCHAR(20) NOT NULL PRIMARY KEY,
-    name            VARCHAR(200) NOT NULL,
+    id              SERIAL PRIMARY KEY,
+    symbol          VARCHAR(20) NOT NULL UNIQUE,
+    name            VARCHAR(200),
+    stock_code      VARCHAR(20),
+    stock_name      VARCHAR(200),
     exchange        VARCHAR(20),
+    market          VARCHAR(20),
     industry        VARCHAR(200),
     sector          VARCHAR(200),
+    market_cap      VARCHAR(50),
+    status          INTEGER DEFAULT 1,
     is_active       BOOLEAN DEFAULT TRUE,
+    list_date       DATE,
     created_at      TIMESTAMP NOT NULL DEFAULT NOW(),
     updated_at      TIMESTAMP NOT NULL DEFAULT NOW()
 );
 
 CREATE INDEX IF NOT EXISTS idx_stocks_name ON stocks (name);
 CREATE INDEX IF NOT EXISTS idx_stocks_exchange ON stocks (exchange);
+
+-- ========================
+-- 3.5 USERS (用户主表)
+-- NOTE: 列定义与 backend/services/api/user_app/models/user.py 的 User 模型一致
+-- ========================
+CREATE TABLE IF NOT EXISTS users (
+    id              SERIAL PRIMARY KEY,
+    user_id         VARCHAR(64) NOT NULL UNIQUE,
+    tenant_id       VARCHAR(64) NOT NULL,
+    username        VARCHAR(128) NOT NULL,
+    email           VARCHAR(255),
+    phone_number    VARCHAR(32),
+    password_hash   VARCHAR(255) NOT NULL,
+    is_active       BOOLEAN DEFAULT TRUE,
+    is_verified     BOOLEAN DEFAULT FALSE,
+    is_admin        BOOLEAN DEFAULT FALSE,
+    is_locked       BOOLEAN DEFAULT FALSE,
+    last_login_at   TIMESTAMPTZ,
+    last_login_ip   VARCHAR(64),
+    login_count     INTEGER DEFAULT 0,
+    created_at      TIMESTAMPTZ DEFAULT NOW(),
+    updated_at      TIMESTAMPTZ DEFAULT NOW(),
+    is_deleted      BOOLEAN DEFAULT FALSE,
+    deleted_at      TIMESTAMPTZ,
+    CONSTRAINT uq_users_tenant_username UNIQUE (tenant_id, username),
+    CONSTRAINT uq_users_tenant_email UNIQUE (tenant_id, email),
+    CONSTRAINT uq_users_tenant_phone UNIQUE (tenant_id, phone_number)
+);
+CREATE INDEX IF NOT EXISTS idx_users_tenant_id ON users (tenant_id);
+CREATE INDEX IF NOT EXISTS idx_users_user_id ON users (user_id);
+CREATE INDEX IF NOT EXISTS idx_users_username ON users (username);
+CREATE INDEX IF NOT EXISTS idx_users_is_deleted ON users (is_deleted);
 
 -- ========================
 -- 4. STOCK_INDUSTRY
@@ -702,23 +742,24 @@ CREATE INDEX IF NOT EXISTS idx_us_user_id ON user_strategies (user_id);
 -- ========================
 DO $$ BEGIN
     -- Create enums if they don't exist
+    -- NOTE: values must match backend/services/trade/models/enums.py（小写）
     IF NOT EXISTS (SELECT 1 FROM pg_type WHERE typname = 'orderside') THEN
-        CREATE TYPE orderside AS ENUM ('BUY', 'SELL');
+        CREATE TYPE orderside AS ENUM ('buy', 'sell');
     END IF;
     IF NOT EXISTS (SELECT 1 FROM pg_type WHERE typname = 'tradeaction') THEN
-        CREATE TYPE tradeaction AS ENUM ('OPEN', 'CLOSE', 'OPEN_REVERSE', 'CLOSE_REVERSE');
+        CREATE TYPE tradeaction AS ENUM ('buy_to_open', 'sell_to_close', 'sell_to_open', 'buy_to_close');
     END IF;
     IF NOT EXISTS (SELECT 1 FROM pg_type WHERE typname = 'positionside') THEN
-        CREATE TYPE positionside AS ENUM ('LONG', 'SHORT');
+        CREATE TYPE positionside AS ENUM ('long', 'short');
     END IF;
     IF NOT EXISTS (SELECT 1 FROM pg_type WHERE typname = 'ordertype') THEN
-        CREATE TYPE ordertype AS ENUM ('MARKET', 'LIMIT', 'STOP', 'STOP_LIMIT');
+        CREATE TYPE ordertype AS ENUM ('market', 'limit', 'stop', 'stop_limit');
     END IF;
     IF NOT EXISTS (SELECT 1 FROM pg_type WHERE typname = 'tradingmode') THEN
         CREATE TYPE tradingmode AS ENUM ('SIMULATION', 'SHADOW', 'REAL');
     END IF;
     IF NOT EXISTS (SELECT 1 FROM pg_type WHERE typname = 'orderstatus') THEN
-        CREATE TYPE orderstatus AS ENUM ('PENDING', 'SUBMITTED', 'PARTIAL_FILL', 'FILLED', 'CANCELLED', 'REJECTED', 'EXPIRED');
+        CREATE TYPE orderstatus AS ENUM ('pending', 'submitted', 'partially_filled', 'filled', 'cancelled', 'rejected', 'expired');
     END IF;
 END $$;
 
@@ -1168,23 +1209,26 @@ CREATE TABLE IF NOT EXISTS quotes (
 
 -- ========================
 -- 49. QUOTE_DAILY_SUMMARIES
+-- NOTE: 列定义与 backend/services/stream/main.py 的归档 SQL 保持一致
 -- ========================
 CREATE TABLE IF NOT EXISTS quote_daily_summaries (
     id              SERIAL PRIMARY KEY,
-    symbol          VARCHAR(20) NOT NULL,
     trade_date      DATE NOT NULL,
+    symbol          VARCHAR(20) NOT NULL,
+    data_source     VARCHAR(20),
     open_price      FLOAT,
     high_price      FLOAT,
     low_price       FLOAT,
     close_price     FLOAT,
-    volume          BIGINT,
-    amount          FLOAT,
-    pre_close       FLOAT,
-    change_pct      FLOAT,
-    turnover_rate   FLOAT,
-    data_source     VARCHAR(20),
+    avg_price       FLOAT,
+    volume_sum      BIGINT,
+    amount_sum      FLOAT,
+    quote_count     INTEGER DEFAULT 0,
+    first_quote_at  TIMESTAMPTZ,
+    last_quote_at   TIMESTAMPTZ,
     created_at      TIMESTAMPTZ DEFAULT NOW(),
-    UNIQUE (symbol, trade_date)
+    updated_at      TIMESTAMPTZ DEFAULT NOW(),
+    UNIQUE (trade_date, symbol, data_source)
 );
 
 -- ========================
