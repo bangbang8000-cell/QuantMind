@@ -109,11 +109,21 @@ async def start_trading(
     try:
         strategy_name = "unknown_strategy"
         mode = str(trading_mode or "SIMULATION").strip().upper()
-        if mode not in {"SIMULATION"}:
+        if mode not in {"SIMULATION", "REAL"}:
             raise HTTPException(
                 status_code=400,
-                detail=f"实盘交易已下线（政策原因），仅支持模拟盘。收到 trading_mode={mode}",
+                detail=f"不支持的交易模式: {mode}。支持 SIMULATION(模拟盘) / REAL(通达信实盘)",
             )
+        # REAL 模式需确认通达信实盘桥已启用
+        if mode == "REAL":
+            enable_real = (
+                os.getenv("ENABLE_REAL_TRADING", "false").strip().lower() == "true"
+            )
+            if not enable_real:
+                raise HTTPException(
+                    status_code=400,
+                    detail="REAL 模式需要设置 ENABLE_REAL_TRADING=true 并配置 TDX 桥，请检查 .env",
+                )
 
         if not strategy_id and not strategy_file:
             raise HTTPException(
@@ -168,7 +178,7 @@ async def start_trading(
 
         readiness = await run_trading_readiness_precheck(
             db,
-            mode="SIMULATION",
+            mode=mode,
             redis_client=redis.client,
             user_id=resolved_user_id,
             tenant_id=resolved_tenant_id,

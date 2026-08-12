@@ -1,0 +1,27 @@
+bridge:
+  name: "bridge-linux"
+  log_level: "INFO"
+
+auth:
+  token: "${BRIDGE_AUTH_TOKEN}"
+
+channels:
+  mode: "auto"
+  http:
+    enabled: true
+    # Windows 交易机 IP
+    host: "192.168.31.39"
+    port: 8550
+    timeout_seconds: 30
+  file_sync:
+    enabled: true
+    # 共享目录挂载点
+    shared_dir: "/mnt/tdx-shared"
+
+failover:
+  primary_channel: "http"
+  fallback_channel: "file_sync"
+  http_max_retries: 3
+  http_retry_delay_ms: 1000
+  health_check_interval_seconds: 10
+  auto_recover_http: true

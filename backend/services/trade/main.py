@@ -241,6 +241,10 @@ app.include_router(simulation_batch.router)
 app.include_router(internal_strategy.router)
 app.include_router(replay_router)
 
+from backend.services.trade.routers.tdx_config import router as tdx_config_router
+
+app.include_router(tdx_config_router, prefix="/api/v1", tags=["TDX-Bridge"])
+
 app.add_middleware(
     CORSMiddleware,
     allow_origins=resolve_cors_origins(logger=logger),

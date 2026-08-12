@@ -8,6 +8,8 @@ import {
   RefreshCw,
   Settings,
   ShieldCheck,
+  Cable,
+  Wifi,
 } from 'lucide-react';
 import { SERVICE_URLS } from '../../../config/services';
 
@@ -28,6 +30,15 @@ interface RotateSecretInfo {
   secret_key: string;
 }
 
+interface TdxConfig {
+  enabled: boolean;
+  bridge_url: string;
+  bridge_token_configured: boolean;
+  real_trading_enabled: boolean;
+  broker_type: string;
+  health?: { status?: string; tdx_connected?: boolean; error?: string } | null;
+}
+
 interface SettingsCenterProps {
   userId: string;
   isActive: boolean;
@@ -46,6 +57,13 @@ const SettingsCenter: React.FC<SettingsCenterProps> = ({ userId, isActive }) => 
   const [showAccessKey, setShowAccessKey] = useState(false);
   const [showSecretKey, setShowSecretKey] = useState(false);
   const [secretKey, setSecretKey] = useState<string | null>(null);
+
+  // 通达信桥配置
+  const [tdxConfig, setTdxConfig] = useState<TdxConfig | null>(null);
+  const [tdxLoading, setTdxLoading] = useState(false);
+  const [tdxNewToken, setTdxNewToken] = useState('');
+  const [tdxNewUrl, setTdxNewUrl] = useState('');
+  const [tdxMsg, setTdxMsg] = useState('');
 
   const handleCopy = async (text: string, key: string) => {
     await navigator.clipboard.writeText(text);
@@ -101,9 +119,51 @@ const SettingsCenter: React.FC<SettingsCenterProps> = ({ userId, isActive }) => 
     }
   };
 
+  const fetchTdxConfig = async () => {
+    setTdxLoading(true);
+    try {
+      const res = await fetch(`${apiGatewayBase}/api/v1/tdx/config`, {
+        headers: authHeader(),
+      });
+      if (res.ok) {
+        const data: TdxConfig = await res.json();
+        setTdxConfig(data);
+        setTdxNewToken('');
+        setTdxNewUrl(data.bridge_url || '');
+      }
+    } catch (e) {
+      console.error('Failed to fetch tdx config', e);
+    } finally {
+      setTdxLoading(false);
+    }
+  };
+
+  const updateTdxConfig = async () => {
+    setTdxLoading(true);
+    setTdxMsg('');
+    try {
+      const payload: Record<string, string> = {};
+      if (tdxNewToken.trim()) payload.bridge_token = tdxNewToken.trim();
+      if (tdxNewUrl.trim()) payload.bridge_url = tdxNewUrl.trim();
+      const res = await fetch(`${apiGatewayBase}/api/v1/tdx/config`, {
+        method: 'POST',
+        headers: authHeader(),
+        body: JSON.stringify(payload),
+      });
+      if (!res.ok) throw new Error('update failed');
+      setTdxMsg('✅ 通达信桥配置已更新');
+      await fetchTdxConfig();
+    } catch (e) {
+      setTdxMsg(`❌ 更新失败: ${e}`);
+    } finally {
+      setTdxLoading(false);
+    }
+  };
+
   useEffect(() => {
     if (!isActive) return;
     fetchBootstrap();
+    fetchTdxConfig();
   }, [isActive, userId]);
 
   if (!isActive) return null;
@@ -207,6 +267,91 @@ const SettingsCenter: React.FC<SettingsCenterProps> = ({ userId, isActive }) => 
               </div>
             </div>
           </div>
+        </div>
+      </div>
+
+      {/* 通达信交易桥卡片 */}
+      <div className="bg-white rounded-3xl border border-gray-200 shadow-sm overflow-hidden mt-4">
+        <div className="p-5 flex flex-col gap-4">
+          <div className="flex items-start justify-between gap-3">
+            <div>
+              <div className="text-sm font-bold text-gray-900 flex items-center">
+                <Cable className="mr-2 text-emerald-600" size={16} />
+                通达信交易桥
+              </div>
+              <div className="text-xs text-gray-500 mt-1">
+                QuantMind 通过桥连接 Windows 通达信，推送选股/下单/拉取账户状态。
+              </div>
+            </div>
+            <button
+              onClick={fetchTdxConfig}
+              disabled={tdxLoading}
+              className="shrink-0 text-xs text-emerald-600 hover:text-emerald-700 font-medium flex items-center gap-1"
+            >
+              <RefreshCw size={14} className={tdxLoading ? 'animate-spin' : ''} />
+              刷新
+            </button>
+          </div>
+
+          {tdxConfig && (
+            <>
+              <div className="flex flex-wrap gap-2">
+                <span className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[11px] font-bold ${tdxConfig.enabled ? 'bg-emerald-100 text-emerald-700' : 'bg-gray-100 text-gray-500'}`}>
+                  <Wifi size={11} />
+                  自动推送: {tdxConfig.enabled ? '开启' : '关闭'}
+                </span>
+                <span className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[11px] font-bold ${tdxConfig.real_trading_enabled ? 'bg-emerald-100 text-emerald-700' : 'bg-gray-100 text-gray-500'}`}>
+                  <ShieldCheck size={11} />
+                  实盘: {tdxConfig.real_trading_enabled ? '开启' : '关闭'}
+                </span>
+                <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[11px] font-bold bg-blue-100 text-blue-700">
+                  桥: {tdxConfig.bridge_url || '-'}
+                </span>
+                <span className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[11px] font-bold ${tdxConfig.bridge_token_configured ? 'bg-green-100 text-green-700' : 'bg-red-100 text-red-700'}`}>
+                  Token: {tdxConfig.bridge_token_configured ? '已配置' : '未配置'}
+                </span>
+              </div>
+
+              {tdxConfig.health && (
+                <div className={`rounded-2xl border px-4 py-3 text-xs ${tdxConfig.health.error ? 'border-red-200 bg-red-50 text-red-700' : 'border-emerald-200 bg-emerald-50 text-emerald-700'}`}>
+                  {tdxConfig.health.error
+                    ? `桥不可达: ${tdxConfig.health.error}`
+                    : `桥在线 · 通达信客户端: ${tdxConfig.health.tdx_connected ? '已连接' : '未登录(17709)'}`}
+                </div>
+              )}
+
+              <div className="space-y-3">
+                <div>
+                  <div className="text-xs text-gray-500 mb-1">桥地址</div>
+                  <input
+                    type="text"
+                    value={tdxNewUrl}
+                    onChange={(e) => setTdxNewUrl(e.target.value)}
+                    placeholder="http://192.168.31.39:8550"
+                    className="w-full px-3 py-2 rounded-xl border border-gray-200 text-sm font-mono focus:outline-none focus:ring-2 focus:ring-emerald-500"
+                  />
+                </div>
+                <div>
+                  <div className="text-xs text-gray-500 mb-1">桥 Token (64位 hex, 与 Windows 侧一致)</div>
+                  <input
+                    type="text"
+                    value={tdxNewToken}
+                    onChange={(e) => setTdxNewToken(e.target.value)}
+                    placeholder="输入新 token (留空则保持现有)"
+                    className="w-full px-3 py-2 rounded-xl border border-gray-200 text-sm font-mono focus:outline-none focus:ring-2 focus:ring-emerald-500"
+                  />
+                </div>
+                {tdxMsg && <div className="text-xs font-medium text-gray-700">{tdxMsg}</div>}
+                <button
+                  onClick={updateTdxConfig}
+                  disabled={tdxLoading || (!tdxNewToken.trim() && !tdxNewUrl.trim())}
+                  className="px-4 py-2 rounded-xl bg-emerald-600 text-white text-xs font-bold hover:bg-emerald-700 disabled:opacity-50"
+                >
+                  保存配置
+                </button>
+              </div>
+            </>
+          )}
         </div>
       </div>
     </div>

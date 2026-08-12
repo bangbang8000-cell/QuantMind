@@ -949,6 +949,234 @@ class RedisBroker(BaseBroker):
         return {}
 
 
+class TdxBroker(BaseBroker):
+    """
+    通达信 (TDX) 交易桥 Broker
+
+    通过 Windows 桥 (bridge-windows, 监听 :8550) 与通达信客户端交互。
+    通达信实盘下单需要用户在客户端手动确认 (Value=1)，本类遵循 Bridge 模式:
+    下单成功返回 Wtbh 作为 exchange_order_id，成交回报由用户确认后由桥回写。
+
+    配置:
+      TDX_BRIDGE_URL  - 桥地址, 如 http://192.168.31.39:8550
+      TDX_BRIDGE_TOKEN - 桥鉴权 token (与 Linux 侧 BRIDGE_AUTH_TOKEN 一致)
+      TDX_ACCOUNT     - 通达信资金账号 (可选, 为空则用默认账号 account_id=0)
+      TDX_ACCOUNT_TYPE - 账号类型, 默认 "stock"
+    """
+
+    def __init__(
+        self,
+        bridge_url: str = "",
+        bridge_token: str = "",
+        account: str = "",
+        account_type: str = "stock",
+        timeout: float = 10.0,
+    ):
+        self.bridge_url = str(bridge_url or os.getenv("TDX_BRIDGE_URL", "")).rstrip("/")
+        self.bridge_token = str(
+            bridge_token or os.getenv("TDX_BRIDGE_TOKEN", "")
+        ).strip()
+        self.account = str(account or os.getenv("TDX_ACCOUNT", "")).strip()
+        self.account_type = str(
+            account_type or os.getenv("TDX_ACCOUNT_TYPE", "stock")
+        ).strip()
+        self.timeout = timeout
+        self._client = None
+        if not self.bridge_url:
+            logger.warning("[TdxBroker] TDX_BRIDGE_URL 未配置")
+
+    async def _get_client(self):
+        if self._client is None:
+            import httpx
+
+            self._client = httpx.AsyncClient(timeout=self.timeout)
+        return self._client
+
+    def _headers(self) -> dict:
+        return {
+            "Content-Type": "application/json; charset=utf-8",
+            "Authorization": f"Bearer {self.bridge_token}",
+        }
+
+    def _std_symbol(self, symbol: str) -> str:
+        """补齐标准代码: 600519 -> 600519.SH, 000001 -> 000001.SZ"""
+        s = str(symbol or "").strip()
+        if not s:
+            return s
+        if "." in s:
+            return s.upper()
+        if s.startswith(("6", "9")):
+            return f"{s}.SH"
+        return f"{s}.SZ"
+
+    async def place_order(
+        self,
+        user_id: int,
+        symbol: str,
+        side: str,
+        quantity: float,
+        order_type: str,
+        price: float | None = None,
+        tenant_id: str = "default",
+        client_order_id: str | None = None,
+        trade_action: str | None = None,
+        position_side: str | None = None,
+        is_margin_trade: bool | None = None,
+    ) -> BrokerResult:
+        if not self.bridge_url:
+            return BrokerResult(success=False, message="TDX_BRIDGE_URL 未配置")
+        if not self.bridge_token:
+            return BrokerResult(success=False, message="TDX_BRIDGE_TOKEN 未配置")
+
+        std_symbol = self._std_symbol(symbol)
+        is_sell = str(side or "").strip().upper() in ("SELL", "S")
+        price_type = 1  # 市价
+        price_value = 0.0
+        if str(order_type or "").strip().upper() in ("LIMIT", "L"):
+            price_type = 0  # 限价
+            price_value = float(price or 0)
+            if price_value <= 0:
+                return BrokerResult(
+                    success=False, message="限价单必须提供价格 (price)"
+                )
+
+        plan_id = str(client_order_id or f"qm_{int(time.time())}_{os.getpid()}")
+        payload = {
+            "plan_id": plan_id,
+            "account": self.account,
+            "account_type": self.account_type,
+            "source": "quantmind",
+            "orders": [
+                {
+                    "stock_code": std_symbol,
+                    "side": "sell" if is_sell else "buy",
+                    "volume": int(float(quantity or 0)),
+                    "order_type": "limit" if price_type == 0 else "market",
+                    "price_type": price_type,
+                    "price": price_value if price_type == 0 else None,
+                }
+            ],
+        }
+        if int(payload["orders"][0]["volume"]) <= 0:
+            return BrokerResult(success=False, message="quantity must be > 0")
+
+        try:
+            client = await self._get_client()
+            resp = await client.post(
+                f"{self.bridge_url}/api/v1/plans/execute",
+                json=payload,
+                headers=self._headers(),
+            )
+            if resp.status_code != 200:
+                return BrokerResult(
+                    success=False,
+                    message=f"桥返回 HTTP {resp.status_code}: {resp.text}",
+                )
+            data = resp.json()
+            if data.get("status") == "duplicate":
+                return BrokerResult(
+                    success=False, message=f"重复计划: {data.get('message')}"
+                )
+            orders = data.get("orders") or []
+            first = orders[0] if orders else {}
+            status = first.get("status", data.get("status", "unknown"))
+            order_id = first.get("order_id", "")
+
+            if status in ("rejected", "error"):
+                return BrokerResult(
+                    success=False,
+                    message=first.get("message") or data.get("message") or "下单被拒",
+                )
+
+            # Bridge 模式: 已提交/待确认, 返回 Wtbh 作为 exchange_order_id
+            return BrokerResult(
+                success=True,
+                exchange_order_id=order_id,
+                message=f"TDX 已受理: {first.get('message') or status}",
+            )
+        except Exception as e:
+            logger.error("[TdxBroker] place_order failed: %s", e)
+            return BrokerResult(success=False, message=str(e))
+
+    async def query_account(
+        self, user_id: str, tenant_id: str = "default"
+    ) -> dict[str, Any]:
+        if not self.bridge_url:
+            return {}
+        try:
+            client = await self._get_client()
+            resp = await client.post(
+                f"{self.bridge_url}/api/v1/account/query",
+                json={"account": self.account, "account_type": self.account_type},
+                headers=self._headers(),
+            )
+            if resp.status_code != 200:
+                logger.warning(
+                    "[TdxBroker] query_account HTTP %s: %s",
+                    resp.status_code,
+                    resp.text,
+                )
+                return {}
+            data = resp.json() or {}
+            asset = data.get("asset") or {}
+            positions = data.get("positions") or []
+            return {
+                "broker": "tdx",
+                "available_cash": asset.get("cash", 0),
+                "balance": asset.get("balance", 0),
+                "total_asset": asset.get("asset", 0),
+                "market_value": asset.get("market_value", 0),
+                "positions": positions,
+            }
+        except Exception as e:
+            logger.error("[TdxBroker] query_account failed: %s", e)
+            return {}
+
+    async def cancel_order(self, exchange_order_id: str, **kwargs) -> bool:
+        if not self.bridge_url:
+            return False
+        symbol = self._std_symbol(kwargs.get("symbol", ""))
+        try:
+            client = await self._get_client()
+            resp = await client.post(
+                f"{self.bridge_url}/api/v1/orders/cancel",
+                json={
+                    "account": self.account,
+                    "account_type": self.account_type,
+                    "stock_code": symbol,
+                    "order_id": str(exchange_order_id),
+                },
+                headers=self._headers(),
+            )
+            if resp.status_code != 200:
+                logger.warning(
+                    "[TdxBroker] cancel_order HTTP %s: %s", resp.status_code, resp.text
+                )
+                return False
+            data = resp.json() or {}
+            return bool(data.get("success"))
+        except Exception as e:
+            logger.error("[TdxBroker] cancel_order failed: %s", e)
+            return False
+
+    async def query_quote(self, symbol: str) -> dict[str, Any]:
+        """用通达信快照接口取最新价."""
+        if not self.bridge_url:
+            return {}
+        try:
+            client = await self._get_client()
+            resp = await client.get(
+                f"{self.bridge_url}/api/v1/health", headers=self._headers()
+            )
+            if resp.status_code != 200:
+                return {}
+            # 行情走共享/桥的 get_market_snapshot; 简单返回空, 让上层走 stream 行情
+            return {}
+        except Exception as e:
+            logger.error("[TdxBroker] query_quote failed for %s: %s", symbol, e)
+            return {}
+
+
 def create_broker(enable_real: bool, **kwargs) -> BaseBroker:
     """
     工厂方法：根据配置创建 Broker 实例。
@@ -1000,9 +1228,19 @@ def create_broker(enable_real: bool, **kwargs) -> BaseBroker:
                 or get_internal_call_secret(),
                 redis_client=kwargs.get("redis_client"),
             )
+        if broker_type == "tdx":
+            return TdxBroker(
+                bridge_url=kwargs.get("tdx_bridge_url")
+                or os.getenv("TDX_BRIDGE_URL", ""),
+                bridge_token=kwargs.get("tdx_bridge_token")
+                or os.getenv("TDX_BRIDGE_TOKEN", ""),
+                account=kwargs.get("tdx_account") or os.getenv("TDX_ACCOUNT", ""),
+                account_type=kwargs.get("tdx_account_type")
+                or os.getenv("TDX_ACCOUNT_TYPE", "stock"),
+            )
         raise ValueError(
             f"[create_broker] 未知 broker_type='{broker_type}'，"
-            "有效值: 'bridge'（默认）, 'redis', 'qmt'。请检查 REAL_BROKER_TYPE 环境变量配置。"
+            "有效值: 'bridge'（默认）, 'redis', 'qmt', 'tdx'。请检查 REAL_BROKER_TYPE 环境变量配置。"
         )
 
     # Inject Simulation Manager

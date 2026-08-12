@@ -142,6 +142,9 @@ redis/data/appendonlydir/appendonly.aof.2.incr.aof
 # Windows specific build artifacts
 *.exe
 *.msi
+# 通达信交易桥 Windows 端（TDXBridge.exe）需要纳入版本管理
+!tools/bridge-windows/dist/TDXBridge.exe
+!tools/bridge-windows/dist/config.yaml
 electron/public/fonts/AlibabaPuHuiTi-Bold.ttf
 electron/public/fonts/AlibabaPuHuiTi-Regular.ttf
 data/ai_ide/config.json

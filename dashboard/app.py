@@ -2,7 +2,10 @@
 QuantMind 数据看板 — Streamlit 主入口
 
 首页展示市场概览：大盘指数、涨跌分布、资金流向。
+侧边栏提供全局交易模式切换（模拟盘 / 实盘通达信桥）。
 """
+
+import os
 
 import streamlit as st
 import pandas as pd
@@ -122,6 +125,25 @@ def render_market_overview():
 with st.sidebar:
     st.image("https://img.shields.io/badge/QuantMind-Dashboard-blue", width=180)
     st.markdown("---")
+
+    # 全局交易模式切换 (REAL/SIMULATION)
+    st.markdown("### ⚙️ 交易模式")
+    mode_options = {"SIMULATION": "模拟盘", "REAL": "实盘(通达信)"}
+    current_mode = st.session_state.get("trading_mode", "SIMULATION")
+    selected = st.radio(
+        "交易模式",
+        list(mode_options.keys()),
+        format_func=lambda x: mode_options[x],
+        index=list(mode_options.keys()).index(current_mode)
+        if current_mode in mode_options else 0,
+        key="trading_mode_radio",
+    )
+    st.session_state.trading_mode = selected
+    if selected == "REAL":
+        st.caption(f"通达信桥: {os.getenv('TDX_BRIDGE_URL', 'http://192.168.31.39:8550')}")
+        st.caption("实盘下单需通达信客户端确认")
+    st.markdown("---")
+
     st.markdown("### 数据源状态")
     try:
         from services.quantmind_db import check_connection

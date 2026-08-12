@@ -54,17 +54,35 @@ class TradingEngine:
 
     def _get_broker(self, trading_mode: TradingMode) -> BaseBroker:
         """
-        按订单 trading_mode 取 broker（实盘通道已下线，统一走本地模拟撮合）。
+        按订单 trading_mode 取 broker:
+          - REAL/SHADOW 且启用 TDX 实盘桥 → TdxBroker (通达信)
+          - 其余 (SIMULATION/BACKTEST) → PaperTradingBroker (本地模拟撮合)
+        通过缓存避免重复构造。
         """
         mode = (trading_mode or TradingMode.SIMULATION).value
-        if mode in self._broker_cache:
-            return self._broker_cache[mode]
+        cache_key = f"{mode}:{getattr(settings, 'REAL_BROKER_TYPE', 'paper')}"
+        if cache_key in self._broker_cache:
+            return self._broker_cache[cache_key]
 
-        broker = create_broker(
-            redis_client=self.redis,
-            market_url=getattr(settings, "MARKET_DATA_SERVICE_URL", "http://stream-gateway:8003"),
-        )
-        self._broker_cache[mode] = broker
+        enable_real = getattr(settings, "ENABLE_REAL_TRADING", False)
+        if mode in ("REAL", "SHADOW") and enable_real:
+            broker = create_broker(
+                enable_real=True,
+                broker_type=getattr(settings, "REAL_BROKER_TYPE", "tdx"),
+                redis_client=self.redis,
+                market_url=getattr(
+                    settings, "MARKET_DATA_SERVICE_URL", "http://stream-gateway:8003"
+                ),
+            )
+        else:
+            broker = create_broker(
+                enable_real=False,
+                redis_client=self.redis,
+                market_url=getattr(
+                    settings, "MARKET_DATA_SERVICE_URL", "http://stream-gateway:8003"
+                ),
+            )
+        self._broker_cache[cache_key] = broker
         return broker
 
     async def submit_order(self, order: Order, *, tenant_id: str = "default") -> dict:

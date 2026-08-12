@@ -15,14 +15,14 @@ import type { RealTradingStatus, AccountInfo, PreflightCheckResponse, PreflightC
 import { authService } from '../../features/auth/services/authService';
 import type { StrategyFile } from '../../types/backtest/strategy';
 import { useAppSelector } from '../../store';
-import { selectCurrentMarket } from '../../store/slices/uiSlice';
+import { selectCurrentMarket, selectTradingMode } from '../../store/slices/uiSlice';
 import { getMarketConfig } from '../../config/marketConfig';
 import { useTradeWebSocket } from '../../hooks/useTradeWebSocket';
 import { buildTradingTopBarAccountInfo, resolveTradingAccountMode } from './utils/accountAdapter';
 import LiveTradeConfigWizard from './components/LiveTradeConfigWizard';
 import type { DeployMode, ExecutionConfig, LiveTradeConfig } from '../../types/liveTrading';
 
-type TradingMode = 'simulation';  // 仅支持模拟盘（实盘通道因政策原因已下线）
+type TradingMode = 'real' | 'simulation';  // 支持实盘(通达信桥)与模拟盘
 type ActiveTab = 'manage' | 'manual-task' | 'personal' | 'position' | 'history' | 'settings' | 'replay';
 type PreflightStage = 'trading-readiness' | 'preflight';
 type PendingDeploy = {
@@ -88,7 +88,7 @@ const RealTradingPage: React.FC = () => {
         }
         return 'user_1001';
     });
-    const tradingMode: TradingMode = 'simulation';  // 仅模拟盘
+    const tradingMode: TradingMode = useAppSelector(selectTradingMode);
     const [status, setStatus] = useState<RealTradingStatus | null>(null);
     const [accountInfo, setAccountInfo] = useState<AccountInfo | null>(null);
     const [preflightResult, setPreflightResult] = useState<PreflightCheckResponse | null>(null);
@@ -110,10 +110,6 @@ const RealTradingPage: React.FC = () => {
     const [isRevealing, setIsRevealing] = useState(false);
     const preflightRequestSeqRef = useRef(0);
     const isFetchingRef = useRef(false);
-
-    useEffect(() => {
-        // 模拟盘模式固定，无需记忆切换
-    }, []);
 
     const fetchData = useCallback(async () => {
         if (isFetchingRef.current) return;
@@ -219,8 +215,8 @@ const RealTradingPage: React.FC = () => {
     const strategyStatus: 'running' | 'starting' | 'stopped' = runtimeStatus === 'running'
         ? 'running'
         : (runtimeStatus === 'starting' ? 'starting' : 'stopped');
-    const resolvedRunMode: 'SIMULATION' | undefined = isRuntimeActive
-        ? 'SIMULATION'
+    const resolvedRunMode: DeployMode | undefined = isRuntimeActive
+        ? (tradingMode === 'real' ? 'REAL' : 'SIMULATION')
         : undefined;
     const resolvedOrchestrationMode: 'docker' | 'k8s' | undefined = isRuntimeActive
         ? status?.orchestration_mode
@@ -259,7 +255,7 @@ const RealTradingPage: React.FC = () => {
                 setEffectiveLiveTradeConfig(startResp.effective_live_trade_config);
             }
 
-            const modeText = '模拟盘';
+            const modeText = tradingMode === 'real' ? '实盘(通达信)' : '模拟盘';
             const permissionText = startResp?.trading_permission === 'observe_only'
                 ? '（观察态，不自动下单）'
                 : '';
@@ -292,7 +288,7 @@ const RealTradingPage: React.FC = () => {
         isShadow: boolean,
         strategy?: StrategyFile | null,
     ) => {
-        const mode: DeployMode = 'SIMULATION';
+        const mode: DeployMode = tradingMode === 'real' ? 'REAL' : 'SIMULATION';
         setWizardStrategy(strategy || { id: strategyId, name: strategyId, source: 'personal', code: '' });
         setWizardMode(mode);
         setWizardOpen(true);
@@ -408,8 +404,8 @@ const RealTradingPage: React.FC = () => {
 
     const confirmStartLabel = useMemo(() => {
         if (!pendingDeploy) return '确认并启动';
-        return '确认并启动模拟盘';
-    }, [pendingDeploy]);
+        return tradingMode === 'real' ? '确认并启动实盘(通达信)' : '确认并启动模拟盘';
+    }, [pendingDeploy, tradingMode]);
 
     // 检测结果全部展示，不做逐项 reveal（加快加载速度）
     useEffect(() => {
@@ -474,16 +470,28 @@ const RealTradingPage: React.FC = () => {
 
     return (
         <div className="flex flex-col h-full bg-[#f8fafc] p-4 gap-3 font-sans">
-            {/* 模拟盘声明 —— 政策原因实盘通道已下线，须让用户一眼看到 */}
-            <div className="shrink-0 flex items-start gap-2.5 px-4 py-2.5 rounded-xl bg-amber-50 border border-amber-200">
-                <AlertTriangle size={16} className="text-amber-600 shrink-0 mt-0.5" />
-                <p className="text-xs leading-relaxed text-amber-900">
-                    <span className="font-semibold">模拟盘</span>
-                    ：本页全部委托均为本地模拟撮合，基于 quantdb 历史行情与 A 股规则（T+1、涨跌停、停牌、整手、佣金印花税）计算，
-                    <span className="font-semibold">不接入任何真实资金或券商通道</span>
-                    。模拟结果不代表真实收益，不构成投资建议。
-                </p>
-            </div>
+            {/* 交易模式声明 —— 模拟盘或实盘(通达信) */}
+            {tradingMode === 'real' ? (
+                <div className="shrink-0 flex items-start gap-2.5 px-4 py-2.5 rounded-xl bg-emerald-50 border border-emerald-200">
+                    <AlertTriangle size={16} className="text-emerald-600 shrink-0 mt-0.5" />
+                    <p className="text-xs leading-relaxed text-emerald-900">
+                        <span className="font-semibold">实盘(通达信)</span>
+                        ：本页委托通过通达信交易桥下达到 Windows 通达信客户端，
+                        <span className="font-semibold">实盘下单需在通达信客户端手动确认</span>
+                        。请确保 Windows 桥已启动、通达信已登录交易账号。
+                    </p>
+                </div>
+            ) : (
+                <div className="shrink-0 flex items-start gap-2.5 px-4 py-2.5 rounded-xl bg-amber-50 border border-amber-200">
+                    <AlertTriangle size={16} className="text-amber-600 shrink-0 mt-0.5" />
+                    <p className="text-xs leading-relaxed text-amber-900">
+                        <span className="font-semibold">模拟盘</span>
+                        ：本页全部委托均为本地模拟撮合，基于 quantdb 历史行情与 A 股规则（T+1、涨跌停、停牌、整手、佣金印花税）计算，
+                        <span className="font-semibold">不接入任何真实资金或券商通道</span>
+                        。模拟结果不代表真实收益，不构成投资建议。
+                    </p>
+                </div>
+            )}
 
             {/* Top Section - Account Overview (collapsible) */}
             <div className="shrink-0 bg-white rounded-2xl shadow-sm border border-gray-100 overflow-hidden">
@@ -524,12 +532,12 @@ const RealTradingPage: React.FC = () => {
                         ))}
                     </div>
 
-                    {/* Bottom Help Center + Simulation Badge */}
+                    {/* Bottom Help Center + Trading Mode Badge */}
                     <div className="p-4 border-t border-gray-200 shrink-0 relative">
                         <div className="flex items-center justify-between gap-1">
                             <HelpCenterLink className="whitespace-nowrap flex-1" />
-                            <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg bg-blue-50 text-blue-700 text-xs font-semibold border border-blue-100">
-                                模拟盘
+                            <span className={`inline-flex items-center gap-1 px-2.5 py-1 rounded-lg text-xs font-semibold border ${tradingMode === 'real' ? 'bg-emerald-50 text-emerald-700 border-emerald-200' : 'bg-blue-50 text-blue-700 border-blue-100'}`}>
+                                {tradingMode === 'real' ? '实盘(通达信)' : '模拟盘'}
                             </span>
                         </div>
                     </div>

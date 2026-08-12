@@ -65,9 +65,16 @@ class Settings(BaseSettings):
     ENABLE_REAL_TRADING: bool = (
         os.getenv("ENABLE_REAL_TRADING", "false").lower() == "true"
     )
+    REAL_BROKER_TYPE: str = os.getenv("REAL_BROKER_TYPE", "tdx")
     ORDER_TIMEOUT: int = 30  # seconds
     MAX_ORDER_SIZE: float = 1000000.0  # max order value
     MIN_ORDER_SIZE: float = 100.0  # min order value
+
+    # 通达信 (TDX) 交易桥配置
+    TDX_BRIDGE_URL: str = os.getenv("TDX_BRIDGE_URL", "http://192.168.31.39:8550")
+    TDX_BRIDGE_TOKEN: str = os.getenv("TDX_BRIDGE_TOKEN", "")
+    TDX_ACCOUNT: str = os.getenv("TDX_ACCOUNT", "")
+    TDX_ACCOUNT_TYPE: str = os.getenv("TDX_ACCOUNT_TYPE", "stock")
 
     # Trade Command Stream（指令通道，替换原 Pub/Sub）
     # key 格式：{TRADE_CMD_STREAM_PREFIX}:{platform_user_id}

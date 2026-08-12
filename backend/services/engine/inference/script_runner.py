@@ -1395,6 +1395,45 @@ class InferenceScriptRunner:
             logger.info(
                 f"[InferenceScriptRunner] 已发布 {published} 条信号, run_id={run_id}"
             )
+
+            # === 推送到通达信 (选股信号 + 消息提醒) ===
+            if os.getenv("ENABLE_TDX_PUSH", "").strip().lower() == "true":
+                try:
+                    import asyncio
+
+                    from backend.services.trade.services.tdx_push_service import (
+                        TdxPushError,
+                        tdx_pusher,
+                    )
+
+                    # 组装通达信板块代码列表 (标准化为 600519.SH 格式)
+                    push_stocks = [
+                        (s.get("symbol") or "").replace("sh", "").replace("sz", "").upper()
+                        + (".SH" if (s.get("symbol") or "").startswith("sh") else
+                           ".SZ" if (s.get("symbol") or "").startswith("sz") else "")
+                        for s in signal_events
+                        if s.get("symbol")
+                    ]
+                    push_stocks = [s for s in push_stocks if "." in s]
+
+                    async def _push_to_tdx():
+                        if push_stocks:
+                            await tdx_pusher.push_signals_to_block(
+                                push_stocks, block_code="",
+                                block_name="QuantMind今日选股", show=True)
+                        await tdx_pusher.push_message(
+                            f"MSG,QuantMind 今日选股 {len(push_stocks)} 只|"
+                            f"预测日期 {prediction_trade_date}|run_id {run_id}"
+                        )
+                        logger.info(
+                            f"[InferenceScriptRunner] 已推送 {len(push_stocks)} 只选股到通达信"
+                        )
+
+                    asyncio.create_task(_push_to_tdx())
+                except (TdxPushError, Exception) as exc:
+                    logger.warning(
+                        f"[InferenceScriptRunner] 推送通达信失败（不影响结果）: {exc}"
+                    )
         except Exception as exc:
             logger.warning(
                 f"[InferenceScriptRunner] 信号发布失败（不影响 DB 结果）: {exc}"
