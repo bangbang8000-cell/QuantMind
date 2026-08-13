@@ -2698,33 +2698,43 @@ def select_top_factors(
 
     # 按日均值（向量化 transform）
     day_mean = ranked_df.groupby("trade_date")[rank_cols].transform("mean")
-
-    # 中心化（rank 后减当日均值）
     centered = ranked_df[rank_cols] - day_mean[rank_cols]
 
     # 每日有效样本数（按 label 计，用于 <30 过滤）
     day_count = df.groupby("trade_date")[label_col].transform("count")
+    mask = day_count >= 30
+
+    # 批量向量化：对全部特征一次算逐日 IC。
+    # 利用 Spearman IC = cov(rank_f, rank_l)/(σf·σl)，用 groupby 聚合列对。
+    # 特征×label 乘积和 与 特征² 一起批量计算，避免 per-feature groupby 全表扫描。
+    cent_eff = centered.where(mask, 0.0)
+    # 每日特征均值（中心化后应≈0，但缺失值导致偏差，重新按有效算）
+    label_rank = centered[label_col]
+    feat_block = centered[features]
+
+    # 协方差分子: Σ(x·y)/n 按日 —— 批量：groupby.sum 一次算所有 特征×label
+    prod_block = feat_block.mul(label_rank, axis=0)  # 每特征 × label（逐行乘积）
+    n_per_day = mask.groupby(df["trade_date"]).transform("sum")  # 每日有效行数
+    denom = np.maximum(n_per_day.where(mask), 1e-9)
+
+    cov_num = prod_block.where(mask).groupby(ranked_df["trade_date"]).sum().div(
+        denom.groupby(df["trade_date"]).first().reindex(
+            prod_block.where(mask).groupby(ranked_df["trade_date"]).sum().index
+        ), axis=0
+    )
+    # 方差: Σ(x²)/n
+    var_f = feat_block.pow(2).where(mask).groupby(ranked_df["trade_date"]).mean()
+    var_l = (label_rank.pow(2)).where(mask).groupby(ranked_df["trade_date"]).mean()
+    std_f = np.sqrt(np.maximum(var_f, 0))
+    std_l = np.sqrt(np.maximum(var_l, 0)).reindex(std_f.index)
+
+    # 逐日 IC 矩阵 [日期 × 特征]
+    ic_matrix = cov_num.div(std_f.mul(std_l, axis=0), axis=0).replace([np.inf, -np.inf], np.nan)
 
     ic_results: dict[str, dict] = {}
     for feat in features:
-        # 有效行：该特征与 label 均非空
-        valid = df[feat].notna() & df[label_col].notna()
-        cnt = valid.groupby(df["trade_date"]).transform("sum")
-        mask = cnt >= 30
-
-        # 逐日协方差（分母=该特征每天实际有效行数）
-        prod = (centered[feat] * centered[label_col]).where(mask & valid)
-        cov_daily = prod.groupby(ranked_df["trade_date"]).sum() / np.maximum(
-            valid.where(mask).groupby(df["trade_date"]).sum(), 1e-9
-        )
-        # 逐日方差（总体标准差 ddof=0，与 spearmanr 一致）
-        var_f = (centered[feat] ** 2).where(mask & valid).groupby(ranked_df["trade_date"]).mean()
-        var_l = (centered[label_col] ** 2).where(mask & valid).groupby(ranked_df["trade_date"]).mean()
-        std_f = np.sqrt(np.maximum(var_f, 0))
-        std_l = np.sqrt(np.maximum(var_l, 0))
-        daily_ics = (cov_daily / (std_f * std_l + 1e-12)).replace([np.inf, -np.inf], np.nan).dropna()
-        daily_ics = daily_ics[daily_ics.abs() <= 1.0]  # 过滤数值异常
-
+        daily_ics = ic_matrix[feat].dropna()
+        daily_ics = daily_ics[daily_ics.abs() <= 1.0]
         if len(daily_ics) < 20:
             ic_results[feat] = {"ic_mean": 0.0, "icir": 0.0, "ic_positive_rate": 0.0, "n_days": len(daily_ics)}
             continue
