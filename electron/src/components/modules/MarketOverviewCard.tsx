@@ -18,14 +18,15 @@ const MARKET_LABELS: Record<MarketId, string> = {
 
 export const MarketOverviewCard: React.FC = () => {
   const currentMarket = useAppSelector(selectCurrentMarket);
-  const { data, loading, error } = useMarketData({ market: currentMarket });
+  const { data, loading, error, timedOut } = useMarketData({ market: currentMarket, timeoutMs: 1000 });
 
   // 市场默认数据
   const fallbackData: Partial<MarketIndex>[] = (MARKET_INDICES[currentMarket] || MARKET_INDICES.CN).map(
     ({ name, basePrice }) => ({ name, price: basePrice, change: 0, changePercent: 0 })
   );
 
-  if (loading) {
+  // 超时：直接显示 0，不再等待 loading
+  if (loading && !timedOut) {
     return <MarketOverviewSkeleton />;
   }
 
@@ -33,7 +34,10 @@ export const MarketOverviewCard: React.FC = () => {
     console.error('获取市场数据出错:', error);
   }
 
-  const displayData = (data?.indices || fallbackData) as MarketIndex[];
+  // 超时未取到数据时，指数价格/涨跌幅统一显示 0
+  const displayData = timedOut
+    ? fallbackData.map(({ name }) => ({ name, price: 0, change: 0, changePercent: 0, amount: undefined }))
+    : (data?.indices || fallbackData) as MarketIndex[];
   const stats = data?.stats;
   const upCount = stats?.up ?? displayData.filter((x) => (x.changePercent ?? 0) > 0).length;
   const downCount = stats?.down ?? displayData.filter((x) => (x.changePercent ?? 0) < 0).length;
@@ -42,11 +46,15 @@ export const MarketOverviewCard: React.FC = () => {
   const lastUpdate = data?.lastUpdate ? String(data.lastUpdate).slice(0, 10) : '';
   const isRealData = Boolean(data?.sourceUsed) || (data?.indices && data.indices.length > 0 && data.indices.some((x) => x.change !== 0));
 
+  // 固定渲染 5 行，数据不足时补占位行，保证各市场卡片高度一致
+  const viewRows = displayData.slice(0, 5);
+  const placeholderCount = Math.max(5 - viewRows.length, 0);
+
   return (
     <Card title={`${MARKET_LABELS[currentMarket]}概览`} height="100%" background="market">
-      <div className="flex flex-col h-full py-1 gap-2">
+      <div className="flex flex-col h-full py-1 gap-1">
         {/* 市场状态横幅 */}
-        <div className={`flex items-center justify-between px-3 py-2 rounded-lg border ${
+        <div className={`flex items-center justify-between px-3 py-1.5 rounded-lg border ${
           trend === 'up'
             ? 'bg-red-50 border-red-100'
             : trend === 'down'
@@ -76,59 +84,73 @@ export const MarketOverviewCard: React.FC = () => {
         </div>
 
         {/* 市场数据项 - 优化布局 */}
-        {displayData.slice(0, 6).map((item, index) => {
+        {viewRows.map((item, index) => {
           const pct = item.changePercent ?? 0;
           const isUp = pct > 0;
           const isDown = pct < 0;
-          // 迷你涨跌柱：按涨跌幅比例缩放（最大 ±5%）
-          const barWidth = Math.min(Math.abs(pct) / 5 * 100, 100);
           return (
             <div
               key={index}
               className="
-                flex items-center justify-between px-3 py-2 rounded-lg
+                flex items-center justify-between px-3 py-1 rounded-lg
                 bg-slate-50 border border-slate-100/80
                 transition-all duration-200 hover:bg-slate-100 hover:shadow-sm
               "
             >
-              {/* 股票名称 */}
-              <div className="text-sm font-bold text-slate-700 min-w-[70px]">
-                {item.name}
+              {/* 股票名称 - 固定宽度 + 单行省略，防止长名称换行导致行高不同 */}
+              <div className="text-sm font-bold text-slate-700 w-[88px] truncate shrink-0">
+                <span className="inline-block w-[88px] overflow-hidden text-ellipsis whitespace-nowrap" title={item.name}>
+                  {item.name}
+                </span>
               </div>
 
-              {/* 迷你涨跌柱 */}
-              <div className="flex-1 flex items-center gap-1.5 mx-2">
-                <div className="h-1.5 flex-1 rounded-full bg-slate-200/70 overflow-hidden">
-                  <div
-                    className={`h-full rounded-full ${isUp ? 'bg-[var(--profit-primary)]' : isDown ? 'bg-[var(--loss-primary)]' : 'bg-slate-400'}`}
-                    style={{ width: isUp || isDown ? `${barWidth}%` : '0%' }}
-                  />
-                </div>
-                <span className={`text-[10px] font-mono font-bold w-[52px] text-right ${
+              {/* 涨跌幅 - 传统百分比居中显示 */}
+              <div className="flex-1 flex items-center justify-center mx-2 min-w-0">
+                <span className={`text-sm font-bold font-mono whitespace-nowrap ${
                   isUp ? 'text-[var(--profit-primary)]' : isDown ? 'text-[var(--loss-primary)]' : 'text-slate-500'
                 }`}>
                   {pct > 0 ? '+' : ''}{pct.toFixed(2)}%
                 </span>
               </div>
 
-              {/* 价格 + 成交额 */}
-              <div className="text-right min-w-[90px]">
-                <div className="text-sm font-black text-slate-800 font-mono">
+              {/* 价格 + 成交额 - 固定两行高度，amount 缺失时显示 -- 保持行高一致 */}
+              <div className="text-right w-[110px] shrink-0">
+                <div className="text-sm font-black text-slate-800 font-mono whitespace-nowrap overflow-hidden text-ellipsis leading-tight">
                   {item.price?.toFixed(item.price && item.price < 10 ? 3 : 2)}
                 </div>
-                {item.amount ? (
-                  <div className="text-[9px] text-slate-400 font-mono mt-0.5">
-                    {formatAmount(item.amount)}
-                  </div>
-                ) : null}
+                <div className="text-[9px] text-slate-400 font-mono mt-0.5 whitespace-nowrap leading-tight">
+                  {item.amount ? formatAmount(item.amount) : '--'}
+                </div>
               </div>
             </div>
           );
         })}
 
+        {/* 占位行：数据不足 5 条时填充，统一各市场卡片高度 */}
+        {Array.from({ length: placeholderCount }).map((_, index) => (
+          <div
+            key={`placeholder-${index}`}
+            aria-hidden="true"
+            className="flex items-center justify-between px-3 py-1 rounded-lg bg-slate-50/50 border border-slate-100/50 opacity-50"
+          >
+            <div className="text-sm font-bold text-slate-300 w-[88px] truncate shrink-0">--</div>
+            <div className="flex-1 flex items-center justify-center mx-2 min-w-0">
+              <span className="text-sm font-bold font-mono text-slate-200">--</span>
+            </div>
+            <div className="text-right w-[110px] shrink-0">
+              <div className="text-sm font-black text-slate-200 font-mono leading-tight">--</div>
+              <div className="text-[9px] text-slate-200 font-mono mt-0.5 leading-tight">--</div>
+            </div>
+          </div>
+        ))}
+
         {/* 数据源标识 */}
-        <div className="text-[9px] text-slate-300 text-right px-1 mt-auto">
-          {isRealData ? `数据截至 ${lastUpdate}` : '实时行情'} · {data?.sourceUsed === 'local_parquet' ? '本地数据' : '实时数据'}
+        <div className="text-[9px] text-slate-300 text-right px-1 mt-auto leading-none">
+          {timedOut
+            ? '行情获取超时'
+            : isRealData
+              ? `数据截至 ${lastUpdate}`
+              : '实时行情'} · {timedOut ? '暂无数据' : data?.sourceUsed === 'local_parquet' ? '本地数据' : '实时数据'}
         </div>
       </div>
     </Card>

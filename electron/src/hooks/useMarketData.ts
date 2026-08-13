@@ -1,3 +1,4 @@
+import { useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { marketService, MarketOverviewResponse, type MarketId } from '../services/marketService';
 
@@ -6,6 +7,7 @@ export interface UseMarketDataOptions {
   refreshInterval?: number;
   mockData?: boolean;
   market?: MarketId;
+  timeoutMs?: number;
 }
 
 export interface UseMarketDataReturn {
@@ -15,6 +17,7 @@ export interface UseMarketDataReturn {
   lastUpdate: string | null;
   refresh: () => void;
   isConnected: boolean;
+  timedOut: boolean;
 }
 
 export const useMarketData = (options: UseMarketDataOptions = {}): UseMarketDataReturn => {
@@ -23,19 +26,44 @@ export const useMarketData = (options: UseMarketDataOptions = {}): UseMarketData
     refreshInterval = 5000, // 5秒
     mockData = false,
     market = 'CN',
+    timeoutMs = 1000, // 默认 1 秒超时
   } = options;
+
+  const [timedOut, setTimedOut] = useState(false);
 
   const { data, error, isLoading, isError, refetch } = useQuery<MarketOverviewResponse, Error>({
     queryKey: ['marketData', market, mockData],
     queryFn: async () => {
-      if (mockData) {
-        return marketService.generateMarketMockData(market);
-      }
-      const response = await marketService.getMarketOverview(market);
-      if (!response.success) {
-        throw new Error(response.error || '获取数据失败');
-      }
-      return response.data!;
+      setTimedOut(false);
+      return await new Promise<MarketOverviewResponse>((resolve) => {
+        const timer = setTimeout(() => {
+          setTimedOut(true);
+          resolve({ indices: [], lastUpdate: '', count: 0, sourceUsed: 'timeout' });
+        }, timeoutMs);
+
+        const done = (result: MarketOverviewResponse) => {
+          clearTimeout(timer);
+          resolve(result);
+        };
+
+        if (mockData) {
+          done(marketService.generateMarketMockData(market));
+          return;
+        }
+
+        marketService
+          .getMarketOverview(market)
+          .then((response) => {
+            if (response.success && response.data) {
+              done(response.data);
+            } else {
+              done({ indices: [], lastUpdate: '', count: 0, sourceUsed: 'error' });
+            }
+          })
+          .catch(() => {
+            done({ indices: [], lastUpdate: '', count: 0, sourceUsed: 'error' });
+          });
+      });
     },
     refetchInterval: autoRefresh ? refreshInterval : false,
     refetchOnWindowFocus: true,
@@ -48,5 +76,6 @@ export const useMarketData = (options: UseMarketDataOptions = {}): UseMarketData
     lastUpdate: data ? new Date().toISOString() : null,
     refresh: refetch,
     isConnected: !isError,
+    timedOut,
   };
 };
