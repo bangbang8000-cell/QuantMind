@@ -350,8 +350,8 @@ class TdxPushService:
                     continue
                 side = str(o.get("side") or "buy").strip().lower()
                 status = str(o.get("status") or "pending").strip().lower()
-                # 桥 side 用 cancel 表示已撤销委托，映射到订单方向
-                order_side = OrderSide.BUY if side in ("buy", "cancel", "unknown") else OrderSide.SELL
+                # 桥已修复方向解析: buy/sell/cancel(方向未知, 保守默认 buy)
+                order_side = OrderSide.SELL if side == "sell" else OrderSide.BUY
                 if status == "filled":
                     order_status = OrderStatus.FILLED
                 elif status in ("partial", "partially_filled"):
