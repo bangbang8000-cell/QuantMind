@@ -107,6 +107,8 @@ else:
 
 # 训练脚本：./docker/training/train.py 挂载到容器内 /app/docker/training/
 _TRAINING_SCRIPT_HOST_PATH = str(_HOST_PROJECT_PATH / "docker" / "training" / "train.py")
+# 预处理纯函数集：train.py 顶层 `from preprocessing import ...`，需与 train.py 一并挂载
+_PREPROCESSING_HOST_PATH = str(_HOST_PROJECT_PATH / "docker" / "training" / "preprocessing.py")
 
 
 class LocalDockerOrchestrator(TrainingOrchestrator):
@@ -439,6 +441,14 @@ class LocalDockerOrchestrator(TrainingOrchestrator):
                 "icir_threshold": 0.15,
                 "correlation_threshold": 0.9,
             }
+
+        # 特征截面预处理配置（P1）：默认关闭，兼容旧模型；显式开启后
+        # train.py 对特征做 per-(trade_date,feature) 中位数填充+缩尾+Z-score。
+        pp_cfg = payload.get("preprocessing")
+        if isinstance(pp_cfg, dict):
+            config["preprocessing"] = pp_cfg
+        elif str(payload.get("enable_cross_sectional_prep", "false")).lower() in ("1", "true", "yes", "on"):
+            config["preprocessing"] = {"enabled": True, "winsor": True}
         return config
 
     # ── 启动训练任务 ─────────────────────────────────────────────────────────────
@@ -596,6 +606,12 @@ class LocalDockerOrchestrator(TrainingOrchestrator):
             "bind": "/app/train.py",
             "mode": "ro",
         }
+        # preprocessing.py 与 train.py 同目录导入（`from preprocessing import ...`）
+        if Path(_PREPROCESSING_HOST_PATH).exists():
+            volumes[str(_PREPROCESSING_HOST_PATH)] = {
+                "bind": "/app/preprocessing.py",
+                "mode": "ro",
+            }
         logger.info(
             "[%s] Local train.py override mounted: %s -> /app/train.py",
             run_id,

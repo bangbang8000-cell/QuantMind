@@ -360,6 +360,12 @@ class RemoteSSHOrchestrator(TrainingOrchestrator):
                 await self._rsync_push(train_script, f"{self.work_dir}/train.py")
                 self._log(run_id, "[SYNC] train.py 已同步（覆盖镜像内置版）")
 
+            # preprocessing.py 与 train.py 同目录顶层 import，需一并推送
+            prep_script = self._resolve_preprocessing_script()
+            if prep_script:
+                await self._rsync_push(prep_script, f"{self.work_dir}/preprocessing.py")
+                self._log(run_id, "[SYNC] preprocessing.py 已同步")
+
             # 统一推理模板 inference_parquet.py 也推送并挂载，
             # 保证远端训练产出与本地一致的完整 inference.py（而非简化 fallback）。
             template = self._resolve_inference_template()
@@ -586,6 +592,12 @@ class RemoteSSHOrchestrator(TrainingOrchestrator):
             config["max_time_minutes"] = 120
         if isinstance(payload.get("factor_selection"), dict):
             config["factor_selection"] = payload["factor_selection"]
+        # 特征截面预处理配置：与本地编排器保持一致，远程 GPU 训练同样生效
+        pp_cfg = payload.get("preprocessing")
+        if isinstance(pp_cfg, dict):
+            config["preprocessing"] = pp_cfg
+        elif str(payload.get("enable_cross_sectional_prep", "false")).lower() in ("1", "true", "yes", "on"):
+            config["preprocessing"] = {"enabled": True, "winsor": True}
         return config
 
     def _resolve_feature_files(self, payload: dict) -> list[str]:
@@ -668,6 +680,7 @@ class RemoteSSHOrchestrator(TrainingOrchestrator):
             f"-v {self.work_dir}:/workspace "
             f"-v {self.work_dir}/feature_snapshots:/tmp/feature_snapshots:ro "
             f"-v {self.work_dir}/train.py:/app/train.py:ro "
+            f"-v {self.work_dir}/preprocessing.py:/app/preprocessing.py:ro "
             f"-v {self.work_dir}/templates:/app/backend/services/engine/inference/templates:ro "
             f"{self.docker_image} python /app/train.py --config /workspace/config.yaml"
         )
@@ -678,6 +691,18 @@ class RemoteSSHOrchestrator(TrainingOrchestrator):
             str(Path(__file__).resolve().parents[3] / "docker" / "training" / "train.py"),
             "/app/docker/training/train.py",
             "/app/train.py",
+        ]
+        for p in candidates:
+            if Path(p).exists():
+                return p
+        return None
+
+    def _resolve_preprocessing_script(self) -> str | None:
+        """定位本地 preprocessing.py（train.py 顶层 import 的纯函数集）。"""
+        candidates = [
+            str(Path(__file__).resolve().parents[3] / "docker" / "training" / "preprocessing.py"),
+            "/app/docker/training/preprocessing.py",
+            "/app/preprocessing.py",
         ]
         for p in candidates:
             if Path(p).exists():

@@ -253,6 +253,7 @@ def _resolve_parquet_path(data_dir: Path, trade_date: str, meta: dict) -> Path |
         "HK": "model_features_hk.parquet",
         "US": "model_features_us.parquet",
         "CRYPTO": "model_features_crypto.parquet",
+        "FUTURES": "model_features_futures.parquet",
     }
 
     if market in _MARKET_PARQUET:
@@ -311,12 +312,138 @@ def load_date_data(trade_date: str, data_dir: Path, meta: dict) -> pd.DataFrame 
     return day_df
 
 
+def _apply_feat_norm(X: np.ndarray, meta: dict) -> np.ndarray:
+    """按 metadata 的 feat_norm (训练集 mean/std) 标准化，推理与训练同分布。
+
+    DL 时序模型训练时用训练集统计量标准化，推理必须复用同一统计量。
+    无 feat_norm 时原样返回（旧模型兼容）。
+    """
+    fn = meta.get("feat_norm")
+    if not isinstance(fn, dict) or not fn.get("mean") or not fn.get("std"):
+        return X
+    mean = np.asarray(fn["mean"], dtype=np.float32)
+    std = np.asarray(fn["std"], dtype=np.float32)
+    std = np.where(std == 0, 1.0, std)
+    X = (X - mean) / std
+    return np.nan_to_num(X, nan=0.0, posinf=0.0, neginf=0.0)
+
+
+def _predict_dl_sequence(inner_model, window_df: pd.DataFrame, features: list[str],
+                         meta: dict, step_len: int) -> np.ndarray:
+    """DL 时序模型推理：按 symbol 分组建 step_len 滑窗，feat_norm 标准化后前向。
+
+    返回与 window_df 中"每个 symbol 最后一个交易日"一一对应的预测分数。
+    Qlib TS 模型期望输入 [batch, step_len, d_feat]，输出逐样本分数。
+    """
+    if torch is None:
+        logger.error("DL 时序推理需要 torch")
+        sys.exit(1)
+    window_df = window_df.copy()
+    # 只保留每个 symbol 的最后一个交易日用于输出（对应推理目标日）
+    preds = []
+    device = getattr(inner_model, "device", None)
+    for sym, grp in window_df.groupby("symbol", sort=False):
+        grp = grp.sort_values("trade_date")
+        X = grp[features].values.astype(np.float32)
+        X = _apply_feat_norm(X, meta)
+        # 窗口不足 step_len 的股票跳过（Qlib TS 模型需要完整窗口）
+        if len(X) < step_len:
+            logger.warning("symbol %s 窗口不足 %d 天，跳过", sym, step_len)
+            preds.append((str(sym), np.nan))
+            continue
+        # 最近 step_len 天建窗，前向取最后一天的输出
+        x_tensor = torch.from_numpy(X[-step_len:]).unsqueeze(0).float()  # [1, step_len, d_feat]
+        if device is not None:
+            x_tensor = x_tensor.to(device)
+        with torch.no_grad():
+            out = inner_model(x_tensor)
+            if isinstance(out, tuple):
+                out = out[0]
+            if hasattr(out, "dim") and out.dim() == 2 and out.shape[1] == 1:
+                out = out.squeeze(-1)
+            score = float(out.detach().cpu().numpy().reshape(-1)[-1])
+        preds.append((str(sym), score))
+    return np.array([p[1] for p in preds], dtype=np.float64)
+
+
+def load_window_data(trade_date: str, data_dir: Path, meta: dict, step_len: int) -> pd.DataFrame:
+    """加载 [trade_date - step_len 交易日, trade_date] 的历史窗口数据，供 DL 时序模型建窗。
+
+    只取 trade_date 当天仍有记录的 symbol（与单日推理的股票集合一致），
+    每 symbol 取 step_len 天窗口（含当日）。无历史窗口的 symbol 会因样本不足
+    被 _build_ts_dataloader 丢弃——这里是按 symbol 过滤窗口。
+    """
+    parquet_path = _resolve_parquet_path(data_dir, trade_date, meta)
+    if parquet_path is None:
+        logger.warning("找不到可用的 parquet 文件 (data_dir=%s, market=%s)", data_dir, (meta.get("context") or {}).get("market", ""))
+        return pd.DataFrame()
+
+    df = pd.read_parquet(parquet_path, engine="pyarrow")
+    if "symbol" not in df.columns and "instrument" in df.columns:
+        df = df.rename(columns={"instrument": "symbol"})
+    df["trade_date"] = pd.to_datetime(df["trade_date"]).dt.strftime("%Y-%m-%d")
+
+    day_df = df[df["trade_date"] == trade_date].copy()
+    if len(day_df) == 0:
+        return pd.DataFrame()
+    day_df = filter_untradable_rows(day_df)
+    if len(day_df) == 0:
+        return pd.DataFrame()
+
+    target_symbols = set(day_df["symbol"].astype(str))
+    window = df[df["symbol"].astype(str).isin(target_symbols)].copy()
+    window = window.sort_values(["symbol", "trade_date"])
+
+    # 每 symbol 保留最近 step_len 天（含当日）
+    keep = window.groupby("symbol", group_keys=False).tail(step_len)
+    logger.info("DL 窗口数据: %d 只股票, 每只≤%d 天, 合计 %d 行", len(target_symbols), step_len, len(keep))
+    return keep
+
+
 # ═══════════════════════════════════════════════════════════════════════════
 # 5. 特征预处理
 # ═══════════════════════════════════════════════════════════════════════════
 
+def _cross_sectional_preprocess_inline(X_df: pd.DataFrame, meta: dict) -> pd.DataFrame:
+    """截面预处理（与 train.py _prepare_arrays 的 prep_cfg 逻辑一致）。
+
+    单日数据 = 一个截面：对每列分位缩尾 → 截面 Z-score。
+    类别特征（ind_code_l1/l2）不参与变换。推理端无法复现中性化（无行业列），已略。
+    """
+    prep = meta.get("preprocessing")
+    if not isinstance(prep, dict) or not prep.get("enabled"):
+        return X_df
+    _exclude = {"ind_code_l1", "ind_code_l2"}
+    feats = [c for c in X_df.columns if c not in _exclude and c != "symbol"]
+    for c in feats:
+        col = pd.to_numeric(X_df[c], errors="coerce").to_numpy(dtype=np.float64)
+        valid = ~np.isnan(col)
+        if valid.sum() == 0:
+            X_df[c] = 0.0
+            continue
+        # 分位缩尾
+        if prep.get("winsor", True) and valid.sum() >= 10:
+            lo = float(np.quantile(col[valid], 0.01))
+            hi = float(np.quantile(col[valid], 0.99))
+            if np.isfinite(lo) and np.isfinite(hi) and lo < hi:
+                col = np.where(valid, np.clip(col, lo, hi), col)
+        # 截面 Z-score
+        mu = col[valid].mean()
+        sd = col[valid].std()
+        if sd == 0 or not np.isfinite(sd):
+            X_df[c] = np.where(valid, 0.0, np.nan)
+        else:
+            X_df[c] = np.where(valid, (col - mu) / sd, np.nan)
+    logger.info("Cross-sectional preprocessing applied (%d features)", len(feats))
+    return X_df
+
+
 def preprocess(df: pd.DataFrame, meta: dict) -> tuple[pd.DataFrame, list[str]]:
-    """按 metadata.json 中的 feature_columns/fill_values 预处理，返回 (X_df, symbols)。"""
+    """按 metadata.json 预处理，返回 (X_df, symbols)。
+
+    新模型（metadata 含 preprocessing.enabled=true）走截面预处理；
+    旧模型走 fill_values 路径（行为不变，兼容已注册模型）。
+    """
     feature_cols = meta.get("feature_columns") or meta.get("features", [])
     fill_values  = meta.get("fill_values", {})
 
@@ -340,11 +467,17 @@ def preprocess(df: pd.DataFrame, meta: dict) -> tuple[pd.DataFrame, list[str]]:
 
     X_df = df[feature_cols].copy()
 
-    # 按 metadata 的 fill_values 填 NaN
-    for col, val in fill_values.items():
-        if col in X_df.columns:
-            X_df[col] = X_df[col].fillna(val)
-    X_df = X_df.fillna(0.0)
+    prep = meta.get("preprocessing")
+    if isinstance(prep, dict) and prep.get("enabled"):
+        # 新模型：截面预处理（含缺失值填充，保持训练同分布）
+        X_df = _cross_sectional_preprocess_inline(X_df, meta)
+        X_df = X_df.fillna(0.0)
+    else:
+        # 旧模型：按 metadata 的 fill_values 填 NaN
+        for col, val in fill_values.items():
+            if col in X_df.columns:
+                X_df[col] = X_df[col].fillna(val)
+        X_df = X_df.fillna(0.0)
 
     symbols = df["symbol"].tolist()
     return X_df, symbols
@@ -427,14 +560,31 @@ def main():
                 logger.error("Qlib DL 模型内部 PyTorch 模型未找到")
                 sys.exit(1)
         inner_model.eval()
-        x_tensor = torch.from_numpy(X_values)
-        # 如果模型有 device 属性，移到对应设备
-        device = getattr(model, "device", None) or getattr(inner_model, "device", None)
-        if device is not None:
-            x_tensor = x_tensor.to(device)
-        with torch.no_grad():
-            pred = inner_model(x_tensor).detach().cpu().numpy()
-        scores = pred.flatten()
+        is_seq = bool(meta.get("is_sequence_model", False))
+        if is_seq:
+            # 时序模型：读历史窗口 → 按 symbol 滑窗 → 标准化 → 前向
+            step_len = int((meta.get("dl_params") or {}).get("dl_step_len", 20))
+            window_df = load_window_data(trade_date, data_dir, meta, step_len)
+            if len(window_df) == 0:
+                logger.warning("日期 %s 无足够历史窗口供 DL 时序推理，触发兜底", trade_date)
+                print("DL sequence inference: no window data", file=sys.stderr)
+                sys.exit(2)
+            features_meta = meta.get("feature_columns") or meta.get("features", [])
+            scores = _predict_dl_sequence(inner_model, window_df, list(features_meta), meta, step_len)
+            # symbols 对齐 window_df 每 symbol 最后一个交易日
+            symbols = []
+            for sym, grp in window_df.groupby("symbol", sort=False):
+                _ = grp.sort_values("trade_date")
+                symbols.append(str(sym))
+        else:
+            # 扁平模型（TabNet 等）：单日二维输入
+            x_tensor = torch.from_numpy(X_values)
+            device = getattr(model, "device", None) or getattr(inner_model, "device", None)
+            if device is not None:
+                x_tensor = x_tensor.to(device)
+            with torch.no_grad():
+                pred = inner_model(x_tensor).detach().cpu().numpy()
+            scores = pred.flatten()
     else:
         # LightGBM
         scores = model.predict(X_values, num_iteration=best_iter)

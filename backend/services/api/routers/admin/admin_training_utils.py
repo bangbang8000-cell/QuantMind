@@ -29,14 +29,14 @@ _ALLOWED_TARGET_MODE = {"return", "classification"}
 _ALLOWED_DEAL_PRICE = {"open", "close"}
 _ALLOWED_MODEL_TYPES = {
     # Tree models (Tier 1) — share same tabular data pipeline
-    "lightgbm", "xgboost", "catboost", "linear",
+    "lightgbm", "xgboost", "catboost", "linear", "random_forest",
     # Deep learning models (Tier 2) — require sequential data / Qlib
     "gru", "lstm", "alstm", "transformer", "tabnet", "tcn",
     # Custom DL models (Tier 3) — non-Qlib PyTorch models
-    "nativetft",
+    "nativetft", "mlp", "hybrid_gru_tree",
 }
-_TREE_MODEL_TYPES = {"lightgbm", "xgboost", "catboost", "linear"}
-_DL_MODEL_TYPES = {"gru", "lstm", "alstm", "transformer", "tabnet", "tcn", "nativetft"}
+_TREE_MODEL_TYPES = {"lightgbm", "xgboost", "catboost", "linear", "random_forest"}
+_DL_MODEL_TYPES = {"gru", "lstm", "alstm", "transformer", "tabnet", "tcn", "nativetft", "mlp", "hybrid_gru_tree"}
 # 市场 → exchange_calendars 日历名。CRYPTO 为 7x24 无休市，不在此映射中。
 _MARKET_TO_XCAL = {"CN": "XSHG", "US": "XNYS", "HK": "XHKG"}
 

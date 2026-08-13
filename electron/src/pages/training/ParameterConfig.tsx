@@ -34,6 +34,12 @@ const MARKET_BENCHMARKS: Record<string, { label: string; value: string }[]> = {
     { label: '比特币', value: 'BTC' },
     { label: '以太坊', value: 'ETH' },
   ],
+  FUTURES: [
+    { label: '原油', value: 'CL.FUT' },
+    { label: '沪铜', value: 'CU.FUT' },
+    { label: '螺纹钢', value: 'RB.FUT' },
+    { label: '黄金', value: 'AU.FUT' },
+  ],
 };
 
 interface ParameterConfigProps {
@@ -604,6 +610,20 @@ export const ParameterConfig: React.FC<ParameterConfigProps> = ({
                   <Switch
                     checked={!!context.industry_as_feature}
                     onChange={(checked) => onContextChange({ ...context, industry_as_feature: checked })}
+                  />
+                </Tooltip>
+              </div>
+              <div className="md:col-span-2 flex items-center justify-between rounded-xl border border-slate-200 bg-white px-3 py-2">
+                <div className="space-y-0.5">
+                  <div className="text-xs text-slate-500">特征截面预处理</div>
+                  <div className="text-[11px] text-slate-400">
+                    按交易日截面：中位数填充缺失 + 分位缩尾(1%/99%) + Z-score 标准化。消除量纲差异与极端值
+                  </div>
+                </div>
+                <Tooltip title="对特征做截面预处理：每交易日按特征中位数填充缺失（停牌）、1%/99% 分位缩尾、截面 Z-score。开启后模型输入分布更规范，但会改变特征量纲（与旧模型不可直接对比）">
+                  <Switch
+                    checked={!!params.preprocessingEnabled}
+                    onChange={(checked) => onParamsChange({ ...params, preprocessingEnabled: checked })}
                   />
                 </Tooltip>
               </div>

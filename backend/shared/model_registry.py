@@ -1377,6 +1377,24 @@ class ModelRegistryService:
             sync_error = validation_error
             sync_status = "failed"
 
+        # 样本外验证软门禁：test 集 Rank ICIR 低于阈值时保持 candidate，
+        # 不自动设为默认，仅注入 quality_warnings 供用户手动评估后激活。
+        # 门禁只做提示，不阻断（用户可通过 activate 流程手动提升）。
+        gate_triggered = False
+        _test_icir = _extract_test_rank_icir(metadata, metrics)
+        _gate_threshold = 0.05
+        if sync_status == "ready" and _test_icir is not None and _test_icir < _gate_threshold:
+            logger.warning(
+                "Model %s test_rank_icir=%.4f < %.2f, holding at candidate (soft gate)",
+                model_id, _test_icir, _gate_threshold,
+            )
+            sync_status = "candidate"
+            gate_triggered = True
+            metadata.setdefault("quality_warnings", []).append(
+                f"test_rank_icir={_test_icir:.4f} 低于软门禁阈值 {_gate_threshold}，"
+                "未自动激活。请人工评估后在模型管理页手动激活。"
+            )
+
         async with get_session() as session:
             if sync_status == "ready":
                 has_business_default = (
@@ -1426,6 +1444,28 @@ class ModelRegistryService:
                         "model_file": model_file,
                         "is_default": bool(should_set_default),
                         "activated_at": now,
+                        "updated_at": now,
+                    },
+                )
+            elif gate_triggered:
+                # 软门禁触发：保持 candidate，持久化 quality_warnings
+                await session.execute(
+                    text(
+                        """
+                        UPDATE qm_user_models
+                        SET status = 'candidate',
+                            model_file = :model_file,
+                            metadata_json = :metadata_json,
+                            updated_at = :updated_at
+                        WHERE tenant_id = :tenant_id AND user_id = :user_id AND model_id = :model_id
+                        """
+                    ),
+                    {
+                        "tenant_id": tenant,
+                        "user_id": user,
+                        "model_id": model_id,
+                        "model_file": model_file,
+                        "metadata_json": json.dumps(metadata, ensure_ascii=False),
                         "updated_at": now,
                     },
                 )
@@ -1826,6 +1866,24 @@ class ModelRegistryService:
             return "failed", "no artifacts found in local training workspace or COS path", model_file
 
         return "ready", "", model_file
+
+    @staticmethod
+    def _extract_test_rank_icir(metadata: dict, metrics: dict) -> float | None:
+        """从模型 metadata/metrics 提取 test 集 Rank ICIR（样本外验证指标）。
+
+        优先取 metadata.metrics.test_rank_icir（train.py 写入）；回退 metrics_json。
+        无法确定时返回 None（软门禁不生效，模型按原流程进入 ready）。
+        """
+        for src in (metrics, metadata.get("metrics"), metadata):
+            if not isinstance(src, dict):
+                continue
+            v = src.get("test_rank_icir")
+            if isinstance(v, (int, float)) and not isinstance(v, bool):
+                try:
+                    return float(v)
+                except (TypeError, ValueError):
+                    pass
+        return None
 
     @staticmethod
     def _validate_synced_model(

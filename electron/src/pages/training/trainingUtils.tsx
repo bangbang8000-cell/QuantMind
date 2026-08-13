@@ -17,7 +17,7 @@ export type DealPrice = 'open' | 'close';
 export type TimePeriodMap = Record<SplitKey, [Dayjs, Dayjs]>;
 
 // 模型类型定义
-export type ModelType = 'lightgbm' | 'xgboost' | 'catboost' | 'linear' | 'gru' | 'lstm' | 'alstm' | 'transformer' | 'tabnet' | 'tcn' | 'nativetft';
+export type ModelType = 'lightgbm' | 'xgboost' | 'catboost' | 'linear' | 'random_forest' | 'gru' | 'lstm' | 'alstm' | 'transformer' | 'tabnet' | 'tcn' | 'nativetft' | 'mlp' | 'hybrid_gru_tree';
 export type ModelCategory = 'tree' | 'linear' | 'deep_learning';
 
 export interface ModelTypeOption {
@@ -40,6 +40,10 @@ export const MODEL_TYPE_OPTIONS: ModelTypeOption[] = [
   // 线性基线模型
   { value: 'linear', label: 'Ridge 线性', category: 'linear', description: '简单线性回归基线，sanity check 用', framework: 'sklearn',
     tooltip: '重要诊断工具：如果 Ridge 的 IC > 0.03，说明特征集有线性可分信号，树模型应该表现更好；如果 Ridge IC ≈ 0 但树模型 IC 很高，说明信号在非线性交互中。IC 应显著低于树模型，否则树模型可能过拟合。' },
+  { value: 'random_forest', label: '随机森林', category: 'tree', description: 'Bagging 基线，对比 Boosting 是否真优', framework: 'sklearn',
+    tooltip: 'Bagging 思想的多树集成，通过自助采样+特征随机选择降低方差。作为 Boosting（LGB/XGB）的对照基线：若 RF IC 接近 LGB，说明信号主要是线性/低阶交互，无需深树；若 LGB 显著优于 RF，则非线性交互重要。训练比 LGB 慢但无需调 learning_rate。' },
+  { value: 'mlp', label: 'MLP', category: 'deep_learning', description: '神经网络最简基线，验证 RNN 是否真优于全连接', framework: 'sklearn',
+    tooltip: '多层感知机基线：验证 GRU/LSTM/Transformer 的时序建模是否真的带来增益。若 MLP 在扁平特征上 IC 已接近 GRU，说明时序结构不重要，可直接用树模型。默认结构 [64,32]，L2 正则，早停。' },
   // 深度学习模型
   { value: 'gru', label: 'GRU', category: 'deep_learning', description: '门控循环单元，时序建模性价比最高', framework: 'pytorch',
     tooltip: '默认 20 日滚动窗口（step_len=20），捕捉动量反转模式。对波动率因子（vol_std_*、vol_parkinson_*）时序衰减敏感。GPU 训练约 10-20 分钟，是最推荐的 DL 入门模型。数据量 < 50 万行时慎用，容易过拟合。' },
@@ -108,6 +112,8 @@ export interface TrainingParams {
   dl_batch_size?: number;
   dl_lr?: number;
   dl_step_len?: number;
+  /** 截面预处理：按 (交易日, 特征) 中位数填充缺失 + 分位缩尾 + 截面 Z-score */
+  preprocessingEnabled?: boolean;
 }
 
 export interface TrainingContext {
@@ -914,6 +920,11 @@ export const buildBackendTrainingPayload = (
       val_months: request.wfa.valMonths,
       step_months: request.wfa.stepMonths,
     };
+  }
+
+  // 特征截面预处理：按交易日截面 中位数填充缺失 + 分位缩尾 + Z-score
+  if (request.params.preprocessingEnabled) {
+    payload.preprocessing = { enabled: true, winsor: true };
   }
 
   // 多周期训练：一次产出 T+1/T+3/T+5/T+10 等周期的模型（编排器按周期展开为多个任务）

@@ -346,9 +346,11 @@ class QlibDataBuilder:
         if not symbols:
             return {"updated": 0, "skipped": 0}
 
-        # 非 A 股市场（无 daily_unadjusted 复权需求）用批量构建
-        if self._market != "CN" and not incremental:
-            return self.build_features_bulk()
+        # 非 A 股市场（无 daily_unadjusted 复权需求）用批量构建。
+        # 逐标的增量在 HK（3387 标的 × 上万分区）上每次 sync 需数小时
+        # （实测 35 分钟无进度），bulk 一次读入仅 ~15s，故一律走 bulk。
+        if self._market != "CN":
+            return self.build_features_bulk(symbols=symbols)
 
         cal_dates = self._load_calendar()
         if not cal_dates:
@@ -388,12 +390,14 @@ class QlibDataBuilder:
 
         return {"updated": updated, "skipped": skipped}
 
-    def build_features_bulk(self) -> dict:
+    def build_features_bulk(self, symbols: list[str] | None = None) -> dict:
         """一次扫描全市场 parquet，按标的分组写 bin（非 A 股专用）。
 
         非 A 股市场（US/HK/CRYPTO/FUTURES）只有 daily_forward 分区，无
         daily_unadjusted，factor 恒为 1.0。整体读入再 groupby，避免逐标的
         全库扫描导致 OOM / 数小时耗时。
+
+        symbols: 可选子集（qlib 格式）；None 则覆盖 parquet 中全部标的。
         """
         import duckdb
 
@@ -424,6 +428,16 @@ class QlibDataBuilder:
         df["ci"] = df["d"].astype(str).map(cal_index)
         df = df[df["ci"].notna()]
         df["ci"] = df["ci"].astype(np.int64)
+
+        if symbols is not None:
+            # all.txt 中的 symbol 已小写（_feat_dir_name 规则），而 parquet 原生
+            # symbol 保留大小写，非 CN 市场过滤需两侧都小写比较
+            if self._market != "CN":
+                qlib_wanted = {s.lower() for s in symbols}
+                df = df[df["symbol"].map(self._to_qlib_symbol).str.lower().isin(qlib_wanted)]
+            else:
+                qlib_wanted = set(symbols)
+                df = df[df["symbol"].map(self._to_qlib_symbol).isin(qlib_wanted)]
 
         updated = skipped = 0
         for qdb_sym, group in df.groupby("symbol", sort=False):

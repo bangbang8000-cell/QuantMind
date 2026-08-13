@@ -123,9 +123,9 @@ DEFAULT_CATBOOST_PARAMS: dict[str, Any] = {
 }
 
 # 支持的模型类型集合
-_TREE_MODEL_TYPES = {"lightgbm", "xgboost", "catboost", "linear"}
-_DL_MODEL_TYPES = {"gru", "lstm", "alstm", "transformer", "tabnet", "tcn", "nativetft"}
-_CUSTOM_DL_MODEL_TYPES = {"nativetft"}  # 非 Qlib 的自定义 DL 模型
+_TREE_MODEL_TYPES = {"lightgbm", "xgboost", "catboost", "linear", "random_forest"}
+_DL_MODEL_TYPES = {"gru", "lstm", "alstm", "transformer", "tabnet", "tcn", "nativetft", "mlp", "hybrid_gru_tree"}
+_CUSTOM_DL_MODEL_TYPES = {"nativetft", "mlp", "hybrid_gru_tree"}  # 非 Qlib 的自定义 DL 模型
 _ALL_MODEL_TYPES = _TREE_MODEL_TYPES | _DL_MODEL_TYPES
 _ENSEMBLE_MODEL_TYPES = _TREE_MODEL_TYPES - {"linear"}  # 可参与集成的树模型
 
@@ -626,6 +626,7 @@ def load_data(
     train_end: str,
     features: list[str],
     target_horizon_days: int = 1,
+    target_mode: str = "return",
     cache_dir: str | None = None,
     valid_end: str | None = None,
     test_end: str | None = None,
@@ -814,7 +815,10 @@ def load_data(
                         ind_map["ind_code_l1"] = pd.Categorical(ind_map["ind_code_l1"]).codes.astype(np.float32)
                         df["symbol"] = df["symbol"].astype(str).str.zfill(6)
                         df = df.merge(ind_map, on="symbol", how="left")
-                        df["ind_code_l1"] = df["ind_code_l1"].fillna(-1).astype(np.float32)
+                        # 缺失行业映射到 max(code)+1 的独立类别 id（而非 fillna(-1) 或 0）：
+                        # 负 id 会被 CatBoost 拒绝；并入 0 会与第一个真实行业混淆。
+                        _ind_max = float(ind_map["ind_code_l1"].max()) if len(ind_map) else -1.0
+                        df["ind_code_l1"] = df["ind_code_l1"].fillna(_ind_max + 1).astype(np.float32)
                         logger.info("Industry mapping merged: %d/%d rows have ind_code_l1",
                                     (df["ind_code_l1"] >= 0).sum(), len(df))
                     else:
@@ -894,6 +898,16 @@ def load_data(
     valid_count_before = len(df)
     df = df[df["label"].notna()].copy()
     logger.info(f"After label shift & dropna: {len(df)} rows (dropped {valid_count_before - len(df)} rows with missing labels)")
+
+    # 分类目标：基于原始远期收益二值化（label>0 → 1），再进入截面 rank 前的统一流程。
+    # 必须在 rank 之前做：rank 后是 -0.5~0.5 连续值，binary objective 无法拟合。
+    _target_mode = str(target_mode or "return").lower()
+    if _target_mode == "classification":
+        from preprocessing import binarize_labels
+        df["label"] = binarize_labels(df["label"].to_numpy())
+        _n_pos = int((df["label"] == 1).sum())
+        _n_neg = int((df["label"] == 0).sum())
+        logger.info(f"Classification target: positive={_n_pos}, negative={_n_neg} (ratio={_n_pos / max(1, _n_pos + _n_neg):.3f})")
 
     # 裁剪到请求日期范围
     mask = (df["trade_date"] >= train_start) & (df["trade_date"] <= train_end)
@@ -1177,7 +1191,7 @@ def _train_wfa_single(
 
     try:
         fill_values, X_train, y_train, X_val, y_val, _fill = _prepare_arrays(
-            train_df, val_df, features
+            train_df, val_df, features, prep_cfg=cfg.get("preprocessing") or {}
         )
         if X_train.shape[0] < 100 or X_val.shape[0] < 10:
             logger.warning("[WFA] window %d: too few samples train=%d val=%d", idx, X_train.shape[0], X_val.shape[0])
@@ -1291,9 +1305,36 @@ def train_wfa(df: pd.DataFrame, features: list[str], cfg: dict) -> dict:
     return {"enabled": True, **summary, "windows": windows}
 
 
-def _prepare_arrays(train_df: pd.DataFrame, val_df: pd.DataFrame, features: list[str]) -> tuple:
-    """计算 fill_values 并转换为 numpy 数组。返回 (fill_values, X_train, y_train, X_val, y_val, _fill_fn)。"""
+def _prepare_arrays(
+    train_df: pd.DataFrame,
+    val_df: pd.DataFrame,
+    features: list[str],
+    prep_cfg: dict | None = None,
+) -> tuple:
+    """计算 fill_values 并转换为 numpy 数组。
+
+    prep_cfg 启用时（`preprocessing.enabled=true`），对特征做截面预处理：
+    per (trade_date, feature) 中位数填充 + 分位缩尾 + 截面 Z-score。
+    类别特征（ind_code_l1/l2）不参与变换（保持原始编码）。
+    返回 (fill_values, X_train, y_train, X_val, y_val, _fill_fn)。
+    """
     import math
+    from preprocessing import cross_sectional_preprocess
+
+    prep_cfg = prep_cfg or {}
+    prep_enabled = bool(prep_cfg.get("enabled", False))
+    _exclude = {"ind_code_l1", "ind_code_l2"}
+    _prep_feats = [f for f in features if f not in _exclude]
+
+    if prep_enabled and _prep_feats:
+        _winsor = bool(prep_cfg.get("winsor", True))
+        train_df = cross_sectional_preprocess(train_df, _prep_feats, enabled=True, winsor=_winsor)
+        val_df = cross_sectional_preprocess(val_df, _prep_feats, enabled=True, winsor=_winsor)
+        logger.info(
+            "Cross-sectional preprocessing enabled: %d features (exclude %s)",
+            len(_prep_feats), sorted(_exclude & set(features)),
+        )
+
     fill_values_raw = train_df[features].median().to_dict()
     fill_values = {k: (0.0 if (isinstance(v, float) and math.isnan(v)) else v) for k, v in fill_values_raw.items()}
 
@@ -1427,10 +1468,16 @@ def _train_catboost(cfg: dict, features: list[str], X_train: np.ndarray, y_train
             X_train[:, idx] = X_train[:, idx].astype(int)
             X_val[:, idx] = X_val[:, idx].astype(int)
 
+    # has_time：数据按时间顺序排列时开启，CatBoost 按时间处理序列数据，
+    # 避免未来信息影响过去预测。需行序为时间序（load_data 已按 symbol+trade_date 排序）。
+    has_time = str(params.get("has_time", "false")).lower() in ("1", "true", "yes", "on")
+
     train_pool = Pool(X_train, label=y_train, feature_names=features,
-                      cat_features=cat_feature_indices if cat_feature_indices else None)
+                      cat_features=cat_feature_indices if cat_feature_indices else None,
+                      has_time=has_time)
     val_pool = Pool(X_val, label=y_val, feature_names=features,
-                    cat_features=cat_feature_indices if cat_feature_indices else None)
+                    cat_features=cat_feature_indices if cat_feature_indices else None,
+                    has_time=has_time)
 
     model = CatBoost(params)
     model.fit(train_pool, eval_set=val_pool, early_stopping_rounds=max(1, int(model_cfg.get("early_stopping_rounds", 100) or 100)))
@@ -1445,6 +1492,62 @@ def _train_linear(cfg: dict, features: list[str], X_train: np.ndarray, y_train: 
     dl_params = model_cfg.get("dl_params", {})
     alpha = float(dl_params.get("alpha", 3.0))
     model = Ridge(alpha=alpha, random_state=int((cfg.get("seed") or 42)))
+    model.fit(X_train, y_train)
+    return model
+
+
+def _train_rf(cfg: dict, features: list[str], X_train: np.ndarray, y_train: np.ndarray,
+              X_val: np.ndarray, y_val: np.ndarray) -> Any:
+    """随机森林：Bagging 基线，用于对比 Boosting 是否真优于 Bagging。
+
+    与 LightGBM/XGBoost 走同一 _prepare_arrays 数据流（含可选截面预处理）。
+    参数：n_estimators（默认 300）、max_depth（默认 None=不限）、max_features（默认 sqrt）。
+    """
+    from sklearn.ensemble import RandomForestRegressor
+    model_cfg = cfg.get("model", {})
+    dl_params = model_cfg.get("dl_params", {})
+    seed = int((cfg.get("seed") or 42))
+    n_estimators = int(dl_params.get("n_estimators", 300))
+    max_depth = dl_params.get("max_depth", None)
+    max_features = str(dl_params.get("max_features", "sqrt"))
+    model = RandomForestRegressor(
+        n_estimators=n_estimators,
+        max_depth=int(max_depth) if max_depth else None,
+        max_features=max_features,
+        n_jobs=_TRAIN_NTHREAD,
+        random_state=seed,
+    )
+    model.fit(X_train, y_train)
+    return model
+
+
+def _train_mlp(cfg: dict, features: list[str], X_train: np.ndarray, y_train: np.ndarray,
+               X_val: np.ndarray, y_val: np.ndarray) -> Any:
+    """MLP 基线：神经网络最简对照，验证 RNN/Transformer 是否真优于全连接。
+
+    用 sklearn MLPRegressor（结构化表格数据基线足够），与树模型共享数据流。
+    参数：hidden_layer_sizes（默认 [64, 32]）、alpha（L2，默认 1e-3）、
+    early_stopping（默认 True，用 val 集早停）。
+    """
+    from sklearn.neural_network import MLPRegressor
+    model_cfg = cfg.get("model", {})
+    dl_params = model_cfg.get("dl_params", {})
+    seed = int((cfg.get("seed") or 42))
+    hidden = dl_params.get("hidden_layer_sizes") or dl_params.get("hidden_size")
+    if isinstance(hidden, (int, float)):
+        hidden = [int(hidden), max(1, int(hidden) // 2)]
+    elif not isinstance(hidden, (list, tuple)):
+        hidden = [64, 32]
+    alpha = float(dl_params.get("alpha", 1e-3))
+    model = MLPRegressor(
+        hidden_layer_sizes=[int(h) for h in hidden],
+        alpha=alpha,
+        learning_rate_init=float(dl_params.get("lr", 0.001)),
+        max_iter=int(dl_params.get("n_epochs", 500)),
+        early_stopping=True,
+        n_iter_no_change=10,
+        random_state=seed,
+    )
     model.fit(X_train, y_train)
     return model
 
@@ -1852,6 +1955,14 @@ def _train_dl(
         },
         "dl_params": {k: v for k, v in dl_params.items()},
     }
+    # feat_norm: TS 模型训练时用训练集 mean/std 标准化（验证集复用），
+    # 推理必须用同一统计量，否则输入分布漂移导致预测不可信。
+    if is_ts and _feat_norm is not None:
+        _fm, _fs = _feat_norm
+        dl_metadata["feat_norm"] = {
+            "mean": [float(v) for v in _fm],
+            "std": [float(v) for v in _fs],
+        }
 
     return model_obj, train_m, val_m, dl_metadata
 
@@ -1935,10 +2046,26 @@ def _train_nativetft(
                 d_feat, hidden_dim, num_heads, step_len, device)
 
     # ── 构建 DataLoader ──
-    train_loader = _build_ts_dataloader(
-        train_df[features], train_df["label"], step_len, batch_size, shuffle=True)
-    val_loader = _build_ts_dataloader(
-        val_df[features], val_df["label"], step_len, batch_size, shuffle=False)
+    # TS 滑窗必须按 symbol 分组，否则窗口会跨越不同股票边界产生污染样本。
+    # train_df/val_df 是扁平 RangeIndex，这里用 (symbol, trade_date) 建 MultiIndex
+    # 供 _build_ts_dataloader 计算每只股票的连续区间 offset。
+    # 训练集计算 mean/std 统计量，验证集复用（避免 look-ahead）；
+    # feat_norm 持久化进 dl_metadata 供推理复现标准化。
+    def _ts_indexed(frame: pd.DataFrame) -> tuple[pd.DataFrame, pd.Series]:
+        f = frame.sort_values(["symbol", "trade_date"])
+        idx = pd.MultiIndex.from_arrays(
+            [f["symbol"].to_numpy(), f["trade_date"].to_numpy()],
+            names=["instrument", "datetime"],
+        )
+        return f[features].set_axis(idx), f["label"].set_axis(idx)
+
+    _xt, _yt = _ts_indexed(train_df)
+    _xv, _yv = _ts_indexed(val_df)
+    train_loader, _feat_norm = _build_ts_dataloader(
+        _xt, _yt, step_len, batch_size, shuffle=True)
+    val_loader, _ = _build_ts_dataloader(
+        _xv, _yv, step_len, batch_size, shuffle=False,
+        feat_norm=_feat_norm)
 
     optimizer = torch.optim.Adam(model.parameters(), lr=lr)
     loss_fn = nn.MSELoss()
@@ -2037,6 +2164,14 @@ def _train_nativetft(
         },
         "dl_params": {k: v for k, v in dl_params.items()},
     }
+    # feat_norm: 训练集 mean/std（验证集已复用），推理必须用同一统计量
+    if _feat_norm is not None:
+        _fm, _fs = _feat_norm
+        dl_metadata["feat_norm"] = {
+            "mean": [float(v) for v in _fm],
+            "std": [float(v) for v in _fs],
+        }
+
 
     return model, train_m, val_m, dl_metadata
 
@@ -2093,7 +2228,27 @@ def _predict_dl(
     # 预测
     if is_ts:
         step_len = dl_metadata.get("dl_params", {}).get("dl_step_len", 20)
-        loader = _build_ts_dataloader(df_X[features], pd.Series(0.0, index=df_X.index), step_len, batch_size, shuffle=False)
+        # 复用训练集标准化统计量（推理输入必须与训练同分布）
+        feat_norm = None
+        _fn = dl_metadata.get("feat_norm")
+        if isinstance(_fn, dict) and _fn.get("mean") and _fn.get("std"):
+            feat_norm = (np.asarray(_fn["mean"], dtype=np.float32),
+                         np.asarray(_fn["std"], dtype=np.float32))
+        # TS 滑窗必须按 symbol 分组：df_X 是扁平 RangeIndex，
+        # 用 (symbol, trade_date) 建 MultiIndex 供 loader 计算股票连续区间。
+        _pred_df = df_X.copy()
+        if "symbol" in _pred_df.columns and "trade_date" in _pred_df.columns:
+            _pred_df = _pred_df.sort_values(["symbol", "trade_date"])
+            _idx = pd.MultiIndex.from_arrays(
+                [_pred_df["symbol"].to_numpy(), _pred_df["trade_date"].to_numpy()],
+                names=["instrument", "datetime"],
+            )
+            _X = _pred_df[features].set_axis(_idx)
+            _y = pd.Series(0.0, index=_idx)
+        else:
+            _X = df_X[features]
+            _y = pd.Series(0.0, index=df_X.index)
+        loader = _build_ts_dataloader(_X, _y, step_len, batch_size, shuffle=False, feat_norm=feat_norm)
         # 找到内部模型
         inner_model = None
         for attr_name in ("model", "GRU_model", "gru_model", "LSTM_model", "lstm_model",
@@ -2202,9 +2357,29 @@ def _predict_nativetft(
     model.load_state_dict(state_dict)
     model.eval()
 
+    # 复用训练集标准化统计量（推理输入必须与训练同分布）
+    feat_norm = None
+    _fn = dl_metadata.get("feat_norm")
+    if isinstance(_fn, dict) and _fn.get("mean") and _fn.get("std"):
+        feat_norm = (np.asarray(_fn["mean"], dtype=np.float32),
+                     np.asarray(_fn["std"], dtype=np.float32))
+    # TS 滑窗必须按 symbol 分组，否则窗口跨股票边界产生污染样本
+    _pred_df = df_X.copy()
+    if "symbol" in _pred_df.columns and "trade_date" in _pred_df.columns:
+        _pred_df = _pred_df.sort_values(["symbol", "trade_date"])
+        _idx = pd.MultiIndex.from_arrays(
+            [_pred_df["symbol"].to_numpy(), _pred_df["trade_date"].to_numpy()],
+            names=["instrument", "datetime"],
+        )
+        _X = _pred_df[features].set_axis(_idx)
+        _y = pd.Series(0.0, index=_idx)
+    else:
+        _X = df_X[features]
+        _y = pd.Series(0.0, index=df_X.index)
+
     # 构建 TS DataLoader 并预测
     loader = _build_ts_dataloader(
-        df_X[features], pd.Series(0.0, index=df_X.index), step_len, batch_size, shuffle=False)
+        _X, _y, step_len, batch_size, shuffle=False, feat_norm=feat_norm)
 
     preds = []
     with torch.no_grad():
@@ -2255,6 +2430,16 @@ def _save_model(model: Any, model_type: str, out_dir: Path) -> str:
             pickle.dump(model, f)
         return "model.pkl"
     elif model_type in _DL_MODEL_TYPES:
+        # MLP 用 sklearn 实现（存 pkl）；其余 DL 模型在 _train_dl() 中已保存 model.pth
+        if model_type == "mlp":
+            import pickle
+            path = out_dir / "model.pkl"
+            with open(path, "wb") as f:
+                pickle.dump(model, f)
+            return "model.pkl"
+        # hybrid_gru_tree 由专用训练管线保存 gru_encoder.pth + 树模型文件
+        if model_type == "hybrid_gru_tree":
+            return "model.pkl"
         # DL 模型在 _train_dl() 中已保存 model.pth，此处仅返回文件名
         return "model.pth"
     else:
@@ -2272,6 +2457,7 @@ def _get_model_framework(model_type: str) -> str:
         "xgboost": "xgboost",
         "catboost": "catboost",
         "linear": "sklearn",
+        "random_forest": "sklearn",
         "gru": "pytorch",
         "lstm": "pytorch",
         "alstm": "pytorch",
@@ -2281,6 +2467,8 @@ def _get_model_framework(model_type: str) -> str:
         "tabnet": "pytorch",
         "tcn": "pytorch",
         "nativetft": "pytorch",
+        "mlp": "pytorch",
+        "hybrid_gru_tree": "pytorch",
     }
     return mapping.get(model_type, "unknown")
 
@@ -2299,7 +2487,9 @@ def train_model(df: pd.DataFrame, features: list[str], cfg: dict, hardware: dict
 
     # 数据切分
     train_df, val_df, test_df = _split_data(df, cfg)
-    fill_values, X_train, y_train, X_val, y_val, _fill = _prepare_arrays(train_df, val_df, features)
+    fill_values, X_train, y_train, X_val, y_val, _fill = _prepare_arrays(
+        train_df, val_df, features, prep_cfg=cfg.get("preprocessing") or {}
+    )
 
     # 路由到对应训练函数
     logger.info("Training model: %s (framework=%s)", model_type, _get_model_framework(model_type))
@@ -2313,6 +2503,10 @@ def train_model(df: pd.DataFrame, features: list[str], cfg: dict, hardware: dict
         model = _train_catboost(cfg, features, X_train, y_train, X_val, y_val)
     elif model_type == "linear":
         model = _train_linear(cfg, features, X_train, y_train, X_val, y_val)
+    elif model_type == "random_forest":
+        model = _train_rf(cfg, features, X_train, y_train, X_val, y_val)
+    elif model_type == "mlp":
+        model = _train_mlp(cfg, features, X_train, y_train, X_val, y_val)
     elif model_type == "nativetft":
         dl_params = model_cfg.get("dl_params", {})
         output_dir = Path("/workspace")
@@ -2575,7 +2769,9 @@ def _train_single_model(
     t0 = time.time()
 
     model_cfg = cfg.get("model", {})
-    fill_values, X_train, y_train, X_val, y_val, _fill = _prepare_arrays(train_df, val_df, features)
+    fill_values, X_train, y_train, X_val, y_val, _fill = _prepare_arrays(
+        train_df, val_df, features, prep_cfg=cfg.get("preprocessing") or {}
+    )
 
     if model_type == "lightgbm":
         model = _train_lgb(cfg, features, X_train, y_train, X_val, y_val)
@@ -2585,6 +2781,10 @@ def _train_single_model(
         model = _train_catboost(cfg, features, X_train, y_train, X_val, y_val)
     elif model_type == "linear":
         model = _train_linear(cfg, features, X_train, y_train, X_val, y_val)
+    elif model_type == "random_forest":
+        model = _train_rf(cfg, features, X_train, y_train, X_val, y_val)
+    elif model_type == "mlp":
+        model = _train_mlp(cfg, features, X_train, y_train, X_val, y_val)
     elif model_type == "nativetft":
         output_dir = Path("/workspace")
         dl_params = model_cfg.get("dl_params", {})
@@ -3121,6 +3321,7 @@ def main() -> int:
             cfg["data"]["train_end"],
             features,
             target_horizon_days=int((cfg.get("label", {}) or {}).get("target_horizon_days") or 1),
+            target_mode=str((cfg.get("label", {}) or {}).get("target_mode") or "return"),
             cache_dir=cfg.get("cache", {}).get("dir"),
             valid_end=cfg.get("split", {}).get("valid", [None, None])[1],
             test_end=cfg.get("split", {}).get("test", [None, None])[1],
@@ -3313,6 +3514,7 @@ def main() -> int:
                 "best_iteration": best_iteration,
                 "target_horizon_days": int((cfg.get("label", {}) or {}).get("target_horizon_days") or 1),
                 "target_mode": str((cfg.get("label", {}) or {}).get("target_mode") or "return"),
+                "preprocessing": (cfg.get("preprocessing") or {}) if (cfg.get("preprocessing") or {}).get("enabled") else None,
                 "label_formula": str((cfg.get("label", {}) or {}).get("label_formula") or ""),
                 "effective_trade_date": str((cfg.get("label", {}) or {}).get("effective_trade_date") or ""),
                 "training_window": str((cfg.get("label", {}) or {}).get("training_window") or ""),
@@ -3489,6 +3691,7 @@ def main() -> int:
                 "best_iteration": best_iteration,
                 "target_horizon_days": int((cfg.get("label", {}) or {}).get("target_horizon_days") or 1),
                 "target_mode": str((cfg.get("label", {}) or {}).get("target_mode") or "return"),
+                "preprocessing": (cfg.get("preprocessing") or {}) if (cfg.get("preprocessing") or {}).get("enabled") else None,
                 "label_formula": str((cfg.get("label", {}) or {}).get("label_formula") or ""),
                 "effective_trade_date": str((cfg.get("label", {}) or {}).get("effective_trade_date") or ""),
                 "training_window": str((cfg.get("label", {}) or {}).get("training_window") or ""),
