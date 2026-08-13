@@ -501,6 +501,24 @@ def _normalize_payload(payload: dict[str, Any], allowed_features: list[str]) -> 
         "dl_params": dl_params,
         "ensemble": ensemble_method,
     }
+    # Stacking 集成参数 + Optuna 超参搜索 + 截面预处理（显式透传）
+    if "n_folds" in payload:
+        normalized["n_folds"] = _clamp_int(payload.get("n_folds"), 3, 2, 10)
+    if "meta_alpha" in payload:
+        try:
+            normalized["meta_alpha"] = float(payload.get("meta_alpha"))
+        except (TypeError, ValueError):
+            pass
+    if isinstance(payload.get("optuna"), dict):
+        normalized["optuna"] = {
+            "enabled": bool(payload["optuna"].get("enabled", False)),
+            "n_trials": _clamp_int(payload["optuna"].get("n_trials"), 20, 5, 100),
+        }
+    if isinstance(payload.get("preprocessing"), dict):
+        normalized["preprocessing"] = {
+            "enabled": bool(payload["preprocessing"].get("enabled", False)),
+            "winsor": bool(payload["preprocessing"].get("winsor", True)),
+        }
     if horizons:
         normalized["horizons"] = horizons
     # 训练时长预算（分钟），默认 120

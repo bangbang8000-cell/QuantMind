@@ -89,6 +89,9 @@ export interface TrainingParams {
   // LightGBM specific (optional, falls back to shared learning_rate/max_depth)
   lgb_learning_rate?: number;
   lgb_max_depth?: number;
+  min_child_samples?: number;
+  path_smooth?: number;
+  bagging_freq?: number;
   // XGBoost specific
   xgb_learning_rate?: number;
   xgb_max_depth?: number;
@@ -96,12 +99,15 @@ export interface TrainingParams {
   xgb_colsample_bytree?: number;
   xgb_reg_alpha?: number;
   xgb_reg_lambda?: number;
+  xgb_min_child_weight?: number;
   // CatBoost specific
   cb_learning_rate?: number;
   cb_depth?: number;
   cb_l2_leaf_reg?: number;
   cb_random_strength?: number;
   cb_bagging_temperature?: number;
+  cb_od_wait?: number;
+  cb_iterations?: number;
   // Linear specific
   linear_alpha?: number;
   // DL specific
@@ -112,8 +118,16 @@ export interface TrainingParams {
   dl_batch_size?: number;
   dl_lr?: number;
   dl_step_len?: number;
+  tcn_kernel_size?: number;
+  tft_num_heads?: number;
   /** 截面预处理：按 (交易日, 特征) 中位数填充缺失 + 分位缩尾 + 截面 Z-score */
   preprocessingEnabled?: boolean;
+  /** Stacking 集成参数 */
+  n_folds?: number;
+  meta_alpha?: number;
+  /** Optuna 自动超参搜索 */
+  optunaEnabled?: boolean;
+  optunaTrials?: number;
 }
 
 export interface TrainingContext {
@@ -524,6 +538,9 @@ export const DEFAULT_PARAMS: TrainingParams = {
   num_leaves: 31,
   max_depth: -1,
   min_data_in_leaf: 300,
+  min_child_samples: 150,
+  path_smooth: 1.0,
+  bagging_freq: 5,
   lambda_l1: 0.5,
   lambda_l2: 1.0,
   feature_fraction: 0.7,
@@ -538,11 +555,13 @@ export const DEFAULT_PARAMS: TrainingParams = {
   xgb_colsample_bytree: 0.65,
   xgb_reg_alpha: 0.5,
   xgb_reg_lambda: 2.0,
+  xgb_min_child_weight: 100,
   // CatBoost
   cb_depth: 6,
   cb_l2_leaf_reg: 3.0,
   cb_random_strength: 1.5,
   cb_bagging_temperature: 0.8,
+  cb_od_wait: 100,
   // Linear
   linear_alpha: 3.0,
   // DL
@@ -553,6 +572,14 @@ export const DEFAULT_PARAMS: TrainingParams = {
   dl_batch_size: 4000,
   dl_lr: 0.0001,
   dl_step_len: 20,
+  tcn_kernel_size: 5,
+  tft_num_heads: 4,
+  // Stacking 集成
+  n_folds: 3,
+  meta_alpha: 1.0,
+  // Optuna
+  optunaEnabled: false,
+  optunaTrials: 20,
 };
 
 /** 各 DL 模型的推荐默认参数，切换模型时自动填充 */
@@ -869,6 +896,9 @@ export const buildBackendTrainingPayload = (
       num_leaves: request.params.num_leaves,
       max_depth: request.params.lgb_max_depth ?? request.params.max_depth,
       min_data_in_leaf: request.params.min_data_in_leaf,
+      min_child_samples: request.params.min_child_samples,
+      path_smooth: request.params.path_smooth,
+      bagging_freq: request.params.bagging_freq,
       lambda_l1: request.params.lambda_l1,
       lambda_l2: request.params.lambda_l2,
       feature_fraction: request.params.feature_fraction,
@@ -883,6 +913,7 @@ export const buildBackendTrainingPayload = (
       colsample_bytree: request.params.xgb_colsample_bytree ?? 0.65,
       reg_alpha: request.params.xgb_reg_alpha ?? 0.5,
       reg_lambda: request.params.xgb_reg_lambda ?? 2.0,
+      min_child_weight: request.params.xgb_min_child_weight ?? 100,
       objective: request.params.objective === 'binary' ? 'binary:logistic' : 'reg:squarederror',
     },
     catboost_params: {
@@ -891,6 +922,7 @@ export const buildBackendTrainingPayload = (
       l2_leaf_reg: request.params.cb_l2_leaf_reg ?? 3.0,
       random_strength: request.params.cb_random_strength ?? 1.5,
       bagging_temperature: request.params.cb_bagging_temperature ?? 0.8,
+      od_wait: request.params.cb_od_wait ?? 100,
       loss_function: request.params.metric === 'auc' ? 'Logloss' : 'RMSE',
     },
     dl_params: {
@@ -901,6 +933,8 @@ export const buildBackendTrainingPayload = (
       batch_size: request.params.dl_batch_size ?? 4000,
       lr: request.params.dl_lr ?? 0.0001,
       step_len: request.params.dl_step_len ?? 20,
+      kernel_size: request.params.tcn_kernel_size ?? 5,
+      num_heads: request.params.tft_num_heads ?? 4,
       alpha: request.params.linear_alpha ?? 3.0,
     },
   };
@@ -908,6 +942,17 @@ export const buildBackendTrainingPayload = (
   if (modelTypes) {
     payload.model_types = modelTypes;
     payload.ensemble = ensembleMethod;
+    // Stacking 集成参数
+    payload.n_folds = request.params.n_folds ?? 3;
+    payload.meta_alpha = request.params.meta_alpha ?? 1.0;
+  }
+
+  // Optuna 自动超参搜索
+  if (request.params.optunaEnabled) {
+    payload.optuna = {
+      enabled: true,
+      n_trials: request.params.optunaTrials ?? 20,
+    };
   }
 
   // WFA 稳定性诊断配置

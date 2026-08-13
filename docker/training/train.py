@@ -80,15 +80,15 @@ DEFAULT_LGB_PARAMS: dict[str, Any] = {
     "metric":            "l2",
     "boosting":          "gbdt",
     "num_leaves":        31,
-    "learning_rate":     0.05,
+    "learning_rate":     0.02,
     "feature_fraction":  0.6,
     "bagging_fraction":  0.7,
     "bagging_freq":      5,
-    "min_child_samples": 50,
+    "min_child_samples": 150,
+    "path_smooth":       1.0,
     "lambda_l1":         0.5,
     "lambda_l2":         1.0,
     "max_depth":         -1,
-    "path_smooth":       0.5,
     "n_jobs":            -1,
     "verbosity":         -1,
 }
@@ -102,7 +102,7 @@ DEFAULT_XGB_PARAMS: dict[str, Any] = {
     "colsample_bytree": 0.65,
     "reg_alpha":        0.5,
     "reg_lambda":       2.0,
-    "min_child_weight": 50,
+    "min_child_weight": 100,
     "tree_method":      "hist",
     "nthread":          -1,
     "verbosity":        0,
@@ -117,7 +117,7 @@ DEFAULT_CATBOOST_PARAMS: dict[str, Any] = {
     "random_strength":  1.5,
     "bagging_temperature": 0.8,
     "od_type":          "Iter",
-    "od_wait":          50,
+    "od_wait":          100,
     "thread_count":     -1,
     "verbose":          100,
 }
@@ -2473,9 +2473,11 @@ def _get_model_framework(model_type: str) -> str:
     return mapping.get(model_type, "unknown")
 
 
-def train_model(df: pd.DataFrame, features: list[str], cfg: dict, hardware: dict | None = None) -> tuple:
+def train_model(df: pd.DataFrame, features: list[str], cfg: dict, hardware: dict | None = None,
+                need_full_pred: bool = True) -> tuple:
     """统一训练入口：根据 model_type 路由到对应训练函数。"""
     model_cfg = cfg.get("model", {})
+    _optuna_result = None
     model_type = str(model_cfg.get("type", "lightgbm")).strip().lower()
 
     if model_type not in _ALL_MODEL_TYPES:
@@ -2495,12 +2497,33 @@ def train_model(df: pd.DataFrame, features: list[str], cfg: dict, hardware: dict
     logger.info("Training model: %s (framework=%s)", model_type, _get_model_framework(model_type))
     train_t0 = time.time()
 
-    if model_type == "lightgbm":
-        model = _train_lgb(cfg, features, X_train, y_train, X_val, y_val)
-    elif model_type == "xgboost":
-        model = _train_xgb(cfg, features, X_train, y_train, X_val, y_val)
-    elif model_type == "catboost":
-        model = _train_catboost(cfg, features, X_train, y_train, X_val, y_val)
+    if model_type in ("lightgbm", "xgboost", "catboost"):
+        # Optuna 自动超参搜索：显式 optuna.enabled=true 时，先搜索最优参数再训练。
+        # _train_single_model 的 OOF fold（need_full_pred=False）不触发，避免重复搜索。
+        _optuna_cfg = cfg.get("optuna", {}) or {}
+        if _optuna_cfg.get("enabled") and need_full_pred:
+            _optuna_result = _tune_tree_hyperparams(
+                cfg, model_type, features, X_train, y_train, X_val, y_val, val_df
+            )
+            if _optuna_result and _optuna_result.get("best_params"):
+                # 将最优参数合并进模型参数后重新训练
+                _best = _optuna_result["best_params"]
+                _merge_cfg = dict(cfg)
+                _model_cfg = dict(cfg.get("model", {}))
+                if model_type == "lightgbm":
+                    _model_cfg["params"] = {**(_model_cfg.get("params") or {}), **_best}
+                elif model_type == "xgboost":
+                    _model_cfg["xgb_params"] = {**(_model_cfg.get("xgb_params") or {}), **_best}
+                elif model_type == "catboost":
+                    _model_cfg["catboost_params"] = {**(_model_cfg.get("catboost_params") or {}), **_best}
+                _merge_cfg["model"] = _model_cfg
+                cfg = _merge_cfg
+        if model_type == "lightgbm":
+            model = _train_lgb(cfg, features, X_train, y_train, X_val, y_val)
+        elif model_type == "xgboost":
+            model = _train_xgb(cfg, features, X_train, y_train, X_val, y_val)
+        elif model_type == "catboost":
+            model = _train_catboost(cfg, features, X_train, y_train, X_val, y_val)
     elif model_type == "linear":
         model = _train_linear(cfg, features, X_train, y_train, X_val, y_val)
     elif model_type == "random_forest":
@@ -2643,6 +2666,7 @@ def train_model(df: pd.DataFrame, features: list[str], cfg: dict, hardware: dict
             "test": test_df.reset_index(drop=True),
         },
         model_type,
+        _optuna_result,
     )
 
 
@@ -2747,6 +2771,84 @@ def select_top_factors(
     return selected, ic_results
 
 
+# ── Optuna 自动超参搜索 ────────────────────────────────────────────────────────
+def _tune_tree_hyperparams(
+    cfg: dict,
+    model_type: str,
+    features: list[str],
+    X_train: np.ndarray,
+    y_train: np.ndarray,
+    X_val: np.ndarray,
+    y_val: np.ndarray,
+    val_df: pd.DataFrame,
+) -> dict | None:
+    """Optuna 自动搜索树模型超参，以验证集 Rank ICIR 为目标。
+
+    返回最优参数 dict（合并进模型参数）；未安装 optuna 时返回 None（优雅降级）。
+    搜索空间面向 A 股选股场景（截面 rank 收益标签、防过拟合优先）。
+    """
+    try:
+        import optuna
+    except ImportError:
+        logger.warning("optuna 未安装，跳过超参搜索（pip install optuna 可启用）")
+        return None
+
+    optuna_cfg = cfg.get("optuna", {}) or {}
+    n_trials = max(5, int(optuna_cfg.get("n_trials", 20)))
+    seed = int((cfg.get("seed") or 42))
+    optuna.logging.set_verbosity(optuna.logging.WARNING)
+
+    def _objective(trial) -> float:
+        params: dict[str, Any] = {}
+        if model_type == "lightgbm":
+            params.update({
+                "learning_rate": trial.suggest_float("learning_rate", 0.005, 0.1, log=True),
+                "num_leaves": trial.suggest_int("num_leaves", 15, 127),
+                "min_child_samples": trial.suggest_int("min_child_samples", 20, 500),
+                "feature_fraction": trial.suggest_float("feature_fraction", 0.4, 0.9),
+                "bagging_fraction": trial.suggest_float("bagging_fraction", 0.4, 0.9),
+                "lambda_l1": trial.suggest_float("lambda_l1", 0.0, 5.0),
+                "lambda_l2": trial.suggest_float("lambda_l2", 0.0, 10.0),
+            })
+            model = _train_lgb({**cfg, "model": {**cfg.get("model", {}), "params": {**cfg.get("model", {}).get("params", {}), **params}}}, features, X_train, y_train, X_val, y_val)
+        elif model_type == "xgboost":
+            params.update({
+                "learning_rate": trial.suggest_float("learning_rate", 0.005, 0.1, log=True),
+                "max_depth": trial.suggest_int("max_depth", 3, 8),
+                "subsample": trial.suggest_float("subsample", 0.5, 0.9),
+                "colsample_bytree": trial.suggest_float("colsample_bytree", 0.4, 0.9),
+                "min_child_weight": trial.suggest_int("min_child_weight", 20, 300),
+                "reg_alpha": trial.suggest_float("reg_alpha", 0.0, 5.0),
+            })
+            model = _train_xgb({**cfg, "model": {**cfg.get("model", {}), "xgb_params": {**cfg.get("model", {}).get("xgb_params", {}), **params}}}, features, X_train, y_train, X_val, y_val)
+        elif model_type == "catboost":
+            params.update({
+                "learning_rate": trial.suggest_float("learning_rate", 0.005, 0.1, log=True),
+                "depth": trial.suggest_int("depth", 4, 10),
+                "l2_leaf_reg": trial.suggest_float("l2_leaf_reg", 1.0, 10.0, log=True),
+                "random_strength": trial.suggest_float("random_strength", 0.5, 5.0),
+            })
+            model = _train_catboost({**cfg, "model": {**cfg.get("model", {}), "catboost_params": {**cfg.get("model", {}).get("catboost_params", {}), **params}}}, features, X_train, y_train, X_val, y_val)
+        else:
+            return -1.0
+
+        y_pred = _predict_with_model(model, X_val, model_type, features)
+        m = _compute_metrics(val_df, y_val.astype("float32"), np.asarray(y_pred, dtype=np.float32).flatten())
+        return float(m["rank_icir"]) if np.isfinite(m["rank_icir"]) else -1.0
+
+    study = optuna.create_study(direction="maximize", sampler=optuna.samplers.TPESampler(seed=seed))
+    study.optimize(_objective, n_trials=n_trials, show_progress_bar=False)
+
+    best = study.best_params
+    logger.info("Optuna %s best params (trial=%d, val_rank_icir=%.4f): %s",
+                model_type, study.best_trial.number, study.best_value, best)
+    return {
+        "best_params": best,
+        "best_value": float(study.best_value),
+        "n_trials": n_trials,
+    }
+
+
 # ── 多模型并行训练 ──────────────────────────────────────────────────────────────
 def _train_single_model(
     model_type: str,
@@ -2769,16 +2871,38 @@ def _train_single_model(
     t0 = time.time()
 
     model_cfg = cfg.get("model", {})
+    _optuna_result = None
     fill_values, X_train, y_train, X_val, y_val, _fill = _prepare_arrays(
         train_df, val_df, features, prep_cfg=cfg.get("preprocessing") or {}
     )
 
-    if model_type == "lightgbm":
-        model = _train_lgb(cfg, features, X_train, y_train, X_val, y_val)
-    elif model_type == "xgboost":
-        model = _train_xgb(cfg, features, X_train, y_train, X_val, y_val)
-    elif model_type == "catboost":
-        model = _train_catboost(cfg, features, X_train, y_train, X_val, y_val)
+    if model_type in ("lightgbm", "xgboost", "catboost"):
+        # Optuna 自动超参搜索：显式 optuna.enabled=true 时，先搜索最优参数再训练。
+        # _train_single_model 的 OOF fold（need_full_pred=False）不触发，避免重复搜索。
+        _optuna_cfg = cfg.get("optuna", {}) or {}
+        if _optuna_cfg.get("enabled") and need_full_pred:
+            _optuna_result = _tune_tree_hyperparams(
+                cfg, model_type, features, X_train, y_train, X_val, y_val, val_df
+            )
+            if _optuna_result and _optuna_result.get("best_params"):
+                # 将最优参数合并进模型参数后重新训练
+                _best = _optuna_result["best_params"]
+                _merge_cfg = dict(cfg)
+                _model_cfg = dict(cfg.get("model", {}))
+                if model_type == "lightgbm":
+                    _model_cfg["params"] = {**(_model_cfg.get("params") or {}), **_best}
+                elif model_type == "xgboost":
+                    _model_cfg["xgb_params"] = {**(_model_cfg.get("xgb_params") or {}), **_best}
+                elif model_type == "catboost":
+                    _model_cfg["catboost_params"] = {**(_model_cfg.get("catboost_params") or {}), **_best}
+                _merge_cfg["model"] = _model_cfg
+                cfg = _merge_cfg
+        if model_type == "lightgbm":
+            model = _train_lgb(cfg, features, X_train, y_train, X_val, y_val)
+        elif model_type == "xgboost":
+            model = _train_xgb(cfg, features, X_train, y_train, X_val, y_val)
+        elif model_type == "catboost":
+            model = _train_catboost(cfg, features, X_train, y_train, X_val, y_val)
     elif model_type == "linear":
         model = _train_linear(cfg, features, X_train, y_train, X_val, y_val)
     elif model_type == "random_forest":
@@ -2897,6 +3021,7 @@ def _train_single_model(
         "pred_df": full_pred_df.reset_index(drop=True) if full_pred_df is not None else None,
         "split_frames": {"train": train_df.reset_index(drop=True), "valid": val_df.reset_index(drop=True), "test": test_df.reset_index(drop=True)},
         "best_iteration": best_iteration,
+        "optuna": _optuna_result,
         "elapsed": elapsed,
     }
 
@@ -3060,6 +3185,7 @@ def train_stacking(
     """
     from sklearn.linear_model import Ridge
 
+    model_cfg = cfg.get("model", {})
     train_df, val_df, test_df = _split_data(df, cfg)
 
     # Step 1: 生成各基模型 OOF 预测 + 全量基模型
@@ -3105,10 +3231,11 @@ def train_stacking(
     logger.info("Meta-learner training samples: %d (from %d train samples)",
                 len(meta_y_train), len(train_df))
 
-    # Step 3: 训练 Ridge 元学习器
-    meta_model = Ridge(alpha=1.0, fit_intercept=True, random_state=42)
+    # Step 3: 训练 Ridge 元学习器（alpha 可配，默认 1.0）
+    meta_alpha = float(model_cfg.get("meta_alpha", 1.0))
+    meta_model = Ridge(alpha=meta_alpha, fit_intercept=True, random_state=42)
     meta_model.fit(meta_X_train, meta_y_train)
-    logger.info("Ridge meta-learner coefficients: %s", dict(zip(
+    logger.info("Ridge meta-learner (alpha=%.3f) coefficients: %s", meta_alpha, dict(zip(
         [f"oof_{mt}" for mt in model_types], meta_model.coef_.round(4)
     )))
 
@@ -3595,12 +3722,16 @@ def main() -> int:
         else:
             # ── 单模型训练路径（向后兼容） ──
             train_result = train_model(df, valid_features, cfg, hardware=hardware)
-            # train_model 返回 8-tuple (树模型) 或 9-tuple (DL 模型，含 dl_metadata)
-            if len(train_result) == 9:
+            # train_model 返回 10-tuple (树模型含 optuna) / 9-tuple (DL 含 dl_metadata) / 8-tuple
+            if len(train_result) == 10:
+                model, fill_values, train_m, val_m, test_m, pred_df, split_frames, actual_model_type, dl_metadata, optuna_result = train_result
+            elif len(train_result) == 9:
                 model, fill_values, train_m, val_m, test_m, pred_df, split_frames, actual_model_type, dl_metadata = train_result
+                optuna_result = None
             else:
                 model, fill_values, train_m, val_m, test_m, pred_df, split_frames, actual_model_type = train_result
                 dl_metadata = None
+                optuna_result = None
             elapsed = float(time.time() - train_t0)
 
             # 获取 best_iteration（不同框架方式不同）
@@ -3708,6 +3839,9 @@ def main() -> int:
                 "generated_at": datetime.utcnow().isoformat(),
                 "elapsed_seconds": elapsed,
             }
+            # Optuna 搜索结果写入 metadata（若启用）
+            if optuna_result:
+                metadata["optuna"] = optuna_result
             # DL 模型特有元数据 (model_class_name, model_params, input_spec 等)
             if dl_metadata:
                 metadata.update(dl_metadata)
