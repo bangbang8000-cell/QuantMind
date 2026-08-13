@@ -215,7 +215,7 @@ export function getStatusConfig(status: string) {
     case 'candidate':
       return { color: 'text-blue-600', bg: 'bg-blue-50', border: 'border-blue-200', label: '候选', icon: React.createElement(Clock, { size: 9 }) };
     case 'syncing':
-      return { color: 'text-indigo-600', bg: 'bg-indigo-50', border: 'border-indigo-200', label: '已同步', icon: React.createElement(CheckCircle2, { size: 9 }) };
+      return { color: 'text-indigo-600', bg: 'bg-indigo-50', border: 'border-indigo-200', label: '同步中', icon: React.createElement(Clock, { size: 9 }) };
     case 'failed':
       return { color: 'text-red-500', bg: 'bg-red-50', border: 'border-red-200', label: '失败', icon: React.createElement(XCircle, { size: 9 }) };
     case 'archived':

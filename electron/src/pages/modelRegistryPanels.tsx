@@ -1,5 +1,5 @@
-import React, { useMemo, useState, useEffect } from 'react';
-import { Button, Card, Tag, Typography, Empty, Spin, Progress, Divider, Input, Modal, Tabs, Switch, DatePicker, Table, Drawer, Badge, Tooltip, Collapse, Select, Pagination, message, Space } from 'antd';
+import React, { useMemo, useState, useEffect, useCallback } from 'react';
+import { Button, Card, Tag, Typography, Empty, Spin, Progress, Divider, Input, Modal, Tabs, Switch, DatePicker, Table, Drawer, Badge, Tooltip, Collapse, Select, Pagination, message, Space, Alert } from 'antd';
 import { clsx } from 'clsx';
 import dayjs from 'dayjs';
 import {
@@ -1234,3 +1234,101 @@ export const InfoCell: React.FC<{ label: string; value: string }> = ({ label, va
     <Text className="mt-1 block text-[11px] font-black text-slate-800 font-mono">{value}</Text>
   </div>
 );
+
+// ── 生产监控：滚动 IC + 漂移告警 ──────────────────────────────────────────────
+function MiniSparkline({ values, color }: { values: number[]; color: string }) {
+  if (values.length < 2) {
+    return <Text type="secondary" className="text-xs">暂无数据</Text>;
+  }
+  const w = 280, h = 56, pad = 4;
+  const min = Math.min(...values), max = Math.max(...values);
+  const range = max - min || 1;
+  const pts = values.map((v, i) => {
+    const x = pad + (i / (values.length - 1)) * (w - pad * 2);
+    const y = h - pad - ((v - min) / range) * (h - pad * 2);
+    return `${x.toFixed(1)},${y.toFixed(1)}`;
+  }).join(' ');
+  return (
+    <svg width={w} height={h} className="overflow-visible">
+      <polyline points={pts} fill="none" stroke={color} strokeWidth={1.8} strokeLinejoin="round" />
+      <circle cx={pad + (w - pad * 2)} cy={h - pad - ((values[values.length - 1] - min) / range) * (h - pad * 2)} r={2.5} fill={color} />
+    </svg>
+  );
+}
+
+export const ProductionMonitorPanel: React.FC<{ model: UserModelRecord }> = ({ model }) => {
+  const [loading, setLoading] = useState(true);
+  const [quality, setQuality] = useState<any>(null);
+  const [error, setError] = useState<string>('');
+
+  const load = useCallback(() => {
+    if (!model?.model_id) return;
+    setLoading(true);
+    setError('');
+    modelTrainingService.getModelQuality(model.model_id, 60)
+      .then((d) => setQuality(d))
+      .catch((e: any) => setError(e?.message ?? '加载失败'))
+      .finally(() => setLoading(false));
+  }, [model?.model_id]);
+
+  useEffect(() => { load(); }, [load]);
+
+  const items: any[] = quality?.items ?? [];
+  const summary: any = quality?.summary ?? {};
+  const rankIcs = items.map((it: any) => it.rank_ic).filter((v: any) => v !== null && v !== undefined) as number[];
+  const coverages = items.map((it: any) => it.coverage).filter((v: any) => v !== null && v !== undefined) as number[];
+  const dates = items.map((it: any) => it.trade_date);
+
+  const driftColor = summary.drift_status === 'healthy' ? 'emerald'
+    : summary.drift_status === 'data_issue' ? 'orange' : 'red';
+
+  return (
+    <div className="space-y-4">
+      {error && <Alert type="warning" showIcon message="生产数据加载失败" description={error} className="rounded-xl" />}
+      {!error && loading && <div className="py-8 text-center"><Spin /></div>}
+      {!error && !loading && items.length === 0 && (
+        <Empty description="暂无生产数据。每日自动推理后，次日回填真实 IC（滞后 5 个交易日）" />
+      )}
+      {!error && !loading && items.length > 0 && (
+        <>
+          {/* 漂移告警横幅 */}
+          {summary.drift_status !== 'healthy' && (
+            <Alert
+              type="error"
+              showIcon
+              message={`漂移告警：${summary.drift_status === 'degraded' ? '信号可能失效' : summary.drift_status === 'drifted' ? '信号衰减' : '数据问题'}`}
+              description={summary.drift_reasons?.join('；') ?? ''}
+              className="rounded-xl border-red-200"
+            />
+          )}
+          {summary.drift_status === 'healthy' && (
+            <div className="rounded-xl bg-emerald-50 border border-emerald-200 px-4 py-2.5 text-xs font-bold text-emerald-700">
+              ✓ 模型运行健康：近{Math.min(rankIcs.length, 20)}日 Rank IC 正常
+            </div>
+          )}
+
+          {/* 指标卡 */}
+          <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+            <MetricCard label="生产天数" value={`${summary.days ?? 0} 天`} />
+            <MetricCard label="Rank IC 均值" value={summary.rank_ic_mean !== null && summary.rank_ic_mean !== undefined ? summary.rank_ic_mean.toFixed(4) : '—'} color={summary.rank_ic_mean != null && summary.rank_ic_mean > 0 ? 'text-emerald-600' : 'text-red-500'} />
+            <MetricCard label="30日 ICIR" value={summary.rank_icir_30d != null ? summary.rank_icir_30d.toFixed(3) : '—'} />
+            <MetricCard label="覆盖率" value={summary.coverage_mean != null ? `${(summary.coverage_mean * 100).toFixed(0)}%` : '—'} />
+          </div>
+
+          {/* 滚动 IC 曲线 */}
+          <div className="rounded-2xl border border-slate-200 bg-white p-4">
+            <div className="flex items-center justify-between mb-3">
+              <Text className="text-[10px] font-black uppercase tracking-[0.22em] text-slate-400">滚动 Rank IC 曲线</Text>
+              <Text type="secondary" className="text-[10px] font-mono">{dates[0]} ~ {dates[dates.length - 1]}</Text>
+            </div>
+            <MiniSparkline values={rankIcs} color={summary.rank_ic_mean != null && summary.rank_ic_mean >= 0 ? '#10b981' : '#ef4444'} />
+            <div className="mt-3 flex gap-4 text-[10px] text-slate-400">
+              <span>数据截至 {dates[dates.length - 1]}（真实 IC 滞后 5 交易日）</span>
+              {coverages.length > 0 && <span>覆盖率 {Math.min(...coverages).toFixed(2)}~{Math.max(...coverages).toFixed(2)}</span>}
+            </div>
+          </div>
+        </>
+      )}
+    </div>
+  );
+};

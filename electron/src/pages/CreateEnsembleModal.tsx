@@ -1,7 +1,7 @@
 import React, { useMemo, useState } from 'react';
-import { Button, Input, Radio, Modal, Select, Slider, message, Tag, Tooltip } from 'antd';
+import { Button, Input, Radio, Modal, Select, Slider, message, Tag, Tooltip, Alert } from 'antd';
 import { clsx } from 'clsx';
-import { Layers, Info, TrendingUp } from 'lucide-react';
+import { Layers, Info, TrendingUp, Activity } from 'lucide-react';
 import { UserModelRecord, modelTrainingService } from '../services/modelTrainingService';
 import { getMeta, getMetrics, extractModelTypeShort, modelDisplayName } from './modelRegistryUtils';
 
@@ -12,7 +12,7 @@ interface CreateEnsembleModalProps {
   models: UserModelRecord[];
 }
 
-type WeightStrategy = 'equal' | 'icir' | 'manual';
+type WeightStrategy = 'equal' | 'icir' | 'manual' | 'recent_ic';
 
 function extractIcirs(models: UserModelRecord[]): Record<string, number> {
   const out: Record<string, number> = {};
@@ -179,7 +179,7 @@ export const CreateEnsembleModal: React.FC<CreateEnsembleModalProps> = ({
         <div>
           <div className="text-[10px] font-black text-slate-500 mb-1.5">权重策略</div>
           <Radio.Group value={strategy} onChange={(e) => setStrategy(e.target.value)} className="w-full">
-            <div className="grid grid-cols-3 gap-2">
+            <div className="grid grid-cols-4 gap-2">
               <Radio.Button value="equal" className="text-center">
                 <Tooltip title="每个模型等权 1/N">
                   <span className="text-[11px] font-bold">等权</span>
@@ -197,9 +197,27 @@ export const CreateEnsembleModal: React.FC<CreateEnsembleModalProps> = ({
                   <span className="text-[11px] font-bold">手动</span>
                 </Tooltip>
               </Radio.Button>
+              <Radio.Button value="recent_ic" className="text-center">
+                <Tooltip title="按各子模型近30日生产真实 Rank IC 动态调权（推荐）">
+                  <span className="text-[11px] font-bold flex items-center justify-center gap-1">
+                    生产IC动态 <Activity size={10} />
+                  </span>
+                </Tooltip>
+              </Radio.Button>
             </div>
           </Radio.Group>
         </div>
+
+        {/* 动态权重说明（recent_ic 时） */}
+        {strategy === 'recent_ic' && (
+          <Alert
+            type="info"
+            showIcon
+            message="最近生产 IC 动态加权"
+            description="推理时按各子模型近 30 日生产真实 Rank IC（指数衰减）动态调权，表现好的模型权重自动提升，失效模型自动降权。权重每日自动刷新。"
+            className="rounded-xl border-blue-100 bg-blue-50/60"
+          />
+        )}
 
         {/* 融合算法 */}
         <div>

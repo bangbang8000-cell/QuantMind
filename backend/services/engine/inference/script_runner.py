@@ -1100,21 +1100,23 @@ class InferenceScriptRunner:
     def _resolve_signal_sides(
         scores: list[float],
         consensus_list: list[int] | None = None,
+        confidence_list: list[float] | None = None,
         buy_pct: float = 0.20,
         sell_pct: float = 0.20,
         min_buy_score: float = 0.2,
         max_sell_score: float = -0.2,
         min_consensus: int = 4,
+        min_confidence: float = 0.3,
     ) -> list[str]:
-        """双指标信号逻辑：百分比排名 + 共识度 + 绝对方向闸门。
+        """双指标信号逻辑：百分比排名 + 共识度 + 绝对方向闸门 + 置信度。
 
         逻辑：
         - Top buy_pct 百分位 AND score > min_buy_score AND consensus >= min_consensus → BUY
         - Bottom sell_pct 百分位 AND score < max_sell_score AND consensus >= min_consensus → SELL
-        - 分歧太大 (consensus < min_consensus) → HOLD
+        - 分歧太大 (consensus < min_consensus) 或低置信 (confidence < min_confidence) → HOLD
         - 其余 → HOLD
 
-        当 consensus_list 为 None 时退化为纯百分位逻辑（兼容旧版JSON输出）。
+        confidence_list 为 None 时跳过置信度门槛（兼容旧版）。
         """
         import numpy as np
 
@@ -1128,14 +1130,16 @@ class InferenceScriptRunner:
         buy_threshold = np.percentile(arr, (1 - buy_pct) * 100)
         sell_threshold = np.percentile(arr, sell_pct * 100)
 
-        # 生成信号（百分位 + 方向 + 共识度 三重约束）
+        # 生成信号（百分位 + 方向 + 共识度 + 置信度 四重约束）
         has_consensus = consensus_list is not None and len(consensus_list) == n
+        has_confidence = confidence_list is not None and len(confidence_list) == n
         sides = []
         for i, s in enumerate(scores):
+            low_conf = has_confidence and confidence_list[i] < min_confidence
             is_buy = s >= buy_threshold and s > min_buy_score
             is_sell = s <= sell_threshold and s < max_sell_score
-            if has_consensus and consensus_list[i] < min_consensus:
-                sides.append("HOLD")  # 分歧太大
+            if (has_consensus and consensus_list[i] < min_consensus) or low_conf:
+                sides.append("HOLD")  # 分歧太大或低置信
             elif is_buy:
                 sides.append("BUY")
             elif is_sell:
@@ -1316,6 +1320,7 @@ class InferenceScriptRunner:
         consensus_list = [s.get("consensus", 0) for s in signals_sorted]
         zfusion_list = [s.get("zfusion", 0.0) for s in signals_sorted]
         detail_list = [s.get("detail", {}) for s in signals_sorted]
+        confidence_list = [s.get("confidence") for s in signals_sorted]
         feature_dim = max(1, self._resolve_expected_feature_dim())
         model_name = str(active_model_id or self.primary_model_id or "inference_script")
         feature_version = self._resolve_feature_version(model_name)
@@ -1349,11 +1354,12 @@ class InferenceScriptRunner:
                     consensus_list=consensus_list,
                     zfusion_list=zfusion_list,
                     detail_list=detail_list,
+                    confidence_list=confidence_list,
                     feature_dim=feature_dim,
                     model_name=model_name,
                     feature_version=feature_version,
                     inference_date=inference_date,
-                    signal_sides=self._resolve_signal_sides(scores, consensus_list),
+                    signal_sides=self._resolve_signal_sides(scores, consensus_list, confidence_list),
                 )
         except Exception as exc:
             logger.error(f"[InferenceScriptRunner] 写库失败: {exc}")
@@ -1489,6 +1495,7 @@ class InferenceScriptRunner:
         consensus_list: list[int] | None = None,
         zfusion_list: list[float] | None = None,
         detail_list: list[dict] | None = None,
+        confidence_list: list[float] | None = None,
     ) -> None:
         """写库逻辑（在 _INFER_PERSIST_LOCK 保护下执行）。
 
@@ -1660,6 +1667,8 @@ class InferenceScriptRunner:
                 quality_parts["zfusion"] = round(zfusion_list[idx], 6)
             if has_detail:
                 quality_parts["detail"] = detail_list[idx]
+            if confidence_list is not None and idx < len(confidence_list) and confidence_list[idx] is not None:
+                quality_parts["confidence"] = round(float(confidence_list[idx]), 4)
             quality = json.dumps(quality_parts) if quality_parts else None
             if quote_redis:
                 try:

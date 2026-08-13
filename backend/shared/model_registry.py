@@ -712,6 +712,47 @@ class ModelRegistryService:
             raise ValueError("archive result unavailable")
         return archived
 
+    async def activate_model(self, *, tenant_id: str, user_id: str, model_id: str) -> dict[str, Any]:
+        """手动激活 candidate 模型 → ready（软门禁触发的模型走此入口）。
+
+        仅 candidate 可激活；激活后保留 quality_warnings（供展示），用户可设默认。
+        """
+        tenant, user = self._normalize_owner(tenant_id=tenant_id, user_id=user_id)
+        mid = str(model_id).strip()
+        if not mid:
+            raise ValueError("model_id is required")
+
+        model = await self.get_model(tenant_id=tenant, user_id=user, model_id=mid)
+        if model is None:
+            raise ValueError("model not found")
+        if model.get("status") != "candidate":
+            raise ValueError(f"only candidate models can be activated, current status: {model.get('status')}")
+
+        now = datetime.now(timezone.utc)
+        async with get_session() as session:
+            await session.execute(
+                text(
+                    """
+                    UPDATE qm_user_models
+                    SET status = 'ready', activated_at = :activated_at, updated_at = :updated_at
+                    WHERE tenant_id = :tenant_id AND user_id = :user_id AND model_id = :model_id
+                    """
+                ),
+                {
+                    "tenant_id": tenant,
+                    "user_id": user,
+                    "model_id": mid,
+                    "activated_at": now,
+                    "updated_at": now,
+                },
+            )
+            await session.commit()
+
+        activated = await self.get_model(tenant_id=tenant, user_id=user, model_id=mid)
+        if activated is None:
+            raise ValueError("activate result unavailable")
+        return activated
+
     async def get_strategy_binding(
         self,
         *,
@@ -1567,6 +1608,9 @@ class ModelRegistryService:
                 raise ValueError(f"manual 权重缺少源模型: {missing}")
             total = sum(raw.values()) or 1.0
             weights = {k: v / total for k, v in raw.items()}
+        elif weight_strategy == "recent_ic":
+            # 初始等权；每日回填任务按近30日生产 rank_ic 动态刷新 weight_snapshot.json
+            weights = {str(s["model_id"]): 1.0 / len(sources) for s in sources}
         else:
             weights = {str(s["model_id"]): 1.0 / len(sources) for s in sources}
 

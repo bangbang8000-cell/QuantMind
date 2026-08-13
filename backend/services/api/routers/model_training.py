@@ -241,7 +241,7 @@ class EnsembleCreateRequest(BaseModel):
     display_name: str = Field(default="", description="融合模型显示名（可选，自动生成）")
     weight_strategy: str = Field(
         default="equal",
-        description="权重策略: equal / icir / manual",
+        description="权重策略: equal / icir / manual / recent_ic",
     )
     manual_weights: dict[str, float] | None = Field(
         default=None, description="manual 策略下各源模型权重"
@@ -766,6 +766,189 @@ async def archive_user_model(
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
     return model
+
+
+@router.post("/{model_id}/activate", summary="手动激活候选模型（用户态）")
+async def activate_user_model(
+    model_id: str,
+    current_user: dict[str, Any] = Depends(get_current_user),
+):
+    """手动激活 candidate 模型 → ready（软门禁触发的模型走此入口）。"""
+    tenant_id = str(current_user.get("tenant_id") or "default")
+    user_id = str(current_user.get("user_id") or current_user.get("sub") or "")
+    try:
+        model = await model_registry_service.activate_model(tenant_id=tenant_id, user_id=user_id, model_id=model_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    return model
+
+
+@router.get("/{model_id}/quality", summary="获取模型生产滚动 IC 监控（用户态）")
+async def get_model_quality(
+    model_id: str,
+    window: int = 60,
+    current_user: dict[str, Any] = Depends(get_current_user),
+):
+    """模型生产质量监控：滚动 IC 序列 + 漂移判定。"""
+    from backend.shared.database_manager_v2 import get_session
+    from sqlalchemy import text as _text
+
+    tenant_id = str(current_user.get("tenant_id") or "default")
+    user_id = str(current_user.get("user_id") or current_user.get("sub") or "")
+    async with get_session(read_only=True) as session:
+        rows = (
+            await session.execute(
+                _text(
+                    """
+                    SELECT trade_date, signals_count, coverage, ic, rank_ic, horizon_days
+                    FROM qm_model_inference_quality
+                    WHERE model_id = :model_id
+                    ORDER BY trade_date DESC
+                    LIMIT :window
+                    """
+                ),
+                {"model_id": model_id, "window": int(window)},
+            )
+        ).mappings().all()
+
+    items = [dict(r) for r in rows]
+    for it in items:
+        it["trade_date"] = str(it["trade_date"])[:10]
+        for k in ("coverage", "ic", "rank_ic"):
+            if it.get(k) is not None:
+                try:
+                    it[k] = float(it[k])
+                except (TypeError, ValueError):
+                    pass
+    items.sort(key=lambda x: x["trade_date"])
+
+    # 漂移判定
+    drift_status = "healthy"
+    drift_reasons: list[str] = []
+    rank_ics = [it["rank_ic"] for it in items if it.get("rank_ic") is not None]
+    recent = rank_ics[-20:] if len(rank_ics) >= 20 else rank_ics
+    if recent:
+        recent_mean = float(sum(recent) / len(recent))
+        if recent_mean < 0:
+            drift_status = "degraded"
+            drift_reasons.append(f"近{len(recent)}日 Rank IC 均值 {recent_mean:.4f} < 0，信号可能失效")
+        elif len(rank_ics) >= 30:
+            hist_mean = float(sum(rank_ics) / len(rank_ics))
+            if hist_mean > 0 and recent_mean < hist_mean * 0.5:
+                drift_status = "drifted"
+                drift_reasons.append(f"近{len(recent)}日 Rank IC {recent_mean:.4f} 较历史均值 {hist_mean:.4f} 衰减超50%")
+    coverages = [it["coverage"] for it in items if it.get("coverage") is not None]
+    if coverages and min(coverages[-10:]) < 0.6:
+        drift_status = "data_issue"
+        drift_reasons.append("近10日覆盖率低于 60%，疑似数据问题")
+
+    # 30 日滚动 ICIR
+    rank_icir_30d = None
+    if len(rank_ics) >= 5:
+        import statistics
+        s = rank_ics[-30:] if len(rank_ics) >= 30 else rank_ics
+        mean_s = sum(s) / len(s)
+        std_s = statistics.pstdev(s)
+        rank_icir_30d = mean_s / std_s if std_s > 0 else None
+
+    return {
+        "model_id": model_id,
+        "items": items,
+        "summary": {
+            "days": len(items),
+            "rank_ic_mean": float(sum(rank_ics) / len(rank_ics)) if rank_ics else None,
+            "rank_icir_30d": rank_icir_30d,
+            "drift_status": drift_status,
+            "drift_reasons": drift_reasons,
+            "coverage_mean": float(sum(coverages) / len(coverages)) if coverages else None,
+        },
+    }
+
+
+@router.post("/compare", summary="A/B 模型对比（用户态）")
+async def compare_models(
+    payload: dict[str, Any],
+    current_user: dict[str, Any] = Depends(get_current_user),
+):
+    """对比两个模型：训练指标表 + 生产 IC 序列 + 特征重叠度。"""
+    from backend.shared.database_manager_v2 import get_session
+    from sqlalchemy import text as _text
+
+    model_ids = payload.get("model_ids") or []
+    if not isinstance(model_ids, list) or len(model_ids) != 2:
+        raise HTTPException(status_code=422, detail="需要恰好两个 model_id")
+    model_a, model_b = str(model_ids[0]), str(model_ids[1])
+    tenant_id = str(current_user.get("tenant_id") or "default")
+    user_id = str(current_user.get("user_id") or current_user.get("sub") or "")
+
+    meta_a = await model_registry_service.get_model(tenant_id=tenant_id, user_id=user_id, model_id=model_a)
+    meta_b = await model_registry_service.get_model(tenant_id=tenant_id, user_id=user_id, model_id=model_b)
+    if not meta_a or not meta_b:
+        raise HTTPException(status_code=404, detail="对比模型不存在")
+
+    def _metrics_of(m: dict) -> dict:
+        md = m.get("metadata") or {}
+        metrics = md.get("metrics") or {}
+        return {
+            "val_ic": metrics.get("val_ic"),
+            "val_rank_ic": metrics.get("val_rank_ic"),
+            "val_rank_icir": metrics.get("val_rank_icir"),
+            "test_ic": metrics.get("test_ic"),
+            "test_rank_ic": metrics.get("test_rank_ic"),
+            "test_rank_icir": metrics.get("test_rank_icir"),
+            "model_type": md.get("model_type"),
+            "target_horizon_days": md.get("target_horizon_days"),
+            "feature_count": md.get("feature_count"),
+            "created_at": str(m.get("created_at") or "")[:19],
+            "is_default": bool(m.get("is_default")),
+            "status": m.get("status"),
+        }
+
+    def _features_of(m: dict) -> set[str]:
+        md = m.get("metadata") or {}
+        feats = md.get("features") or md.get("feature_columns") or []
+        return set(str(f) for f in feats)
+
+    feats_a, feats_b = _features_of(meta_a), _features_of(meta_b)
+    common = feats_a & feats_b
+    only_a = feats_a - feats_b
+    only_b = feats_b - feats_a
+
+    # 生产 IC 序列（按模型分别查询）
+    async def _quality_series(mid: str) -> list[dict]:
+        async with get_session(read_only=True) as session:
+            rows = (
+                await session.execute(
+                    _text(
+                        """
+                        SELECT trade_date, rank_ic, coverage
+                        FROM qm_model_inference_quality
+                        WHERE model_id = :mid
+                        ORDER BY trade_date
+                        """
+                    ),
+                    {"mid": mid},
+                )
+            ).mappings().all()
+        return [{"trade_date": str(r["trade_date"])[:10], "rank_ic": float(r["rank_ic"]) if r["rank_ic"] is not None else None, "coverage": float(r["coverage"]) if r["coverage"] is not None else None} for r in rows]
+
+    quality_a = await _quality_series(model_a)
+    quality_b = await _quality_series(model_b)
+
+    return {
+        "model_a": {"model_id": model_a, "metrics": _metrics_of(meta_a)},
+        "model_b": {"model_id": model_b, "metrics": _metrics_of(meta_b)},
+        "feature_overlap": {
+            "common_count": len(common),
+            "common": sorted(common)[:200],
+            "only_a_count": len(only_a),
+            "only_a": sorted(only_a)[:100],
+            "only_b_count": len(only_b),
+            "only_b": sorted(only_b)[:100],
+        },
+        "quality_a": quality_a,
+        "quality_b": quality_b,
+    }
 
 
 def _build_precheck_items(
@@ -2578,8 +2761,8 @@ async def create_ensemble_model(
       - icir    按源模型 Val Rank ICIR 归一化加权
       - manual  手动指定权重（自动归一化到和为 1）
     """
-    if payload.weight_strategy not in ("equal", "icir", "manual"):
-        raise HTTPException(status_code=422, detail="weight_strategy 应为 equal / icir / manual")
+    if payload.weight_strategy not in ("equal", "icir", "manual", "recent_ic"):
+        raise HTTPException(status_code=422, detail="weight_strategy 应为 equal / icir / manual / recent_ic")
     if payload.weight_strategy == "manual" and not payload.manual_weights:
         raise HTTPException(status_code=422, detail="manual 策略必须提供 manual_weights")
     if payload.fusion_strategy not in ("linear", "majority_vote", "periodic_hierarchy", "confidence_gate"):

@@ -92,6 +92,19 @@ if AUTO_INFERENCE_ENABLED:
             "task": "engine.tasks.auto_inference_if_needed",
             "schedule": crontab(minute="0", hour="0", day_of_week="1-5"),
         },
+        # 推理质量回填：每日 02:30 回填已完成推理但缺 quality 记录的日期
+        # （滞后 5 天等真实收益兑现，算生产 Rank IC）
+        "backfill-inference-quality-daily": {
+            "task": "engine.tasks.backfill_inference_quality",
+            "schedule": crontab(minute="30", hour="2", day_of_week="1-6"),
+            "kwargs": {"horizon_days": 5, "limit": 500},
+        },
+        # 时间平滑历史：每日 03:00 聚合近5日推理分数供融合平滑
+        "build-smooth-history-daily": {
+            "task": "engine.tasks.build_smooth_history",
+            "schedule": crontab(minute="0", hour="3", day_of_week="1-6"),
+            "kwargs": {"lookback_days": 5},
+        },
     }
 
 if NEWS_ENRICH_ENABLED:
