@@ -2687,13 +2687,13 @@ def select_top_factors(
     logger.info("=== Factor Selection: IC/ICIR screening ===")
     logger.info("Input: %d features, target top-%d", len(features), n_top)
 
-    # Step 1: 日频 Rank IC 计算（内存友好 + 交易日降采样）
+    # Step 1: 日频 Rank IC 计算（内存友好，默认不降采样保证质量）
     # Spearman IC = 截面 rank 后按日 Pearson 相关。
-    # 降采样：因子筛选的 IC/ICIR 估计不需全部交易日，按 sample_ratio 抽样
-    # （默认每 3 个交易日取 1），保持跨截面（每天仍全市场），IC 估计偏差小。
     # 逐特征单独 rank + cov 聚合（单列操作，内存峰值低，避免批量版 OOM）。
+    # 降采样为可选加速（FACTOR_SELECT_SAMPLE_RATIO>1 时按每 N 天取 1），
+    # 默认 1 = 全量交易日，IC/ICIR 估计精确（不降质量）。
     t0_sel = time.time()
-    sample_ratio = max(1, int(os.getenv("FACTOR_SELECT_SAMPLE_RATIO", "3")))
+    sample_ratio = max(1, int(os.getenv("FACTOR_SELECT_SAMPLE_RATIO", "1")))
     if sample_ratio > 1 and len(features) > 40:
         dates_sorted = sorted(df["trade_date"].unique())
         sample_dates = set(dates_sorted[::sample_ratio])
