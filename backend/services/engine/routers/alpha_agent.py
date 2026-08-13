@@ -79,7 +79,7 @@ async def start_evolution(
     user_id: Optional[str] = Query(None, description="已废弃：身份取自 JWT，仅用于防伪校验"),
     market: str = Query("a_share", description="市场: a_share, crypto, hong_kong, us_stock"),
     universe: str = Query("csi300", description="股票池: csi300, csi500, csi1000, sse50, gem, star, csi800, all_a"),
-    loop_n: int = Query(3, ge=1, le=20, description="演化轮数"),
+    loop_n: int = Query(5, ge=1, le=20, description="演化轮数"),
     direction: str = Query("", description="因子挖掘方向/假设"),
     data_source: str = Query("", description="数据源: qlib_bin, parquet, pg (留空使用默认)"),
 ):
@@ -321,7 +321,7 @@ async def backtest_factor(
     """对因子发起轻量验证（多市场 + 数据源可选）
 
     data_source=qlib_bin (默认): 用 Qlib 二进制 (5 个市场均支持)；
-    data_source=h5: 走 RD-Agent daily_pv.h5，仅 A 股 / 美股 / 港股有预生成 H5，其他市场自动回退。
+    data_source=h5: 走 RD-Agent daily_pv.h5（A股/港股/美股有预生成，期货从 parquet 自动生成，crypto 预生成）。
     """
     factor = await _require_owned_factor(factor_id, request, for_write=True)
 

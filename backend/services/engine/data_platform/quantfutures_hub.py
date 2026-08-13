@@ -98,6 +98,33 @@ class QuantFuturesDataHub(QuantDBDataHub):
         df = conn.execute(f"SELECT * FROM {view_name} WHERE {where} ORDER BY dt").fetchdf()
         return self._normalize_kline(df)
 
+    def fetch_daily_kline_batch(
+        self,
+        symbols: list[str],
+        start,
+        end,
+        *,
+        adjust: str = "qfq",
+    ):
+        """批量读期货日K。覆盖父类实现：期货视图名带 qfut_ 前缀（qfut_daily_forward）。"""
+        import pandas as _pd
+
+        view_name = "qfut_daily_forward"
+        if not symbols or not self._view_exists(view_name):
+            return _pd.DataFrame()
+        conn = self._get_duck_conn()
+        conditions = _dt_conditions(start, end)
+        placeholders = ", ".join("?" for _ in symbols)
+        conditions.append(f"symbol IN ({placeholders})")
+        where = " AND ".join(conditions)
+        df = conn.execute(
+            f"SELECT * FROM {view_name} WHERE {where} ORDER BY symbol, dt",
+            list(symbols),
+        ).fetchdf()
+        if df.empty:
+            return df
+        return self._normalize_kline(df)
+
     def fetch_realtime(self, symbol: str | None = None):
         """实时行情快照（2_base_sector/futures_realtime/*.parquet）。"""
         import pandas as pd

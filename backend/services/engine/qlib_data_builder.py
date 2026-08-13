@@ -433,7 +433,9 @@ class QlibDataBuilder:
             span = int(positions.max()) - start_idx + 1
             offsets = positions - start_idx
 
-            feat_dir = self._qlib_dir / "features" / qlib_sym
+            # qlib 的 FileFeatureStorage 强制 instrument.lower() 拼路径，
+            # 目录必须小写否则读取静默为空
+            feat_dir = self._qlib_dir / "features" / self._feat_dir_name(qlib_sym)
             feat_dir.mkdir(parents=True, exist_ok=True)
 
             try:
@@ -482,7 +484,8 @@ class QlibDataBuilder:
         incremental: bool = True,
     ) -> bool:
         """构建单个 symbol 的 Qlib features。"""
-        feat_dir = self._qlib_dir / "features" / qlib_sym
+        # qlib FileFeatureStorage 强制 instrument.lower()，目录必须小写
+        feat_dir = self._qlib_dir / "features" / self._feat_dir_name(qlib_sym)
         feat_dir.mkdir(parents=True, exist_ok=True)
 
         if self._is_index_symbol(qlib_sym):
@@ -691,6 +694,12 @@ class QlibDataBuilder:
         if s.startswith(prefix):
             return s
         return f"{prefix}{s}"
+
+    def _feat_dir_name(self, qlib_symbol: str) -> str:
+        """feature 目录名。qlib 的 FileFeatureStorage 强制 instrument.lower()
+        拼路径，非 A 股市场 symbol 含大写（fut_CL.FUT / hk_00700.HK /
+        us_AAPL），目录必须小写，否则 feature 读取静默返回空。"""
+        return qlib_symbol if self._market == "CN" else qlib_symbol.lower()
 
     def _to_qdb_symbol(self, qlib_symbol: str) -> str:
         """Qlib 格式 -> 原生 symbol。必须与 _to_qlib_symbol 完全对称。"""
