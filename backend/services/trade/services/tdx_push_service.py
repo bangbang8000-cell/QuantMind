@@ -123,8 +123,8 @@ class TdxPushService:
             "py_code": py_code, "handle_type": handle_type})
 
     async def place_order(self, stock_code: str, side: str, volume: int,
-                          price: Optional[float] = None,
-                          price_type: Optional[int] = None,
+                          price: float | None = None,
+                          price_type: int | None = None,
                           plan_id: str = "") -> dict:
         """通过桥下单到通达信."""
         order = {
