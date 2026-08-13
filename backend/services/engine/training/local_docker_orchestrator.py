@@ -606,12 +606,13 @@ class LocalDockerOrchestrator(TrainingOrchestrator):
             "bind": "/app/train.py",
             "mode": "ro",
         }
-        # preprocessing.py 与 train.py 同目录导入（`from preprocessing import ...`）
-        if Path(_PREPROCESSING_HOST_PATH).exists():
-            volumes[str(_PREPROCESSING_HOST_PATH)] = {
-                "bind": "/app/preprocessing.py",
-                "mode": "ro",
-            }
+        # preprocessing.py 与 train.py 同目录导入（`from preprocessing import ...`）。
+        # 与 train.py 一样无条件挂载：API 容器内 os.path.exists 无法感知宿主机路径，
+        # 条件判断会导致宿主机文件存在但容器内看不到 → 挂载被跳过 → ImportError。
+        volumes[str(_PREPROCESSING_HOST_PATH)] = {
+            "bind": "/app/preprocessing.py",
+            "mode": "ro",
+        }
         logger.info(
             "[%s] Local train.py override mounted: %s -> /app/train.py",
             run_id,

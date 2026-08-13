@@ -2684,32 +2684,59 @@ def select_top_factors(
 
     返回 (selected_features, ic_results)。
     """
-    from scipy.stats import spearmanr
-
     logger.info("=== Factor Selection: IC/ICIR screening ===")
     logger.info("Input: %d features, target top-%d", len(features), n_top)
 
-    # Step 1: 日频 Rank IC 计算
+    # Step 1: 日频 Rank IC 计算（向量化，替代 特征×天数 双重循环）
+    # Spearman IC = 截面 rank 后按日 Pearson 相关。
+    # 一次性对全部特征做截面 rank（groupby.rank 向量化），
+    # 再按日算 cov/(std_x*std_y) 得逐日 IC，消除 136×2600 次 spearmanr 调用。
+    t0_sel = time.time()
+    rank_cols = features + [label_col]
+    ranked_df = df.groupby("trade_date", sort=False)[rank_cols].rank(method="average")
+    ranked_df["trade_date"] = df["trade_date"].values
+
+    # 按日均值（向量化 transform）
+    day_mean = ranked_df.groupby("trade_date")[rank_cols].transform("mean")
+
+    # 中心化（rank 后减当日均值）
+    centered = ranked_df[rank_cols] - day_mean[rank_cols]
+
+    # 每日有效样本数（按 label 计，用于 <30 过滤）
+    day_count = df.groupby("trade_date")[label_col].transform("count")
+
     ic_results: dict[str, dict] = {}
     for feat in features:
-        daily_ics = []
-        for _, g in df.groupby("trade_date", sort=False):
-            valid = g[[feat, label_col]].dropna()
-            if len(valid) < 30:
-                continue
-            ic, _ = spearmanr(valid[feat], valid[label_col])
-            if np.isfinite(ic):
-                daily_ics.append(ic)
+        # 有效行：该特征与 label 均非空
+        valid = df[feat].notna() & df[label_col].notna()
+        cnt = valid.groupby(df["trade_date"]).transform("sum")
+        mask = cnt >= 30
+
+        # 逐日协方差（分母=该特征每天实际有效行数）
+        prod = (centered[feat] * centered[label_col]).where(mask & valid)
+        cov_daily = prod.groupby(ranked_df["trade_date"]).sum() / np.maximum(
+            valid.where(mask).groupby(df["trade_date"]).sum(), 1e-9
+        )
+        # 逐日方差（总体标准差 ddof=0，与 spearmanr 一致）
+        var_f = (centered[feat] ** 2).where(mask & valid).groupby(ranked_df["trade_date"]).mean()
+        var_l = (centered[label_col] ** 2).where(mask & valid).groupby(ranked_df["trade_date"]).mean()
+        std_f = np.sqrt(np.maximum(var_f, 0))
+        std_l = np.sqrt(np.maximum(var_l, 0))
+        daily_ics = (cov_daily / (std_f * std_l + 1e-12)).replace([np.inf, -np.inf], np.nan).dropna()
+        daily_ics = daily_ics[daily_ics.abs() <= 1.0]  # 过滤数值异常
+
         if len(daily_ics) < 20:
             ic_results[feat] = {"ic_mean": 0.0, "icir": 0.0, "ic_positive_rate": 0.0, "n_days": len(daily_ics)}
             continue
-        arr = np.array(daily_ics)
+        arr = daily_ics.to_numpy()
         ic_results[feat] = {
             "ic_mean": float(np.mean(arr)),
             "icir": float(np.mean(arr) / (np.std(arr) + 1e-9)),
             "ic_positive_rate": float(np.mean(arr > 0)),
             "n_days": len(arr),
+            "daily_ics": daily_ics.tolist(),  # 供 Step 4 稳定性检验复用，避免二次计算
         }
+    logger.info("IC/ICIR screening done in %.1fs (%d features)", time.time() - t0_sel, len(ic_results))
 
     # Step 2: IC阈值初筛
     candidates = {
@@ -2740,23 +2767,18 @@ def select_top_factors(
     logger.info("After correlation pruning (thresh=%.2f): %d selected",
                 correlation_threshold, len(selected))
 
-    # Step 4: 稳定性检验（滚动窗口 IC 标准差）
+    # Step 4: 稳定性检验（复用 Step 1 已算的逐日 IC 序列，避免二次双重循环）
+    # 滚动60日 IC 标准差 / 均值 → 稳定性比率
     stable = []
     for feat in selected:
-        daily_ics = []
-        for _, g in df.groupby("trade_date", sort=False):
-            valid = g[[feat, label_col]].dropna()
-            if len(valid) < 30:
-                continue
-            ic, _ = spearmanr(valid[feat], valid[label_col])
-            if np.isfinite(ic):
-                daily_ics.append(ic)
-        if daily_ics:
-            # 滚动60日 IC 标准差 / 均值 → 稳定性比率
-            rolling_std = pd.Series(daily_ics).rolling(60, min_periods=20).std()
-            mean_ic = abs(np.mean(daily_ics))
-            if mean_ic > 0 and rolling_std.mean() / (mean_ic + 1e-9) < 2.0:
-                stable.append(feat)
+        daily_series = ic_results[feat].get("daily_ics")
+        if not daily_series or len(daily_series) < 20:
+            continue
+        daily_ics = np.asarray(daily_series, dtype=np.float64)
+        rolling_std = pd.Series(daily_ics).rolling(60, min_periods=20).std()
+        mean_ic = abs(float(np.mean(daily_ics)))
+        if mean_ic > 0 and rolling_std.mean() / (mean_ic + 1e-9) < 2.0:
+            stable.append(feat)
 
     if len(stable) >= 30:
         selected = stable[:n_top]

@@ -1135,7 +1135,11 @@ class InferenceScriptRunner:
         has_confidence = confidence_list is not None and len(confidence_list) == n
         sides = []
         for i, s in enumerate(scores):
-            low_conf = has_confidence and confidence_list[i] < min_confidence
+            # 置信度门槛（None 视为低置信 → HOLD，避免 NoneType 比较异常）
+            conf = confidence_list[i] if has_confidence else None
+            low_conf = conf is not None and conf < min_confidence
+            if has_confidence and conf is None:
+                low_conf = True
             is_buy = s >= buy_threshold and s > min_buy_score
             is_sell = s <= sell_threshold and s < max_sell_score
             if (has_consensus and consensus_list[i] < min_consensus) or low_conf:
