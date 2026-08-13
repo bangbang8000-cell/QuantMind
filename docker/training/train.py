@@ -2687,54 +2687,50 @@ def select_top_factors(
     logger.info("=== Factor Selection: IC/ICIR screening ===")
     logger.info("Input: %d features, target top-%d", len(features), n_top)
 
-    # Step 1: 日频 Rank IC 计算（向量化，替代 特征×天数 双重循环）
+    # Step 1: 日频 Rank IC 计算（内存友好 + 交易日降采样）
     # Spearman IC = 截面 rank 后按日 Pearson 相关。
-    # 一次性对全部特征做截面 rank（groupby.rank 向量化），
-    # 再按日算 cov/(std_x*std_y) 得逐日 IC，消除 136×2600 次 spearmanr 调用。
+    # 降采样：因子筛选的 IC/ICIR 估计不需全部交易日，按 sample_ratio 抽样
+    # （默认每 3 个交易日取 1），保持跨截面（每天仍全市场），IC 估计偏差小。
+    # 逐特征单独 rank + cov 聚合（单列操作，内存峰值低，避免批量版 OOM）。
     t0_sel = time.time()
-    rank_cols = features + [label_col]
-    ranked_df = df.groupby("trade_date", sort=False)[rank_cols].rank(method="average")
-    ranked_df["trade_date"] = df["trade_date"].values
+    sample_ratio = max(1, int(os.getenv("FACTOR_SELECT_SAMPLE_RATIO", "3")))
+    if sample_ratio > 1 and len(features) > 40:
+        dates_sorted = sorted(df["trade_date"].unique())
+        sample_dates = set(dates_sorted[::sample_ratio])
+        fs_df = df[df["trade_date"].isin(sample_dates)].copy()
+        logger.info("Factor select downsampled: %d -> %d days (ratio=%d)",
+                    len(dates_sorted), len(sample_dates), sample_ratio)
+    else:
+        fs_df = df
 
-    # 按日均值（向量化 transform）
-    day_mean = ranked_df.groupby("trade_date")[rank_cols].transform("mean")
-    centered = ranked_df[rank_cols] - day_mean[rank_cols]
-
-    # 每日有效样本数（按 label 计，用于 <30 过滤）
-    day_count = df.groupby("trade_date")[label_col].transform("count")
-    mask = day_count >= 30
-
-    # 批量向量化：对全部特征一次算逐日 IC。
-    # 利用 Spearman IC = cov(rank_f, rank_l)/(σf·σl)，用 groupby 聚合列对。
-    # 特征×label 乘积和 与 特征² 一起批量计算，避免 per-feature groupby 全表扫描。
-    cent_eff = centered.where(mask, 0.0)
-    # 每日特征均值（中心化后应≈0，但缺失值导致偏差，重新按有效算）
-    label_rank = centered[label_col]
-    feat_block = centered[features]
-
-    # 协方差分子: Σ(x·y)/n 按日 —— 批量：groupby.sum 一次算所有 特征×label
-    prod_block = feat_block.mul(label_rank, axis=0)  # 每特征 × label（逐行乘积）
-    n_per_day = mask.groupby(df["trade_date"]).transform("sum")  # 每日有效行数
-    denom = np.maximum(n_per_day.where(mask), 1e-9)
-
-    cov_num = prod_block.where(mask).groupby(ranked_df["trade_date"]).sum().div(
-        denom.groupby(df["trade_date"]).first().reindex(
-            prod_block.where(mask).groupby(ranked_df["trade_date"]).sum().index
-        ), axis=0
-    )
-    # 方差: Σ(x²)/n
-    var_f = feat_block.pow(2).where(mask).groupby(ranked_df["trade_date"]).mean()
-    var_l = (label_rank.pow(2)).where(mask).groupby(ranked_df["trade_date"]).mean()
-    std_f = np.sqrt(np.maximum(var_f, 0))
-    std_l = np.sqrt(np.maximum(var_l, 0)).reindex(std_f.index)
-
-    # 逐日 IC 矩阵 [日期 × 特征]
-    ic_matrix = cov_num.div(std_f.mul(std_l, axis=0), axis=0).replace([np.inf, -np.inf], np.nan)
+    # 按日预分组（一次），逐特征复用
+    date_arr = fs_df["trade_date"].values
+    label_rank_all = fs_df.groupby("trade_date", sort=False)[label_col].rank(method="average")
+    label_rank_all = label_rank_all - fs_df.groupby("trade_date", sort=False)[label_col].transform("mean")
+    day_count_all = fs_df.groupby("trade_date")[label_col].transform("count")
+    mask_all = day_count_all >= 30
 
     ic_results: dict[str, dict] = {}
     for feat in features:
-        daily_ics = ic_matrix[feat].dropna()
+        if feat not in fs_df.columns:
+            continue
+        # 单特征截面 rank + 中心化
+        r_f = fs_df.groupby("trade_date", sort=False)[feat].rank(method="average")
+        r_f = r_f - fs_df.groupby("trade_date", sort=False)[feat].transform("mean")
+        valid = fs_df[feat].notna() & fs_df[label_col].notna()
+        mask = mask_all & valid
+        n_per_day = mask.groupby(date_arr).transform("sum")
+
+        # 逐日 cov / var（单特征，内存小）
+        cov_daily = (r_f * label_rank_all).where(mask).groupby(date_arr).sum() / np.maximum(
+            n_per_day.where(mask).groupby(date_arr).sum(), 1e-9
+        )
+        var_f = (r_f ** 2).where(mask).groupby(date_arr).mean()
+        var_l = (label_rank_all ** 2).where(mask).groupby(date_arr).mean()
+        daily_ics = (cov_daily / (np.sqrt(np.maximum(var_f, 0)) * np.sqrt(np.maximum(var_l, 0)) + 1e-12))
+        daily_ics = daily_ics.replace([np.inf, -np.inf], np.nan).dropna()
         daily_ics = daily_ics[daily_ics.abs() <= 1.0]
+
         if len(daily_ics) < 20:
             ic_results[feat] = {"ic_mean": 0.0, "icir": 0.0, "ic_positive_rate": 0.0, "n_days": len(daily_ics)}
             continue
