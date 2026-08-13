@@ -1020,6 +1020,28 @@ def _check_quantdb_latest_daily() -> tuple[bool, str]:
         return False, f"QuantDB 检查失败: {exc}"
 
 
+def check_tdx_bridge_online() -> tuple[bool, str]:
+    """探测通达信桥健康状态（QMT Agent 缺失时的兜底交易通道）。
+
+    返回 (online, detail)。桥已配置且 /api/v1/health 返回 200 即视为在线。
+    """
+    bridge_url = str(getattr(settings, "TDX_BRIDGE_URL", "") or "").strip()
+    bridge_token = str(getattr(settings, "TDX_BRIDGE_TOKEN", "") or "").strip()
+    if not bridge_url or not bridge_token:
+        return False, "TDX 桥未配置（TDX_BRIDGE_URL/TOKEN 为空）"
+    try:
+        resp = httpx.get(f"{bridge_url.rstrip('/')}/api/v1/health", timeout=3.0)
+        if resp.status_code == 200:
+            payload = resp.json() if resp.headers.get("content-type", "").startswith("application/json") else {}
+            tdx_connected = bool((payload or {}).get("tdx_connected", True))
+            return True, (
+                "TDX 桥在线，通达信已连接" if tdx_connected else "TDX 桥在线，通达信客户端未连接"
+            )
+        return False, f"TDX 桥返回 HTTP {resp.status_code}"
+    except Exception as exc:
+        return False, f"TDX 桥不可达: {exc}"
+
+
 def check_stream_series_freshness(
     redis_client=None, *, allow_quantdb_fallback: bool = False
 ) -> dict[str, Any]:

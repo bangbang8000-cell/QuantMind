@@ -1396,41 +1396,72 @@ class InferenceScriptRunner:
                 f"[InferenceScriptRunner] 已发布 {published} 条信号, run_id={run_id}"
             )
 
-            # === 推送到通达信 (选股信号 + 消息提醒) ===
+            # === 推送到通达信 (Top N 选股: 板块 + 预警 + 消息) ===
             if os.getenv("ENABLE_TDX_PUSH", "").strip().lower() == "true":
                 try:
                     import asyncio
 
-                    from backend.services.trade.services.tdx_push_service import (
-                        TdxPushError,
-                        tdx_pusher,
+                    from backend.services.trade.services.tdx_signal_push_service import (
+                        tdx_signal_pusher,
                     )
 
-                    # 组装通达信板块代码列表 (标准化为 600519.SH 格式)
-                    push_stocks = [
-                        (s.get("symbol") or "").replace("sh", "").replace("sz", "").upper()
-                        + (".SH" if (s.get("symbol") or "").startswith("sh") else
-                           ".SZ" if (s.get("symbol") or "").startswith("sz") else "")
-                        for s in signal_events
-                        if s.get("symbol")
-                    ]
-                    push_stocks = [s for s in push_stocks if "." in s]
-
                     async def _push_to_tdx():
-                        if push_stocks:
-                            await tdx_pusher.push_signals_to_block(
-                                push_stocks, block_code="",
-                                block_name="QuantMind今日选股", show=True)
-                        await tdx_pusher.push_message(
-                            f"MSG,QuantMind 今日选股 {len(push_stocks)} 只|"
-                            f"预测日期 {prediction_trade_date}|run_id {run_id}"
+                        result = await tdx_signal_pusher.build_push_payload(
+                            tenant_id=tenant_id,
+                            user_id=str(user_id),
+                            run_id=run_id,
                         )
-                        logger.info(
-                            f"[InferenceScriptRunner] 已推送 {len(push_stocks)} 只选股到通达信"
-                        )
+                        if result.get("success"):
+                            logger.info(
+                                "[InferenceScriptRunner] 已推送 %d 只选股到通达信 (run=%s)",
+                                result.get("pushed", 0),
+                                run_id,
+                            )
+                        else:
+                            logger.warning(
+                                "[InferenceScriptRunner] 通达信选股推送未成功: %s",
+                                result.get("error") or "未知原因",
+                            )
 
-                    asyncio.create_task(_push_to_tdx())
-                except (TdxPushError, Exception) as exc:
+                    try:
+                        asyncio.get_running_loop()
+                    except RuntimeError:
+                        # celery 同步上下文: 没有运行中的事件循环
+                        asyncio.run(_push_to_tdx())
+                    else:
+                        asyncio.create_task(_push_to_tdx())
+
+                    # === 滚动买卖检查 (分数>2.2买/掉下2.2卖/大盘MA20过滤) ===
+                    from backend.services.trade.services.tdx_rolling_trade_service import (
+                        tdx_rolling_trader,
+                    )
+
+                    async def _run_rolling_push():
+                        result = await tdx_rolling_trader.run_rolling_push(
+                            tenant_id=tenant_id,
+                            user_id=str(user_id),
+                            run_id=run_id,
+                        )
+                        if result.get("success"):
+                            logger.info(
+                                "[InferenceScriptRunner] 滚动买卖推送完成 run=%s buys=%d sells=%d",
+                                run_id,
+                                len(result.get("buys") or []),
+                                len(result.get("sells") or []),
+                            )
+                        else:
+                            logger.warning(
+                                "[InferenceScriptRunner] 滚动买卖推送未成功: %s",
+                                result.get("error") or "未知原因",
+                            )
+
+                    try:
+                        asyncio.get_running_loop()
+                    except RuntimeError:
+                        asyncio.run(_run_rolling_push())
+                    else:
+                        asyncio.create_task(_run_rolling_push())
+                except Exception as exc:
                     logger.warning(
                         f"[InferenceScriptRunner] 推送通达信失败（不影响结果）: {exc}"
                     )

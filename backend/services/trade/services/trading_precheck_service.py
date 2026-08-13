@@ -548,7 +548,10 @@ async def run_trading_readiness_precheck(
     )
 
     from backend.services.trade.routers.real_trading_utils import check_stream_series_freshness
-    res = check_stream_series_freshness(redis_client=redis_client)
+    # REAL 模式同样回退 QuantDB 日线兜底：TDX 通道无实时行情流时仍可交易
+    res = check_stream_series_freshness(
+        redis_client=redis_client, allow_quantdb_fallback=True
+    )
     checks.append(
         _build_check(
             "stream_series_freshness",
@@ -562,6 +565,18 @@ async def run_trading_readiness_precheck(
         qmt_ok, qmt_detail = await _check_qmt_agent_online(
             db, redis_client, tenant_id, user_id
         )
+        if not qmt_ok:
+            # QMT Agent 未就绪时回退通达信桥（用户使用 TDX 通道）
+            from backend.services.trade.routers.real_trading_utils import (
+                check_tdx_bridge_online,
+            )
+
+            tdx_online, tdx_detail = check_tdx_bridge_online()
+            if tdx_online:
+                qmt_ok = True
+                qmt_detail = f"{tdx_detail}（QMT Agent 未接入: {qmt_detail}）"
+            else:
+                qmt_detail = f"{qmt_detail}；且 {tdx_detail}"
         checks.append(
             _build_check(
                 "qmt_agent_online",

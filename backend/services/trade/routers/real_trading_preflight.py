@@ -219,11 +219,12 @@ async def preflight_check(
             f"{orchestration_label} 客户端已就绪" if orchestration_ok else f"{orchestration_label} 客户端未初始化",
         )
 
-    # 7) QMT Agent 在线状态（PG 账户快照 + Redis 心跳）
+    # 7) QMT Agent 在线状态（PG 账户快照 + Redis 心跳）; 无 QMT 时回退通达信桥
     bridge_required = mode == "REAL"
     account_report: dict | None = None
     if bridge_required:
         heartbeat_key = build_trade_agent_heartbeat_key(resolved_tenant_id, resolved_user_id)
+        qmt_failed_detail: str | None = None
         try:
             account_snapshot = await _fetch_latest_real_account_snapshot(
                 db,
@@ -232,21 +233,9 @@ async def preflight_check(
             )
             heartbeat_raw = redis.client.get(heartbeat_key)
             if not account_snapshot:
-                add_check(
-                    "qmt_agent_online",
-                    "QMT Agent 在线状态",
-                    False,
-                    bridge_required,
-                    "未检测到 PostgreSQL 实盘账户快照，请先等待 QMT Agent 上报并落库",
-                )
+                qmt_failed_detail = "未检测到 PostgreSQL 实盘账户快照，请先等待 QMT Agent 上报并落库"
             elif not heartbeat_raw:
-                add_check(
-                    "qmt_agent_online",
-                    "QMT Agent 在线状态",
-                    False,
-                    bridge_required,
-                    f"未检测到 QMT Agent 心跳上报({heartbeat_key})，请确认 QMT Agent 已连接",
-                )
+                qmt_failed_detail = f"未检测到 QMT Agent 心跳上报({heartbeat_key})，请确认 QMT Agent 已连接"
             else:
                 account_report = account_snapshot.get("payload_json") or {}
                 if not isinstance(account_report, dict):
@@ -254,34 +243,16 @@ async def preflight_check(
                 try:
                     heartbeat_report = json.loads(heartbeat_raw)
                 except Exception as e:
-                    add_check(
-                        "qmt_agent_online",
-                        "QMT Agent 在线状态",
-                        False,
-                        bridge_required,
-                        f"检测到 QMT Agent 心跳无法解析为 JSON: {e}",
-                    )
+                    qmt_failed_detail = f"检测到 QMT Agent 心跳无法解析为 JSON: {e}"
                     heartbeat_report = None
 
                 if not isinstance(heartbeat_report, dict):
-                    add_check(
-                        "qmt_agent_online",
-                        "QMT Agent 在线状态",
-                        False,
-                        bridge_required,
-                        "检测到 QMT Agent 心跳格式异常（非 JSON 对象）",
-                    )
+                    qmt_failed_detail = "检测到 QMT Agent 心跳格式异常（非 JSON 对象）"
                 else:
                     account_ts = _parse_snapshot_timestamp(account_snapshot.get("snapshot_at"))
                     heartbeat_ts = _parse_bridge_report_ts(heartbeat_report)
                     if account_ts is None or heartbeat_ts is None:
-                        add_check(
-                            "qmt_agent_online",
-                            "QMT Agent 在线状态",
-                            False,
-                            bridge_required,
-                            "QMT Agent 上报缺少有效时间戳（PG 账户快照或心跳）",
-                        )
+                        qmt_failed_detail = "QMT Agent 上报缺少有效时间戳（PG 账户快照或心跳）"
                     else:
                         account_age_sec = max(0, int(time.time() - account_ts))
                         heartbeat_age_sec = max(0, int(time.time() - heartbeat_ts))
@@ -296,23 +267,39 @@ async def preflight_check(
                                 f"账户快照 {account_age_sec} 秒前，心跳 {heartbeat_age_sec} 秒前",
                             )
                         else:
-                            add_check(
-                                "qmt_agent_online",
-                                "QMT Agent 在线状态",
-                                False,
-                                bridge_required,
-                                f"QMT Agent 上报已过期：账户快照 {account_age_sec}/{account_threshold_sec} 秒，心跳 {heartbeat_age_sec}/{heartbeat_threshold_sec} 秒",
+                            qmt_failed_detail = (
+                                f"QMT Agent 上报已过期：账户快照 {account_age_sec}/{account_threshold_sec} 秒，"
+                                f"心跳 {heartbeat_age_sec}/{heartbeat_threshold_sec} 秒"
                             )
         except Exception as e:
-            add_check(
-                "qmt_agent_online",
-                "QMT Agent 在线状态",
-                False,
-                bridge_required,
-                f"QMT Agent 检测失败: {e}",
-            )
+            qmt_failed_detail = f"QMT Agent 检测失败: {e}"
             # 回滚事务以清除 aborted 状态，避免后续查询失败
             await db.rollback()
+
+        # QMT 未就绪时回退通达信桥（用户使用 TDX 通道，无 QMT Agent）
+        if qmt_failed_detail:
+            from backend.services.trade.routers.real_trading_utils import (
+                check_tdx_bridge_online,
+            )
+
+            tdx_online, tdx_detail = check_tdx_bridge_online()
+            if tdx_online:
+                add_check(
+                    "qmt_agent_online",
+                    "交易通道（通达信桥）",
+                    True,
+                    bridge_required,
+                    f"{tdx_detail}（QMT Agent 未接入: {qmt_failed_detail}）",
+                    {"channel": "tdx_bridge", "qmt_detail": qmt_failed_detail},
+                )
+            else:
+                add_check(
+                    "qmt_agent_online",
+                    "交易通道（QMT/通达信）",
+                    False,
+                    bridge_required,
+                    f"{qmt_failed_detail}；且 {tdx_detail}",
+                )
 
     # 7.1~7.4) 双向交易专属预检
     margin_enabled = bool(getattr(settings, "ENABLE_MARGIN_TRADING", False))
@@ -350,13 +337,27 @@ async def preflight_check(
             )
 
         real_short_required = mode == "REAL"
+        # TDX 桥通道在线时，多空灰度检查自动放行（通达信股票账户无信用数据）
+        tdx_channel_ready = False
+        if real_short_required:
+            from backend.services.trade.routers.real_trading_utils import (
+                check_tdx_bridge_online,
+            )
+
+            tdx_channel_ready, _tdx_detail_now = check_tdx_bridge_online()
+
+        short_skip = real_short_required and tdx_channel_ready
         long_short_enabled = bool(getattr(settings, "ENABLE_LONG_SHORT_REAL", False))
         add_check(
             "long_short_real_feature",
             "实盘多空灰度开关",
-            long_short_enabled or not real_short_required,
+            long_short_enabled or not real_short_required or short_skip,
             real_short_required,
-            "ENABLE_LONG_SHORT_REAL 已开启" if long_short_enabled else "ENABLE_LONG_SHORT_REAL 未开启",
+            (
+                "ENABLE_LONG_SHORT_REAL 已开启"
+                if long_short_enabled
+                else ("通达信桥通道，跳过实盘多空灰度" if short_skip else "ENABLE_LONG_SHORT_REAL 未开启")
+            ),
         )
         whitelist_users = {
             item.strip()
@@ -367,23 +368,31 @@ async def preflight_check(
         add_check(
             "long_short_whitelist",
             "实盘多空白名单",
-            in_whitelist or not real_short_required,
+            in_whitelist or not real_short_required or short_skip,
             real_short_required,
             "当前用户在 LONG_SHORT_WHITELIST_USERS 白名单内"
             if in_whitelist
-            else "当前用户不在 LONG_SHORT_WHITELIST_USERS 白名单",
+            else (
+                "通达信桥通道，跳过实盘多空白名单"
+                if short_skip
+                else "当前用户不在 LONG_SHORT_WHITELIST_USERS 白名单"
+            ),
         )
 
         short_real_ok = bool(getattr(settings, "ENABLE_SHORT_SELLING_REAL", False))
         add_check(
             "broker_margin_trade_support",
             "信用交易动作支持",
-            short_real_ok or not real_short_required,
+            short_real_ok or not real_short_required or short_skip,
             real_short_required,
             (
                 "实盘信用交易动作已开启"
                 if short_real_ok
-                else "未开启 ENABLE_SHORT_SELLING_REAL，实盘不会发送融券交易动作"
+                else (
+                    "通达信桥通道，跳过实盘信用交易检查"
+                    if short_skip
+                    else "未开启 ENABLE_SHORT_SELLING_REAL，实盘不会发送融券交易动作"
+                )
             ),
         )
 
@@ -393,12 +402,16 @@ async def preflight_check(
         add_check(
             "margin_account_state",
             "信用账户状态",
-            account_has_credit_fields or mode != "REAL",
+            account_has_credit_fields or mode != "REAL" or short_skip,
             mode == "REAL",
             (
                 "账户快照已包含信用账户字段"
                 if account_has_credit_fields
-                else "当前账户快照未包含 liabilities/short_market_value 等信用字段"
+                else (
+                    "通达信桥通道，无需信用账户字段"
+                    if short_skip
+                    else "当前账户快照未包含 liabilities/short_market_value 等信用字段"
+                )
             ),
             account_report if account_has_credit_fields else {},
         )
@@ -408,24 +421,28 @@ async def preflight_check(
         add_check(
             "short_admission_capability",
             "做空准入能力可用",
-            short_admission_ready or mode != "REAL",
+            short_admission_ready or mode != "REAL" or short_skip,
             mode == "REAL",
             (
                 f"credit_enabled={bool(account_report.get('credit_enabled'))}, "
                 f"shortable_symbols_count={int(account_report.get('shortable_symbols_count') or 0)}, "
                 f"last_short_check_at={account_report.get('last_short_check_at')}"
             )
-            if isinstance(account_report, dict)
-            else "未检测到账户快照",
+            if isinstance(account_report, dict) and account_report
+            else (
+                "通达信桥通道，无需做空准入检查"
+                if short_skip
+                else "未检测到账户快照"
+            ),
         )
 
     # 8~10) Stream 探针：REAL/SHADOW/SIMULATION 均检测行情质量
     if mode in {"REAL", "SHADOW", "SIMULATION"}:
-        # 1. Stream时序序列 (始终阻断；模拟盘可回退 QuantDB 日线)
+        # 1. Stream时序序列 (始终阻断；SIMULATION/REAL 可回退 QuantDB 日线——TDX 通道无实时行情流)
         try:
             res = check_stream_series_freshness(
                 redis_client=redis.client,
-                allow_quantdb_fallback=(mode == "SIMULATION"),
+                allow_quantdb_fallback=(mode in {"SIMULATION", "REAL"}),
             )
             add_check(
                 "stream_series_freshness",
@@ -444,11 +461,11 @@ async def preflight_check(
                 f"行情检测异常: {e}",
             )
 
-        # 2. Stream行情落库 (始终阻断；模拟盘可回退 QuantDB 日线)
+        # 2. Stream行情落库 (始终阻断；SIMULATION/REAL 可回退 QuantDB 日线)
         try:
             res = check_stream_quote_persist_rate(
                 redis_client=redis.client,
-                allow_quantdb_fallback=(mode == "SIMULATION"),
+                allow_quantdb_fallback=(mode in {"SIMULATION", "REAL"}),
             )
             add_check(
                 "stream_quote_persist_rate",
@@ -672,10 +689,11 @@ async def preflight_check(
         )
 
         try:
-            # 模拟盘：行情时序缺失/不新鲜时回退 QuantDB 日线兜底
+            # SIMULATION/REAL(TDX通道) 均回退 QuantDB 日线兜底：
+            # 无实时行情流时，撮合/交易直读 QuantDB 日线
             res = check_stream_series_freshness(
                 redis_client=redis.client,
-                allow_quantdb_fallback=(mode == "SIMULATION"),
+                allow_quantdb_fallback=(mode in {"SIMULATION", "REAL"}),
             )
             stream_ok = bool(res["ok"])
             is_trading_hours = _is_cn_trading_hours()

@@ -10,6 +10,9 @@ import {
   ShieldCheck,
   Cable,
   Wifi,
+  Server,
+  Send,
+  SlidersHorizontal,
 } from 'lucide-react';
 import { SERVICE_URLS } from '../../../config/services';
 
@@ -39,6 +42,47 @@ interface TdxConfig {
   health?: { status?: string; tdx_connected?: boolean; error?: string } | null;
 }
 
+interface TdxOverview {
+  available: boolean;
+  error?: string;
+  bridge?: {
+    hostname?: string;
+    local_ips?: string[];
+    bridge_url?: string;
+    port?: number;
+    tdx_connected?: boolean;
+    server_time?: string;
+    token_configured?: boolean;
+    shared_dir?: string;
+  };
+  account?: {
+    currency?: string;
+    balance?: number;
+    cash?: number;
+    asset?: number;
+    market_value?: number;
+    position_count?: number;
+  };
+  positions?: Array<Record<string, unknown>>;
+  orders?: Array<Record<string, unknown>>;
+  cache?: {
+    stock_info?: number;
+    kline?: number;
+    sector_stocks?: number;
+    market_snapshot?: number;
+    tdx_log?: number;
+    financial?: number;
+    trade_log?: number;
+    mem_hit_rate?: number;
+    mem_entries?: number;
+  };
+  security?: {
+    banned_ips?: number;
+    active_ips?: number;
+    write_active?: number;
+  };
+}
+
 interface SettingsCenterProps {
   userId: string;
   isActive: boolean;
@@ -64,6 +108,45 @@ const SettingsCenter: React.FC<SettingsCenterProps> = ({ userId, isActive }) => 
   const [tdxNewToken, setTdxNewToken] = useState('');
   const [tdxNewUrl, setTdxNewUrl] = useState('');
   const [tdxMsg, setTdxMsg] = useState('');
+  const [tdxError, setTdxError] = useState('');
+
+  const extractApiError = async (res: Response): Promise<string> => {
+    try {
+      const data = await res.json();
+      return data.detail || data.message || data.error || '';
+    } catch {
+      return '';
+    }
+  };
+
+  // 通达信桥局域网信息（聚合统计）
+  const [tdxOverview, setTdxOverview] = useState<TdxOverview | null>(null);
+  const [tdxOverviewLoading, setTdxOverviewLoading] = useState(false);
+  const [pushLoading, setPushLoading] = useState(false);
+  const [pushResult, setPushResult] = useState<{
+    ok: boolean;
+    pushed?: number;
+    skipped?: number;
+    runId?: string;
+    stocks?: Array<{ rank: number; symbol: string; name: string; score: number }>;
+    error?: string;
+  } | null>(null);
+  const [rollingLoading, setRollingLoading] = useState(false);
+  const [rollingResult, setRollingResult] = useState<{
+    ok: boolean;
+    buys?: Array<{ symbol: string; name: string; score: number; volume: number; close: number }>;
+    sells?: Array<{ symbol: string; name: string; score: number | null; reason: string }>;
+    market?: { above_ma20: boolean; detail: string };
+    placedOrders?: Array<{ symbol: string; side: string; volume: number; status: string; message: string }>;
+    failedOrders?: Array<{ symbol: string; side: string; error: string }>;
+    error?: string;
+  } | null>(null);
+  const [rollingThreshold, setRollingThreshold] = useState('2.2');
+  const [rollingAmount, setRollingAmount] = useState('10000');
+  const [rollingAutoPlace, setRollingAutoPlace] = useState(false);
+  const [rollingDate, setRollingDate] = useState('');
+  const [rollingCfgMsg, setRollingCfgMsg] = useState('');
+  const [activeTab, setActiveTab] = useState<'credentials' | 'tdx'>('credentials');
 
   const handleCopy = async (text: string, key: string) => {
     await navigator.clipboard.writeText(text);
@@ -121,6 +204,7 @@ const SettingsCenter: React.FC<SettingsCenterProps> = ({ userId, isActive }) => 
 
   const fetchTdxConfig = async () => {
     setTdxLoading(true);
+    setTdxError('');
     try {
       const res = await fetch(`${apiGatewayBase}/api/v1/tdx/config`, {
         headers: authHeader(),
@@ -130,9 +214,13 @@ const SettingsCenter: React.FC<SettingsCenterProps> = ({ userId, isActive }) => 
         setTdxConfig(data);
         setTdxNewToken('');
         setTdxNewUrl(data.bridge_url || '');
+      } else {
+        const detail = await extractApiError(res);
+        setTdxError(detail || `HTTP ${res.status}`);
       }
     } catch (e) {
       console.error('Failed to fetch tdx config', e);
+      setTdxError(String(e));
     } finally {
       setTdxLoading(false);
     }
@@ -160,17 +248,146 @@ const SettingsCenter: React.FC<SettingsCenterProps> = ({ userId, isActive }) => 
     }
   };
 
+  const fetchTdxOverview = async () => {
+    setTdxOverviewLoading(true);
+    try {
+      const res = await fetch(`${apiGatewayBase}/api/v1/tdx/overview`, {
+        headers: authHeader(),
+      });
+      if (res.ok) {
+        setTdxOverview(await res.json());
+      }
+    } catch (e) {
+      console.error('Failed to fetch tdx overview', e);
+    } finally {
+      setTdxOverviewLoading(false);
+    }
+  };
+
+  const pushSignalsToTdx = async () => {
+    setPushLoading(true);
+    setPushResult(null);
+    try {
+      const res = await fetch(`${apiGatewayBase}/api/v1/tdx/push-signals`, {
+        method: 'POST',
+        headers: { ...authHeader(), 'Content-Type': 'application/json' },
+        body: JSON.stringify({ top_n: 20 }),
+      });
+      const data = await res.json();
+      if (res.ok && data.success) {
+        setPushResult({
+          ok: true,
+          pushed: data.pushed,
+          skipped: data.skipped?.length,
+          runId: data.run_id,
+          stocks: data.stocks,
+        });
+      } else {
+        setPushResult({ ok: false, error: data.error || data.detail || `HTTP ${res.status}` });
+      }
+    } catch (e) {
+      setPushResult({ ok: false, error: String(e) });
+    } finally {
+      setPushLoading(false);
+    }
+  };
+
+  const fetchRollingConfig = async () => {
+    try {
+      const res = await fetch(`${apiGatewayBase}/api/v1/tdx/rolling-config`, {
+        headers: authHeader(),
+      });
+      if (res.ok) {
+        const data = await res.json();
+        setRollingThreshold(String(data.score_threshold ?? '2.2'));
+        setRollingAmount(String(data.fixed_buy_amount ?? '10000'));
+        setRollingAutoPlace(Boolean(data.auto_place));
+      }
+    } catch (e) {
+      console.error('Failed to fetch rolling config', e);
+    }
+  };
+
+  const saveRollingConfig = async () => {
+    setRollingCfgMsg('');
+    const threshold = parseFloat(rollingThreshold);
+    const amount = parseFloat(rollingAmount);
+    if (!Number.isFinite(threshold) || threshold <= 0 || threshold > 10) {
+      setRollingCfgMsg('❌ 阈值需在 0-10 之间');
+      return;
+    }
+    if (!Number.isFinite(amount) || amount <= 0) {
+      setRollingCfgMsg('❌ 每只金额需大于 0');
+      return;
+    }
+    try {
+      const res = await fetch(`${apiGatewayBase}/api/v1/tdx/rolling-config`, {
+        method: 'PUT',
+        headers: { ...authHeader(), 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          score_threshold: threshold,
+          fixed_buy_amount: amount,
+          auto_place: rollingAutoPlace,
+        }),
+      });
+      if (res.ok) {
+        setRollingCfgMsg('✅ 已保存，推理自动推送即时生效');
+        await fetchRollingConfig();
+      } else {
+        const detail = await extractApiError(res);
+        setRollingCfgMsg(`❌ 保存失败: ${detail || `HTTP ${res.status}`}`);
+      }
+    } catch (e) {
+      setRollingCfgMsg(`❌ 保存失败: ${e}`);
+    }
+  };
+
+  const runRollingCheck = async () => {
+    setRollingLoading(true);
+    setRollingResult(null);
+    try {
+      const body: Record<string, unknown> = {};
+      if (rollingDate.trim()) body.trade_date = rollingDate.trim();
+      const res = await fetch(`${apiGatewayBase}/api/v1/tdx/rolling-signals`, {
+        method: 'POST',
+        headers: { ...authHeader(), 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
+      });
+      const data = await res.json();
+      if (res.ok && data.success) {
+        setRollingResult({
+          ok: true,
+          buys: data.buys,
+          sells: data.sells,
+          market: data.market,
+          placedOrders: data.placed_orders,
+          failedOrders: data.failed_orders,
+        });
+      } else {
+        setRollingResult({ ok: false, error: data.error || data.detail || `HTTP ${res.status}` });
+      }
+    } catch (e) {
+      setRollingResult({ ok: false, error: String(e) });
+    } finally {
+      setRollingLoading(false);
+    }
+  };
+
   useEffect(() => {
     if (!isActive) return;
     fetchBootstrap();
     fetchTdxConfig();
+    fetchTdxOverview();
+    fetchRollingConfig();
+    const timer = setInterval(fetchTdxOverview, 8000);
+    return () => clearInterval(timer);
   }, [isActive, userId]);
 
   if (!isActive) return null;
 
   return (
-    <div className="h-full flex flex-col p-4 bg-gray-50/30 overflow-y-auto custom-scrollbar">
-      <div className="mb-4 pb-3 border-b border-gray-200">
+    <div className="h-full flex flex-col overflow-hidden">
+      <div className="px-4 pt-4 pb-3 border-b border-gray-200 bg-gray-50/30 shrink-0">
         <h3 className="text-xl font-bold text-gray-800 flex items-center">
           <Settings className="mr-3 text-blue-600" size={24} />
           模拟交易设置
@@ -180,8 +397,40 @@ const SettingsCenter: React.FC<SettingsCenterProps> = ({ userId, isActive }) => 
         </p>
       </div>
 
-      <div className="bg-white rounded-3xl border border-gray-200 shadow-sm overflow-hidden">
-        <div className="p-5 flex flex-col gap-4">
+      {/* 顶部切换按钮 */}
+      <div className="px-4 py-3 bg-gray-50/30 shrink-0 flex items-center gap-2">
+        <button
+          onClick={() => setActiveTab('credentials')}
+          className={`px-4 py-2 rounded-xl text-xs font-bold transition-colors ${
+            activeTab === 'credentials'
+              ? 'bg-white text-indigo-700 border border-indigo-200 shadow-sm'
+              : 'bg-white/60 text-gray-500 border border-gray-200 hover:text-gray-700'
+          }`}
+        >
+          <Key size={13} className="inline mr-1.5 -mt-0.5" />
+          接入凭证 / API 密钥
+        </button>
+        <button
+          onClick={() => setActiveTab('tdx')}
+          className={`px-4 py-2 rounded-xl text-xs font-bold transition-colors ${
+            activeTab === 'tdx'
+              ? 'bg-white text-emerald-700 border border-emerald-200 shadow-sm'
+              : 'bg-white/60 text-gray-500 border border-gray-200 hover:text-gray-700'
+          }`}
+        >
+          <Cable size={13} className="inline mr-1.5 -mt-0.5" />
+          通达信交易桥 / 滚动买卖
+        </button>
+      </div>
+
+      {/* 内容区：两个面板各自独立滚动 */}
+      <div className="flex-1 min-h-0 px-4 pb-4">
+        <div
+          className={`h-full bg-white rounded-3xl border border-gray-200 shadow-sm overflow-y-auto custom-scrollbar ${
+            activeTab === 'credentials' ? '' : 'hidden'
+          }`}
+        >
+          <div className="p-5 flex flex-col gap-4">
           <div className="space-y-4">
             <div className="flex items-start justify-between gap-3">
               <div>
@@ -268,10 +517,14 @@ const SettingsCenter: React.FC<SettingsCenterProps> = ({ userId, isActive }) => 
             </div>
           </div>
         </div>
-      </div>
+        </div>
 
-      {/* 通达信交易桥卡片 */}
-      <div className="bg-white rounded-3xl border border-gray-200 shadow-sm overflow-hidden mt-4">
+        {/* 通达信交易桥卡片 */}
+        <div
+          className={`h-full bg-white rounded-3xl border border-gray-200 shadow-sm overflow-y-auto custom-scrollbar ${
+            activeTab === 'tdx' ? '' : 'hidden'
+          }`}
+        >
         <div className="p-5 flex flex-col gap-4">
           <div className="flex items-start justify-between gap-3">
             <div>
@@ -292,6 +545,12 @@ const SettingsCenter: React.FC<SettingsCenterProps> = ({ userId, isActive }) => 
               刷新
             </button>
           </div>
+
+          {tdxError && (
+            <div className="rounded-2xl border border-red-200 bg-red-50 px-4 py-3 text-xs text-red-700">
+              {tdxConfig ? `桥配置刷新失败（显示旧数据）: ${tdxError}` : `通达信桥配置加载失败: ${tdxError}`}
+            </div>
+          )}
 
           {tdxConfig && (
             <>
@@ -317,6 +576,260 @@ const SettingsCenter: React.FC<SettingsCenterProps> = ({ userId, isActive }) => 
                   {tdxConfig.health.error
                     ? `桥不可达: ${tdxConfig.health.error}`
                     : `桥在线 · 通达信客户端: ${tdxConfig.health.tdx_connected ? '已连接' : '未登录(17709)'}`}
+                </div>
+              )}
+
+              {/* 局域网桥信息 */}
+              {tdxOverview?.available && (
+                <div className="rounded-2xl border border-slate-200 bg-slate-50/50 overflow-hidden">
+                  <div className="px-4 py-2.5 flex items-center justify-between border-b border-slate-200/70">
+                    <span className="text-xs font-bold text-slate-700 flex items-center gap-1.5">
+                      <Server size={13} className="text-emerald-600" />
+                      局域网桥信息
+                    </span>
+                    <span className="text-[10px] text-slate-400 font-medium flex items-center gap-1">
+                      <RefreshCw size={11} className={tdxOverviewLoading ? 'animate-spin' : ''} />
+                      {tdxOverview.bridge?.server_time ? `同步于 ${String(tdxOverview.bridge.server_time).slice(11, 19)}` : '每 8s 自动刷新'}
+                    </span>
+                  </div>
+                  <div className="px-4 py-2 flex items-center justify-between border-b border-slate-200/70 bg-white/50">
+                    <span className="text-[11px] text-slate-500">
+                      模型推理选股 → 通达信板块/预警
+                    </span>
+                    <div className="flex items-center gap-2">
+                      <button
+                        onClick={pushSignalsToTdx}
+                        disabled={pushLoading || !tdxOverview?.bridge?.tdx_connected}
+                        className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-[11px] font-bold bg-blue-600 text-white hover:bg-blue-700 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
+                      >
+                        <Send size={12} className={pushLoading ? 'animate-pulse' : ''} />
+                        {pushLoading ? '推送中…' : '推送今日选股'}
+                      </button>
+                      <button
+                        onClick={runRollingCheck}
+                        disabled={rollingLoading || !tdxOverview?.bridge?.tdx_connected}
+                        className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-[11px] font-bold bg-emerald-600 text-white hover:bg-emerald-700 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
+                      >
+                        <RefreshCw size={12} className={rollingLoading ? 'animate-spin' : ''} />
+                        {rollingLoading ? '检查中…' : rollingDate ? `推${rollingDate}分数` : '滚动买卖检查'}
+                      </button>
+                    </div>
+                  </div>
+
+                  {/* 滚动买卖配置 */}
+                  <div className="px-4 py-3 border-b border-slate-200/70 bg-white/50 space-y-2">
+                    <div className="text-[11px] font-bold text-slate-600 flex items-center gap-1.5">
+                      <SlidersHorizontal size={12} className="text-emerald-600" />
+                      滚动买卖配置（阈值与金额可自己改）
+                    </div>
+                    <div className="flex flex-wrap items-end gap-3">
+                      <label className="flex flex-col gap-1">
+                        <span className="text-[10px] text-slate-400 font-medium">买入分数阈值（{'>'}此分买入，低于则卖出）</span>
+                        <input
+                          type="number"
+                          step="0.1"
+                          min="0"
+                          max="10"
+                          value={rollingThreshold}
+                          onChange={(e) => setRollingThreshold(e.target.value)}
+                          className="w-28 px-2.5 py-1.5 rounded-lg border border-slate-200 bg-white text-xs font-mono font-bold text-slate-700 focus:outline-none focus:ring-2 focus:ring-emerald-400/40"
+                        />
+                      </label>
+                      <label className="flex flex-col gap-1">
+                        <span className="text-[10px] text-slate-400 font-medium">每只固定买入金额（元）</span>
+                        <input
+                          type="number"
+                          step="500"
+                          min="1000"
+                          value={rollingAmount}
+                          onChange={(e) => setRollingAmount(e.target.value)}
+                          className="w-32 px-2.5 py-1.5 rounded-lg border border-slate-200 bg-white text-xs font-mono font-bold text-slate-700 focus:outline-none focus:ring-2 focus:ring-emerald-400/40"
+                        />
+                      </label>
+                      <label className="flex flex-col gap-1">
+                        <span className="text-[10px] text-slate-400 font-medium">推历史日期（YYYY-MM-DD，留空=最新）</span>
+                        <input
+                          type="date"
+                          value={rollingDate}
+                          onChange={(e) => setRollingDate(e.target.value)}
+                          className="w-40 px-2.5 py-1.5 rounded-lg border border-slate-200 bg-white text-xs font-mono text-slate-700 focus:outline-none focus:ring-2 focus:ring-emerald-400/40"
+                        />
+                      </label>
+                      <button
+                        onClick={saveRollingConfig}
+                        className="px-3 py-1.5 rounded-lg text-[11px] font-bold bg-slate-700 text-white hover:bg-slate-800 transition-colors"
+                      >
+                        保存配置
+                      </button>
+                    </div>
+                    <label className="flex items-center gap-2 cursor-pointer select-none">
+                      <input
+                        type="checkbox"
+                        checked={rollingAutoPlace}
+                        onChange={(e) => setRollingAutoPlace(e.target.checked)}
+                        className="w-3.5 h-3.5 accent-emerald-600"
+                      />
+                      <span className="text-[11px] font-bold text-slate-700">
+                        把买卖信号生成为真实委托推给通达信
+                        <span className="text-slate-400 font-medium">（通达信客户端弹确认框，你确认后成交；卖单市价、买单收盘价限价）</span>
+                      </span>
+                    </label>
+                    {rollingCfgMsg && (
+                      <div className={`text-[11px] font-medium ${rollingCfgMsg.startsWith('✅') ? 'text-emerald-600' : 'text-red-600'}`}>
+                        {rollingCfgMsg}
+                      </div>
+                    )}
+                    <div className="text-[10px] text-slate-400 leading-relaxed">
+                      规则：分数 {'>'} 阈值 → 买入；持仓分数 ≤ 阈值 → 卖出；大盘低于 MA20 → 只卖不买。推历史日期时跳过当日大盘过滤。开「真实委托」后信号直接生成下单（卖先买后）。
+                    </div>
+                  </div>
+                  {rollingResult && (
+                    <div className={`px-4 py-2.5 text-[11px] border-b ${rollingResult.ok ? 'border-emerald-100 bg-emerald-50/60 text-emerald-700' : 'border-red-100 bg-red-50/60 text-red-700'}`}>
+                      {rollingResult.ok ? (
+                        <div className="space-y-1.5">
+                          <div className="font-bold flex items-center gap-2">
+                            {rollingResult.market?.above_ma20 ? '大盘站上 MA20 · 可买可卖' : '大盘低于 MA20 · 只卖不买'}
+                            <span className="text-[10px] font-mono font-medium text-emerald-600/80">{rollingResult.market?.detail}</span>
+                          </div>
+                          {rollingResult.buys && rollingResult.buys.length > 0 && (
+                            <div>
+                              <span className="font-bold text-rose-600">买入预警 {rollingResult.buys.length} 只</span>
+                              <div className="mt-1 flex flex-wrap gap-1">
+                                {(rollingResult.buys || []).map((b) => (
+                                  <span key={b.symbol} className="px-1.5 py-0.5 rounded bg-white border border-rose-100 font-mono text-[10px]">
+                                    {b.symbol} {b.name} <b>{b.score}</b> {b.volume}股
+                                  </span>
+                                ))}
+                              </div>
+                            </div>
+                          )}
+                          {rollingResult.sells && rollingResult.sells.length > 0 && (
+                            <div>
+                              <span className="font-bold text-emerald-600">卖出预警 {rollingResult.sells.length} 只</span>
+                              <div className="mt-1 flex flex-wrap gap-1">
+                                {(rollingResult.sells || []).map((s) => (
+                                  <span key={s.symbol} className="px-1.5 py-0.5 rounded bg-white border border-emerald-100 font-mono text-[10px]">
+                                    {s.symbol} {s.name} {s.score ?? '无分数'}
+                                  </span>
+                                ))}
+                              </div>
+                            </div>
+                          )}
+                          {(!rollingResult.buys?.length && !rollingResult.sells?.length) && (
+                            <span>无买卖动作（持仓均 {'>'} {rollingThreshold} 分且无新增候选）</span>
+                          )}
+                          {rollingResult.placedOrders && rollingResult.placedOrders.length > 0 && (
+                            <div>
+                              <span className="font-bold text-amber-600">已推通达信下单 {rollingResult.placedOrders.length} 笔（客户端弹确认框）</span>
+                              <div className="mt-1 flex flex-wrap gap-1">
+                                {rollingResult.placedOrders.map((o, i) => (
+                                  <span key={`${o.symbol}-${i}`} className={`px-1.5 py-0.5 rounded bg-white border font-mono text-[10px] ${o.side === 'buy' ? 'border-rose-100' : 'border-emerald-100'}`}>
+                                    {o.side === 'buy' ? '买' : '卖'} {o.symbol} {o.volume}股 · {o.status}
+                                  </span>
+                                ))}
+                              </div>
+                            </div>
+                          )}
+                          {rollingResult.failedOrders && rollingResult.failedOrders.length > 0 && (
+                            <div>
+                              <span className="font-bold text-red-500">下单失败 {rollingResult.failedOrders.length} 笔</span>
+                              <div className="mt-1 flex flex-wrap gap-1">
+                                {rollingResult.failedOrders.map((f, i) => (
+                                  <span key={`${f.symbol}-${i}`} className="px-1.5 py-0.5 rounded bg-white border border-red-100 font-mono text-[10px]" title={f.error}>
+                                    {f.side === 'buy' ? '买' : '卖'} {f.symbol}: {f.error}
+                                  </span>
+                                ))}
+                              </div>
+                            </div>
+                          )}
+                        </div>
+                      ) : (
+                        <span>滚动检查失败: {rollingResult.error}</span>
+                      )}
+                    </div>
+                  )}
+                  <div className="p-4 grid grid-cols-2 gap-3">
+                    <div className="rounded-xl bg-white border border-slate-100 p-3">
+                      <div className="text-[10px] font-bold text-slate-400 uppercase tracking-wider mb-1.5">桥主机</div>
+                      <div className="text-sm font-bold text-slate-800 font-mono truncate">{tdxOverview.bridge?.hostname || '-'}</div>
+                      <div className="text-[10px] text-slate-500 font-mono mt-0.5 truncate">{(tdxOverview.bridge?.local_ips || []).join(' / ')}</div>
+                    </div>
+                    <div className="rounded-xl bg-white border border-slate-100 p-3">
+                      <div className="text-[10px] font-bold text-slate-400 uppercase tracking-wider mb-1.5">通达信连接</div>
+                      <div className="flex items-center gap-1.5">
+                        <span className={`w-2 h-2 rounded-full ${tdxOverview.bridge?.tdx_connected ? 'bg-emerald-500' : 'bg-red-500'}`} />
+                        <span className="text-sm font-bold text-slate-800">{tdxOverview.bridge?.tdx_connected ? '已连接' : '未连接'}</span>
+                      </div>
+                      <div className="text-[10px] text-slate-500 font-mono mt-0.5 truncate">端口 {tdxOverview.bridge?.port ?? '-'}</div>
+                    </div>
+                    <div className="rounded-xl bg-white border border-slate-100 p-3">
+                      <div className="text-[10px] font-bold text-slate-400 uppercase tracking-wider mb-1.5">账户资产</div>
+                      <div className="text-sm font-bold text-red-600 font-mono">
+                        {(tdxOverview.account?.asset ?? 0).toLocaleString('zh-CN', { minimumFractionDigits: 2 })}
+                      </div>
+                      <div className="text-[10px] text-slate-500 mt-0.5">
+                        可用 <span className="font-mono font-semibold text-slate-700">{(tdxOverview.account?.cash ?? 0).toLocaleString('zh-CN', { minimumFractionDigits: 2 })}</span>
+                      </div>
+                    </div>
+                    <div className="rounded-xl bg-white border border-slate-100 p-3">
+                      <div className="text-[10px] font-bold text-slate-400 uppercase tracking-wider mb-1.5">持仓 / 市值</div>
+                      <div className="text-sm font-bold text-slate-800 font-mono">
+                        {(tdxOverview.account?.position_count ?? 0)} 只
+                      </div>
+                      <div className="text-[10px] text-slate-500 mt-0.5">
+                        市值 <span className="font-mono font-semibold text-slate-700">{(tdxOverview.account?.market_value ?? 0).toLocaleString('zh-CN', { minimumFractionDigits: 2 })}</span>
+                      </div>
+                    </div>
+                    <div className="rounded-xl bg-white border border-slate-100 p-3">
+                      <div className="text-[10px] font-bold text-slate-400 uppercase tracking-wider mb-1.5">当日委托 / 持仓明细</div>
+                      <div className="text-sm font-bold text-slate-800">
+                        委托 <span className="font-mono">{tdxOverview.orders?.length ?? 0}</span>
+                        <span className="mx-1 text-slate-300">·</span>
+                        持仓 <span className="font-mono">{tdxOverview.positions?.length ?? 0}</span>
+                      </div>
+                      <div className="text-[10px] text-slate-500 mt-0.5 truncate">
+                        {(tdxOverview.positions || []).map((p: any) => p.symbol || p.stock_code || p.code).filter(Boolean).slice(0, 3).join(', ') || '无持仓'}
+                      </div>
+                    </div>
+                    <div className="rounded-xl bg-white border border-slate-100 p-3">
+                      <div className="text-[10px] font-bold text-slate-400 uppercase tracking-wider mb-1.5">缓存 / 安全</div>
+                      <div className="text-xs font-bold text-slate-700">
+                        K线 <span className="font-mono">{tdxOverview.cache?.kline ?? 0}</span>
+                        <span className="mx-1 text-slate-300">·</span>
+                        快照 <span className="font-mono">{tdxOverview.cache?.market_snapshot ?? 0}</span>
+                      </div>
+                      <div className="text-[10px] text-slate-500 mt-0.5">
+                        活跃IP <span className="font-mono font-semibold text-slate-700">{tdxOverview.security?.active_ips ?? 0}</span>
+                        {tdxOverview.security?.banned_ips ? <span className="text-red-500 font-mono"> · 封禁 {tdxOverview.security?.banned_ips}</span> : null}
+                      </div>
+                    </div>
+                  </div>
+                  {pushResult && (
+                    <div className={`px-4 py-2.5 text-[11px] border-t ${pushResult.ok ? 'border-emerald-100 bg-emerald-50/60 text-emerald-700' : 'border-red-100 bg-red-50/60 text-red-700'}`}>
+                      {pushResult.ok ? (
+                        <div>
+                          <span className="font-bold">已推送 {pushResult.pushed} 只</span>
+                          {pushResult.skipped ? <span className="ml-1 text-emerald-600/70">（过滤 {pushResult.skipped}）</span> : null}
+                          <span className="ml-2 font-mono text-[10px] text-emerald-600/80">{pushResult.runId}</span>
+                          <div className="mt-1 flex flex-wrap gap-1">
+                            {(pushResult.stocks || []).map((s) => (
+                              <span key={s.rank} className="px-1.5 py-0.5 rounded bg-white border border-emerald-100 font-mono text-[10px]">
+                                {s.rank}.{s.symbol} {s.name} <b>{s.score}</b>
+                              </span>
+                            ))}
+                          </div>
+                        </div>
+                      ) : (
+                        <span>推送失败: {pushResult.error}</span>
+                      )}
+                    </div>
+                  )}
+                </div>
+              )}
+
+              {tdxOverview && !tdxOverview.available && (
+                <div className="rounded-2xl border border-amber-200 bg-amber-50 px-4 py-3 text-xs text-amber-700">
+                  局域网桥信息暂不可用: {tdxOverview.error || '未知原因'}
                 </div>
               )}
 
@@ -352,6 +865,7 @@ const SettingsCenter: React.FC<SettingsCenterProps> = ({ userId, isActive }) => 
               </div>
             </>
           )}
+        </div>
         </div>
       </div>
     </div>

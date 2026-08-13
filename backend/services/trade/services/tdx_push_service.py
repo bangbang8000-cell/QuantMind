@@ -7,9 +7,13 @@ TdxPushService - QuantMind ↔ 通达信 双向推送服务
 所有请求经 Windows 桥 (TDX_BRIDGE_URL:8550) 转发到通达信客户端。
 受 ENABLE_TDX_PUSH 开关控制, 未配置 token 时安全降级不报错。
 """
+import asyncio
 import logging
 import os
+import uuid
 from typing import Any, Optional
+
+from backend.shared.database_manager_v2 import get_session
 
 logger = logging.getLogger(__name__)
 
@@ -20,6 +24,33 @@ TIMEOUT = 10.0
 
 class TdxPushError(Exception):
     """通达信推送失败"""
+
+
+def _batch_quantdb_last_close(symbols: list[str]) -> dict[str, float]:
+    """批量从 QuantDB 本地日线读取最近交易日收盘价（与模拟撮合同源）。"""
+    if not symbols:
+        return {}
+    result: dict[str, float] = {}
+    try:
+        from backend.services.trade.simulation.services.local_market_data import (
+            LocalMarketData,
+        )
+        from backend.shared.stock_utils import StockCodeUtil
+
+        market_data = LocalMarketData()
+        latest_date = market_data.latest_trade_date()
+        if latest_date is None:
+            return result
+        for symbol in symbols:
+            suffix = StockCodeUtil.to_suffix(symbol)
+            if not suffix:
+                continue
+            bar = market_data.get_bar(suffix, latest_date)
+            if bar is not None and bar.close > 0:
+                result[symbol] = float(bar.close)
+    except Exception as exc:
+        logger.warning("[TdxSync] QuantDB 收盘价补全失败: %s", exc)
+    return result
 
 
 class TdxPushService:
@@ -163,6 +194,250 @@ class TdxPushService:
             "positions": pnl_list,
             "total_pnl": round(total_pnl, 2),
         }
+
+    async def sync_account_to_pg(
+        self,
+        *,
+        tenant_id: str = "default",
+        user_id: str = "",
+    ) -> dict[str, Any]:
+        """拉取通达信账户/持仓并落库到 real_account_snapshots，供前端 /account 读取。
+
+        返回: {success, account_id, total_asset, cash, market_value, position_count}
+        """
+        if not self.enabled:
+            return {"success": False, "error": "TDX_BRIDGE_URL/TOKEN 未配置"}
+        data = await self._post("/api/v1/account/query", {})
+        asset = data.get("asset", {}) or {}
+        positions_raw = data.get("positions", []) or []
+        # 桥返回的持仓缺少现价/市值，用 QuantDB 最近收盘价补全（与模拟撮合同源）
+        price_map = await asyncio.to_thread(
+            _batch_quantdb_last_close,
+            [str(p.get("stock_code") or "").strip() for p in positions_raw],
+        )
+        positions = []
+        for p in positions_raw:
+            symbol = str(p.get("stock_code") or "").strip()
+            if not symbol:
+                continue
+            volume = int(p.get("total_volume") or 0)
+            price = float(p.get("current_price") or p.get("price") or 0)
+            if price <= 0:
+                price = price_map.get(symbol, 0.0)
+            positions.append(
+                {
+                    "symbol": symbol,
+                    "name": str(p.get("stock_name") or "").strip(),
+                    "volume": volume,
+                    "available_volume": int(p.get("available_volume") or 0),
+                    "cost_price": float(p.get("cost_price") or 0),
+                    "price": price,
+                    "market_value": round(volume * price, 2),
+                }
+            )
+        total_asset = float(asset.get("asset") or 0)
+        cash = float(asset.get("cash") or 0)
+        # 桥的 market_value 可能为 0，按持仓市值累加
+        market_value = float(asset.get("market_value") or 0)
+        if market_value <= 0 and positions:
+            market_value = round(sum(float(x.get("market_value") or 0) for x in positions), 2)
+
+        from datetime import date, datetime, timezone
+
+        from sqlalchemy import insert
+
+        from backend.services.trade.models.real_account_snapshot import (
+            RealAccountSnapshot,
+        )
+
+        now = datetime.now(timezone.utc).replace(tzinfo=None)
+        account_id = f"tdx-{tenant_id}-{user_id}"
+        snapshot_date = now.date()
+        snapshot_month = snapshot_date.strftime("%Y-%m")
+        payload = {
+            "positions": positions,
+            "source": "tdx_bridge",
+            "broker_type": "tdx",
+        }
+        async with get_session() as db:
+            await db.execute(
+                insert(RealAccountSnapshot).values(
+                    tenant_id=tenant_id,
+                    user_id=user_id or "0",
+                    account_id=account_id,
+                    snapshot_at=now,
+                    snapshot_date=snapshot_date,
+                    snapshot_month=snapshot_month,
+                    total_asset=total_asset,
+                    cash=cash,
+                    market_value=market_value,
+                    today_pnl_raw=0.0,
+                    total_pnl_raw=0.0,
+                    floating_pnl_raw=0.0,
+                    source="tdx_bridge",
+                    payload_json=payload,
+                )
+            )
+            await self._sync_orders_to_pg(
+                db=db,
+                tenant_id=tenant_id,
+                user_id=user_id,
+                now=now,
+            )
+            await db.commit()
+        logger.info(
+            "[TdxPush] 通达信账户已落库 PG: asset=%.2f cash=%.2f positions=%d",
+            total_asset,
+            cash,
+            len(positions),
+        )
+        return {
+            "success": True,
+            "account_id": account_id,
+            "total_asset": total_asset,
+            "cash": cash,
+            "market_value": market_value,
+            "position_count": len(positions),
+        }
+
+    async def _sync_orders_to_pg(
+        self,
+        *,
+        db,
+        tenant_id: str,
+        user_id: str,
+        now,
+    ) -> None:
+        """把通达信当日委托同步到 orders 表（REAL 模式交易记录展示）。
+
+        幂等：按 exchange_order_id（桥的委托编号）去重，已存在则跳过。
+        """
+        try:
+            from sqlalchemy import select, text
+
+            from backend.services.trade.models.enums import (
+                OrderSide,
+                OrderStatus,
+                OrderType,
+                TradingMode,
+            )
+            from backend.services.trade.models.order import Order
+
+            orders = await self.pull_orders()
+            if not orders:
+                return
+
+            # 桥委托的 order_id 是字符串（如 "160356"），映射为 exchange_order_id
+            existing_ids = {
+                str(r[0])
+                for r in (
+                    await db.execute(
+                        select(Order.exchange_order_id).where(
+                            Order.exchange_order_id.is_not(None),
+                            Order.tenant_id == tenant_id,
+                            Order.user_id == user_id,
+                        )
+                    )
+                ).fetchall()
+            }
+
+            for o in orders:
+                exchange_id = str(o.get("order_id") or "").strip()
+                if not exchange_id or exchange_id in existing_ids:
+                    continue
+                symbol = str(o.get("stock_code") or "").strip()
+                if not symbol:
+                    continue
+                side = str(o.get("side") or "buy").strip().lower()
+                status = str(o.get("status") or "pending").strip().lower()
+                # 桥 side 用 cancel 表示已撤销委托，映射到订单方向
+                order_side = OrderSide.BUY if side in ("buy", "cancel", "unknown") else OrderSide.SELL
+                if status == "filled":
+                    order_status = OrderStatus.FILLED
+                elif status in ("partial", "partially_filled"):
+                    order_status = OrderStatus.PARTIALLY_FILLED
+                elif status in ("cancel", "cancelled"):
+                    order_status = OrderStatus.CANCELLED
+                else:
+                    order_status = OrderStatus.SUBMITTED
+
+                time_hhmm = str(o.get("time") or "").strip()
+                submitted_at = now
+                if len(time_hhmm) >= 4:
+                    try:
+                        submitted_at = now.replace(
+                            hour=int(time_hhmm[:2]),
+                            minute=int(time_hhmm[2:4]),
+                            second=0,
+                            microsecond=0,
+                        )
+                    except (ValueError, TypeError):
+                        pass
+                order_type = (
+                    OrderType.LIMIT
+                    if float(o.get("order_price") or 0) > 0
+                    else OrderType.MARKET
+                )
+                total_volume = float(o.get("total_volume") or 0)
+                filled_volume = float(o.get("filled_volume") or 0)
+                price = float(o.get("order_price") or 0)
+                filled_price = float(o.get("filled_price") or price)
+
+                await db.execute(
+                    text(
+                        """
+                        INSERT INTO orders (
+                            order_id, tenant_id, user_id, portfolio_id, strategy_id, symbol,
+                            side, trade_action, position_side, is_margin_trade,
+                            order_type, trading_mode, status,
+                            quantity, filled_quantity, price, average_price,
+                            order_value, filled_value, commission,
+                            submitted_at, filled_at,
+                            client_order_id, exchange_order_id, remarks
+                        ) VALUES (
+                            :order_id, :tenant_id, :user_id, :portfolio_id, NULL, :symbol,
+                            :side, :trade_action, :position_side, FALSE,
+                            :order_type, :trading_mode, :status,
+                            :quantity, :filled_quantity, :price, :average_price,
+                            :order_value, :filled_value, 0,
+                            :submitted_at, :filled_at,
+                            :client_order_id, :exchange_order_id, :remarks
+                        )
+                        """
+                    ),
+                    {
+                        "order_id": uuid.uuid4(),
+                        "tenant_id": tenant_id,
+                        "user_id": user_id or "0",
+                        "portfolio_id": 0,
+                        "symbol": symbol,
+                        "side": order_side.value,
+                        # PG tradeaction enum: OPEN/CLOSE（与 Python 命名不同）
+                        "trade_action": "OPEN" if order_side == OrderSide.BUY else "CLOSE",
+                        # PG positionside enum: LONG/SHORT（大写）
+                        "position_side": "LONG",
+                        "order_type": order_type.value,
+                        "trading_mode": TradingMode.REAL.value,
+                        "status": order_status.value,
+                        "quantity": total_volume,
+                        "filled_quantity": filled_volume,
+                        "price": price if price > 0 else None,
+                        "average_price": filled_price if filled_volume > 0 else None,
+                        "order_value": round(total_volume * price, 2),
+                        "filled_value": round(filled_volume * filled_price, 2),
+                        "submitted_at": submitted_at,
+                        "filled_at": submitted_at
+                        if order_status == OrderStatus.FILLED
+                        else None,
+                        "client_order_id": f"tdx-{exchange_id}",
+                        "exchange_order_id": exchange_id,
+                        "remarks": "通达信桥委托",
+                    },
+                )
+                existing_ids.add(exchange_id)
+            logger.info("[TdxSync] 通达信委托落库 %d 笔 (user=%s)", len(orders), user_id)
+        except Exception as exc:
+            logger.warning("[TdxSync] 通达信委托落库失败: %s", exc)
 
     async def check_order_success(self, wtbh: str) -> dict:
         """检查下单是否成功.

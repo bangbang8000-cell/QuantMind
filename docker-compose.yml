@@ -146,6 +146,13 @@ services:
       - USER_SERVICE_URL=http://127.0.0.1:8002
       - REAL_TRADING_SERVICE_URL=http://127.0.0.1:8002
 
+      # 通达信(TDX)交易桥配置（Windows 桥地址/token，与 Windows 侧 setup.bat 一致）
+      - TDX_BRIDGE_URL=${TDX_BRIDGE_URL:-http://192.168.31.39:8550}
+      - TDX_BRIDGE_TOKEN=${TDX_BRIDGE_TOKEN:-}
+      - ENABLE_TDX_PUSH=${ENABLE_TDX_PUSH:-false}
+      - ENABLE_REAL_TRADING=${ENABLE_REAL_TRADING:-false}
+      - REAL_BROKER_TYPE=${REAL_BROKER_TYPE:-tdx}
+
       # 调试配置
       - DEBUG=false
       - LOG_LEVEL=INFO
@@ -385,6 +392,13 @@ services:
 
       # 数据同步定时任务
       - DAILY_SYNC_ENABLED=true
+
+      # 通达信(TDX)交易桥配置（自动推理完成后推送 Top N 选股到通达信）
+      - TDX_BRIDGE_URL=${TDX_BRIDGE_URL:-http://192.168.31.39:8550}
+      - TDX_BRIDGE_TOKEN=${TDX_BRIDGE_TOKEN:-}
+      - ENABLE_TDX_PUSH=${ENABLE_TDX_PUSH:-false}
+      - TDX_ACCOUNT=${TDX_ACCOUNT:-}
+      - TDX_ACCOUNT_TYPE=${TDX_ACCOUNT_TYPE:-stock}
     volumes:
       # 运行时数据
       - ./data:/data
