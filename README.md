@@ -223,7 +223,6 @@ QuantMind 提供 **12+ 专业功能模块**：
 - **📨 界面消息**：推送选股通知到通达信消息中心
 - **🔄 实时推送**：推理完成后自动推送（`ENABLE_TDX_PUSH=true`）
 - **⚙️ 通达信滚动交易**：分数阈值选股 + 自动买卖（`tdx_rolling_trade`）
-- **🔌 多数据适配**：mootdx / eltdx / injoyai 通达信数据源
 
 ```
 模型推理 → Top N 选股 → 通达信板块 + 预警 + 消息 → 双击下单
@@ -293,7 +292,7 @@ QuantMind 内置丰富的 AI 技能，覆盖量化全流程：
 | **前端** | Electron、React 18、TypeScript、Vite、Ant Design |
 | **可视化** | ECharts、Recharts |
 | **AI 助手** | QwenPaw、Claude Code Skills、LLM 意图识别 |
-| **通达信对接** | 通达信板块/预警推送、滚动交易、mootdx/eltdx 数据 |
+| **通达信对接** | 通达信板块/预警推送、滚动交易 |
 | **部署** | Docker、Docker Compose、AutoDL GPU、Nginx |
 
 ### 数据技术
