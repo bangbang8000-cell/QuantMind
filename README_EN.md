@@ -422,9 +422,25 @@ git clone https://github.com/qusong0627/QuantMind.git
 
 ## 🤝 Open Source Philosophy
 
-> **Make professional quant capability accessible.** QuantDB solves the data problem — with data ready, train directly. Convert complex quant infrastructure (data, features, training, inference) into out-of-box capability.
+**QuantMind's vision — Democratize quantitative trading, not just for institutions.**
 
-**Data-Driven · Out-of-Box · Multi-Market · AI-Powered**
+Quantitative trading has been monopolized by institutions, blocked by two foundations: **data infrastructure** and **technical infrastructure**.
+
+- **Data**: Professional quotes/financials/factors cost institutions millions — individuals must crawl, clean, and reinvent wheels
+- **Tech**: Model training, backtest, inference, deployment need professional teams — individuals start from zero
+
+**QuantMind solves both foundations with open source:**
+
+| Foundation | Institution Way | QuantMind Open-Source |
+|------|---------|------------------|
+| **Data** | Millions for professional data | **QuantDB** — register & pull, out-of-box |
+| **Features** | Team-developed 151+ factors | **315 AI factors** auto-generated |
+| **Training** | Professional ML engineers | **13 AI models** + Optuna auto-tune |
+| **Inference** | Institutional deployment team | Auto-register, one-click inference |
+
+> **We believe quant should not be a rich man's game.** Turn complex data/features/training/inference into out-of-box capability, so every ordinary investor can arm themselves with AI — **Data ready, train directly, quant for everyone.**
+
+**Data-Driven · Open Source · Quant Democratization · AI for Every Investor**
 
 ---
 
