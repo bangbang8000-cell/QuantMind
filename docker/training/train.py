@@ -2368,6 +2368,11 @@ def _predict_dl(
         })
     else:
         X_values = df_X[features].values.astype(np.float32)
+        # 填充 NaN/Inf：tabnet 内部断言禁止 NaN 输入
+        if np.isnan(X_values).any() or np.isinf(X_values).any():
+            logger.warning("DL flat predict: 特征含 %d NaN/%d Inf，填 0",
+                           int(np.isnan(X_values).sum()), int(np.isinf(X_values).sum()))
+            X_values = np.nan_to_num(X_values, nan=0.0, posinf=0.0, neginf=0.0)
         X_tensor = torch.from_numpy(X_values)
         inner_model = None
         for attr_name in ("model", "GRU_model", "gru_model", "LSTM_model", "lstm_model",
