@@ -230,6 +230,18 @@ def _rank_ic_series(df: pd.DataFrame, pred_col: str, label_col: str) -> list[flo
 
 
 def _compute_metrics(df: pd.DataFrame, y_true: np.ndarray, y_pred: np.ndarray) -> dict:
+    # 剔除 NaN/Inf 对，避免 rmse/auc 传播为 NaN
+    y_true = np.asarray(y_true, dtype=np.float64)
+    y_pred = np.asarray(y_pred, dtype=np.float64)
+    valid = np.isfinite(y_true) & np.isfinite(y_pred)
+    if valid.sum() < 10:
+        return {"ic": float("nan"), "rank_ic": float("nan"), "rank_icir": float("nan"),
+                "rmse": 0.0, "auc": 0.0, "score_direction": "normal"}
+    y_true = y_true[valid]
+    y_pred = y_pred[valid]
+    # df 与 y 长度一致时同步过滤，避免 assign 长度不匹配
+    if len(df) == len(valid):
+        df = df.iloc[valid].copy()
     ic     = _ic(y_pred, y_true)
     series = _rank_ic_series(df.assign(_pred=y_pred, _label=y_true), "_pred", "_label")
     rank_ic   = float(np.nanmean(series)) if series else float("nan")
