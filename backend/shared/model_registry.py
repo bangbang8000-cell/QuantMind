@@ -1422,7 +1422,7 @@ class ModelRegistryService:
         # 不自动设为默认，仅注入 quality_warnings 供用户手动评估后激活。
         # 门禁只做提示，不阻断（用户可通过 activate 流程手动提升）。
         gate_triggered = False
-        _test_icir = _extract_test_rank_icir(metadata, metrics)
+        _test_icir = self._extract_test_rank_icir(metadata, metrics)
         _gate_threshold = 0.05
         if sync_status == "ready" and _test_icir is not None and _test_icir < _gate_threshold:
             logger.warning(
