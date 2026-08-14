@@ -2257,7 +2257,7 @@ def _predict_dl(
         else:
             _X = df_X[features]
             _y = pd.Series(0.0, index=df_X.index)
-        loader = _build_ts_dataloader(_X, _y, step_len, batch_size, shuffle=False, feat_norm=feat_norm)
+        loader, _ = _build_ts_dataloader(_X, _y, step_len, batch_size, shuffle=False, feat_norm=feat_norm)
         # 找到内部模型
         inner_model = None
         for attr_name in ("model", "GRU_model", "gru_model", "LSTM_model", "lstm_model",
@@ -2387,7 +2387,7 @@ def _predict_nativetft(
         _y = pd.Series(0.0, index=df_X.index)
 
     # 构建 TS DataLoader 并预测
-    loader = _build_ts_dataloader(
+    loader, _ = _build_ts_dataloader(
         _X, _y, step_len, batch_size, shuffle=False, feat_norm=feat_norm)
 
     preds = []
