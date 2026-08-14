@@ -74,15 +74,37 @@
 
 > 数据来源：**[https://quantdb.quantmind.cloud/](https://quantdb.quantmind.cloud/)**
 
-QuantMind 的 A 股数据由 **QuantDB 专业数据服务**提供，这是本平台的核心竞争力之一 —— **你不需要自己爬数据、清洗数据、对齐复权**。
+QuantMind 的 A 股数据由 **QuantDB 专业数据服务**提供，这是本平台的核心竞争力 —— **你不需要自己爬数据、清洗数据、对齐复权，数据到位直接训练**。
 
-### QuantDB A 股数据特点
+### 📊 QuantDB A 股数据（量化级专业数据）
 
-- **📊 覆盖全市场 5000+ 只 A 股**，含完整行情、财报、估值、资金流
-- **✅ 专业清洗**：已处理复权、停牌、涨跌停、ST 标记、假日填充
-- **🧮 高质量特征**：直接提供 **315 维 AI 因子** 与标准化特征，无需自研
-- **🚀 高性能存储**：Parquet 列式存储 + DuckDB 查询，秒级加载 1000 万行
-- **🔄 每日自动更新**：`quantdb_daily_sync` 一条命令增量同步
+**覆盖面**：
+- **全市场 5000+ 只 A 股**（沪深京），含主板/创业板/科创板/北交所
+- **20+ 年历史数据**，2016-2026 连续日线/分钟线
+- **完整财务三表**：利润表、资产负债表、现金流量表、分红、拆股
+
+**量化因子体系（151+ 维 / 315 维 AI 因子）**：
+
+| 因子类别 | 说明 | 典型因子 |
+|---------|------|---------|
+| **动量因子** | 过去 N 日收益、乖离、趋势 | mom_ret_5d / 20d / 60d |
+| **波动率因子** | 波动幅度、风险、Parkinson | vol_std_20 / vol_atr_14 |
+| **流动性因子** | 成交量、换手率、Amihud | liq_volume / liq_turnover |
+| **基本面因子** | 估值、盈利、成长 | fun_pe / fun_pb / fun_roe |
+| **风格因子** | 市值、价值、成长暴露 | style_bp / style_ep_ttm |
+| **资金流因子** | 主力资金、北向资金 | 资金流向特征 |
+| **筹码因子** | 持仓结构、股东变化 | chip_* |
+| **技术因子** | KDJ/MACD/RSI 等 | tech_* |
+| **行业因子** | 申万一级行业 | ind_code_l1 |
+
+**专业清洗**：
+- ✅ 前复权/后复权处理，停牌/退市标记
+- ✅ 涨跌停、ST/*ST、假日填充（volume=0 识别）
+- ✅ 全市场对齐，**无幸存者偏差**处理，标签防泄漏
+
+**高性能存储**：
+- Parquet 列式存储 + DuckDB 查询，**1000 万行秒级加载**
+- 训练直接读本地 parquet，无需数据库
 
 ### 相比自建数据的优势
 
@@ -325,12 +347,29 @@ QuantMind 内置丰富的 AI 技能，覆盖量化全流程：
 
 ## 🚀 快速开始
 
-### 环境要求
+### 💻 环境要求（多系统支持）
 
-- Python 3.10+、Node.js 20+、Docker + Docker Compose
-- 可选：NVIDIA GPU（深度学习训练）
+| 系统 | 说明 |
+|------|------|
+| **Ubuntu / Debian** | 推荐 Linux 部署，性能最佳 |
+| **Windows + WSL2** | 装 Docker Desktop + WSL2 后端即可 |
+| **macOS** | Docker Desktop 直接运行 |
+| **云服务器** | 任意 Docker 环境，单机即可 |
 
-### 一键部署
+**核心依赖**：
+- Docker + Docker Compose（无需单独装 Python/Node，全容器化）
+- Windows 用户建议 **WSL2**（性能 + 兼容性最佳）
+
+### 🧠 内存建议（重要）
+
+| 用途 | 推荐内存 | 说明 |
+|------|---------|------|
+| **模型训练** | **64GB 以上** | 千万级特征加载 + 深度学习训练 |
+| **推理 / 策略回测** | **32GB 以上** | 全市场 5000+ 股票推理 |
+
+> ⚠️ **内存不足会导致训练卡死/被杀**（OOM）。建议训练机 ≥64GB，若只有 32GB 请缩小时间窗或特征数。
+
+### 🚀 一键部署（5 步）
 
 ```bash
 # 1. 克隆仓库
@@ -344,19 +383,29 @@ cp .env.example .env
 # 3. 启动所有服务
 docker-compose up -d
 
-# 4. 下载 QuantDB 数据（A股）
-wget <QuantDB 数据包>
-tar xzf quantdb_data.tar.gz -C data/
+# 4. 下载 QuantDB A股数据（可选，已内置基础数据）
+#    从 Releases 下载数据包，或用内置同步脚本拉取
+docker exec quantmind python backend/scripts/quantdb_daily_sync.py
 
 # 5. 访问
-# 前端: http://localhost:3080
+# 前端: http://localhost:3000
 # API:  http://localhost:8000
 ```
 
-### 数据同步
+### 🔧 部署排错（常见问题）
+
+| 问题 | 解决方案 |
+|------|---------|
+| 端口被占用 | `WEB_PORT=8080 docker-compose up -d` 改端口 |
+| 内存不足 | 关闭其他容器，或 `--memory` 限制 + 缩数据窗 |
+| WSL2 无法启动 | `wsl --set-default-version 2`，确保内核更新 |
+| 数据不完整 | 跑 `docker exec quantmind python backend/scripts/quantdb_daily_sync.py` |
+| 训练被杀（ExitCode 137）| 内存不足（OOM），需 ≥64GB 或缩小数据量 |
+
+### 🐍 数据同步（多市场）
 
 ```bash
-# A股 QuantDB 日度同步
+# A股 QuantDB 日度同步（主力数据源）
 docker exec quantmind python backend/scripts/quantdb_daily_sync.py
 
 # 港股/美股/区块链/期货
@@ -454,6 +503,21 @@ QuantMind 开源的**根本目的**：
 > **让专业量化能力触手可及。** 用 QuantDB 的专业数据解决数据难题，数据来源有了，直接训练即可 —— 把复杂的量化基建（数据、特征、训练、推理）变成开箱即用的能力，让每个开发者都能专注在策略本身。
 
 **数据驱动 · 开箱即用 · 多市场覆盖 · AI 赋能**
+
+---
+
+## 👥 适合人群
+
+- **个人量化研究者** — 快速验证 Alpha 策略、因子挖掘
+- **学术研究者** — 研究 A 股多因子模型、深度学习选股
+- **股票爱好者** — 想用 AI 辅助选股、但不想从零搭数据/训练
+- **小团队** — 量化策略原型验证与二次开发
+
+---
+
+## 🔍 关键词
+
+量化交易 · 量化投资 · A股量化 · 港股量化 · 美股量化 · 多因子模型 · 因子挖掘 · Alpha策略 · 机器学习选股 · 深度学习选股 · LightGBM · XGBoost · CatBoost · LSTM · Transformer · Qlib · 股票预测 · 选股模型 · 策略回测 · 模型训练 · AI炒股 · 智能选股 · QuantDB · 量化数据 · 网格交易 · 程序化交易 · 量化平台 · 开源量化
 
 ---
 
