@@ -267,7 +267,7 @@ cd QuantMind
 cp .env.example .env
 
 # 3. 啟動所有服務
-docker-compose up -d
+docker compose up -d
 
 # 4. 同步 QuantDB A股資料
 docker exec quantmind python backend/scripts/quantdb_daily_sync.py
@@ -276,6 +276,18 @@ docker exec quantmind python backend/scripts/quantdb_daily_sync.py
 # 前端: http://localhost:3000
 # API:  http://localhost:8000
 ```
+
+> **指令說明**：使用 `docker compose`（新版標準）。舊版 Docker 用 `docker-compose`（帶連字號），如遇 `command not found` 請改用 `docker compose` 或升級 Docker。
+
+### 🔗 訪問連結
+
+| 服務 | 網址 | 說明 |
+|------|------|------|
+| 前端 Web | `http://localhost:3000` | 改埠：`WEB_PORT=8080 docker compose up -d` |
+| API | `http://localhost:8000` | FastAPI |
+| API 文件 | `http://localhost:8000/docs` | Swagger |
+| 後端日誌 | `docker logs -f quantmind` | 訓練/推論日誌 |
+| 容器狀態 | `docker ps` | 11 個服務 |
 
 ---
 

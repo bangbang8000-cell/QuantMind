@@ -567,22 +567,45 @@ cp .env.example .env
 # 编辑 .env，设置 DB_PASSWORD、SECRET_KEY 等
 
 # 3. 启动所有服务
-docker-compose up -d
+docker compose up -d
 
 # 4. 拉取 QuantDB A股数据（可选，已内置基础数据）
 #    注册 QuantDB 后直接拉取，或用内置同步脚本
 docker exec quantmind python backend/scripts/quantdb_daily_sync.py
 
 # 5. 访问
-# 前端: http://localhost:3000
+# 前端: http://localhost:3000   （WEB_PORT 可改）
 # API:  http://localhost:8000
+# 训练任务: docker logs quantmind 查看
 ```
+
+### ⚙️ Docker 命令兼容（不同系统/版本）
+
+> **命令说明**：本仓库统一使用 `docker compose`（新版标准，Docker 20.10+ / v2+）。
+> 旧版 Docker 用 `docker-compose`（带连字符），如遇 `command not found` 请改用 `docker compose` 或升级 Docker。
+
+| 系统 | Docker 安装 | 启动命令 | 说明 |
+|------|------------|---------|------|
+| **Ubuntu/Debian** | `apt install docker.io docker-compose-plugin` | `docker compose up -d` | 推荐，性能最佳 |
+| **Windows** | Docker Desktop (WSL2 后端) | `docker compose up -d` | 在 WSL2 终端内执行 |
+| **macOS** | Docker Desktop | `docker compose up -d` | 直接运行 |
+| **旧版 Docker** | 独立 compose | `docker-compose up -d` | v1 旧命令 |
+
+### 🔗 访问链接
+
+| 服务 | 地址 | 说明 |
+|------|------|------|
+| **前端 Web** | `http://localhost:3000` | 改端口：`WEB_PORT=8080 docker compose up -d` |
+| **API** | `http://localhost:8000` | FastAPI 接口 |
+| **API 文档** | `http://localhost:8000/docs` | Swagger 交互式文档 |
+| **后端日志** | `docker logs -f quantmind` | 训练/推理日志 |
+| **容器状态** | `docker ps` | 11 个服务状态 |
 
 ### 🔧 部署排错（常见问题）
 
 | 问题 | 解决方案 |
 |------|---------|
-| 端口被占用 | `WEB_PORT=8080 docker-compose up -d` 改端口 |
+| 端口被占用 | `WEB_PORT=8080 docker compose up -d` 改端口 |
 | 内存不足 | 关闭其他容器，或 `--memory` 限制 + 缩数据窗 |
 | WSL2 无法启动 | `wsl --set-default-version 2`，确保内核更新 |
 | 数据不完整 | 跑 `docker exec quantmind python backend/scripts/quantdb_daily_sync.py` |
@@ -617,7 +640,7 @@ git clone https://github.com/qusong0627/QuantMind.git
 
 # 2. 配置环境变量（.env）
 # 3. 启动服务
-docker-compose up -d
+docker compose up -d
 
 # 4. 注册 QuantDB 并拉取 A股数据（或运行内置同步脚本）
 docker exec quantmind python backend/scripts/quantdb_daily_sync.py

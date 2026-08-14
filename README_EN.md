@@ -394,7 +394,7 @@ cp .env.example .env
 # Edit .env: DB_PASSWORD, SECRET_KEY, etc.
 
 # 3. Start all services
-docker-compose up -d
+docker compose up -d
 
 # 4. Sync QuantDB A-Share data (optional, base data built-in)
 docker exec quantmind python backend/scripts/quantdb_daily_sync.py
@@ -408,11 +408,22 @@ docker exec quantmind python backend/scripts/quantdb_daily_sync.py
 
 | Problem | Solution |
 |------|---------|
-| Port conflict | `WEB_PORT=8080 docker-compose up -d` |
+| Port conflict | `WEB_PORT=8080 docker compose up -d` |
 | OOM | Close containers, reduce data window |
 | WSL2 fail | `wsl --set-default-version 2`, update kernel |
 | Incomplete data | Run quantdb_daily_sync.py |
 | Training killed (Exit 137) | OOM — need 64GB+ or smaller data |
+| `docker-compose: command not found` | Use `docker compose` (v2+) or upgrade Docker |
+
+### 🔗 Access Links
+
+| Service | URL | Note |
+|------|------|------|
+| **Frontend Web** | `http://localhost:3000` | Change port: `WEB_PORT=8080 docker compose up -d` |
+| **API** | `http://localhost:8000` | FastAPI |
+| **API Docs** | `http://localhost:8000/docs` | Swagger |
+| **Backend Logs** | `docker logs -f quantmind` | Train/inference logs |
+| **Container Status** | `docker ps` | 11 services |
 
 ---
 
@@ -421,7 +432,7 @@ docker exec quantmind python backend/scripts/quantdb_daily_sync.py
 ```bash
 # Production
 git clone https://github.com/qusong0627/QuantMind.git
-# config .env → docker-compose up -d → register QuantDB & sync data → init DB → build index
+# config .env → docker compose up -d → register QuantDB & sync data → init DB → build index
 ```
 
 ---
