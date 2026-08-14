@@ -122,6 +122,54 @@ def _load_pytorch_model(model_path: Path, meta: dict):
         sys.exit(1)
 
     model_class_name = meta.get("model_class_name")
+    model_type = str(meta.get("model_type", ""))
+    # NativeTFT：训练端保存 state_dict，需重建架构再 load_state_dict
+    if model_type.upper() == "NATIVETFT":
+        import torch.nn as nn
+        import torch.nn.functional as F
+        arch = meta.get("model_arch") or {}
+        input_dim = int(arch.get("input_dim", 7))
+        hidden_dim = int(arch.get("hidden_dim", 64))
+        num_heads = int(arch.get("num_heads", 4))
+        dropout = float(arch.get("dropout", 0.2))
+
+        class _GRN(nn.Module):
+            def __init__(self, i, h, o, p):
+                super().__init__()
+                self.lin1 = nn.Linear(i, h)
+                self.lin2 = nn.Linear(h, h)
+                self.gate = nn.Linear(h, o)
+                self.drop = nn.Dropout(p)
+                self.norm = nn.LayerNorm(o)
+                self.skip = nn.Linear(i, o) if i != o else nn.Identity()
+            def forward(self, x):
+                h = F.elu(self.lin1(x)); h = self.lin2(h); h = self.drop(h)
+                g = self.gate(h).sigmoid()
+                return self.norm(self.skip(x) + g * h)
+
+        class _NativeTFTNet(nn.Module):
+            def __init__(self):
+                super().__init__()
+                self.input_proj = nn.Linear(input_dim, hidden_dim)
+                self.gru = nn.GRU(hidden_dim, hidden_dim, batch_first=True)
+                self.attn = nn.MultiheadAttention(hidden_dim, num_heads, batch_first=True)
+                self.grn = _GRN(hidden_dim, hidden_dim, hidden_dim, dropout)
+                self.output_layer = nn.Linear(hidden_dim, 1)
+            def forward(self, x):
+                h = self.input_proj(x)
+                h_gru, _ = self.gru(h)
+                attn_out, _ = self.attn(h_gru, h_gru, h_gru)
+                h = h_gru + attn_out
+                h = self.grn(h[:, -1, :])
+                return self.output_layer(h).squeeze(-1)
+
+        model = _NativeTFTNet()
+        state_dict = torch.load(str(model_path), map_location="cpu", weights_only=True)
+        model.load_state_dict(state_dict)
+        model.eval()
+        logger.info("NativeTFT 模型已加载: input=%d hidden=%d heads=%d", input_dim, hidden_dim, num_heads)
+        return ("torch", model)
+
     if model_class_name and model_class_name in _QLIB_DL_MAP:
         # Qlib DL 模型: 重建模型架构 + 加载 state_dict
         import importlib
