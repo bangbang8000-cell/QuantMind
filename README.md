@@ -39,34 +39,45 @@
 
 ## 📖 项目简介
 
-**QuantMind 开源版** 是一款面向个人量化研究者的本地化金融量化交易平台，基于微软 **Qlib** 量化框架构建，提供从**模型训练 → 回测 → 推理 → 实盘交易**的完整研究闭环。
+**QuantMind 开源版** 是一款面向专业量化研究者的 **AI 驱动量化交易平台**，采用机构级技术栈（微软 Qlib + 深度学习 + 自动化因子挖掘），提供从**模型训练 → 回测 → 推理 → 实盘交易**的完整研究闭环。
 
-平台深度集成 **13 种主流机器学习模型**（LightGBM/XGBoost/CatBoost/GRU/LSTM/Transformer 等），支持 **151+ 维量化因子**训练与推理，用户可快速构建 Alpha 策略并在历史数据上验证效果。
+**QuantMind 不是传统手工因子量化，而是让机器学习模型自动学习市场规律**——深度集成 **13 种主流 AI 模型**（LightGBM/XGBoost/CatBoost/GRU/LSTM/Transformer 等），支持 **151+ 维量化特征**训练与推理，前沿技术、机构级标准，用户可快速构建 Alpha 策略并在历史数据上验证。
 
 **核心特色：**
 
-- **🧠 模型训练与推理**：13 种模型可视化训练，Optuna 自动调参，多周期/多模型融合，远程 GPU 训练；训练完成自动注册、一键推理，多市场（A股/港股/美股/区块链/期货）信号生成
+- **🧠 AI 模型训练与推理（前沿技术）**：13 种 ML/DL 模型可视化训练、Optuna 自动调参、多周期/多模型融合、远程 GPU 训练；训练完成自动注册、一键推理，多市场（A股/港股/美股/区块链/期货）信号生成
 - **📊 QuantDB 专业 A 股数据**：开箱即用的专业数据集合，5000+ 只 A 股、315 维 AI 因子、专业清洗、每日自动更新 —— **数据到位，直接训练**
-- **🤖 AI 全流程**：智能策略生成、QuantBot 助手、RD-Agent 自动因子挖掘、多 Agent 投研
-- **🔒 本地化部署**：docker compose 一键启动，数据与模型完全本地化，无需云服务，保障研究隐私
+- **🤖 AI 全流程自动化**：RD-Agent 自动因子挖掘、QuantBot 智能助手、多 Agent 投研、智能策略生成
+- **🔒 本地化部署**：docker compose 一键启动，数据与模型完全本地化，无云依赖，保障研究隐私
 
-适合个人开发者、学术研究者及小团队进行量化策略原型验证与二次开发，是进入金融量化领域的理想起点。
+适合个人量化研究者、学术团队及专业机构进行策略原型验证与二次开发，是进入 AI 量化领域的理想起点。
 
 
 ---
 
 ## ⚡ 核心亮点
 
-**QuantMind 是"数据到位即可训练"的量化平台** —— 解决了量化入门最大的痛点：**数据难、特征难、训练难、部署难**。
+**QuantMind 是 AI 驱动的量化平台 —— 不是传统手工因子选股，而是让机器学习模型自动学习市场规律。**
+
+传统量化靠人肉调因子、经验判断；QuantMind 用 **13 种 AI 模型自动从 151+ 特征中学习**，让 LightGBM、LSTM、Transformer 等模型**自动发现**有效规律，摆脱人工经验的局限。
+
+| 对比维度 | 传统因子量化 | QuantMind AI 量化 |
+|---------|------------|------------------|
+| **信号来源** | 手工设计因子 | 机器学习自动学习 |
+| **模型** | 线性打分 | 13 种 ML/DL 模型 |
+| **非线性** | 难捕捉 | 树模型 + 神经网络天然捕捉 |
+| **时序依赖** | 忽略 | LSTM/GRU/Transformer 建模 |
+| **调参** | 人工试错 | Optuna 自动搜索 |
+| **集成** | 简单加权 | Stacking + 动态融合 |
 
 | 痛点 | QuantMind 解法 |
 |------|---------------|
-| 数据难获取 | **QuantDB 专业数据**，一条命令拉全，无需自己爬 |
-| 特征难构建 | **151+ 维特征** 自动生成（动量/波动/流动性/资金流/风格）|
-| 训练门槛高 | **13 种模型** 一行配置，前端可视化训练，支持远程 GPU |
-| 推理部署难 | 训练完自动注册，一键推理，信号生成闭环 |
+| 数据难获取 | **QuantDB 专业数据**，一条命令拉全 |
+| 特征难构建 | **151+ 维特征** 自动生成 |
+| 训练门槛高 | **13 种 AI 模型** 前端可视化训练 + 远程 GPU |
+| 推理部署难 | 训练完自动注册，一键推理 |
 
-**从零到第一个模型，只需 30 分钟。**
+**从零到第一个 AI 模型，只需 30 分钟。**
 
 ---
 
@@ -124,42 +135,75 @@ QuantMind 的 A 股数据由 **QuantDB 专业数据服务**提供，这是本平
 
 ### 架构总览
 
+<div align="center">
+
+**Layered Microservices · QuantDB Data Hub · GPU Training Cluster**
+
+</div>
+
+<table>
+<tr>
+<th align="center" width="33%">🎨 表现层 <br/><sub>Presentation</sub></th>
+<th align="center" width="33%">🧠 服务层 <br/><sub>Microservices (FastAPI)</sub></th>
+<th align="center" width="33%">⚙️ 基础层 <br/><sub>Infrastructure</sub></th>
+</tr>
+<tr>
+<td>
+
+**前端（Electron + React + TS）**
+
+市场分析 · 智能策略 · 模型训练  
+模型管理 · 回测中心 · 模拟交易  
+QuantBot · 投研平台 · RSS · 通达信
+
+</td>
+<td>
+
+**API `:8000`** — 认证 / 策略 / 社区  
+**Engine `:8001`** — Qlib回测 / **训练推理** / Alpha  
+**Trade `:8002`** — 订单 / 风控 / 模拟盘  
+**Stream `:8003`** — 实时行情 / WebSocket
+
+</td>
+<td>
+
+**QuantDB** — 专业数据中枢  
+**训练引擎** — Qlib + Optuna  
+**AutoDL GPU** — 远程训练集群  
+**PostgreSQL + Redis** — 持久化  
+**Celery** — 异步任务调度
+
+</td>
+</tr>
+</table>
+
+### 数据流（量化研究闭环）
+
 ```
-┌─────────────────────────────────────────────────────────────┐
-│                      前端 (Electron + React + TS)            │
-│  市场分析 · 智能策略 · 模型训练 · 模型管理 · 回测中心 · 模拟盘  │
-│  QuantBot · 投研平台 · RSS信息流 · 通达信推送 · 后台管理        │
-└──────────────────────────┬──────────────────────────────────┘
-                           │ HTTP / WebSocket
-┌──────────────────────────▼──────────────────────────────────┐
-│                    后端微服务 (FastAPI)                       │
-│  ┌─────────┐ ┌─────────┐ ┌─────────┐ ┌─────────┐            │
-│  │ API :8000│ │Engine:8001│ │Trade:8002│ │Stream:8003│       │
-│  │用户/策略 │ │Qlib/训练 │ │订单/风控 │ │行情推送  │          │
-│  └─────────┘ └─────────┘ └─────────┘ └─────────┘            │
-└───────┬──────────────────┬──────────────────┬───────────────┘
-        │                  │                  │
-  ┌─────▼─────┐     ┌──────▼──────┐    ┌──────▼──────┐
-  │ QuantDB   │     │ 训练引擎     │    │ AutoDL GPU  │
-  │ 数据服务   │     │ Qlib+Optuna │    │ 远程训练节点 │
-  └───────────┘     └─────────────┘    └─────────────┘
+QuantDB 数据源
+   ↓
+特征工程（151+ 维 / 315 AI 因子）
+   ↓
+特征快照（Parquet 列式存储）
+   ↓
+13 种模型训练（Optuna 调参 / Stacking 集成 / 远程 GPU）
+   ↓
+模型注册（版本管理 · 生产监控 · A/B 对比 · 软门禁）
+   ↓
+多市场推理（截面排序 · 信号生成 · 融合加权）
+   ↓
+回测验证 → 策略部署 → 模拟盘 → 通达信推送
 ```
 
-### 核心服务
+### 架构设计要点
 
-| 服务 | 端口 | 职责 |
-|------|------|------|
-| **api** | 8000 | 用户认证、策略管理、社区、新闻代理 |
-| **engine** | 8001 | Qlib 回测、AI 策略生成、**模型训练/推理**、Alpha Agent |
-| **trade** | 8002 | 订单管理、持仓、风控、**模拟交易** |
-| **stream** | 8003 | 实时行情、WebSocket 推送 |
-
-### 数据流
-
-```
-QuantDB 数据 → 特征工程(151+维) → 特征快照(Parquet) → 模型训练
-     → 模型注册 → 推理(多市场) → 信号生成 → 回测/策略/模拟盘
-```
+| 维度 | 设计 |
+|------|------|
+| **微服务隔离** | 4 服务独立进程，独立扩容，故障隔离 |
+| **数据本地化** | QuantDB parquet 本地化，训练读盘秒级，无需数据库 |
+| **异步任务** | Celery 调度数据同步/特征/推理/回填，避免阻塞 |
+| **远程 GPU** | AutoDL 远程训练，自动推送快照 + 回传模型 |
+| **全链路监控** | 训练日志流、生产 IC 回填、漂移告警、节点状态 |
 
 ---
 
@@ -169,31 +213,118 @@ QuantMind 内置 **13 种专业模型**，覆盖从传统机器学习到深度�
 
 ### 13 种训练模型
 
-| 类别 | 模型 | 优势 |
-|------|------|------|
-| **树模型** | LightGBM | 极速训练，A股 IC 最稳定，首选基线 |
-| | XGBoost | 异构集成，与 LGB 互补 |
-| | CatBoost | 原生支持行业类别特征 |
-| | RandomForest | Bagging 基线，验证 Boosting 价值 |
-| **线性** | Ridge | sanity check，判断信号线性度 |
-| **深度学习** | GRU | 时序建模性价比最高，DL 入门首选 |
-| | LSTM | 长程记忆，适合大窗口 |
-| | ALSTM | 注意力增强，捕捉事件驱动 |
-| | Transformer | 自注意力，长程依赖 |
-| | TabNet | 表格数据专用，自带特征选择 |
-| | TCN | 时间卷积，训练快 |
-| | NativeTFT | 自研轻量 TFT，GRU+注意力 |
-| | MLP | 神经网络基线，验证时序建模价值 |
+QuantMind 内置 **13 种专业模型**，覆盖传统机器学习到深度学习完整谱系。每种模型经 A 股实测调优，前端可视化配置，开箱即用。
 
-### 专业训练能力
+#### 🌲 树模型（Tree Models）— 快且稳，量化基线首选
 
-- **🎯 多周期训练**：一次训练 T+1/3/5/10 四周期，自动 ICIR 加权融合
-- **🔬 Optuna 自动调参**：TPE 采样自动搜索最优超参，以 Rank ICIR 为目标
-- **📐 截面预处理**：per-date Z-score + 分位缩尾 + 中位数填充，专业多因子标准
-- **🧪 WFA 稳定性诊断**：Walk-Forward 滚动窗口验证模型稳定性
-- **🔍 因子筛选**：IC/ICIR 筛选 + 相关性去冗余 + 稳定性检验
-- **🧬 Stacking 集成**：时序 OOF + Ridge 元学习器，多模型融合
-- **🛡️ 防泄漏**：严格时间切分、标签防泄漏、ST/停牌过滤
+<table>
+<tr>
+<th align="center" width="22%">模型</th>
+<th align="center" width="40%">专业优势</th>
+<th align="center" width="38%">最佳特征 / 场景</th>
+</tr>
+<tr>
+<td align="center"><strong>LightGBM</strong><br/><sub>🌳 首选基线</sub></td>
+<td>直方图算法极速训练（3 分钟内）；A 股实证 IC 最稳定；对量价因子非线性捕捉强；低内存</td>
+<td><b>动量 + 波动 + 流动性</b><br/>mom_ret_* · vol_std_* · liq_turnover<br/>建议第一个模型必跑</td>
+</tr>
+<tr>
+<td align="center"><strong>XGBoost</strong><br/><sub>🌳 异构互补</sub></td>
+<td>level-wise 分裂与 LGB 互补；对资金流因子捕捉更优；与 LGB Stacking 集成提升 10-15% ICIR</td>
+<td><b>LGB 基础 + 资金流/微结构</b><br/>flow_vpin · flow_pressure<br/>与 LGB 做集成效果最佳</td>
+</tr>
+<tr>
+<td align="center"><strong>CatBoost</strong><br/><sub>🌳 类别友好</sub></td>
+<td>有序提升防过拟合；<b>原生支持行业类别特征</b>（无需 one-hot）；对风格因子交互捕捉好</td>
+<td><b>开启"行业作为特征"</b><br/>ind_code_l1 · style_bp · style_ep<br/>行业信息增益最大</td>
+</tr>
+<tr>
+<td align="center"><strong>RandomForest</strong><br/><sub>🌳 Bagging 基线</sub></td>
+<td>Bagging 思想降方差；<b>验证 Boosting 价值</b>——RF 与 LGB 接近说明信号线性；LGB 更优说明非线性重要</td>
+<td><b>诊断用</b><br/>任意特征<br/>判断是否值得投入复杂模型</td>
+</tr>
+</table>
+
+#### 📏 线性模型（Linear）— sanity check
+
+<table>
+<tr>
+<th align="center" width="22%">模型</th>
+<th align="center" width="40%">专业优势</th>
+<th align="center" width="38%">最佳特征 / 场景</th>
+</tr>
+<tr>
+<td align="center"><strong>Ridge</strong><br/><sub>📏 线性基线</sub></td>
+<td>线性回归 + L2 正则；<b>判断信号线性度</b>——Ridge IC>0.03 说明有线性信号；IC≈0 说明信号在非线性交互</td>
+<td><b>已标准化特征</b><br/>全特征<br/>必跑诊断基线，不用于实战</td>
+</tr>
+</table>
+
+#### 🤖 深度学习（Deep Learning）— 捕捉时序与非线性
+
+<table>
+<tr>
+<th align="center" width="22%">模型</th>
+<th align="center" width="40%">专业优势</th>
+<th align="center" width="38%">最佳特征 / 场景</th>
+</tr>
+<tr>
+<td align="center"><strong>GRU</strong><br/><sub>🤖 DL 入门首选</sub></td>
+<td>门控循环单元；DL 中性价比最高；GPU 训练约 10-20 分钟；适合中小数据量</td>
+<td><b>波动率时序衰减</b><br/>vol_std_* · vol_parkinson<br/>动量反转模式</td>
+</tr>
+<tr>
+<td align="center"><strong>LSTM</strong><br/><sub>🤖 长程记忆</sub></td>
+<td>多门控记忆更长；适合 >5 年大窗口；但 A 股实测提升有限（<5%），GRU 好则不必试</td>
+<td><b>长历史窗口因子</b><br/>mom_ret_60d · vol_*<br/>大数据集</td>
+</tr>
+<tr>
+<td align="center"><strong>ALSTM</strong><br/><sub>🤖 注意力增强</sub></td>
+<td>注意力自动学习重要时间步；<b>捕捉事件驱动</b>（业绩公告前后）；结果略不稳定</td>
+<td><b>事件/公告类特征</b><br/>基本面公告<br/>GRU 效果好（IC>0.05）再尝试</td>
+</tr>
+<tr>
+<td align="center"><strong>Transformer</strong><br/><sub>🤖 长程依赖</sub></td>
+<td>自注意力全局长程依赖；捕捉跨周期因子组合；<b>需 ≥100 万行数据收敛</b></td>
+<td><b>多样特征组合</b><br/>短期动量 + 长期风格<br/>数据量大才用</td>
+</tr>
+<tr>
+<td align="center"><strong>TabNet</strong><br/><sub>🤖 表格专用</sub></td>
+<td>表格数据 SOTA；<b>自带特征选择</b>（mask 机制）；无需时序窗口；像"可学习的树模型"</td>
+<td><b>资金流 + 微结构</b><br/>flow_* · microstructure<br/>特征探索利器</td>
+</tr>
+<tr>
+<td align="center"><strong>TCN</strong><br/><sub>🤖 时间卷积</sub></td>
+<td>因果卷积比 RNN 快 50%；<b>捕捉波动率突变与量能异动</b>；kernel 可调捕捉更长期依赖</td>
+<td><b>异动类特征</b><br/>vol_jump_zadj · liq_volume_ratio<br/>需频繁重训时优先</td>
+</tr>
+<tr>
+<td align="center"><strong>NativeTFT</strong><br/><sub>🤖 自研轻量 TFT</sub></td>
+<td>GRU 时序 + 注意力 + 门控残差；比 pytorch_forecasting TFT <b>轻 10 倍</b>；无额外依赖</td>
+<td><b>动量 + 波动率时序组合</b><br/>GRU 好想试注意力时用</td>
+</tr>
+<tr>
+<td align="center"><strong>MLP</strong><br/><sub>🤖 神经网络基线</sub></td>
+<td>全连接最简网络；<b>验证时序建模价值</b>——MLP IC 接近 GRU 说明时序不重要，直接用树模型</td>
+<td><b>任意扁平特征</b><br/>诊断基线<br/>判断是否值得用 RNN</td>
+</tr>
+</table>
+
+#### ✨ 专业训练能力
+
+<div align="center">
+
+| 能力 | 说明 |
+|------|------|
+| 🎯 **多周期训练** | 一次训练 T+1/3/5/10 四周期，自动 ICIR 加权融合 |
+| 🔬 **Optuna 自动调参** | TPE 采样自动搜索最优超参，以 Rank ICIR 为目标 |
+| 📐 **截面预处理** | per-date Z-score + 分位缩尾 + 中位数填充，专业多因子标准 |
+| 🧪 **WFA 稳定性** | Walk-Forward 滚动窗口验证模型稳定性 |
+| 🔍 **因子筛选** | IC/ICIR 筛选 + 相关性去冗余 + 稳定性检验 |
+| 🧬 **Stacking 集成** | 时序 OOF + Ridge 元学习器，多模型融合 |
+| 🛡️ **防泄漏** | 严格时间切分、标签防泄漏、ST/停牌过滤 |
+
+</div>
 
 ### 模型管理（专业级）
 
@@ -317,31 +448,78 @@ QuantMind 内置丰富的 AI 技能，覆盖量化全流程：
 
 ---
 
-## 🛠️ 技术栈
+## 🛠️ 核心技术（机构级 AI 量化）
 
-### 核心技术
+QuantMind 采用**机构级 AI 量化技术栈**，覆盖从数据到模型到部署的全链路：
+
+<div align="center">
+
+### 🤖 AI 核心能力
+
+</div>
+
+<table>
+<tr>
+<th align="center" width="33%">🧠 AI 建模引擎</th>
+<th align="center" width="33%">📊 数据处理平台</th>
+<th align="center" width="33%">⚡ 训练基础设施</th>
+</tr>
+<tr>
+<td>
+
+- **13 种 ML/DL 模型**（LGB/XGB/CatBoost/GRU/LSTM/Transformer/TCN...）
+- **Optuna 自动超参搜索**（TPE 采样）
+- **WFA Walk-Forward 稳定性诊断**
+- **Stacking 多模型集成**（OOF + Ridge）
+- **多周期 ICIR 加权融合**
+
+</td>
+<td>
+
+- **QuantDB 专业数据**（315 AI 因子）
+- **151+ 维特征工程**（动量/波动/流动性/风格/筹码）
+- **截面预处理**（Z-score + 缩尾 + 中性化）
+- **因子筛选**（IC/ICIR + 去冗余）
+- **Parquet + DuckDB** 秒级读取
+
+</td>
+<td>
+
+- **Qlib 微软量化框架**
+- **PyTorch 深度学习**
+- **AutoDL 远程 GPU 集群**
+- **Docker 容器化编排**
+- **Celery 异步任务调度**
+
+</td>
+</tr>
+</table>
+
+### 🔥 技术亮点
+
+| 技术 | 亮点 |
+|------|------|
+| **AI 因子挖掘** | RD-Agent（微软）自动进化因子，LLM 驱动生成 → 回测 → 优胜劣汰 |
+| **多 Agent 投研** | TradingAgents 7 分析师 + 辩论模块，自动生成研究报告 |
+| **AI 助手** | QuantBot 意图识别自动执行 + QwenPaw 多轮对话 |
+| **Claude Skills** | 20+ 量化技能包，覆盖数据/策略/训练/分析 |
+| **通达信对接** | 选股结果一键推送到通达信，双击闪电下单 |
+| **生产监控** | 每日回填真实 Rank IC，漂移检测 + 信号失效告警 |
+
+### 🛠️ 技术栈速览
 
 | 领域 | 技术 |
 |------|------|
-| **量化框架** | Qlib（微软）、Backtrader、自研回测引擎 |
-| **机器学习** | LightGBM、XGBoost、CatBoost、scikit-learn、Optuna |
-| **深度学习** | PyTorch、GRU/LSTM/Transformer/TabNet/TCN |
-| **数据** | **QuantDB**、Parquet、DuckDB、pandas、pyarrow |
-| **因子挖掘** | RD-Agent、AlphaAgent |
-| **后端** | Python 3.10、FastAPI、SQLAlchemy、Celery |
-| **数据库** | PostgreSQL、Redis（6 库隔离）|
-| **前端** | Electron、React 18、TypeScript、Vite、Ant Design |
-| **可视化** | ECharts、Recharts |
-| **AI 助手** | QwenPaw、Claude Code Skills、LLM 意图识别 |
-| **通达信对接** | 通达信板块/预警推送、滚动交易 |
-| **部署** | Docker、Docker Compose、AutoDL GPU、Nginx |
-
-### 数据技术
-
-- **QuantDB SDK**：专业行情/财报/估值数据查询
-- **Parquet 列式存储**：千万级数据秒级加载
-- **DuckDB**：本地高性能 SQL 分析
-- **151+ 维特征工程**：动量/波动/流动性/资金流/风格/筹码
+| 量化框架 | **Qlib（微软）**、Backtrader、自研回测引擎 |
+| 机器学习 | LightGBM、XGBoost、CatBoost、scikit-learn、**Optuna** |
+| 深度学习 | **PyTorch**、GRU/LSTM/Transformer/TabNet/TCN |
+| 数据 | **QuantDB**、Parquet、**DuckDB**、pandas、pyarrow |
+| 因子挖掘 | **RD-Agent**、AlphaAgent |
+| 后端 | Python 3.10、**FastAPI**、SQLAlchemy、Celery |
+| 数据库 | PostgreSQL、Redis（6 库隔离）|
+| 前端 | Electron、React 18、TypeScript、Vite、Ant Design |
+| AI 助手 | QwenPaw、Claude Code Skills、LLM 意图识别 |
+| 部署 | Docker、Docker Compose、**AutoDL GPU**、Nginx |
 
 ---
 
@@ -368,6 +546,8 @@ QuantMind 内置丰富的 AI 技能，覆盖量化全流程：
 | **推理 / 策略回测** | **32GB 以上** | 全市场 5000+ 股票推理 |
 
 > ⚠️ **内存不足会导致训练卡死/被杀**（OOM）。建议训练机 ≥64GB，若只有 32GB 请缩小时间窗或特征数。
+
+> 🔧 **平台支持**：当前完整版支持 **x86_64 / AMD64**（Intel/AMD）。**ARM 服务器（aarch64）暂不支持完整版**——因微软 Qlib 框架仅发布 x86_64 版本，ARM 无法安装。ARM 用户请用 x86 云服务器或 x86 主机。
 
 ### 🚀 一键部署（5 步）
 
