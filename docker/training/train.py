@@ -2687,60 +2687,34 @@ def select_top_factors(
     logger.info("=== Factor Selection: IC/ICIR screening ===")
     logger.info("Input: %d features, target top-%d", len(features), n_top)
 
-    # Step 1: 日频 Rank IC 计算（内存友好，默认不降采样保证质量）
-    # Spearman IC = 截面 rank 后按日 Pearson 相关。
-    # 逐特征单独 rank + cov 聚合（单列操作，内存峰值低，避免批量版 OOM）。
-    # 降采样为可选加速（FACTOR_SELECT_SAMPLE_RATIO>1 时按每 N 天取 1），
-    # 默认 1 = 全量交易日，IC/ICIR 估计精确（不降质量）。
+    # Step 1: 日频 Rank IC 计算（原始 spearmanr 算法，数值 100% 正确）
+    # 质量优先：不使用降采样或向量化近似，逐特征逐交易日算 Spearman IC。
+    # 虽然较慢（约 18 分钟），但 IC/ICIR 估计精确，因子选择可靠。
+    from scipy.stats import spearmanr
+
     t0_sel = time.time()
-    sample_ratio = max(1, int(os.getenv("FACTOR_SELECT_SAMPLE_RATIO", "1")))
-    if sample_ratio > 1 and len(features) > 40:
-        dates_sorted = sorted(df["trade_date"].unique())
-        sample_dates = set(dates_sorted[::sample_ratio])
-        fs_df = df[df["trade_date"].isin(sample_dates)].copy()
-        logger.info("Factor select downsampled: %d -> %d days (ratio=%d)",
-                    len(dates_sorted), len(sample_dates), sample_ratio)
-    else:
-        fs_df = df
-
-    # 按日预分组（一次），逐特征复用
-    date_arr = fs_df["trade_date"].values
-    label_rank_all = fs_df.groupby("trade_date", sort=False)[label_col].rank(method="average")
-    label_rank_all = label_rank_all - fs_df.groupby("trade_date", sort=False)[label_col].transform("mean")
-    day_count_all = fs_df.groupby("trade_date")[label_col].transform("count")
-    mask_all = day_count_all >= 30
-
     ic_results: dict[str, dict] = {}
     for feat in features:
-        if feat not in fs_df.columns:
+        if feat not in df.columns:
             continue
-        # 单特征截面 rank + 中心化
-        r_f = fs_df.groupby("trade_date", sort=False)[feat].rank(method="average")
-        r_f = r_f - fs_df.groupby("trade_date", sort=False)[feat].transform("mean")
-        valid = fs_df[feat].notna() & fs_df[label_col].notna()
-        mask = mask_all & valid
-        n_per_day = mask.groupby(date_arr).transform("sum")
-
-        # 逐日 cov / var（单特征，内存小）
-        cov_daily = (r_f * label_rank_all).where(mask).groupby(date_arr).sum() / np.maximum(
-            n_per_day.where(mask).groupby(date_arr).sum(), 1e-9
-        )
-        var_f = (r_f ** 2).where(mask).groupby(date_arr).mean()
-        var_l = (label_rank_all ** 2).where(mask).groupby(date_arr).mean()
-        daily_ics = (cov_daily / (np.sqrt(np.maximum(var_f, 0)) * np.sqrt(np.maximum(var_l, 0)) + 1e-12))
-        daily_ics = daily_ics.replace([np.inf, -np.inf], np.nan).dropna()
-        daily_ics = daily_ics[daily_ics.abs() <= 1.0]
-
+        daily_ics = []
+        for _, g in df.groupby("trade_date", sort=False):
+            valid = g[[feat, label_col]].dropna()
+            if len(valid) < 30:
+                continue
+            ic, _ = spearmanr(valid[feat], valid[label_col])
+            if np.isfinite(ic):
+                daily_ics.append(ic)
         if len(daily_ics) < 20:
             ic_results[feat] = {"ic_mean": 0.0, "icir": 0.0, "ic_positive_rate": 0.0, "n_days": len(daily_ics)}
             continue
-        arr = daily_ics.to_numpy()
+        arr = np.array(daily_ics)
         ic_results[feat] = {
             "ic_mean": float(np.mean(arr)),
             "icir": float(np.mean(arr) / (np.std(arr) + 1e-9)),
             "ic_positive_rate": float(np.mean(arr > 0)),
             "n_days": len(arr),
-            "daily_ics": daily_ics.tolist(),  # 供 Step 4 稳定性检验复用，避免二次计算
+            "daily_ics": daily_ics,  # 供 Step 4 稳定性检验复用，避免二次计算
         }
     logger.info("IC/ICIR screening done in %.1fs (%d features)", time.time() - t0_sel, len(ic_results))
 
