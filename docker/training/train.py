@@ -2187,6 +2187,9 @@ def _train_nativetft(
 
     if best_state is not None:
         model.load_state_dict(best_state)
+    else:
+        logger.warning("NativeTFT best_state 为 None（可能 val_score 全 NaN），使用最终权重")
+        best_state = copy.deepcopy(model.state_dict())
 
     # 保存模型
     torch.save(best_state, str(output_dir / "model.pth"))
