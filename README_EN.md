@@ -1,3 +1,9 @@
+<div align="center">
+
+**🌐 Language** · [中文](README.md) · [English](#) · [繁體中文](README_ZH-Hant.md)
+
+</div>
+
 <h1 align="center">QuantMind</h1>
 
 <p align="center">
