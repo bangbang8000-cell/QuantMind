@@ -353,6 +353,9 @@ def _predict_dl_sequence(inner_model, window_df: pd.DataFrame, features: list[st
             continue
         # 最近 step_len 天建窗，前向取最后一天的输出
         x_tensor = torch.from_numpy(X[-step_len:]).unsqueeze(0).float()  # [1, step_len, d_feat]
+        # TCN 期望 channels-first [batch, d_feat, seq]（训练时 qlib 内部 transpose）
+        if "TCN" in str(meta.get("model_class_name", "")):
+            x_tensor = x_tensor.transpose(1, 2)
         if device is not None:
             x_tensor = x_tensor.to(device)
         with torch.no_grad():
@@ -583,7 +586,17 @@ def main():
             if device is not None:
                 x_tensor = x_tensor.to(device)
             with torch.no_grad():
-                pred = inner_model(x_tensor).detach().cpu().numpy()
+                # TabNet.forward(x, priors) 需要 priors 参数（训练时 qlib 内部构造）
+                if "Tabnet" in str(meta.get("model_class_name", "")):
+                    priors = torch.ones(x_tensor.shape[0], x_tensor.shape[1], dtype=x_tensor.dtype)
+                    if device is not None:
+                        priors = priors.to(device)
+                    pred = inner_model(x_tensor, priors)
+                else:
+                    pred = inner_model(x_tensor)
+                if isinstance(pred, tuple):
+                    pred = pred[0]
+                pred = pred.detach().cpu().numpy()
             scores = pred.flatten()
     else:
         # LightGBM

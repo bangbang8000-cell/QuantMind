@@ -1953,10 +1953,6 @@ def _train_dl(
     torch.save(best_state, str(output_dir / "model.pth"))
     logger.info("DL model saved: model.pth (best_epoch=%d, best_score=%.6f)", best_epoch, best_score)
 
-    # 计算指标
-    train_m = {"ic": evals["train"][best_epoch] if evals["train"] else float("nan"), "rank_ic": float("nan"), "rank_icir": float("nan"), "rmse": float("nan"), "auc": float("nan")}
-    val_m = {"ic": evals["valid"][best_epoch] if evals["valid"] else float("nan"), "rank_ic": float("nan"), "rank_icir": float("nan"), "rmse": float("nan"), "auc": float("nan")}
-
     # DL 元数据 (供推理重建模型)
     dl_metadata = {
         "model_class_name": cls_name,
@@ -1976,6 +1972,33 @@ def _train_dl(
             "mean": [float(v) for v in _fm],
             "std": [float(v) for v in _fs],
         }
+
+    # 计算指标：train/val 用模型预测算真实 rmse/auc（不再硬编码 NaN）
+    # test 指标由 train_model 基于 test_df 计算。
+    def _dl_metrics(frame: pd.DataFrame) -> dict:
+        try:
+            pred_df = _predict_dl(output_dir, frame, features, dl_metadata)
+            frame_m = frame.copy()
+            if "symbol" not in frame_m.columns or "trade_date" not in frame_m.columns:
+                frame_m = frame.reset_index()
+                if "instrument" in frame_m.columns:
+                    frame_m["symbol"] = frame_m["instrument"]
+                    frame_m["trade_date"] = frame_m["datetime"] if "datetime" in frame_m.columns else 0
+            merged = frame_m.merge(pred_df[["symbol", "trade_date", "pred"]], on=["symbol", "trade_date"], how="left")
+            if merged["pred"].notna().sum() < 10:
+                logger.warning("DL metrics: 预测不足 10 行有效，rmse/auc 置 0")
+                return {"ic": float("nan"), "rank_ic": float("nan"), "rank_icir": float("nan"), "rmse": 0.0, "auc": 0.0}
+            y_true = merged["label"].astype("float32").to_numpy()
+            y_pred = merged["pred"].fillna(0).astype("float32").to_numpy()
+            return _compute_metrics(merged, y_true, y_pred)
+        except Exception as exc:
+            logger.warning("DL metrics 计算失败: %s", exc)
+            return {"ic": float("nan"), "rank_ic": float("nan"), "rank_icir": float("nan"), "rmse": 0.0, "auc": 0.0}
+
+    train_m = _dl_metrics(train_df)
+    val_m = _dl_metrics(val_df)
+    train_m.setdefault("rmse", 0.0); train_m.setdefault("auc", 0.0)
+    val_m.setdefault("rmse", 0.0); val_m.setdefault("auc", 0.0)
 
     return model_obj, train_m, val_m, dl_metadata
 
@@ -2157,11 +2180,6 @@ def _train_nativetft(
     torch.save(best_state, str(output_dir / "model.pth"))
     logger.info("NativeTFT saved: model.pth (best_epoch=%d, best_ic=%.6f)", best_epoch, best_score)
 
-    train_m = {"ic": evals["train"][best_epoch] if evals["train"] else float("nan"),
-               "rank_ic": float("nan"), "rank_icir": float("nan"), "rmse": float("nan"), "auc": float("nan")}
-    val_m = {"ic": evals["valid"][best_epoch] if evals["valid"] else float("nan"),
-             "rank_ic": float("nan"), "rank_icir": float("nan"), "rmse": float("nan"), "auc": float("nan")}
-
     dl_metadata = {
         "model_type": "NativeTFT",
         "model_arch": {
@@ -2185,6 +2203,30 @@ def _train_nativetft(
             "std": [float(v) for v in _fs],
         }
 
+    # 计算真实 train/val 指标（不再硬编码 NaN rmse/auc）
+    def _tft_metrics(frame: pd.DataFrame) -> dict:
+        try:
+            pred_df = _predict_nativetft(output_dir, frame, features, dl_metadata)
+            frame_m = frame.copy()
+            if "symbol" not in frame_m.columns or "trade_date" not in frame_m.columns:
+                frame_m = frame.reset_index()
+                if "instrument" in frame_m.columns:
+                    frame_m["symbol"] = frame_m["instrument"]
+                    frame_m["trade_date"] = frame_m["datetime"] if "datetime" in frame_m.columns else 0
+            merged = frame_m.merge(pred_df[["symbol", "trade_date", "pred"]], on=["symbol", "trade_date"], how="left")
+            if merged["pred"].notna().sum() < 10:
+                return {"ic": float("nan"), "rank_ic": float("nan"), "rank_icir": float("nan"), "rmse": 0.0, "auc": 0.0}
+            y_true = merged["label"].astype("float32").to_numpy()
+            y_pred = merged["pred"].fillna(0).astype("float32").to_numpy()
+            return _compute_metrics(merged, y_true, y_pred)
+        except Exception as exc:
+            logger.warning("NativeTFT metrics 计算失败: %s", exc)
+            return {"ic": float("nan"), "rank_ic": float("nan"), "rank_icir": float("nan"), "rmse": 0.0, "auc": 0.0}
+
+    train_m = _tft_metrics(train_df)
+    val_m = _tft_metrics(val_df)
+    train_m.setdefault("rmse", 0.0); train_m.setdefault("auc", 0.0)
+    val_m.setdefault("rmse", 0.0); val_m.setdefault("auc", 0.0)
 
     return model, train_m, val_m, dl_metadata
 
@@ -2272,9 +2314,14 @@ def _predict_dl(
                 break
         inner_model.eval() if inner_model is not None else None
         preds = []
+        is_tcn = "TCN" in cls_name
         for batch in loader:
             data = batch[0] if isinstance(batch, (list, tuple)) else batch
             feature = data[:, :, 0:-1]
+            # TCN 期望 channels-first [batch, d_feat, seq]（训练时 qlib 内部 transpose，
+            # 推理需手动补）；GRU/LSTM/ALSTM batch_first，Transformer 内部自处理。
+            if is_tcn:
+                feature = feature.transpose(1, 2)
             with torch.no_grad():
                 pred = inner_model(feature.float())
                 if isinstance(pred, tuple):
@@ -2294,6 +2341,11 @@ def _predict_dl(
             orig = ds.original_rows[ds.indices] + step_len - 1
             if orig.max() < n_total and len(orig) == raw_pred.shape[0]:
                 out[orig] = raw_pred
+            else:
+                logger.warning("DL predict scatter 不匹配: pred=%d orig=%d n_total=%d -> 全 NaN",
+                               raw_pred.shape[0], len(orig), n_total)
+        else:
+            logger.warning("DL predict 无 original_rows 或无预测: pred=%d", raw_pred.shape[0])
         return pd.DataFrame({
             "symbol": _pred_df["symbol"].to_numpy(),
             "trade_date": _pred_df["trade_date"].to_numpy(),
@@ -2310,11 +2362,17 @@ def _predict_dl(
             if inner_model is not None:
                 break
         inner_model.eval() if inner_model is not None else None
+        is_tabnet = "Tabnet" in cls_name
         preds = []
         for i in range(0, len(X_tensor), batch_size):
             batch = X_tensor[i:i+batch_size]
             with torch.no_grad():
-                pred = inner_model(batch.float())
+                if is_tabnet:
+                    # qlib TabNet.forward(x, priors) 需要 priors 参数（训练时 qlib 内部构造）
+                    priors = torch.ones(batch.shape[0], batch.shape[1], dtype=batch.dtype)
+                    pred = inner_model(batch.float(), priors)
+                else:
+                    pred = inner_model(batch.float())
                 if isinstance(pred, tuple):
                     pred = pred[0]
                 if hasattr(pred, 'dim') and pred.dim() == 2 and pred.shape[1] == 1:

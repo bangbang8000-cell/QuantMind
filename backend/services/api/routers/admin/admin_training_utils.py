@@ -124,7 +124,10 @@ def _coerce_float(value: Any) -> float | None:
     try:
         if value is None:
             return None
-        return float(value)
+        f = float(value)
+        if f != f or f in (float("inf"), float("-inf")):  # NaN/Inf 视为无效
+            return None
+        return f
     except Exception:
         return None
 
