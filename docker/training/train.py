@@ -1470,14 +1470,23 @@ def _train_catboost(cfg: dict, features: list[str], X_train: np.ndarray, y_train
 
     # has_time：数据按时间顺序排列时开启，CatBoost 按时间处理序列数据，
     # 避免未来信息影响过去预测。需行序为时间序（load_data 已按 symbol+trade_date 排序）。
+    # 注意：旧版 catboost 的 Pool 不支持 has_time 参数，需 try/except 降级。
     has_time = str(params.get("has_time", "false")).lower() in ("1", "true", "yes", "on")
-
-    train_pool = Pool(X_train, label=y_train, feature_names=features,
-                      cat_features=cat_feature_indices if cat_feature_indices else None,
-                      has_time=has_time)
-    val_pool = Pool(X_val, label=y_val, feature_names=features,
-                    cat_features=cat_feature_indices if cat_feature_indices else None,
-                    has_time=has_time)
+    _pool_kwargs: dict = {
+        "feature_names": features,
+        "cat_features": cat_feature_indices if cat_feature_indices else None,
+    }
+    if has_time:
+        try:
+            train_pool = Pool(X_train, label=y_train, has_time=True, **_pool_kwargs)
+            val_pool = Pool(X_val, label=y_val, has_time=True, **_pool_kwargs)
+        except TypeError:
+            logger.warning("当前 catboost 版本不支持 has_time，降级为不带该参数")
+            train_pool = Pool(X_train, label=y_train, **_pool_kwargs)
+            val_pool = Pool(X_val, label=y_val, **_pool_kwargs)
+    else:
+        train_pool = Pool(X_train, label=y_train, **_pool_kwargs)
+        val_pool = Pool(X_val, label=y_val, **_pool_kwargs)
 
     model = CatBoost(params)
     model.fit(train_pool, eval_set=val_pool, early_stopping_rounds=max(1, int(model_cfg.get("early_stopping_rounds", 100) or 100)))
