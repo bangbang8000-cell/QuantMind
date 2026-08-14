@@ -357,8 +357,18 @@ class QlibBacktestServiceRuntimeMixin(QlibBacktestServiceQueryMixin):
                         end_ts = signal_ts
 
                 # 2. Qlib 物理日历边界检查
+                # 边界语义：cal_max_ts 是日历最后一天，若请求终点 >= cal_max_ts，
+                # 则实际终点收缩到 cal_max_ts 本身（可用数据最后一天），而不是
+                # 倒数第二天 full_cal[-2]。
+                # 否则会污染两个下游环节：
+                #   a) signal_end_date_truncated（上方）：信号只覆盖到 cal_max_ts，
+                #      但 request.end_date 被写成 cal_max_ts-1，导致 rows_in_range
+                #      少算一天；
+                #   b) qlib.backtest() 以 request.end_date 作为终点：当日历完全
+                #      不覆盖区间时 qlib 静默用工作日日历补 44 天空转（0 成交、
+                #      全部指标 0），而收缩到 cal_max_ts 后即可正常出信号。
                 if end_ts >= cal_max_ts:
-                    actual_end_date = str(full_cal[-2].date())
+                    actual_end_date = str(cal_max_ts.date())
                     task_log.info(
                         "calendar_limit_reached",
                         "检测到目标日期达到日历边界，执行安全回退",
@@ -383,6 +393,20 @@ class QlibBacktestServiceRuntimeMixin(QlibBacktestServiceQueryMixin):
                     "date_decision_error", "日期决策逻辑异常", error=str(cal_err)
                 )
                 actual_end_date = request.end_date
+
+            # 3. 区间反转守卫（必须在 try 之外，异常不能被上面的兜底吞掉）：
+            #    请求起始日整体晚于行情日历最后可用日。
+            #    qlib.backtest() 收到 start>end 的反转区间会静默用工作日日历
+            #    补足空转（0 成交、全指标 0、状态 completed），前端表现为
+            #    「回测完成但全是 0」。此处直接给出可操作的错误。
+            request_start_ts = pd.Timestamp(request.start_date)
+            actual_end_ts = pd.Timestamp(actual_end_date)
+            if request_start_ts > actual_end_ts:
+                raise ValueError(
+                    f"回测起始日期 {request.start_date} 晚于行情数据最后可用日期 "
+                    f"{actual_end_date}。请将回测区间调整到 {actual_end_date} 之前，"
+                    f"或在数据管理页同步最新数据并重建 Qlib 缓存。"
+                )
             # --- 日期自适应校准 [END] ---
 
             # 构建策略配置 (使用工厂模式)
