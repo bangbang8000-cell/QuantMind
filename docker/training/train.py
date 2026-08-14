@@ -1630,6 +1630,7 @@ def _build_ts_dataloader(
     batch_size: int,
     shuffle: bool = True,
     feat_norm: tuple[np.ndarray, np.ndarray] | None = None,
+    drop_last: bool = True,
 ) -> "tuple[torch.utils.data.DataLoader, tuple[np.ndarray, np.ndarray]]":
     """将扁平 DataFrame (MultiIndex: instrument x datetime) 转为 3D DataLoader。
 
@@ -1694,6 +1695,9 @@ def _build_ts_dataloader(
         offsets = [0, len(X_values)]
 
     dataset = _TSLazyDataset(X_values, y_values, offsets, step_len)
+    # 记录排序索引（相对 df_X 的行），供推理 scatter 回原始行号
+    if isinstance(df_X.index, pd.MultiIndex):
+        dataset.original_rows = order
     logger.info("TS DataLoader: %d samples from %d rows (step_len=%d)", len(dataset), len(X_values), step_len)
     # drop_last=True 与 Qlib 官方 fit() 一致：末批若只剩 1 个样本，
     # collate 会把 weight 压成 0 维标量，Qlib loss_fn 内的 weight[mask] 会抛
@@ -1702,7 +1706,7 @@ def _build_ts_dataloader(
         dataset,
         batch_size=batch_size,
         shuffle=shuffle,
-        drop_last=True,
+        drop_last=drop_last,
         num_workers=0,
     )
     return loader, (_feat_mean, _feat_std)
@@ -2257,7 +2261,7 @@ def _predict_dl(
         else:
             _X = df_X[features]
             _y = pd.Series(0.0, index=df_X.index)
-        loader, _ = _build_ts_dataloader(_X, _y, step_len, batch_size, shuffle=False, feat_norm=feat_norm)
+        loader, _ = _build_ts_dataloader(_X, _y, step_len, batch_size, shuffle=False, feat_norm=feat_norm, drop_last=False)
         # 找到内部模型
         inner_model = None
         for attr_name in ("model", "GRU_model", "gru_model", "LSTM_model", "lstm_model",
@@ -2278,7 +2282,23 @@ def _predict_dl(
                 if hasattr(pred, 'dim') and pred.dim() == 2 and pred.shape[1] == 1:
                     pred = pred.squeeze(-1)
                 preds.append(pred.detach().cpu().numpy())
-        return np.concatenate(preds)
+        raw_pred = np.concatenate(preds)
+
+        # 时序滑窗预测天然比全量行少（每只股票前 step_len-1 行无完整窗口）。
+        # 用 dataset.original_rows（排序索引→原始 df_X 行）把预测 scatter
+        # 回原始行的窗口末端位置，其余填 NaN，返回 DataFrame(symbol,trade_date,pred)。
+        n_total = len(_pred_df)
+        out = np.full(n_total, np.nan, dtype=np.float32)
+        if raw_pred.shape[0] > 0 and hasattr(loader.dataset, "original_rows"):
+            ds = loader.dataset
+            orig = ds.original_rows[ds.indices] + step_len - 1
+            if orig.max() < n_total and len(orig) == raw_pred.shape[0]:
+                out[orig] = raw_pred
+        return pd.DataFrame({
+            "symbol": _pred_df["symbol"].to_numpy(),
+            "trade_date": _pred_df["trade_date"].to_numpy(),
+            "pred": out,
+        })
     else:
         X_values = df_X[features].values.astype(np.float32)
         X_tensor = torch.from_numpy(X_values)
@@ -2300,7 +2320,12 @@ def _predict_dl(
                 if hasattr(pred, 'dim') and pred.dim() == 2 and pred.shape[1] == 1:
                     pred = pred.squeeze(-1)
                 preds.append(pred.detach().cpu().numpy())
-        return np.concatenate(preds)
+        _flat_pred = np.concatenate(preds)
+        return pd.DataFrame({
+            "symbol": df_X["symbol"].to_numpy(),
+            "trade_date": df_X["trade_date"].to_numpy(),
+            "pred": _flat_pred,
+        })
 
 
 def _predict_nativetft(
@@ -2388,7 +2413,7 @@ def _predict_nativetft(
 
     # 构建 TS DataLoader 并预测
     loader, _ = _build_ts_dataloader(
-        _X, _y, step_len, batch_size, shuffle=False, feat_norm=feat_norm)
+        _X, _y, step_len, batch_size, shuffle=False, feat_norm=feat_norm, drop_last=False)
 
     preds = []
     with torch.no_grad():
@@ -2397,8 +2422,21 @@ def _predict_nativetft(
             feature = data[:, :, 0:-1].float()
             pred = model(feature)
             preds.append(pred.cpu().numpy())
+    raw_pred = np.concatenate(preds)
 
-    return np.concatenate(preds)
+    # 与 _predict_dl 相同的 scatter 逻辑：用 original_rows 映射回原始行
+    n_total = len(_pred_df)
+    out = np.full(n_total, np.nan, dtype=np.float32)
+    if raw_pred.shape[0] > 0 and hasattr(loader.dataset, "original_rows"):
+        ds = loader.dataset
+        orig = ds.original_rows[ds.indices] + step_len - 1
+        if orig.max() < n_total and len(orig) == raw_pred.shape[0]:
+            out[orig] = raw_pred
+    return pd.DataFrame({
+        "symbol": _pred_df["symbol"].to_numpy(),
+        "trade_date": _pred_df["trade_date"].to_numpy(),
+        "pred": out,
+    })
 
 
 def _predict_with_model(model: Any, X: np.ndarray, model_type: str, features: list[str] | None = None) -> np.ndarray:
@@ -2551,7 +2589,11 @@ def train_model(df: pd.DataFrame, features: list[str], cfg: dict, hardware: dict
 
         y_full_pred = _predict_nativetft(output_dir, df, features, dl_metadata)
         full_pred_df = df[["symbol", "trade_date", "label"]].copy()
-        full_pred_df["pred"] = y_full_pred
+        # 时序 DL 预测返回 DataFrame(symbol,trade_date,pred)，按 key 对齐合并
+        full_pred_df = full_pred_df.merge(
+            y_full_pred[["symbol", "trade_date", "pred"]],
+            on=["symbol", "trade_date"], how="left",
+        )
         full_pred_df["split"] = "train"
         full_pred_df.loc[
             (full_pred_df["trade_date"] >= val_df["trade_date"].min()) &
@@ -2597,7 +2639,11 @@ def train_model(df: pd.DataFrame, features: list[str], cfg: dict, hardware: dict
         # DL 模型生成全窗口预测
         y_full_pred = _predict_dl(output_dir, df, features, dl_metadata)
         full_pred_df = df[["symbol", "trade_date", "label"]].copy()
-        full_pred_df["pred"] = y_full_pred
+        # 时序 DL 预测返回 DataFrame(symbol,trade_date,pred)，按 key 对齐合并
+        full_pred_df = full_pred_df.merge(
+            y_full_pred[["symbol", "trade_date", "pred"]],
+            on=["symbol", "trade_date"], how="left",
+        )
         full_pred_df["split"] = "train"
         full_pred_df.loc[
             (full_pred_df["trade_date"] >= val_df["trade_date"].min()) &
@@ -2928,7 +2974,11 @@ def _train_single_model(
         )
         y_full_pred = _predict_nativetft(output_dir, df, features, dl_metadata)
         full_pred_df = df[["symbol", "trade_date", "label"]].copy()
-        full_pred_df["pred"] = y_full_pred
+        # 时序 DL 预测返回 DataFrame(symbol,trade_date,pred)，按 key 对齐合并
+        full_pred_df = full_pred_df.merge(
+            y_full_pred[["symbol", "trade_date", "pred"]],
+            on=["symbol", "trade_date"], how="left",
+        )
         full_pred_df["split"] = "train"
         full_pred_df.loc[
             (full_pred_df["trade_date"] >= val_df["trade_date"].min()) &
@@ -2960,7 +3010,11 @@ def _train_single_model(
         )
         y_full_pred = _predict_dl(output_dir, df, features, dl_metadata)
         full_pred_df = df[["symbol", "trade_date", "label"]].copy()
-        full_pred_df["pred"] = y_full_pred
+        # 时序 DL 预测返回 DataFrame(symbol,trade_date,pred)，按 key 对齐合并
+        full_pred_df = full_pred_df.merge(
+            y_full_pred[["symbol", "trade_date", "pred"]],
+            on=["symbol", "trade_date"], how="left",
+        )
         full_pred_df["split"] = "train"
         full_pred_df.loc[
             (full_pred_df["trade_date"] >= val_df["trade_date"].min()) &
