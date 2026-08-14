@@ -18,14 +18,19 @@ fi
 # 下载部署脚本（使用临时目录，避免提前占用 /opt/quantmind）
 TMP_DEPLOY_DIR="$(mktemp -d /tmp/quantmind-deploy.XXXXXX)"
 DEPLOY_SCRIPT="$TMP_DEPLOY_DIR/deploy.sh"
-DEPLOY_URL="https://gitee.com/qusong0627/QuantMind/raw/master/deploy/deploy.sh"
+# 默认固定到发布 tag（而非动态 master），确保部署可复现、可校验。
+# 可用环境变量覆盖：
+#   QUANTMIND_DEPLOY_TAG=master         （使用最新 master，不推荐生产）
+#   QUANTMIND_DEPLOY_SHA256=xxx         （校验 deploy.sh 哈希）
+QUANTMIND_DEPLOY_TAG="${QUANTMIND_DEPLOY_TAG:-v1.9.0-beta}"
+DEPLOY_URL="https://gitee.com/qusong0627/QuantMind/raw/${QUANTMIND_DEPLOY_TAG}/deploy/deploy.sh"
 EXPECTED_SHA256="${QUANTMIND_DEPLOY_SHA256:-}"
 cleanup() {
     rm -rf "$TMP_DEPLOY_DIR"
 }
 trap cleanup EXIT
 
-echo "下载部署脚本..."
+echo "下载部署脚本 (tag=${QUANTMIND_DEPLOY_TAG})..."
 curl -fsSL "$DEPLOY_URL" -o "$DEPLOY_SCRIPT"
 
 if [[ -n "$EXPECTED_SHA256" ]]; then
@@ -39,6 +44,7 @@ if [[ -n "$EXPECTED_SHA256" ]]; then
     echo "deploy.sh 校验通过"
 else
     echo "警告: 未设置 QUANTMIND_DEPLOY_SHA256，已跳过 deploy.sh 完整性校验"
+    echo "建议生产部署设置: QUANTMIND_DEPLOY_SHA256=\$(curl -fsSL $DEPLOY_URL | sha256sum | awk '{print \$1}')"
 fi
 
 # 添加执行权限

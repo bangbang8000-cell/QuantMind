@@ -828,15 +828,41 @@ step10_init_database() {
     log_info "等待数据库就绪..."
     sleep 5
 
-    if [[ -f "data/quantmind_init.sql" ]]; then
-        log_info "初始化数据库..."
-        if docker exec -i quantmind-db psql -U quantmind -d quantmind < data/quantmind_init.sql 2>&1; then
-            log_info "数据库初始化完成"
+    # 优先执行仓库内已提交的 db_init.sql（含 users 等全部核心表），
+    # 确保即使缺少 data/quantmind_init.sql 也能完成建表。
+    # 容器内路径 /app/backend/shared/db_init.sql 由 ./backend:/app/backend 挂载提供。
+    DB_INIT_DONE=0
+    if docker exec quantmind-db sh -c 'command -v psql >/dev/null 2>&1'; then
+        # 通过 quantmind 容器执行（其挂载了 backend 源码）
+        if docker exec quantmind bash -c "psql -h \${DB_HOST:-db} -p \${DB_PORT:-5432} -U \${DB_USER:-quantmind} -d \${DB_NAME:-quantmind} -f /app/backend/shared/db_init.sql --quiet -v ON_ERROR_STOP=0" 2>&1; then
+            log_info "核心表初始化完成（db_init.sql）"
+            DB_INIT_DONE=1
         else
-            log_warn "数据库初始化可能失败，检查日志"
+            log_warn "db_init.sql 执行失败，尝试通过数据库容器直接执行"
+            if docker exec -i quantmind-db psql -U quantmind -d quantmind < backend/shared/db_init.sql 2>&1; then
+                log_info "核心表初始化完成（db_init.sql via db 容器）"
+                DB_INIT_DONE=1
+            else
+                log_warn "db_init.sql 初始化失败"
+            fi
         fi
     else
-        log_warn "未找到初始化 SQL: data/quantmind_init.sql"
+        if docker exec -i quantmind-db psql -U quantmind -d quantmind < backend/shared/db_init.sql 2>&1; then
+            log_info "核心表初始化完成（db_init.sql）"
+            DB_INIT_DONE=1
+        else
+            log_warn "db_init.sql 初始化失败"
+        fi
+    fi
+
+    # 补充执行完整 dump（如存在，含所有业务表的更全定义）
+    if [[ -f "data/quantmind_init.sql" ]]; then
+        log_info "补充初始化数据（quantmind_init.sql）..."
+        if docker exec -i quantmind-db psql -U quantmind -d quantmind < data/quantmind_init.sql 2>&1; then
+            log_info "数据库补充初始化完成"
+        else
+            log_warn "数据库补充初始化可能失败，检查日志（可忽略，核心表已建）"
+        fi
     fi
 
     # 创建默认管理员用户（如果不存在）
