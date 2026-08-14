@@ -415,7 +415,7 @@ docker exec quantmind python backend/scripts/quantdb_daily_sync.py
 ```bash
 # Production
 git clone https://github.com/qusong0627/QuantMind.git
-# config .env → docker-compose up -d → download data → init DB → build index
+# config .env → docker-compose up -d → register QuantDB & sync data → init DB → build index
 ```
 
 ---

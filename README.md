@@ -563,8 +563,8 @@ cp .env.example .env
 # 3. 启动所有服务
 docker-compose up -d
 
-# 4. 下载 QuantDB A股数据（可选，已内置基础数据）
-#    从 Releases 下载数据包，或用内置同步脚本拉取
+# 4. 拉取 QuantDB A股数据（可选，已内置基础数据）
+#    注册 QuantDB 后直接拉取，或用内置同步脚本
 docker exec quantmind python backend/scripts/quantdb_daily_sync.py
 
 # 5. 访问
@@ -613,7 +613,8 @@ git clone https://github.com/qusong0627/QuantMind.git
 # 3. 启动服务
 docker-compose up -d
 
-# 4. 下载数据（从 Releases 下载数据包解压到 data/）
+# 4. 注册 QuantDB 并拉取 A股数据（或运行内置同步脚本）
+docker exec quantmind python backend/scripts/quantdb_daily_sync.py
 # 5. 初始化数据库（首次启动自动建表 + 默认 admin）
 # 6. 构建股票索引
 ```
