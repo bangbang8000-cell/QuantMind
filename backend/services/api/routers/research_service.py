@@ -1457,7 +1457,7 @@ async def predict_single_stock(
 
     consensus_score = round(sum(c["score"] for c in consensus) / len(consensus) * 100, 2)
 
-    return {
+    payload_data = {
         "status": "success",
         "symbol": normalized_symbol,
         "stock_name": stock_name,
@@ -1480,4 +1480,5 @@ async def predict_single_stock(
         "consensus_score": consensus_score,
         "error": None,
     }
+    return {"code": 200, "data": payload_data}
 

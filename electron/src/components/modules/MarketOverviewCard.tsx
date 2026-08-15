@@ -18,7 +18,7 @@ const MARKET_LABELS: Record<MarketId, string> = {
 
 export const MarketOverviewCard: React.FC = () => {
   const currentMarket = useAppSelector(selectCurrentMarket);
-  const { data, loading, error, timedOut } = useMarketData({ market: currentMarket, timeoutMs: 1000 });
+  const { data, loading, error, timedOut } = useMarketData({ market: currentMarket, timeoutMs: 8000 });
 
   // 市场默认数据
   const fallbackData: Partial<MarketIndex>[] = (MARKET_INDICES[currentMarket] || MARKET_INDICES.CN).map(

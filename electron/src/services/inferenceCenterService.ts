@@ -83,14 +83,19 @@ export interface AvailableModelOption {
 
 class InferenceCenterService {
   private get client(): AxiosInstance {
+    const baseURL = (import.meta as any).env?.VITE_USER_API_URL || SERVICE_ENDPOINTS.API_GATEWAY || SERVICE_ENDPOINTS.USER_SERVICE;
     const client = axios.create({
-      baseURL: `${SERVICE_ENDPOINTS.api}/api/v1`,
+      baseURL,
       timeout: 30000,
     });
     client.interceptors.request.use((config) => {
       const token = authService.getAccessToken();
       if (token) {
-        config.headers.Authorization = `Bearer ${token}`;
+        if (config.headers && typeof config.headers.set === 'function') {
+          config.headers.set('Authorization', `Bearer ${token}`);
+        } else if (config.headers) {
+          config.headers['Authorization'] = `Bearer ${token}`;
+        }
       }
       return config;
     });
@@ -131,8 +136,11 @@ class InferenceCenterService {
   }
 
   async predictSingleStock(req: SingleStockPredictionRequest): Promise<SingleStockPredictionResponse> {
-    const resp = await this.client.post<SingleStockPredictionResponse>('/research/predict-stock', req);
-    return resp.data;
+    const resp = await this.client.post<{ code?: number; data?: SingleStockPredictionResponse } | SingleStockPredictionResponse>('/research/predict-stock', req);
+    if ((resp.data as any)?.data) {
+      return (resp.data as any).data;
+    }
+    return resp.data as SingleStockPredictionResponse;
   }
 }
 
