@@ -18,26 +18,16 @@
 #
 # 注意：多台节点共享同一份代码/镜像，各自独立训练、独立回传模型。
 
-nodes:
-  - id: autodl-1
-    name: "AutoDL GPU"
-    host: "192.168.31.66"
-    port: 22
-    user: "openai"
-    ssh_password: ""
-    ssh_key: ""
-    work_dir: "/home/openai/workspace"
-    docker_image: "quantmind-train:latest"
-    gpus: "all"
+nodes: []
 
-  # 示例：第二台节点（按需增删）
-  # - id: autodl-2
-  #   name: "AutoDL A100"
-  #   host: "10.0.0.100"
+  # 示例：按需增删节点
+  # - id: autodl-1
+  #   name: "AutoDL GPU"
+  #   host: "192.168.31.66"
   #   port: 22
   #   user: "root"
   #   ssh_password: ""
-  #   ssh_key: "~/.ssh/autodl2"
+  #   ssh_key: "~/.ssh/autodl1"
   #   work_dir: "/workspace"
   #   docker_image: "quantmind-train:latest"
   #   gpus: "all"

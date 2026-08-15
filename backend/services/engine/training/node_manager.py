@@ -35,6 +35,134 @@ def _env_or(key: str, default: str) -> str:
     return (os.getenv(key) or default).strip()
 
 
+# 写操作相关常量
+_PASSWORD_FIELD = "ssh_password"
+_KEY_FIELD = "ssh_key"
+_PUBLIC_FIELDS = (
+    "id", "name", "host", "port", "user", "work_dir", "docker_image", "gpus",
+)
+
+
+def _load_yaml() -> dict[str, Any]:
+    """读取节点配置文件原始内容（不存在时返回空结构）。"""
+    cfg_path = _resolve_config_path()
+    if cfg_path and cfg_path.exists():
+        try:
+            data = yaml.safe_load(cfg_path.read_text(encoding="utf-8")) or {}
+            if isinstance(data, dict):
+                return data
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("读取训练节点配置失败 %s: %s", cfg_path, exc)
+    return {}
+
+
+def _write_yaml(data: dict[str, Any]) -> Path:
+    """原子写回节点配置文件（临时文件 + rename），返回写入路径。"""
+    cfg_path = _resolve_config_path()
+    if cfg_path is None:
+        raise RuntimeError("未找到训练节点配置文件（training_nodes.yaml），无法保存节点配置")
+    cfg_path.parent.mkdir(parents=True, exist_ok=True)
+    tmp_path = cfg_path.with_suffix(".yaml.tmp")
+    tmp_path.write_text(
+        yaml.safe_dump(data, allow_unicode=True, sort_keys=False),
+        encoding="utf-8",
+    )
+    tmp_path.replace(cfg_path)
+    return cfg_path
+
+
+def _sanitize_node_for_output(node: dict[str, Any]) -> dict[str, Any]:
+    """输出给前端的节点信息：剔除明文密码，仅保留是否已配置标记。"""
+    out = {k: node.get(k) for k in _PUBLIC_FIELDS}
+    out["id"] = str(node.get("id") or "")
+    out["has_password"] = bool(node.get(_PASSWORD_FIELD))
+    out["has_key"] = bool(node.get(_KEY_FIELD))
+    return out
+
+
+def save_training_node(node: dict[str, Any]) -> dict[str, Any]:
+    """新增或更新一个训练节点。
+
+    - 按 node["id"] 定位；已存在则更新，否则追加。
+    - ssh_password / ssh_key 为空字符串时表示"保持不变"（不回显明文）。
+    - 校验：id/host/user/port 必填，密码与 key 至少其一（首次创建时）。
+    """
+    node_id = str(node.get("id") or "").strip()
+    if not node_id:
+        raise ValueError("节点 id 不能为空")
+    host = str(node.get("host") or "").strip()
+    if not host:
+        raise ValueError("节点 host 不能为空")
+
+    data = _load_yaml()
+    nodes = data.get("nodes") or []
+    existing = next((n for n in nodes if str(n.get("id") or "") == node_id), None)
+    is_new = existing is None
+
+    if is_new:
+        user = str(node.get("user") or "root").strip()
+        pwd = str(node.get(_PASSWORD_FIELD) or "").strip()
+        key = str(node.get(_KEY_FIELD) or "").strip()
+        if not pwd and not key:
+            raise ValueError("新增节点必须提供 ssh_password 或 ssh_key 之一")
+        nodes.append({
+            "id": node_id,
+            "name": str(node.get("name") or node_id).strip(),
+            "host": host,
+            "port": int(node.get("port") or 22),
+            "user": user,
+            _PASSWORD_FIELD: pwd,
+            _KEY_FIELD: key,
+            "work_dir": str(node.get("work_dir") or "/workspace").strip(),
+            "docker_image": str(node.get("docker_image") or "quantmind-train:latest").strip(),
+            "gpus": str(node.get("gpus") or "all").strip(),
+        })
+    else:
+        existing["name"] = str(node.get("name") or existing.get("name") or node_id).strip()
+        existing["host"] = host
+        existing["port"] = int(node.get("port") or existing.get("port") or 22)
+        existing["user"] = str(node.get("user") or existing.get("user") or "root").strip()
+        existing["work_dir"] = str(node.get("work_dir") or existing.get("work_dir") or "/workspace").strip()
+        existing["docker_image"] = str(
+            node.get("docker_image") or existing.get("docker_image") or "quantmind-train:latest"
+        ).strip()
+        existing["gpus"] = str(node.get("gpus") or existing.get("gpus") or "all").strip()
+        # 密码/密钥留空 = 保持不变
+        if node.get(_PASSWORD_FIELD):
+            existing[_PASSWORD_FIELD] = str(node[_PASSWORD_FIELD]).strip()
+        if node.get(_KEY_FIELD):
+            existing[_KEY_FIELD] = str(node[_KEY_FIELD]).strip()
+
+    data["nodes"] = nodes
+    _write_yaml(data)
+    logger.info("已保存训练节点 %s (is_new=%s)", node_id, is_new)
+    return _sanitize_node_for_output(existing or nodes[-1])
+
+
+def delete_training_node(node_id: str) -> bool:
+    """按 id 删除训练节点，返回是否实际删除。"""
+    node_id = str(node_id or "").strip()
+    if not node_id:
+        return False
+    data = _load_yaml()
+    nodes = data.get("nodes") or []
+    remaining = [n for n in nodes if str(n.get("id") or "") != node_id]
+    if len(remaining) == len(nodes):
+        return False
+    data["nodes"] = remaining
+    _write_yaml(data)
+    logger.info("已删除训练节点 %s", node_id)
+    return True
+
+
+def get_training_node_detail(node_id: str) -> dict[str, Any] | None:
+    """获取单个节点的详情（剔除明文密码，返回 has_password/has_key 标记）。"""
+    node = get_node_config(node_id)
+    if node is None:
+        return None
+    return _sanitize_node_for_output(node)
+
+
 def load_training_nodes() -> list[dict[str, Any]]:
     """读取所有 AutoDL 远程节点配置。
 
