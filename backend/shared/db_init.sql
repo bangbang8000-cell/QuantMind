@@ -2103,5 +2103,49 @@ CREATE INDEX IF NOT EXISTS ix_system_tasks_task_type ON system_tasks (task_type)
 CREATE INDEX IF NOT EXISTS ix_system_tasks_status ON system_tasks (status);
 
 -- ========================
+-- 63. QM_USER_MODELS & QM_STRATEGY_MODEL_BINDINGS (用户模型注册与策略绑定表)
+-- ========================
+CREATE TABLE IF NOT EXISTS qm_user_models (
+    tenant_id VARCHAR(64) NOT NULL,
+    user_id VARCHAR(64) NOT NULL,
+    model_id VARCHAR(128) NOT NULL,
+    source_run_id VARCHAR(64),
+    status VARCHAR(32) NOT NULL DEFAULT 'candidate',
+    storage_path TEXT,
+    model_file VARCHAR(255),
+    metadata_json JSONB,
+    metrics_json JSONB,
+    is_default BOOLEAN NOT NULL DEFAULT FALSE,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    activated_at TIMESTAMPTZ,
+    PRIMARY KEY (tenant_id, user_id, model_id)
+);
+
+CREATE TABLE IF NOT EXISTS qm_strategy_model_bindings (
+    tenant_id VARCHAR(64) NOT NULL,
+    user_id VARCHAR(64) NOT NULL,
+    strategy_id VARCHAR(128) NOT NULL,
+    model_id VARCHAR(128) NOT NULL,
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    PRIMARY KEY (tenant_id, user_id, strategy_id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_qm_user_models_user_status
+    ON qm_user_models (tenant_id, user_id, status, updated_at DESC);
+
+CREATE INDEX IF NOT EXISTS idx_qm_strategy_model_bindings_model
+    ON qm_strategy_model_bindings (tenant_id, user_id, model_id);
+
+CREATE UNIQUE INDEX IF NOT EXISTS uq_qm_user_models_default_per_user
+    ON qm_user_models (tenant_id, user_id)
+    WHERE is_default = TRUE;
+
+-- 彻底清除存量硬编码 model_qlib 与 alpha158 假数据记录
+DELETE FROM qm_user_models
+WHERE model_id IN ('model_qlib', 'alpha158', 'sys-model_qlib', 'sys-alpha158');
+
+-- ========================
 -- DONE - 所有缺失表已创建
 -- ========================
+

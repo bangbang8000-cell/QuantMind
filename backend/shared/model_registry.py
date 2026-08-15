@@ -107,7 +107,6 @@ class ModelRegistryService:
             """
             DELETE FROM qm_user_models
             WHERE model_id IN ('model_qlib', 'alpha158', 'sys-model_qlib', 'sys-alpha158')
-              AND (metadata_json->>'system_default' = 'true' OR storage_path LIKE '%/production/model_qlib%' OR storage_path LIKE '%/production/alpha158%')
             """,
         ]
         async with get_session() as session:
