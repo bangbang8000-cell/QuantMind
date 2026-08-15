@@ -148,6 +148,7 @@ CREATE INDEX IF NOT EXISTS idx_stocks_exchange ON stocks (exchange);
 -- ========================
 -- 3.5 USERS (用户主表)
 -- NOTE: 列定义与 backend/services/api/user_app/models/user.py 的 User 模型一致
+--       （此前缺失导致认证/社区/策略存储等模块查询失败）
 -- ========================
 CREATE TABLE IF NOT EXISTS users (
     id              SERIAL PRIMARY KEY,
@@ -176,6 +177,7 @@ CREATE INDEX IF NOT EXISTS idx_users_tenant_id ON users (tenant_id);
 CREATE INDEX IF NOT EXISTS idx_users_user_id ON users (user_id);
 CREATE INDEX IF NOT EXISTS idx_users_username ON users (username);
 CREATE INDEX IF NOT EXISTS idx_users_is_deleted ON users (is_deleted);
+
 
 -- ========================
 -- 4. STOCK_INDUSTRY
@@ -956,44 +958,7 @@ CREATE TABLE IF NOT EXISTS risk_rules (
 );
 
 -- ========================
--- 39. QMT_AGENT_BINDINGS
--- ========================
-CREATE TABLE IF NOT EXISTS qmt_agent_bindings (
-    id                  VARCHAR(64) NOT NULL PRIMARY KEY,
-    tenant_id           VARCHAR(64) NOT NULL DEFAULT 'default',
-    user_id             VARCHAR(64) NOT NULL,
-    api_key_id          INTEGER NOT NULL,
-    agent_type          VARCHAR(32) NOT NULL,
-    account_id          VARCHAR(64) NOT NULL,
-    client_fingerprint  VARCHAR(255) NOT NULL,
-    hostname            VARCHAR(255),
-    client_version      VARCHAR(64),
-    status              VARCHAR(32) NOT NULL DEFAULT 'active',
-    last_ip             VARCHAR(64),
-    last_seen_at        TIMESTAMPTZ,
-    bound_at            TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-    created_at          TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-    updated_at          TIMESTAMPTZ NOT NULL DEFAULT NOW()
-);
-
--- ========================
--- 40. QMT_AGENT_SESSIONS
--- ========================
-CREATE TABLE IF NOT EXISTS qmt_agent_sessions (
-    id          VARCHAR(64) NOT NULL PRIMARY KEY,
-    binding_id  VARCHAR(64) NOT NULL,
-    tenant_id   VARCHAR(64) NOT NULL DEFAULT 'default',
-    user_id     VARCHAR(64) NOT NULL,
-    token_hash  VARCHAR(64) NOT NULL,
-    expires_at  TIMESTAMPTZ NOT NULL,
-    revoked_at  TIMESTAMPTZ,
-    last_used_at TIMESTAMPTZ,
-    created_at  TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-    updated_at  TIMESTAMPTZ NOT NULL DEFAULT NOW()
-);
-
--- ========================
--- 41. REAL_ACCOUNT_SNAPSHOTS
+-- 39. REAL_ACCOUNT_SNAPSHOTS
 -- ========================
 CREATE TABLE IF NOT EXISTS real_account_snapshots (
     id              SERIAL PRIMARY KEY,
@@ -1014,7 +979,7 @@ CREATE TABLE IF NOT EXISTS real_account_snapshots (
 );
 
 -- ========================
--- 42. REAL_TRADING_PREFLIGHT_SNAPSHOTS
+-- 40. REAL_TRADING_PREFLIGHT_SNAPSHOTS
 -- ========================
 CREATE TABLE IF NOT EXISTS real_trading_preflight_snapshots (
     id                  SERIAL PRIMARY KEY,
@@ -1037,7 +1002,7 @@ CREATE TABLE IF NOT EXISTS real_trading_preflight_snapshots (
 );
 
 -- ========================
--- 43. REAL_ACCOUNT_LEDGER_DAILY_SNAPSHOTS
+-- 41. REAL_ACCOUNT_LEDGER_DAILY_SNAPSHOTS
 -- ========================
 CREATE TABLE IF NOT EXISTS real_account_ledger_daily_snapshots (
     id              SERIAL PRIMARY KEY,
@@ -1065,7 +1030,7 @@ CREATE TABLE IF NOT EXISTS real_account_ledger_daily_snapshots (
 );
 
 -- ========================
--- 44. SIM_ORDERS
+-- 42. SIM_ORDERS
 -- ========================
 CREATE TABLE IF NOT EXISTS sim_orders (
     id              SERIAL PRIMARY KEY,
@@ -1099,7 +1064,7 @@ CREATE TABLE IF NOT EXISTS sim_orders (
 );
 
 -- ========================
--- 45. SIM_TRADES
+-- 43. SIM_TRADES
 -- ========================
 CREATE TABLE IF NOT EXISTS sim_trades (
     id              SERIAL PRIMARY KEY,
@@ -1125,7 +1090,7 @@ CREATE TABLE IF NOT EXISTS sim_trades (
 );
 
 -- ========================
--- 46. SIMULATION_FUND_SNAPSHOTS
+-- 44. SIMULATION_FUND_SNAPSHOTS
 -- ========================
 CREATE TABLE IF NOT EXISTS simulation_fund_snapshots (
     id              SERIAL PRIMARY KEY,
@@ -1145,7 +1110,7 @@ CREATE TABLE IF NOT EXISTS simulation_fund_snapshots (
 );
 
 -- ========================
--- 47. KLINES
+-- 45. KLINES
 -- ========================
 CREATE TABLE IF NOT EXISTS klines (
     id              SERIAL PRIMARY KEY,
@@ -1167,7 +1132,7 @@ CREATE TABLE IF NOT EXISTS klines (
 );
 
 -- ========================
--- 48. QUOTES
+-- 46. QUOTES
 -- ========================
 CREATE TABLE IF NOT EXISTS quotes (
     id              SERIAL PRIMARY KEY,
@@ -1208,7 +1173,7 @@ CREATE TABLE IF NOT EXISTS quotes (
 );
 
 -- ========================
--- 49. QUOTE_DAILY_SUMMARIES
+-- 47. QUOTE_DAILY_SUMMARIES
 -- NOTE: 列定义与 backend/services/stream/main.py 的归档 SQL 保持一致
 -- ========================
 CREATE TABLE IF NOT EXISTS quote_daily_summaries (
@@ -1232,7 +1197,7 @@ CREATE TABLE IF NOT EXISTS quote_daily_summaries (
 );
 
 -- ========================
--- 50. COMMUNITY_POSTS
+-- 48. COMMUNITY_POSTS
 -- ========================
 CREATE TABLE IF NOT EXISTS community_posts (
     id              BIGSERIAL PRIMARY KEY,
@@ -1260,7 +1225,7 @@ CREATE INDEX IF NOT EXISTS idx_cp_author_id ON community_posts (author_id);
 CREATE INDEX IF NOT EXISTS idx_cp_category ON community_posts (tenant_id, category);
 
 -- ========================
--- 51. COMMUNITY_COMMENTS
+-- 49. COMMUNITY_COMMENTS
 -- ========================
 CREATE TABLE IF NOT EXISTS community_comments (
     id              BIGSERIAL PRIMARY KEY,
@@ -1279,7 +1244,7 @@ CREATE INDEX IF NOT EXISTS idx_cc_post_id ON community_comments (post_id);
 CREATE INDEX IF NOT EXISTS idx_cc_author_id ON community_comments (author_id);
 
 -- ========================
--- 52. COMMUNITY_INTERACTIONS
+-- 50. COMMUNITY_INTERACTIONS
 -- ========================
 CREATE TABLE IF NOT EXISTS community_interactions (
     id              BIGSERIAL PRIMARY KEY,
@@ -1293,7 +1258,7 @@ CREATE TABLE IF NOT EXISTS community_interactions (
 );
 
 -- ========================
--- 53. COMMUNITY_AUTHOR_FOLLOWS
+-- 51. COMMUNITY_AUTHOR_FOLLOWS
 -- ========================
 CREATE TABLE IF NOT EXISTS community_author_follows (
     id              BIGSERIAL PRIMARY KEY,
@@ -1305,7 +1270,7 @@ CREATE TABLE IF NOT EXISTS community_author_follows (
 );
 
 -- ========================
--- 54. COMMUNITY_AUDIT_LOGS
+-- 52. COMMUNITY_AUDIT_LOGS
 -- ========================
 CREATE TABLE IF NOT EXISTS community_audit_logs (
     id              BIGSERIAL PRIMARY KEY,
@@ -1321,7 +1286,7 @@ CREATE TABLE IF NOT EXISTS community_audit_logs (
 );
 
 -- ========================
--- 55. ADMIN_MODELS
+-- 53. ADMIN_MODELS
 -- ========================
 CREATE TABLE IF NOT EXISTS admin_models (
     id              SERIAL PRIMARY KEY,
@@ -1339,7 +1304,7 @@ CREATE TABLE IF NOT EXISTS admin_models (
 );
 
 -- ========================
--- 56. ADMIN_DATA_FILES
+-- 54. ADMIN_DATA_FILES
 -- ========================
 CREATE TABLE IF NOT EXISTS admin_data_files (
     id              SERIAL PRIMARY KEY,
@@ -1353,7 +1318,7 @@ CREATE TABLE IF NOT EXISTS admin_data_files (
 );
 
 -- ========================
--- 57. ADMIN_TRAINING_JOBS
+-- 55. ADMIN_TRAINING_JOBS
 -- ========================
 CREATE TABLE IF NOT EXISTS admin_training_jobs (
     id              VARCHAR(64) PRIMARY KEY,
@@ -1370,7 +1335,7 @@ CREATE TABLE IF NOT EXISTS admin_training_jobs (
 );
 
 -- ========================
--- 58. LOGIN_DEVICES
+-- 56. LOGIN_DEVICES
 -- ========================
 CREATE TABLE IF NOT EXISTS login_devices (
     id              SERIAL PRIMARY KEY,
@@ -1389,6 +1354,753 @@ CREATE TABLE IF NOT EXISTS login_devices (
     last_seen_at    TIMESTAMPTZ,
     last_location_change TIMESTAMPTZ
 );
+
+-- ========================
+-- REPLAY (时光回放：模拟盘历史单步推演)
+-- 与 sim_orders/sim_trades 刻意分表：会话生命周期独立，
+-- 且 trade_date 记录的是「模拟交易日」而非墙钟时间。
+-- ========================
+CREATE TABLE IF NOT EXISTS replay_sessions (
+    session_id      UUID PRIMARY KEY,
+    tenant_id       VARCHAR(64) NOT NULL DEFAULT 'default',
+    user_id         INTEGER NOT NULL,
+    name            VARCHAR(128) NOT NULL DEFAULT '',
+    model_id        VARCHAR(128),
+    strategy_params JSONB NOT NULL DEFAULT '{}'::jsonb,
+    initial_cash    FLOAT NOT NULL,
+    start_date      DATE NOT NULL,
+    end_date        DATE NOT NULL,
+    cursor_date     DATE,
+    next_date       DATE,
+    sessions_total  INTEGER NOT NULL DEFAULT 0,
+    sessions_done   INTEGER NOT NULL DEFAULT 0,
+    status          VARCHAR(20) NOT NULL DEFAULT 'creating',
+    signal_progress JSONB NOT NULL DEFAULT '{}'::jsonb,
+    auto_trade      BOOLEAN NOT NULL DEFAULT TRUE,
+    stop_loss_pct   FLOAT,
+    pending_orders  JSONB,
+    error_message   TEXT,
+    created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at      TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS idx_replay_session_scope_status
+    ON replay_sessions (tenant_id, user_id, status);
+
+CREATE TABLE IF NOT EXISTS replay_orders (
+    id              SERIAL PRIMARY KEY,
+    order_id        UUID NOT NULL UNIQUE,
+    session_id      UUID NOT NULL REFERENCES replay_sessions(session_id) ON DELETE CASCADE,
+    trade_date      DATE NOT NULL,
+    symbol          VARCHAR(20) NOT NULL,
+    side            VARCHAR(10) NOT NULL,
+    order_type      VARCHAR(10) NOT NULL DEFAULT 'market',
+    status          VARCHAR(20) NOT NULL DEFAULT 'pending',
+    origin          VARCHAR(20) NOT NULL DEFAULT 'signal',
+    quantity        FLOAT NOT NULL,
+    filled_quantity FLOAT NOT NULL DEFAULT 0,
+    price           FLOAT,
+    average_price   FLOAT,
+    filled_value    FLOAT NOT NULL DEFAULT 0,
+    total_fee       FLOAT NOT NULL DEFAULT 0,
+    reject_reason   VARCHAR(200),
+    price_source    VARCHAR(64),
+    created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at      TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS idx_replay_order_session_date
+    ON replay_orders (session_id, trade_date);
+
+CREATE TABLE IF NOT EXISTS replay_trades (
+    id              SERIAL PRIMARY KEY,
+    trade_id        UUID NOT NULL UNIQUE,
+    session_id      UUID NOT NULL REFERENCES replay_sessions(session_id) ON DELETE CASCADE,
+    order_id        UUID NOT NULL REFERENCES replay_orders(order_id) ON DELETE CASCADE,
+    trade_date      DATE NOT NULL,
+    symbol          VARCHAR(20) NOT NULL,
+    side            VARCHAR(10) NOT NULL,
+    origin          VARCHAR(20) NOT NULL DEFAULT 'signal',
+    quantity        FLOAT NOT NULL,
+    price           FLOAT NOT NULL,
+    trade_value     FLOAT NOT NULL,
+    commission      FLOAT NOT NULL DEFAULT 0,
+    stamp_duty      FLOAT NOT NULL DEFAULT 0,
+    transfer_fee    FLOAT NOT NULL DEFAULT 0,
+    total_fee       FLOAT NOT NULL DEFAULT 0,
+    price_source    VARCHAR(64),
+    avg_cost_before FLOAT,
+    realized_pnl    FLOAT,
+    holding_days    INTEGER,
+    executed_at     TIMESTAMP NOT NULL DEFAULT NOW(),
+    created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at      TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS idx_replay_trade_session_date
+    ON replay_trades (session_id, trade_date);
+
+CREATE TABLE IF NOT EXISTS replay_equity_snapshots (
+    id              SERIAL PRIMARY KEY,
+    session_id      UUID NOT NULL REFERENCES replay_sessions(session_id) ON DELETE CASCADE,
+    trade_date      DATE NOT NULL,
+    cash            FLOAT NOT NULL DEFAULT 0,
+    market_value    FLOAT NOT NULL DEFAULT 0,
+    total_asset     FLOAT NOT NULL DEFAULT 0,
+    day_pnl         FLOAT NOT NULL DEFAULT 0,
+    cum_pnl         FLOAT NOT NULL DEFAULT 0,
+    realized_pnl_cum FLOAT NOT NULL DEFAULT 0,
+    unrealized_pnl  FLOAT NOT NULL DEFAULT 0,
+    position_count  INTEGER NOT NULL DEFAULT 0,
+    positions       JSONB NOT NULL DEFAULT '{}'::jsonb,
+    created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    CONSTRAINT uq_replay_equity_session_date UNIQUE (session_id, trade_date)
+);
+
+CREATE TABLE IF NOT EXISTS replay_signals (
+    id              SERIAL PRIMARY KEY,
+    session_id      UUID NOT NULL REFERENCES replay_sessions(session_id) ON DELETE CASCADE,
+    trade_date      DATE NOT NULL,
+    symbol          VARCHAR(20) NOT NULL,
+    score           FLOAT NOT NULL,
+    created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    CONSTRAINT uq_replay_signal_session_date_symbol UNIQUE (session_id, trade_date, symbol)
+);
+
+CREATE INDEX IF NOT EXISTS idx_replay_signal_session_date
+    ON replay_signals (session_id, trade_date);
+
+-- ========================
+-- 59. USER APP 扩展表（认证/RBAC/订阅/通知/KYC）
+-- NOTE: 列定义与 backend/services/api/user_app/models/ 下的模型一致
+-- ========================
+
+-- 59.1 ROLES
+CREATE TABLE IF NOT EXISTS roles (
+    id              SERIAL PRIMARY KEY,
+    name            VARCHAR(64) NOT NULL UNIQUE,
+    code            VARCHAR(64) NOT NULL UNIQUE,
+    description     TEXT,
+    is_active       BOOLEAN DEFAULT TRUE,
+    is_system       BOOLEAN DEFAULT FALSE,
+    priority        INTEGER DEFAULT 0,
+    created_at      TIMESTAMPTZ DEFAULT NOW(),
+    updated_at      TIMESTAMPTZ
+);
+CREATE INDEX IF NOT EXISTS idx_roles_code ON roles (code);
+
+-- 59.2 PERMISSIONS
+CREATE TABLE IF NOT EXISTS permissions (
+    id              SERIAL PRIMARY KEY,
+    name            VARCHAR(128) NOT NULL UNIQUE,
+    code            VARCHAR(128) NOT NULL UNIQUE,
+    resource        VARCHAR(64) NOT NULL,
+    action          VARCHAR(32) NOT NULL,
+    description     TEXT,
+    is_active       BOOLEAN DEFAULT TRUE,
+    created_at      TIMESTAMPTZ DEFAULT NOW(),
+    updated_at      TIMESTAMPTZ
+);
+CREATE INDEX IF NOT EXISTS idx_permissions_code ON permissions (code);
+CREATE INDEX IF NOT EXISTS idx_permissions_resource ON permissions (resource);
+
+-- 59.3 USER_ROLES（用户-角色关联）
+CREATE TABLE IF NOT EXISTS user_roles (
+    user_id         VARCHAR(64) NOT NULL REFERENCES users(user_id),
+    role_id         INTEGER NOT NULL REFERENCES roles(id),
+    created_at      TIMESTAMPTZ DEFAULT NOW(),
+    PRIMARY KEY (user_id, role_id)
+);
+
+-- 59.4 ROLE_PERMISSIONS（角色-权限关联）
+CREATE TABLE IF NOT EXISTS role_permissions (
+    role_id         INTEGER NOT NULL REFERENCES roles(id),
+    permission_id   INTEGER NOT NULL REFERENCES permissions(id),
+    created_at      TIMESTAMPTZ DEFAULT NOW(),
+    PRIMARY KEY (role_id, permission_id)
+);
+
+-- 59.5 API_KEYS
+CREATE TABLE IF NOT EXISTS api_keys (
+    id              SERIAL PRIMARY KEY,
+    user_id         VARCHAR(64) NOT NULL,
+    tenant_id       VARCHAR(64) NOT NULL,
+    access_key      VARCHAR(64) NOT NULL UNIQUE,
+    secret_hash     VARCHAR(255) NOT NULL,
+    name            VARCHAR(100),
+    permissions     JSONB DEFAULT '[]'::jsonb,
+    is_active       BOOLEAN DEFAULT TRUE,
+    created_at      TIMESTAMPTZ DEFAULT NOW(),
+    expires_at      TIMESTAMPTZ,
+    last_used_at    TIMESTAMPTZ
+);
+CREATE INDEX IF NOT EXISTS idx_api_keys_user_id ON api_keys (user_id);
+CREATE INDEX IF NOT EXISTS idx_api_keys_tenant_id ON api_keys (tenant_id);
+CREATE INDEX IF NOT EXISTS idx_api_keys_access_key ON api_keys (access_key);
+
+-- 59.6 IDENTITY_VERIFICATIONS（实名认证）
+CREATE TABLE IF NOT EXISTS identity_verifications (
+    id                  SERIAL PRIMARY KEY,
+    user_id             VARCHAR(64) NOT NULL REFERENCES users(user_id),
+    tenant_id           VARCHAR(64) NOT NULL,
+    real_name           VARCHAR(128) NOT NULL,
+    id_number           VARCHAR(128) NOT NULL,
+    document_type       VARCHAR(32) DEFAULT 'id_card',
+    front_image_url     VARCHAR(512),
+    back_image_url      VARCHAR(512),
+    handheld_image_url  VARCHAR(512),
+    status              VARCHAR(32) DEFAULT 'pending',
+    rejection_reason    TEXT,
+    submitted_at        TIMESTAMPTZ DEFAULT NOW(),
+    verified_at         TIMESTAMPTZ,
+    verified_by         VARCHAR(64)
+);
+CREATE INDEX IF NOT EXISTS idx_identity_verifications_user_id ON identity_verifications (user_id);
+CREATE INDEX IF NOT EXISTS idx_identity_verifications_tenant_id ON identity_verifications (tenant_id);
+CREATE INDEX IF NOT EXISTS idx_identity_verifications_id_number ON identity_verifications (id_number);
+CREATE INDEX IF NOT EXISTS idx_identity_verifications_status ON identity_verifications (status);
+
+-- 59.7 NOTIFICATIONS
+CREATE TABLE IF NOT EXISTS notifications (
+    id                  SERIAL PRIMARY KEY,
+    user_id             VARCHAR(64) NOT NULL REFERENCES users(user_id),
+    tenant_id           VARCHAR(64) NOT NULL,
+    title               VARCHAR(128) NOT NULL,
+    content             TEXT NOT NULL,
+    notification_type   VARCHAR(32) DEFAULT 'system',
+    level               VARCHAR(16) DEFAULT 'info',
+    action_url          VARCHAR(512),
+    is_read             BOOLEAN DEFAULT FALSE,
+    read_at             TIMESTAMPTZ,
+    created_at          TIMESTAMPTZ DEFAULT NOW(),
+    expires_at          TIMESTAMPTZ
+);
+CREATE INDEX IF NOT EXISTS idx_notifications_user_id ON notifications (user_id);
+CREATE INDEX IF NOT EXISTS idx_notifications_tenant_id ON notifications (tenant_id);
+CREATE INDEX IF NOT EXISTS idx_notifications_type ON notifications (notification_type);
+CREATE INDEX IF NOT EXISTS idx_notifications_is_read ON notifications (is_read);
+CREATE INDEX IF NOT EXISTS idx_notifications_created_at ON notifications (created_at);
+
+-- 59.8 PAYMENT_TRANSACTIONS
+CREATE TABLE IF NOT EXISTS payment_transactions (
+    id              SERIAL PRIMARY KEY,
+    user_id         VARCHAR(64) NOT NULL,
+    tenant_id       VARCHAR(64) NOT NULL,
+    amount          FLOAT NOT NULL,
+    currency        VARCHAR(16) NOT NULL DEFAULT 'CNY',
+    status          VARCHAR(32) NOT NULL DEFAULT 'pending',
+    provider        VARCHAR(32) NOT NULL DEFAULT 'alipay',
+    transaction_id  VARCHAR(128) NOT NULL UNIQUE,
+    description     TEXT,
+    metadata_info   JSONB,
+    created_at      TIMESTAMP DEFAULT NOW(),
+    completed_at    TIMESTAMP
+);
+CREATE INDEX IF NOT EXISTS idx_payment_transactions_user_id ON payment_transactions (user_id);
+CREATE INDEX IF NOT EXISTS idx_payment_transactions_tenant_id ON payment_transactions (tenant_id);
+CREATE INDEX IF NOT EXISTS idx_payment_transactions_tx_id ON payment_transactions (transaction_id);
+
+-- 59.9 USER_AUDIT_LOGS
+CREATE TABLE IF NOT EXISTS user_audit_logs (
+    id              SERIAL PRIMARY KEY,
+    user_id         VARCHAR(64) NOT NULL,
+    tenant_id       VARCHAR(64) NOT NULL,
+    action          VARCHAR(64) NOT NULL,
+    resource        VARCHAR(128),
+    resource_id     VARCHAR(128),
+    description     TEXT,
+    request_data    TEXT,
+    response_data   TEXT,
+    ip_address      VARCHAR(64),
+    user_agent      TEXT,
+    request_method  VARCHAR(16),
+    request_path    VARCHAR(255),
+    status_code     INTEGER,
+    success         BOOLEAN DEFAULT TRUE,
+    error_message   TEXT,
+    created_at      TIMESTAMPTZ DEFAULT NOW(),
+    duration_ms     INTEGER
+);
+CREATE INDEX IF NOT EXISTS idx_user_audit_logs_user_id ON user_audit_logs (user_id);
+CREATE INDEX IF NOT EXISTS idx_user_audit_logs_tenant_id ON user_audit_logs (tenant_id);
+CREATE INDEX IF NOT EXISTS idx_user_audit_logs_action ON user_audit_logs (action);
+CREATE INDEX IF NOT EXISTS idx_user_audit_logs_created_at ON user_audit_logs (created_at);
+
+-- 59.10 EMAIL_VERIFICATIONS
+CREATE TABLE IF NOT EXISTS email_verifications (
+    id                  SERIAL PRIMARY KEY,
+    user_id             VARCHAR(64) NOT NULL,
+    tenant_id           VARCHAR(64) NOT NULL,
+    email               VARCHAR(255) NOT NULL,
+    verification_code   VARCHAR(128) NOT NULL UNIQUE,
+    code_type           VARCHAR(32) NOT NULL,
+    is_used             BOOLEAN DEFAULT FALSE,
+    is_expired          BOOLEAN DEFAULT FALSE,
+    created_at          TIMESTAMPTZ DEFAULT NOW(),
+    expires_at          TIMESTAMPTZ NOT NULL,
+    used_at             TIMESTAMPTZ,
+    attempts            INTEGER DEFAULT 0,
+    ip_address          VARCHAR(64)
+);
+CREATE INDEX IF NOT EXISTS idx_email_verifications_user_id ON email_verifications (user_id);
+CREATE INDEX IF NOT EXISTS idx_email_verifications_tenant_id ON email_verifications (tenant_id);
+CREATE INDEX IF NOT EXISTS idx_email_verifications_email ON email_verifications (email);
+CREATE INDEX IF NOT EXISTS idx_email_verifications_code ON email_verifications (verification_code);
+CREATE INDEX IF NOT EXISTS idx_email_verifications_is_used ON email_verifications (is_used);
+CREATE INDEX IF NOT EXISTS idx_email_verifications_expires_at ON email_verifications (expires_at);
+
+-- 59.11 PASSWORD_RESET_TOKENS
+CREATE TABLE IF NOT EXISTS password_reset_tokens (
+    id              SERIAL PRIMARY KEY,
+    user_id         VARCHAR(64) NOT NULL REFERENCES users(user_id),
+    tenant_id       VARCHAR(64) NOT NULL,
+    email           VARCHAR(255) NOT NULL,
+    token           VARCHAR(128) NOT NULL UNIQUE,
+    is_used         BOOLEAN DEFAULT FALSE,
+    is_expired      BOOLEAN DEFAULT FALSE,
+    created_at      TIMESTAMPTZ DEFAULT NOW(),
+    expires_at      TIMESTAMPTZ NOT NULL,
+    used_at         TIMESTAMPTZ,
+    ip_address      VARCHAR(64),
+    attempts        INTEGER DEFAULT 0
+);
+CREATE INDEX IF NOT EXISTS idx_password_reset_tokens_user_id ON password_reset_tokens (user_id);
+CREATE INDEX IF NOT EXISTS idx_password_reset_tokens_tenant_id ON password_reset_tokens (tenant_id);
+CREATE INDEX IF NOT EXISTS idx_password_reset_tokens_email ON password_reset_tokens (email);
+CREATE INDEX IF NOT EXISTS idx_password_reset_tokens_token ON password_reset_tokens (token);
+CREATE INDEX IF NOT EXISTS idx_password_reset_tokens_is_used ON password_reset_tokens (is_used);
+CREATE INDEX IF NOT EXISTS idx_password_reset_tokens_expires_at ON password_reset_tokens (expires_at);
+
+-- 59.12 SUBSCRIPTION_PLANS
+CREATE TABLE IF NOT EXISTS subscription_plans (
+    id              SERIAL PRIMARY KEY,
+    name            VARCHAR(100) NOT NULL,
+    code            VARCHAR(50) NOT NULL UNIQUE,
+    description     VARCHAR(255),
+    price           NUMERIC(10, 2) NOT NULL DEFAULT 0.00,
+    currency        VARCHAR(3) DEFAULT 'CNY',
+    "interval"      VARCHAR(20) DEFAULT 'month',
+    features        JSONB DEFAULT '[]'::jsonb,
+    is_active       BOOLEAN DEFAULT TRUE,
+    created_at      TIMESTAMPTZ DEFAULT NOW(),
+    updated_at      TIMESTAMPTZ
+);
+CREATE INDEX IF NOT EXISTS idx_subscription_plans_code ON subscription_plans (code);
+
+-- 59.13 USER_SUBSCRIPTIONS
+CREATE TABLE IF NOT EXISTS user_subscriptions (
+    id              SERIAL PRIMARY KEY,
+    user_id         VARCHAR(64) NOT NULL,
+    tenant_id       VARCHAR(64) NOT NULL,
+    plan_id         INTEGER NOT NULL REFERENCES subscription_plans(id),
+    status          VARCHAR(20) DEFAULT 'active',
+    start_date      TIMESTAMPTZ NOT NULL,
+    end_date        TIMESTAMPTZ NOT NULL,
+    auto_renew      BOOLEAN DEFAULT TRUE,
+    created_at      TIMESTAMPTZ DEFAULT NOW(),
+    updated_at      TIMESTAMPTZ
+);
+CREATE INDEX IF NOT EXISTS idx_user_subscriptions_user_id ON user_subscriptions (user_id);
+CREATE INDEX IF NOT EXISTS idx_user_subscriptions_tenant_id ON user_subscriptions (tenant_id);
+
+-- 59.14 USER_PROFILES
+CREATE TABLE IF NOT EXISTS user_profiles (
+    id                      SERIAL PRIMARY KEY,
+    user_id                 VARCHAR(64) NOT NULL UNIQUE,
+    tenant_id               VARCHAR(64) NOT NULL,
+    display_name            VARCHAR(128),
+    avatar_url              VARCHAR(512),
+    bio                     TEXT,
+    location                VARCHAR(128),
+    website                 VARCHAR(255),
+    phone                   VARCHAR(32),
+    trading_experience      VARCHAR(32) DEFAULT 'intermediate',
+    risk_tolerance          VARCHAR(32) DEFAULT 'medium',
+    investment_goal         VARCHAR(128),
+    github_url              VARCHAR(255),
+    twitter_handle          VARCHAR(128),
+    linkedin_url            VARCHAR(255),
+    preferences             JSONB DEFAULT '{}'::jsonb,
+    notification_settings   JSONB DEFAULT '{}'::jsonb,
+    api_key                 TEXT,
+    created_at              TIMESTAMPTZ DEFAULT NOW(),
+    updated_at              TIMESTAMPTZ
+);
+CREATE INDEX IF NOT EXISTS idx_user_profiles_user_id ON user_profiles (user_id);
+CREATE INDEX IF NOT EXISTS idx_user_profiles_tenant_id ON user_profiles (tenant_id);
+
+-- 59.15 USER_SESSIONS
+CREATE TABLE IF NOT EXISTS user_sessions (
+    id              VARCHAR(64) PRIMARY KEY,
+    session_id      VARCHAR(64) NOT NULL UNIQUE,
+    user_id         VARCHAR(64) NOT NULL,
+    tenant_id       VARCHAR(64) NOT NULL,
+    token_jti       VARCHAR(64),
+    refresh_token   VARCHAR(1024),
+    ip_address      VARCHAR(64),
+    user_agent      VARCHAR(255),
+    created_at      TIMESTAMPTZ DEFAULT NOW(),
+    expires_at      TIMESTAMPTZ NOT NULL,
+    last_active_at  TIMESTAMPTZ,
+    is_active       BOOLEAN DEFAULT TRUE,
+    is_revoked      BOOLEAN DEFAULT FALSE
+);
+CREATE INDEX IF NOT EXISTS idx_user_sessions_user_id ON user_sessions (user_id);
+CREATE INDEX IF NOT EXISTS idx_user_sessions_tenant_id ON user_sessions (tenant_id);
+CREATE INDEX IF NOT EXISTS idx_user_sessions_token_jti ON user_sessions (token_jti);
+
+-- ========================
+-- 60. SIMULATION 账本表（模拟交易重构：账本/日终/公司行为/调仓）
+-- NOTE: 列定义与 backend/services/trade/simulation/models/ 下的模型一致
+-- ========================
+
+-- 60.1 SIMULATION_ACCOUNTS
+CREATE TABLE IF NOT EXISTS simulation_accounts (
+    account_id              VARCHAR(96) PRIMARY KEY,
+    tenant_id               VARCHAR(64) NOT NULL DEFAULT 'default',
+    user_id                 VARCHAR(64) NOT NULL,
+    base_currency           VARCHAR(16) NOT NULL DEFAULT 'CNY',
+    account_type            VARCHAR(32) NOT NULL DEFAULT 'cash',
+    status                  VARCHAR(32) NOT NULL DEFAULT 'active',
+    initial_equity          FLOAT NOT NULL DEFAULT 0,
+    cash                    FLOAT NOT NULL DEFAULT 0,
+    available_cash          FLOAT NOT NULL DEFAULT 0,
+    frozen_cash             FLOAT NOT NULL DEFAULT 0,
+    long_market_value       FLOAT NOT NULL DEFAULT 0,
+    short_market_value      FLOAT NOT NULL DEFAULT 0,
+    total_asset             FLOAT NOT NULL DEFAULT 0,
+    liabilities             FLOAT NOT NULL DEFAULT 0,
+    equity                  FLOAT NOT NULL DEFAULT 0,
+    maintenance_margin_ratio FLOAT NOT NULL DEFAULT 0,
+    last_trade_at           TIMESTAMP,
+    last_projected_at       TIMESTAMP,
+    created_at              TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at              TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_simulation_accounts_tenant_user
+    ON simulation_accounts (tenant_id, user_id);
+
+-- 60.2 SIMULATION_ACCOUNT_DAILY
+CREATE TABLE IF NOT EXISTS simulation_account_daily (
+    id                  SERIAL PRIMARY KEY,
+    account_id          VARCHAR(96) NOT NULL,
+    tenant_id           VARCHAR(64) NOT NULL DEFAULT 'default',
+    user_id             VARCHAR(64) NOT NULL,
+    snapshot_date       DATE NOT NULL,
+    snapshot_at         TIMESTAMP NOT NULL,
+    cash                FLOAT NOT NULL DEFAULT 0,
+    available_cash      FLOAT NOT NULL DEFAULT 0,
+    frozen_cash         FLOAT NOT NULL DEFAULT 0,
+    long_market_value   FLOAT NOT NULL DEFAULT 0,
+    short_market_value  FLOAT NOT NULL DEFAULT 0,
+    total_asset         FLOAT NOT NULL DEFAULT 0,
+    liabilities         FLOAT NOT NULL DEFAULT 0,
+    equity              FLOAT NOT NULL DEFAULT 0,
+    daily_pnl           FLOAT NOT NULL DEFAULT 0,
+    total_pnl           FLOAT NOT NULL DEFAULT 0,
+    created_at          TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at          TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS idx_sim_account_daily_owner_time
+    ON simulation_account_daily (tenant_id, user_id, snapshot_at);
+CREATE INDEX IF NOT EXISTS idx_sim_account_daily_owner_date
+    ON simulation_account_daily (tenant_id, user_id, snapshot_date);
+CREATE INDEX IF NOT EXISTS idx_sim_account_daily_account_id
+    ON simulation_account_daily (account_id);
+CREATE INDEX IF NOT EXISTS idx_sim_account_daily_snapshot_date
+    ON simulation_account_daily (snapshot_date);
+
+-- 60.3 SIMULATION_CASH_LEDGER
+CREATE TABLE IF NOT EXISTS simulation_cash_ledger (
+    id              SERIAL PRIMARY KEY,
+    account_id      VARCHAR(96) NOT NULL,
+    tenant_id       VARCHAR(64) NOT NULL DEFAULT 'default',
+    user_id         VARCHAR(64) NOT NULL,
+    event_type      VARCHAR(64) NOT NULL,
+    ref_type        VARCHAR(32) NOT NULL DEFAULT 'trade',
+    ref_id          VARCHAR(96),
+    amount          FLOAT NOT NULL DEFAULT 0,
+    balance_after   FLOAT,
+    trade_date      TIMESTAMP,
+    occurred_at     TIMESTAMP NOT NULL,
+    currency        VARCHAR(16) NOT NULL DEFAULT 'CNY',
+    note            VARCHAR(255),
+    created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at      TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS idx_sim_cash_ledger_owner_time
+    ON simulation_cash_ledger (tenant_id, user_id, occurred_at);
+CREATE INDEX IF NOT EXISTS idx_sim_cash_ledger_account_id
+    ON simulation_cash_ledger (account_id);
+CREATE INDEX IF NOT EXISTS idx_sim_cash_ledger_event_type
+    ON simulation_cash_ledger (event_type);
+
+-- 60.4 SIMULATION_CORPORATE_ACTIONS
+CREATE TABLE IF NOT EXISTS simulation_corporate_actions (
+    id                      SERIAL PRIMARY KEY,
+    symbol                  VARCHAR(20) NOT NULL,
+    action_type             VARCHAR(32) NOT NULL,
+    ex_date                 TIMESTAMP,
+    effective_date          TIMESTAMP,
+    cash_dividend_per_share FLOAT NOT NULL DEFAULT 0,
+    share_ratio             FLOAT NOT NULL DEFAULT 0,
+    rights_price            FLOAT NOT NULL DEFAULT 0,
+    source                  VARCHAR(64) NOT NULL DEFAULT 'manual',
+    note                    VARCHAR(255),
+    status                  VARCHAR(32) NOT NULL DEFAULT 'pending',
+    applied_at              TIMESTAMP,
+    created_at              TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at              TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS idx_sim_corporate_actions_symbol_dates
+    ON simulation_corporate_actions (symbol, ex_date, effective_date);
+CREATE INDEX IF NOT EXISTS idx_sim_corporate_actions_status_effective
+    ON simulation_corporate_actions (status, effective_date);
+CREATE INDEX IF NOT EXISTS idx_sim_corporate_actions_action_type
+    ON simulation_corporate_actions (action_type);
+
+-- 60.5 SIMULATION_FILLS
+CREATE TABLE IF NOT EXISTS simulation_fills (
+    id              SERIAL PRIMARY KEY,
+    fill_id         UUID NOT NULL UNIQUE,
+    order_id        UUID NOT NULL,
+    legacy_trade_id INTEGER,
+    tenant_id       VARCHAR(64) NOT NULL DEFAULT 'default',
+    user_id         VARCHAR(32) NOT NULL,
+    account_id      VARCHAR(128) NOT NULL,
+    strategy_id     VARCHAR(64),
+    portfolio_id    INTEGER NOT NULL DEFAULT 0,
+    symbol          VARCHAR(20) NOT NULL,
+    side            VARCHAR(16) NOT NULL,
+    position_side   VARCHAR(16) NOT NULL DEFAULT 'long',
+    trade_action    VARCHAR(32),
+    fill_price      FLOAT NOT NULL,
+    fill_quantity   FLOAT NOT NULL,
+    gross_amount    FLOAT NOT NULL,
+    commission      FLOAT NOT NULL DEFAULT 0,
+    stamp_duty      FLOAT NOT NULL DEFAULT 0,
+    transfer_fee    FLOAT NOT NULL DEFAULT 0,
+    borrow_fee      FLOAT NOT NULL DEFAULT 0,
+    executed_at     TIMESTAMP NOT NULL,
+    price_source    VARCHAR(64),
+    session_phase   VARCHAR(32),
+    created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at      TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS idx_simulation_fills_owner_symbol
+    ON simulation_fills (tenant_id, user_id, symbol);
+CREATE INDEX IF NOT EXISTS idx_simulation_fills_owner_executed
+    ON simulation_fills (tenant_id, user_id, executed_at);
+CREATE INDEX IF NOT EXISTS idx_simulation_fills_order_id ON simulation_fills (order_id);
+CREATE INDEX IF NOT EXISTS idx_simulation_fills_symbol ON simulation_fills (symbol);
+
+-- 60.6 SIMULATION_ORDERS
+CREATE TABLE IF NOT EXISTS simulation_orders (
+    id                  SERIAL PRIMARY KEY,
+    order_id            UUID NOT NULL UNIQUE,
+    client_order_id     VARCHAR(64),
+    tenant_id           VARCHAR(64) NOT NULL DEFAULT 'default',
+    user_id             VARCHAR(32) NOT NULL,
+    strategy_id         VARCHAR(64),
+    account_id          VARCHAR(128) NOT NULL,
+    portfolio_id        INTEGER NOT NULL DEFAULT 0,
+    legacy_order_id     INTEGER,
+    symbol              VARCHAR(20) NOT NULL,
+    side                VARCHAR(16) NOT NULL,
+    position_side       VARCHAR(16) NOT NULL DEFAULT 'long',
+    trade_action        VARCHAR(32),
+    order_type          VARCHAR(16) NOT NULL,
+    time_in_force       VARCHAR(16) NOT NULL DEFAULT 'DAY',
+    quantity            FLOAT NOT NULL,
+    price               FLOAT,
+    trigger_source      VARCHAR(32) NOT NULL DEFAULT 'manual',
+    status              VARCHAR(32) NOT NULL DEFAULT 'pending',
+    rejected_reason     VARCHAR(500),
+    trading_session_date DATE,
+    submitted_at        TIMESTAMP,
+    expires_at          TIMESTAMP,
+    created_at          TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at          TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS idx_simulation_orders_owner_status
+    ON simulation_orders (tenant_id, user_id, status);
+CREATE INDEX IF NOT EXISTS idx_simulation_orders_owner_created
+    ON simulation_orders (tenant_id, user_id, created_at);
+CREATE INDEX IF NOT EXISTS idx_simulation_orders_order_id ON simulation_orders (order_id);
+CREATE INDEX IF NOT EXISTS idx_simulation_orders_symbol ON simulation_orders (symbol);
+
+-- 60.7 SIMULATION_POSITION_DAILY
+CREATE TABLE IF NOT EXISTS simulation_position_daily (
+    id                  SERIAL PRIMARY KEY,
+    account_id          VARCHAR(96) NOT NULL,
+    tenant_id           VARCHAR(64) NOT NULL DEFAULT 'default',
+    user_id             VARCHAR(64) NOT NULL,
+    snapshot_date       DATE NOT NULL,
+    snapshot_at         TIMESTAMP NOT NULL,
+    symbol              VARCHAR(20) NOT NULL,
+    position_side       VARCHAR(16) NOT NULL DEFAULT 'long',
+    quantity            FLOAT NOT NULL DEFAULT 0,
+    available_quantity  FLOAT NOT NULL DEFAULT 0,
+    frozen_quantity     FLOAT NOT NULL DEFAULT 0,
+    cost_price          FLOAT NOT NULL DEFAULT 0,
+    close_price         FLOAT NOT NULL DEFAULT 0,
+    market_value        FLOAT NOT NULL DEFAULT 0,
+    unrealized_pnl      FLOAT NOT NULL DEFAULT 0,
+    created_at          TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at          TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS idx_sim_position_daily_owner_symbol_time
+    ON simulation_position_daily (tenant_id, user_id, symbol, snapshot_at);
+CREATE INDEX IF NOT EXISTS idx_sim_position_daily_owner_symbol_date
+    ON simulation_position_daily (tenant_id, user_id, symbol, snapshot_date);
+CREATE INDEX IF NOT EXISTS idx_sim_position_daily_snapshot_date
+    ON simulation_position_daily (snapshot_date);
+
+-- 60.8 SIMULATION_POSITION_LOTS
+CREATE TABLE IF NOT EXISTS simulation_position_lots (
+    id                  SERIAL PRIMARY KEY,
+    account_id          VARCHAR(96) NOT NULL,
+    tenant_id           VARCHAR(64) NOT NULL DEFAULT 'default',
+    user_id             VARCHAR(64) NOT NULL,
+    symbol              VARCHAR(20) NOT NULL,
+    position_side       VARCHAR(16) NOT NULL DEFAULT 'long',
+    open_fill_id        VARCHAR(96),
+    open_date           TIMESTAMP,
+    quantity_open       FLOAT NOT NULL DEFAULT 0,
+    quantity_remaining  FLOAT NOT NULL DEFAULT 0,
+    cost_price          FLOAT NOT NULL DEFAULT 0,
+    cost_amount         FLOAT NOT NULL DEFAULT 0,
+    status              VARCHAR(32) NOT NULL DEFAULT 'open',
+    closed_at           TIMESTAMP,
+    created_at          TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at          TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS idx_sim_position_lots_owner_symbol_side
+    ON simulation_position_lots (tenant_id, user_id, symbol, position_side);
+CREATE INDEX IF NOT EXISTS idx_sim_position_lots_symbol
+    ON simulation_position_lots (symbol);
+
+-- 60.9 SIMULATION_REBALANCE_JOBS
+CREATE TABLE IF NOT EXISTS simulation_rebalance_jobs (
+    id                  SERIAL PRIMARY KEY,
+    job_id              VARCHAR(96) NOT NULL UNIQUE,
+    tenant_id           VARCHAR(64) NOT NULL DEFAULT 'default',
+    user_id             VARCHAR(64) NOT NULL,
+    strategy_id         VARCHAR(96) NOT NULL,
+    job_type            VARCHAR(32) NOT NULL DEFAULT 'rebalance',
+    schedule_type       VARCHAR(32) NOT NULL DEFAULT 'interval',
+    planned_run_at      TIMESTAMP,
+    window_start_at     TIMESTAMP,
+    window_end_at       TIMESTAMP,
+    status              VARCHAR(32) NOT NULL DEFAULT 'pending',
+    attempt_count       INTEGER NOT NULL DEFAULT 0,
+    last_error          VARCHAR(500),
+    idempotency_key     VARCHAR(128),
+    started_at          TIMESTAMP,
+    finished_at         TIMESTAMP,
+    created_at          TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at          TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS idx_sim_rebalance_jobs_owner_status
+    ON simulation_rebalance_jobs (tenant_id, user_id, status);
+CREATE INDEX IF NOT EXISTS idx_sim_rebalance_jobs_job_id
+    ON simulation_rebalance_jobs (job_id);
+CREATE INDEX IF NOT EXISTS idx_sim_rebalance_jobs_idempotency_key
+    ON simulation_rebalance_jobs (idempotency_key);
+
+-- ========================
+-- 61. QMT_AGENT（QMT Agent 设备绑定与会话）
+-- NOTE: 列定义与 backend/services/trade/models/qmt_agent_binding.py / qmt_agent_session.py 一致
+-- ========================
+
+-- 61.1 QMT_AGENT_BINDINGS
+CREATE TABLE IF NOT EXISTS qmt_agent_bindings (
+    id                  VARCHAR(64) PRIMARY KEY,
+    tenant_id           VARCHAR(64) NOT NULL DEFAULT 'default',
+    user_id             VARCHAR(64) NOT NULL,
+    api_key_id          INTEGER NOT NULL,
+    agent_type          VARCHAR(32) NOT NULL DEFAULT 'qmt',
+    account_id          VARCHAR(64) NOT NULL,
+    client_fingerprint  VARCHAR(255) NOT NULL,
+    hostname            VARCHAR(255),
+    client_version      VARCHAR(64),
+    status              VARCHAR(32) NOT NULL DEFAULT 'active',
+    last_ip             VARCHAR(64),
+    last_seen_at        TIMESTAMPTZ,
+    bound_at            TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    created_at          TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at          TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS idx_qmt_binding_tenant_account_status
+    ON qmt_agent_bindings (tenant_id, account_id, status);
+CREATE INDEX IF NOT EXISTS idx_qmt_binding_api_key ON qmt_agent_bindings (api_key_id);
+CREATE INDEX IF NOT EXISTS idx_qmt_binding_tenant_id ON qmt_agent_bindings (tenant_id);
+CREATE INDEX IF NOT EXISTS idx_qmt_binding_user_id ON qmt_agent_bindings (user_id);
+CREATE INDEX IF NOT EXISTS idx_qmt_binding_account_id ON qmt_agent_bindings (account_id);
+CREATE INDEX IF NOT EXISTS idx_qmt_binding_status ON qmt_agent_bindings (status);
+
+-- 61.2 QMT_AGENT_SESSIONS
+CREATE TABLE IF NOT EXISTS qmt_agent_sessions (
+    id              VARCHAR(64) PRIMARY KEY,
+    binding_id      VARCHAR(64) NOT NULL,
+    tenant_id       VARCHAR(64) NOT NULL DEFAULT 'default',
+    user_id         VARCHAR(64) NOT NULL,
+    token_hash      VARCHAR(64) NOT NULL UNIQUE,
+    expires_at      TIMESTAMPTZ NOT NULL,
+    revoked_at      TIMESTAMPTZ,
+    last_used_at    TIMESTAMPTZ,
+    created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at      TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS idx_qmt_session_binding ON qmt_agent_sessions (binding_id);
+CREATE INDEX IF NOT EXISTS idx_qmt_session_tenant_user ON qmt_agent_sessions (tenant_id, user_id);
+CREATE INDEX IF NOT EXISTS idx_qmt_session_tenant_id ON qmt_agent_sessions (tenant_id);
+CREATE INDEX IF NOT EXISTS idx_qmt_session_user_id ON qmt_agent_sessions (user_id);
+CREATE INDEX IF NOT EXISTS idx_qmt_session_token_hash ON qmt_agent_sessions (token_hash);
+
+-- ========================
+-- 62. ENGINE 标签与系统任务表
+-- NOTE: 列定义与 backend/services/engine/models/stock_tag.py / task.py 一致
+-- ========================
+
+-- 62.1 TAG_DICTIONARY（标签字典）
+CREATE TABLE IF NOT EXISTS tag_dictionary (
+    tag_code        VARCHAR(64) PRIMARY KEY,
+    tag_name        VARCHAR(128) NOT NULL,
+    tag_category    VARCHAR(32) NOT NULL,
+    source          VARCHAR(64),
+    is_active       BOOLEAN NOT NULL DEFAULT TRUE,
+    sort_order      INTEGER NOT NULL DEFAULT 0,
+    created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at      TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+-- 62.2 STOCK_TAG（股票-标签成员关系）
+CREATE TABLE IF NOT EXISTS stock_tag (
+    id              BIGSERIAL PRIMARY KEY,
+    symbol          VARCHAR(16) NOT NULL,
+    tag_code        VARCHAR(64) NOT NULL REFERENCES tag_dictionary(tag_code),
+    source          VARCHAR(64),
+    created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    CONSTRAINT uq_stock_tag_symbol_code UNIQUE (symbol, tag_code)
+);
+CREATE INDEX IF NOT EXISTS ix_stock_tag_tag_code ON stock_tag (tag_code);
+CREATE INDEX IF NOT EXISTS ix_stock_tag_symbol ON stock_tag (symbol);
+
+-- 62.3 SYSTEM_TASKS（系统后台任务）
+CREATE TABLE IF NOT EXISTS system_tasks (
+    task_id         VARCHAR(64) PRIMARY KEY,
+    task_type       VARCHAR(32) NOT NULL,
+    status          VARCHAR(20) DEFAULT 'PENDING',
+    progress        INTEGER DEFAULT 0,
+    logs            TEXT,
+    result_path     TEXT,
+    error_message   TEXT,
+    created_at      TIMESTAMPTZ DEFAULT NOW(),
+    finished_at     TIMESTAMPTZ
+);
+CREATE INDEX IF NOT EXISTS ix_system_tasks_task_type ON system_tasks (task_type);
+CREATE INDEX IF NOT EXISTS ix_system_tasks_status ON system_tasks (status);
 
 -- ========================
 -- DONE - 所有缺失表已创建
