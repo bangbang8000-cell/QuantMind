@@ -13,6 +13,7 @@ import { QuantDBCatalogPanel } from './quantdb/QuantDBCatalogPanel';
 import { QuantDBConfigCard } from './quantdb/QuantDBConfigCard';
 import { QuantDBPreviewDrawer } from './quantdb/QuantDBPreviewDrawer';
 import { describeError } from './quantdb/utils';
+import { SyncSchedulePanel } from './data-management/SyncSchedulePanel';
 
 const { Text } = Typography;
 
@@ -216,6 +217,8 @@ export const AdminQuantDBPanel: React.FC = () => {
             </div>
 
             <QuantDBConfigCard onSaved={loadInfo} />
+
+            <SyncSchedulePanel market="A" defaultDays={5} />
 
             <QuantDBCatalogPanel
                 connected={Boolean(info?.connected)}

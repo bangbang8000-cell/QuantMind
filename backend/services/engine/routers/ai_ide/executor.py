@@ -759,6 +759,12 @@ def _run_module_backtest(module):
             ).strip().lower() in {"1", "true", "yes", "on"},
             qlib_provider_uri=os.getenv("AI_IDE_BACKTEST_PROVIDER_URI"),
             qlib_region=os.getenv("AI_IDE_BACKTEST_REGION"),
+            # AI-IDE 模块型策略默认走向量化极速引擎：step 逐日循环在
+            # universe=all 全市场 + 近 1 年区间下要 500s+，向量化引擎秒级完成。
+            # 策略是 standard_topk 型 TopK 打分选股，向量化引擎语义一致。
+            use_vectorized=os.getenv(
+                "AI_IDE_BACKTEST_VECTORIZED", "true"
+            ).strip().lower() in {"1", "true", "yes", "on"},
         )
 
         print("[SYSTEM] 开始执行回测...")

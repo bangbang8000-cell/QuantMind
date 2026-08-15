@@ -25,7 +25,7 @@ STRATEGY_CONFIG = {
         "f_consecutive_limit_up_days_max": 0,
         "f_turnover_rate_min": 0.5,
         "f_turnover_rate_max": 15.0,
-        "f_beta_20_max": 1.8,
+        "f_beta_20_max": 1.5,
         "f_float_mv_min": 500000000.0,
         "f_micro_jump_flag_not": 1,
         "market_state_symbol": "SH000300",

@@ -59,70 +59,314 @@ def _default_datasets(market: str) -> tuple[DatasetSpec, ...]:
     if market == "BC":
         return (
             # 1 K线行情
-            DatasetSpec("daily_forward", "日线", "1", "kline", "1_kline_data/daily_forward", "partition", "Binance 日线"),
-            DatasetSpec("min5_kline", "5分钟线", "1", "kline", "1_kline_data/min5_kline", "symbol", "Binance 5m，体积大，按需同步"),
-            DatasetSpec("min1_kline", "1分钟线", "1", "kline", "1_kline_data/min1_kline", "symbol", "Binance 1m，体积大，按需同步"),
-            DatasetSpec("index_daily", "指数日线", "1", "kline", "1_kline_data/index_daily", "partition"),
+            DatasetSpec(
+                "daily_forward",
+                "日线",
+                "1",
+                "kline",
+                "1_kline_data/daily_forward",
+                "partition",
+                "Binance 日线",
+            ),
+            DatasetSpec(
+                "min5_kline",
+                "5分钟线",
+                "1",
+                "kline",
+                "1_kline_data/min5_kline",
+                "symbol",
+                "Binance 5m，体积大，按需同步",
+            ),
+            DatasetSpec(
+                "min1_kline",
+                "1分钟线",
+                "1",
+                "kline",
+                "1_kline_data/min1_kline",
+                "symbol",
+                "Binance 1m，体积大，按需同步",
+            ),
+            DatasetSpec(
+                "index_daily",
+                "指数日线",
+                "1",
+                "kline",
+                "1_kline_data/index_daily",
+                "partition",
+            ),
             # 2 基础板块
-            DatasetSpec("instrument_detail", "标的详情", "2", "base_sector", "2_base_sector/instrument_detail", "single"),
-            DatasetSpec("sector", "行业板块", "2", "base_sector", "2_base_sector/sector", "symbol"),
-            DatasetSpec("f10", "基本面快照", "2", "base_sector", "2_base_sector/f10", "symbol"),
+            DatasetSpec(
+                "instrument_detail",
+                "标的详情",
+                "2",
+                "base_sector",
+                "2_base_sector/instrument_detail",
+                "single",
+            ),
+            DatasetSpec(
+                "sector",
+                "行业板块",
+                "2",
+                "base_sector",
+                "2_base_sector/sector",
+                "symbol",
+            ),
+            DatasetSpec(
+                "f10", "基本面快照", "2", "base_sector", "2_base_sector/f10", "symbol"
+            ),
             # 5 技术衍生
-            DatasetSpec("valuation", "估值", "5", "technical", "5_technical_derived/valuation", "partition", "Binance 收盘快照"),
+            DatasetSpec(
+                "valuation",
+                "估值",
+                "5",
+                "technical",
+                "5_technical_derived/valuation",
+                "partition",
+                "Binance 收盘快照",
+            ),
         )
     if market == "FUTURES":
         return (
             # 1 K线行情
-            DatasetSpec("daily_forward", "期货日K", "1", "kline", "1_kline_data/daily_forward", "partition", "期货/贵金属日K（国际 CL.FUT / 国内主力 / 上金所）"),
+            DatasetSpec(
+                "daily_forward",
+                "期货日K",
+                "1",
+                "kline",
+                "1_kline_data/daily_forward",
+                "partition",
+                "期货/贵金属日K（国际 CL.FUT / 国内主力 / 上金所）",
+            ),
             # 2 实时快照
-            DatasetSpec("futures_realtime", "实时行情", "2", "base_sector", "2_base_sector/futures_realtime", "symbol", "国际/国内期货实时快照"),
+            DatasetSpec(
+                "futures_realtime",
+                "实时行情",
+                "2",
+                "base_sector",
+                "2_base_sector/futures_realtime",
+                "symbol",
+                "国际/国内期货实时快照",
+            ),
         )
     base = [
         # 1 K线行情
-        DatasetSpec("daily_forward", "日线", "1", "kline", "1_kline_data/daily_forward", "partition", "yahoo 日线"),
-        DatasetSpec("index_daily", "指数日线", "1", "kline", "1_kline_data/index_daily", "partition"),
+        DatasetSpec(
+            "daily_forward",
+            "日线",
+            "1",
+            "kline",
+            "1_kline_data/daily_forward",
+            "partition",
+            "yahoo 日线",
+        ),
+        DatasetSpec(
+            "index_daily",
+            "指数日线",
+            "1",
+            "kline",
+            "1_kline_data/index_daily",
+            "partition",
+        ),
         # 2 基础板块
-        DatasetSpec("instrument_detail", "标的详情", "2", "base_sector", "2_base_sector/instrument_detail", "single"),
-        DatasetSpec("sector", "行业板块", "2", "base_sector", "2_base_sector/sector", "symbol"),
-        DatasetSpec("f10", "基本面快照", "2", "base_sector", "2_base_sector/f10", "symbol"),
+        DatasetSpec(
+            "instrument_detail",
+            "标的详情",
+            "2",
+            "base_sector",
+            "2_base_sector/instrument_detail",
+            "single",
+        ),
+        DatasetSpec(
+            "sector", "行业板块", "2", "base_sector", "2_base_sector/sector", "symbol"
+        ),
+        DatasetSpec(
+            "f10", "基本面快照", "2", "base_sector", "2_base_sector/f10", "symbol"
+        ),
         # 3 财务数据
-        DatasetSpec("income", "利润表", "3", "financial", "3_financial_data/income", "symbol"),
-        DatasetSpec("balance", "资产负债表", "3", "financial", "3_financial_data/balance", "symbol"),
-        DatasetSpec("cashflow", "现金流量表", "3", "financial", "3_financial_data/cashflow", "symbol"),
-        DatasetSpec("dividend", "分红", "3", "financial", "3_financial_data/dividend", "symbol"),
-        DatasetSpec("splits", "拆股", "3", "financial", "3_financial_data/splits", "symbol"),
+        DatasetSpec(
+            "income", "利润表", "3", "financial", "3_financial_data/income", "symbol"
+        ),
+        DatasetSpec(
+            "balance",
+            "资产负债表",
+            "3",
+            "financial",
+            "3_financial_data/balance",
+            "symbol",
+        ),
+        DatasetSpec(
+            "cashflow",
+            "现金流量表",
+            "3",
+            "financial",
+            "3_financial_data/cashflow",
+            "symbol",
+        ),
+        DatasetSpec(
+            "dividend", "分红", "3", "financial", "3_financial_data/dividend", "symbol"
+        ),
+        DatasetSpec(
+            "splits", "拆股", "3", "financial", "3_financial_data/splits", "symbol"
+        ),
         # 5 技术衍生
-        DatasetSpec("valuation", "估值", "5", "technical", "5_technical_derived/valuation", "partition", "yahoo info 快照"),
+        DatasetSpec(
+            "valuation",
+            "估值",
+            "5",
+            "technical",
+            "5_technical_derived/valuation",
+            "partition",
+            "yahoo info 快照",
+        ),
         # 4 分析师/持仓/期权（归入"分析预测"组）
-        DatasetSpec("recommendations", "分析师评级", "4", "analyst", "4_analyst/recommendations", "symbol"),
-        DatasetSpec("upgrades_downgrades", "评级调整", "4", "analyst", "4_analyst/upgrades_downgrades", "symbol"),
-        DatasetSpec("earnings_history", "盈利历史", "4", "analyst", "4_analyst/earnings_history", "symbol"),
-        DatasetSpec("earnings_dates", "财报日期", "4", "analyst", "4_analyst/earnings_dates", "symbol"),
-        DatasetSpec("earnings_estimate", "盈利预期", "4", "analyst", "4_analyst/earnings_estimate", "symbol"),
-        DatasetSpec("revenue_estimate", "营收预期", "4", "analyst", "4_analyst/revenue_estimate", "symbol"),
-        DatasetSpec("growth_estimates", "增长预期", "4", "analyst", "4_analyst/growth_estimates", "symbol"),
-        DatasetSpec("analyst_price_targets", "目标价", "4", "analyst", "4_analyst/analyst_price_targets", "symbol"),
-        DatasetSpec("major_holders", "主要股东", "4", "analyst", "4_analyst/major_holders", "symbol"),
-        DatasetSpec("mutual_fund_holders", "共同基金持仓", "4", "analyst", "4_analyst/mutual_fund_holders", "symbol"),
-        DatasetSpec("calendar", "分红/财报日历", "4", "analyst", "4_analyst/calendar", "symbol"),
-        DatasetSpec("insider_transactions", "内部人交易", "4", "analyst", "4_analyst/insider_transactions", "symbol"),
+        DatasetSpec(
+            "recommendations",
+            "分析师评级",
+            "4",
+            "analyst",
+            "4_analyst/recommendations",
+            "symbol",
+        ),
+        DatasetSpec(
+            "upgrades_downgrades",
+            "评级调整",
+            "4",
+            "analyst",
+            "4_analyst/upgrades_downgrades",
+            "symbol",
+        ),
+        DatasetSpec(
+            "earnings_history",
+            "盈利历史",
+            "4",
+            "analyst",
+            "4_analyst/earnings_history",
+            "symbol",
+        ),
+        DatasetSpec(
+            "earnings_dates",
+            "财报日期",
+            "4",
+            "analyst",
+            "4_analyst/earnings_dates",
+            "symbol",
+        ),
+        DatasetSpec(
+            "earnings_estimate",
+            "盈利预期",
+            "4",
+            "analyst",
+            "4_analyst/earnings_estimate",
+            "symbol",
+        ),
+        DatasetSpec(
+            "revenue_estimate",
+            "营收预期",
+            "4",
+            "analyst",
+            "4_analyst/revenue_estimate",
+            "symbol",
+        ),
+        DatasetSpec(
+            "growth_estimates",
+            "增长预期",
+            "4",
+            "analyst",
+            "4_analyst/growth_estimates",
+            "symbol",
+        ),
+        DatasetSpec(
+            "analyst_price_targets",
+            "目标价",
+            "4",
+            "analyst",
+            "4_analyst/analyst_price_targets",
+            "symbol",
+        ),
+        DatasetSpec(
+            "major_holders",
+            "主要股东",
+            "4",
+            "analyst",
+            "4_analyst/major_holders",
+            "symbol",
+        ),
+        DatasetSpec(
+            "mutual_fund_holders",
+            "共同基金持仓",
+            "4",
+            "analyst",
+            "4_analyst/mutual_fund_holders",
+            "symbol",
+        ),
+        DatasetSpec(
+            "calendar", "分红/财报日历", "4", "analyst", "4_analyst/calendar", "symbol"
+        ),
+        DatasetSpec(
+            "insider_transactions",
+            "内部人交易",
+            "4",
+            "analyst",
+            "4_analyst/insider_transactions",
+            "symbol",
+        ),
         DatasetSpec("options_chain", "期权链", "4", "analyst", "4_options", "symbol"),
     ]
     if market == "HK":
         base.append(
-            DatasetSpec("akshare_valuation", "估值(akshare)", "2", "base_sector", "2_base_sector/akshare_valuation", "symbol", "akshare 真实估值：PE/PB/PS/PCF + 排名"),
+            DatasetSpec(
+                "akshare_valuation",
+                "估值(akshare)",
+                "2",
+                "base_sector",
+                "2_base_sector/akshare_valuation",
+                "symbol",
+                "akshare 真实估值：PE/PB/PS/PCF + 排名",
+            ),
         )
         base.append(
-            DatasetSpec("akshare_financial", "财务指标(akshare)", "2", "base_sector", "2_base_sector/akshare_financial", "symbol", "akshare 财务指标：EPS/ROE/市值/股息率 21项"),
+            DatasetSpec(
+                "akshare_financial",
+                "财务指标(akshare)",
+                "2",
+                "base_sector",
+                "2_base_sector/akshare_financial",
+                "symbol",
+                "akshare 财务指标：EPS/ROE/市值/股息率 21项",
+            ),
         )
         base.append(
-            DatasetSpec("akshare_profile", "公司资料(akshare)", "2", "base_sector", "2_base_sector/akshare_profile", "symbol", "akshare 公司资料：行业/董事长/员工数等"),
+            DatasetSpec(
+                "akshare_profile",
+                "公司资料(akshare)",
+                "2",
+                "base_sector",
+                "2_base_sector/akshare_profile",
+                "symbol",
+                "akshare 公司资料：行业/董事长/员工数等",
+            ),
         )
         base.append(
-            DatasetSpec("ccass_top50", "CCASS机构持仓", "2", "base_sector", "2_base_sector/ccass_top50", "partition", "港股CCASS top50机构持股，stock_code 5位"),
+            DatasetSpec(
+                "ccass_top50",
+                "CCASS机构持仓",
+                "2",
+                "base_sector",
+                "2_base_sector/ccass_top50",
+                "partition",
+                "港股CCASS top50机构持股，stock_code 5位",
+            ),
         )
         base.append(
-            DatasetSpec("hsgt_south", "南向资金(港股通)", "2", "base_sector", "2_base_sector/hsgt_south", "partition", "港股通南向资金持仓，symbol 4位+.HK"),
+            DatasetSpec(
+                "hsgt_south",
+                "南向资金(港股通)",
+                "2",
+                "base_sector",
+                "2_base_sector/hsgt_south",
+                "partition",
+                "港股通南向资金持仓，symbol 4位+.HK",
+            ),
         )
     return tuple(base)
 
@@ -143,7 +387,9 @@ class SyncDatasetsRequest(BaseModel):
 
 
 class DataSourcesRequest(BaseModel):
-    sources: dict[str, bool] = Field(..., description="数据源勾选状态 {source: enabled}")
+    sources: dict[str, bool] = Field(
+        ..., description="数据源勾选状态 {source: enabled}"
+    )
 
 
 def _data_dir(env_var: str, default_dir: str) -> Path:
@@ -154,18 +400,26 @@ def _data_dir(env_var: str, default_dir: str) -> Path:
     if p.is_dir():
         return p
     if "US" in env_var:
-        from backend.services.engine.data_platform.quantus_hub import _resolve_quantus_data_dir
+        from backend.services.engine.data_platform.quantus_hub import (
+            _resolve_quantus_data_dir,
+        )
 
         return _resolve_quantus_data_dir()
     if "BC" in env_var:
-        from backend.services.engine.data_platform.quantbc_hub import _resolve_quantbc_data_dir
+        from backend.services.engine.data_platform.quantbc_hub import (
+            _resolve_quantbc_data_dir,
+        )
 
         return _resolve_quantbc_data_dir()
     if "FUTURES" in env_var:
-        from backend.services.engine.data_platform.quantfutures_hub import _resolve_quantfutures_data_dir
+        from backend.services.engine.data_platform.quantfutures_hub import (
+            _resolve_quantfutures_data_dir,
+        )
 
         return _resolve_quantfutures_data_dir()
-    from backend.services.engine.data_platform.quanthk_hub import _resolve_quanthk_data_dir
+    from backend.services.engine.data_platform.quanthk_hub import (
+        _resolve_quanthk_data_dir,
+    )
 
     return _resolve_quanthk_data_dir()
 
@@ -197,7 +451,11 @@ def _dataset_stats(spec: DatasetSpec, root: Path) -> dict[str, Any]:
         return {"synced": False, "files": 0, "size_mb": 0.0}
     files = [f for f in d.rglob("*.parquet") if f.is_file()]
     size_mb = round(sum(f.stat().st_size for f in files) / 1024 / 1024, 1)
-    stats: dict[str, Any] = {"synced": bool(files), "files": len(files), "size_mb": size_mb}
+    stats: dict[str, Any] = {
+        "synced": bool(files),
+        "files": len(files),
+        "size_mb": size_mb,
+    }
     if spec.layout == "partition":
         dates = _dataset_dates(spec, d)
         if dates:
@@ -206,7 +464,11 @@ def _dataset_stats(spec: DatasetSpec, root: Path) -> dict[str, Any]:
             stats["partitions"] = len(dates)
     if files:
         latest = max(f.stat().st_mtime for f in files)
-        stats["updated_at"] = datetime.fromtimestamp(latest, tz=timezone.utc).isoformat().replace("+00:00", "Z")
+        stats["updated_at"] = (
+            datetime.fromtimestamp(latest, tz=timezone.utc)
+            .isoformat()
+            .replace("+00:00", "Z")
+        )
     return stats
 
 
@@ -241,7 +503,10 @@ def _json_safe(value: Any) -> Any:
 
 
 def _json_safe_records(df: pd.DataFrame) -> list[dict[str, Any]]:
-    return [{str(k): _json_safe(v) for k, v in row.items()} for row in df.to_dict(orient="records")]
+    return [
+        {str(k): _json_safe(v) for k, v in row.items()}
+        for row in df.to_dict(orient="records")
+    ]
 
 
 def _pick_local_file(spec: DatasetSpec, root: Path, symbol: str | None) -> Path | None:
@@ -264,21 +529,36 @@ def _pick_local_file(spec: DatasetSpec, root: Path, symbol: str | None) -> Path 
         for f in files:
             if f.stem.upper() == target:
                 return f
-        raise HTTPException(status_code=404, detail=f"{spec.dataset} 无 {symbol} 的本地文件")
+        raise HTTPException(
+            status_code=404, detail=f"{spec.dataset} 无 {symbol} 的本地文件"
+        )
     return files[0]
 
 
-def _symbol_choices(spec: DatasetSpec, root: Path) -> dict[str, Any]:
+def _symbol_choices(spec: DatasetSpec, root: Path, market: str) -> dict[str, Any]:
     if spec.layout != "symbol":
         return {}
     d = root / spec.rel_dir
     if not d.is_dir():
         return {}
     stems = sorted(f.stem for f in d.glob("*.parquet") if f.is_file())
-    return {"symbol_total": len(stems), "symbol_choices": stems[:MAX_SYMBOL_CHOICES]}
+    names: dict[str, str] = {}
+    try:
+        from backend.scripts.market_cn_names import _read_security_master
+
+        names = {s: n for s, n in _read_security_master(market).items() if s in stems}
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("security_master 中文名读取失败: %s", exc)
+    return {
+        "symbol_total": len(stems),
+        "symbol_choices": stems[:MAX_SYMBOL_CHOICES],
+        "symbol_names": names,
+    }
 
 
-def make_market_router(*, market: str, env_var: str, default_dir: str, sync_entry: str) -> APIRouter:
+def make_market_router(
+    *, market: str, env_var: str, default_dir: str, sync_entry: str
+) -> APIRouter:
     """生成美股/港股管理路由。
 
     Args:
@@ -309,26 +589,30 @@ def make_market_router(*, market: str, env_var: str, default_dir: str, sync_entr
             root = _root()
             items = []
             for spec in DATASETS:
-                items.append({
-                    "dataset": spec.dataset,
-                    "name": spec.name,
-                    "group": spec.group,
-                    "category_id": spec.category_id,
-                    "layout": spec.layout,
-                    "rel_dir": spec.rel_dir,
-                    "note": spec.note,
-                    **_dataset_stats(spec, root),
-                })
+                items.append(
+                    {
+                        "dataset": spec.dataset,
+                        "name": spec.name,
+                        "group": spec.group,
+                        "category_id": spec.category_id,
+                        "layout": spec.layout,
+                        "rel_dir": spec.rel_dir,
+                        "note": spec.note,
+                        **_dataset_stats(spec, root),
+                    }
+                )
             groups = []
             for g in _GROUPS:
                 members = [it for it in items if it["group"] == g["id"]]
-                groups.append({
-                    **g,
-                    "dataset_count": len(members),
-                    "synced_count": sum(1 for it in members if it["synced"]),
-                    "files": sum(it["files"] for it in members),
-                    "size_mb": round(sum(it["size_mb"] for it in members), 1),
-                })
+                groups.append(
+                    {
+                        **g,
+                        "dataset_count": len(members),
+                        "synced_count": sum(1 for it in members if it["synced"]),
+                        "files": sum(it["files"] for it in members),
+                        "size_mb": round(sum(it["size_mb"] for it in members), 1),
+                    }
+                )
             return {
                 "success": True,
                 "data": {
@@ -366,14 +650,16 @@ def make_market_router(*, market: str, env_var: str, default_dir: str, sync_entr
                     "rows_total": 0,
                     "columns": [],
                     "data": [],
-                    **_symbol_choices(spec, root),
+                    **_symbol_choices(spec, root, market),
                     "timestamp": _now_iso(),
                 },
             }
         try:
             df = pd.read_parquet(file_path)
         except Exception as exc:  # noqa: BLE001
-            logger.error("%s preview failed (%s): %s", market, dataset, exc, exc_info=True)
+            logger.error(
+                "%s preview failed (%s): %s", market, dataset, exc, exc_info=True
+            )
             raise HTTPException(status_code=500, detail=f"预览失败: {exc}") from exc
         columns = [{"name": str(c), "dtype": str(df[c].dtype)} for c in df.columns]
         records = _json_safe_records(df.head(limit))
@@ -388,7 +674,7 @@ def make_market_router(*, market: str, env_var: str, default_dir: str, sync_entr
                 "column_count": len(columns),
                 "columns": columns,
                 "data": records,
-                **_symbol_choices(spec, root),
+                **_symbol_choices(spec, root, market),
                 "timestamp": _now_iso(),
             },
         }
@@ -426,7 +712,9 @@ def make_market_router(*, market: str, env_var: str, default_dir: str, sync_entr
         }
 
     @router.post("/data-sources")
-    async def save_data_sources(payload: DataSourcesRequest, current_user: dict = Depends(require_admin)):
+    async def save_data_sources(
+        payload: DataSourcesRequest, current_user: dict = Depends(require_admin)
+    ):
         from backend.shared.data_source_config import save_sources
 
         saved = save_sources(market, payload.sources)
@@ -475,14 +763,27 @@ def make_market_router(*, market: str, env_var: str, default_dir: str, sync_entr
             if req.with_qlib:
                 _job_update(job_id, stage="qlib_cache")
                 try:
-                    from backend.services.engine.qlib_data_builder import ensure_qlib_cache
+                    from backend.services.engine.qlib_data_builder import (
+                        ensure_qlib_cache,
+                    )
 
-                    market_map = {"US": "US", "HK": "HK", "BC": "CRYPTO", "FUTURES": "FUTURES"}
+                    market_map = {
+                        "US": "US",
+                        "HK": "HK",
+                        "BC": "CRYPTO",
+                        "FUTURES": "FUTURES",
+                    }
                     qlib_market = market_map.get(market, market)
                     provider_uri = ensure_qlib_cache(market=qlib_market)
                     qlib_cache = {"status": "ok", "provider_uri": provider_uri}
                 except Exception as exc:  # noqa: BLE001
-                    logger.error("%s sync job %s: qlib cache failed: %s", market, job_id, exc, exc_info=True)
+                    logger.error(
+                        "%s sync job %s: qlib cache failed: %s",
+                        market,
+                        job_id,
+                        exc,
+                        exc_info=True,
+                    )
                     qlib_cache = {"status": "error", "reason": str(exc)}
 
             _job_update(
@@ -496,13 +797,29 @@ def make_market_router(*, market: str, env_var: str, default_dir: str, sync_entr
                 finished_at=_now_iso(),
             )
         except Exception as exc:  # noqa: BLE001
-            logger.error("%s sync job %s failed: %s", market, job_id, exc, exc_info=True)
+            logger.error(
+                "%s sync job %s failed: %s", market, job_id, exc, exc_info=True
+            )
             _job_update(job_id, status="failed", error=str(exc), finished_at=_now_iso())
 
     @router.post("/sync-datasets")
-    async def sync_datasets(payload: SyncDatasetsRequest, current_user: dict = Depends(require_admin)):
+    async def sync_datasets(
+        payload: SyncDatasetsRequest, current_user: dict = Depends(require_admin)
+    ):
         for name in payload.datasets:
             _spec(name)
+        # CCASS 抓取任务互斥：同时跑两个会相互触发 HKEX 封禁，直接拒绝
+        if market == "HK" and "ccass_top50" in payload.datasets:
+            with _jobs_lock:
+                running_ccass = any(
+                    j["status"] == "running" and "ccass_top50" in j["datasets"]
+                    for j in _jobs.values()
+                )
+            if running_ccass:
+                raise HTTPException(
+                    status_code=409,
+                    detail="已有 CCASS 同步任务运行中，请等待完成后再触发",
+                )
         job_id = f"{_prefix}-{next(_job_counter)}"
         job = {
             "job_id": job_id,
@@ -523,7 +840,9 @@ def make_market_router(*, market: str, env_var: str, default_dir: str, sync_entr
             for stale in sorted(_jobs)[:-MAX_JOB_HISTORY]:
                 if _jobs[stale]["status"] != "running":
                     _jobs.pop(stale, None)
-        threading.Thread(target=_run_sync_job, args=(job_id, payload), daemon=True).start()
+        threading.Thread(
+            target=_run_sync_job, args=(job_id, payload), daemon=True
+        ).start()
         return {"success": True, "data": {"job": job}}
 
     @router.get("/sync-jobs")
@@ -548,7 +867,9 @@ def make_market_router(*, market: str, env_var: str, default_dir: str, sync_entr
             if job is None:
                 raise HTTPException(status_code=404, detail=f"任务不存在: {job_id}")
             if job["status"] != "running":
-                raise HTTPException(status_code=400, detail=f"任务状态为 {job['status']}，无法取消")
+                raise HTTPException(
+                    status_code=400, detail=f"任务状态为 {job['status']}，无法取消"
+                )
             job["cancel_requested"] = True
         return {
             "success": True,

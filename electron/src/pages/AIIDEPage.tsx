@@ -35,6 +35,7 @@ import {
     Sparkles,
     Bug,
     Search as SearchIcon,
+    BrainCircuit,
 } from 'lucide-react';
 import { message, Modal, Input } from 'antd';
 import { clsx } from 'clsx';
@@ -161,6 +162,7 @@ const AIIDEPage: React.FC = () => {
     const [isSaving, setIsSaving] = React.useState(false);
     const [isAITyping, setIsAITyping] = React.useState(false);
     const [assistantRole, setAssistantRole] = React.useState<'quant_analyst' | 'bug_fixer' | 'code_reviewer'>('quant_analyst');
+    const [defaultModelName, setDefaultModelName] = React.useState<string>('');
     const [createMode, setCreateMode] = React.useState<'file' | 'folder' | null>(null);
     const [createName, setCreateName] = React.useState('');
     const [searchQuery, setSearchQuery] = React.useState('');
@@ -408,6 +410,20 @@ const AIIDEPage: React.FC = () => {
         const init = async () => {
              // 只需要加载文件列表（云端模式下）
              await fetchLocalFileList();
+             // 加载默认模型名，供回测上下文提示
+             try {
+                 const defaultModel = await modelTrainingService.getDefaultModel();
+                 const mid = String(defaultModel?.model_id || '').trim();
+                 if (mid) {
+                     const meta = defaultModel?.metadata_json || {};
+                     const display = String(
+                         (meta as any)?.display_name || (meta as any)?.name || (meta as any)?.model_name || ''
+                     ).trim();
+                     setDefaultModelName(display || mid);
+                 }
+             } catch (err) {
+                 console.warn('[AI-IDE] 默认模型解析失败', err);
+             }
         };
         init();
         return () => {
@@ -897,6 +913,9 @@ const AIIDEPage: React.FC = () => {
             is_third_party: true,
             qlib_provider_uri: marketConfig.qlibProviderUri,
             qlib_region: marketConfig.qlibRegion,
+            // AI-IDE 模块型策略默认走向量化极速引擎：全市场近 1 年 step 逐日循环
+            // 需 500s+，向量化引擎在相同语义下秒级~分钟级完成
+            use_vectorized: true,
             strategy_params: {
                 signal: '<PRED>',
             },
@@ -916,6 +935,12 @@ const AIIDEPage: React.FC = () => {
             if (defaultModelId) {
                 modelId = defaultModelId;
             }
+            // 解析默认模型显示名：优先 metadata.display_name，其次 model_id
+            const meta = defaultModel?.metadata_json || {};
+            const displayName = String(
+                (meta as any)?.display_name || (meta as any)?.name || ''
+            ).trim();
+            setDefaultModelName(displayName || defaultModelId || '');
         } catch (error) {
             console.warn('[AI-IDE] Failed to resolve default model', error);
         }
@@ -2453,6 +2478,15 @@ const AIIDEPage: React.FC = () => {
                                 return rawName.length > 30 ? rawName.substring(0, 30) + '...' : rawName;
                             })()}
                         </span>
+                        {defaultModelName ? (
+                            <span
+                                className="ml-2 inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-blue-50 text-blue-600 border border-blue-100 font-medium"
+                                title="回测默认使用的模型"
+                            >
+                                <BrainCircuit className="h-3 w-3" />
+                                默认模型: {defaultModelName.length > 26 ? defaultModelName.substring(0, 26) + '...' : defaultModelName}
+                            </span>
+                        ) : null}
                     </div>
                     <div className="flex items-center gap-2">
                         <button

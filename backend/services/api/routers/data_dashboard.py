@@ -293,6 +293,36 @@ async def search_stocks(
     limit: int = Query(20, ge=1, le=100),
     current_user: dict = Depends(get_current_user),
 ):
+    # HK/US: stocks_index 只有 A 股，直接走本地 security_master（中文名）
+    if market and market.upper() in ("HK", "US"):
+        try:
+            from backend.scripts.market_cn_names import _read_security_master
+
+            mapping = _read_security_master(market.upper())
+            if mapping:
+                k = keyword.strip().lower()
+                results = []
+                for sym, name in mapping.items():
+                    if k in sym.lower() or k in name.lower():
+                        results.append({
+                            "symbol": sym,
+                            "code": sym,
+                            "name": name,
+                            "market": market.upper(),
+                        })
+                        if len(results) >= limit:
+                            break
+                if results:
+                    return {
+                        "success": True,
+                        "keyword": keyword,
+                        "market": market,
+                        "results": results,
+                        "count": len(results),
+                    }
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("security_master search failed: %s", exc)
+
     # 优先使用 stocks_search 的 JSON 索引
     try:
         from backend.services.api.routers.stocks_search import stock_index_store

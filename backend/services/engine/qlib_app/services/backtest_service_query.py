@@ -291,7 +291,8 @@ class QlibBacktestServiceQueryMixin:
             "strategy_total_position": strategy_total_position,
         }
 
-    def _normalize_signal_config(self, signal: Any) -> Any:
+    @staticmethod
+    def _normalize_signal_config(signal: Any) -> Any:
         if signal is None:
             return "<PRED>"
         if isinstance(signal, dict):

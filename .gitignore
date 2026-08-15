@@ -215,5 +215,8 @@ examples/
 df_check.txt
 quantmind-新版/
 
+# CCASS 爬虫测试（配合本地未提交的爬虫改动，不入公共仓库）
+backend/services/tests/test_ccass_sync_resilience.py
+
 # AutoDL 训练节点配置（含 SSH 凭据，禁止提交）
 config/training_nodes.yaml

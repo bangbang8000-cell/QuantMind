@@ -429,7 +429,8 @@ QuantMind 内置丰富的 AI 技能，覆盖量化全流程：
 - **策略类**：`smart-strategy-stock-picking`、`backtest-center`、`strategy-*`
 - **训练类**：`simulation-trading`、`model-training`、`batch-inference-analysis`
 - **分析类**：`alphagbm-*`（财报/估值/情绪/期权）、`financial-analysis`
-- **运营类**：`quantmind-operations`、`deployment-patterns`
+- **运营类**：`quantmind-operations`、`quantmind-deploy`（部署运维 + 问题排查）、`deployment-patterns`
+- **投研类**：`trading-agents`（多 Agent 研究报告）、`rd-agent-factor-mining`
 
 ### QuantBot 智能助手
 
@@ -557,6 +558,36 @@ QuantMind 采用**机构级 AI 量化技术栈**，覆盖从数据到模型到�
 
 ### 🚀 一键部署（5 步）
 
+> 🤖 **推荐：先装技能包，让 AI 帮你部署**
+> 
+> QuantMind 提供**技能包**（`quantmind-operations-skill.zip`），包含 **11 个技能**（部署运维、模型训练/推理、数据同步、回测中心、AI-IDE、模拟交易、市场分析、因子挖掘、投研分析等）。安装后主流 AI 编程工具都能自动识别"部署/装不上/帮我部署"等意图，**一步步指导你完成部署、检查、排查**（含环境要求、网络预检、数据库初始化、users 表验证等专业指导，避免 AI 乱猜）。
+> 
+> **各主流工具安装方式：**
+> 
+> ```bash
+> # ① Claude Code / QuantBot（推荐，SKILL.md 原生格式）
+> unzip quantmind-operations-skill.zip -d ~/.claude/
+> # 验证: ls ~/.claude/skills/quantmind-deploy/SKILL.md
+> # 然后对 Claude Code 说：帮我部署 QuantMind / 部署不上帮我排查
+> 
+> # ② OpenAI Codex（.codex 目录，读取 AGENTS.md 指令）
+> unzip quantmind-operations-skill.zip -d ~/.codex/
+> # Codex 读取 ~/.codex/AGENTS.md；技能目录内容可在 AGENTS.md 中引用
+> 
+> # ③ OpenCode（opencode 通用 Agent 指令）
+> unzip quantmind-operations-skill.zip -d ~/.config/opencode/
+> # 或项目级: 解压到项目根后，把 SKILL.md 要点写入 AGENTS.md
+> 
+> # ④ 腾讯 Trae / CodeBuddy（.trae 目录）
+> unzip quantmind-operations-skill.zip -d ~/.trae/
+> 
+> # ⑤ 字节豆包 MarsCode / 其他工具
+> #    克隆仓库后，把 .claude/skills/*/SKILL.md 的关键流程导入项目的 AGENTS.md
+> #    （所有工具都读 AGENTS.md / 项目级指令文件，把本技能包要点粘进去即可）
+> ```
+> 
+> **通用做法**：无论哪个工具，最稳妥的方式是把技能包内容导入该工具的 **AGENTS.md**（项目根 `AGENTS.md` 或全局指令文件），AI 就能按部署流程一步步来。直接对 AI 说"帮我部署 QuantMind"即可。
+
 ```bash
 # 1. 克隆仓库
 git clone https://github.com/qusong0627/QuantMind.git
@@ -631,6 +662,14 @@ docker exec quantmind python backend/scripts/quantdb_daily_sync.py
 ---
 
 ## 📦 部署指南
+
+> 🤖 **部署遇到问题？先装技能包让 AI 排查**
+> 
+> `quantmind-operations-skill.zip` 内含 **`quantmind-deploy` 部署技能**：一键部署、快速部署、部署前准备（环境/网络/内存要求）、数据库初始化（users 表）、部署后 6 步检查、**问题诊断树**、AI 常见坑提示。对 Claude Code 说"部署不上"即可自动调用。
+> 
+> ```bash
+> unzip quantmind-operations-skill.zip -d ~/.claude/
+> ```
 
 ### 生产环境
 

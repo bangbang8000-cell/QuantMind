@@ -18,6 +18,7 @@ from backend.services.engine.qlib_app.utils.recording_strategy import (
     _OUR_KWARGS,
     DynamicRiskMixin,
     RedisLoggerMixin,
+    RedisRecordingStrategy,
     RedisWeightStrategy,
     strip_unsupported_kwargs,
 )
@@ -230,6 +231,87 @@ class RedisTopkStrategy(DynamicRiskMixin, TopkDropoutStrategy, RedisLoggerMixin)
     def post_exe_step(self, execute_result=None):
         self.log_progress()
         self.log_executed_trades(execute_result)
+
+
+class RedisRiskGuardTopkStrategy(RedisRecordingStrategy):
+    """
+    大盘风控 Top-K 选股策略 (Risk Guard Top-K)
+    继承 RedisRecordingStrategy（DynamicRiskMixin + FundamentalFilterMixin + TopkDropout）：
+    1. FundamentalFilterMixin 消化 f_* 基本面/交易硬过滤（排除 ST、涨跌停、流动性等）；
+    2. DynamicRiskMixin 结合大盘状态（market_state_series）自动降仓；
+    3. 维持 Top-K-Dropout 的低换手优势。
+    额外消费行业分散参数（max_industry_count / industry_cap_ratio）。
+    """
+
+    def __init__(self, *args, **kwargs):
+        # 行业分散参数：当前由平台上层消费，策略层消化避免传给 qlib BaseStrategy
+        self.max_industry_count = int(kwargs.pop("max_industry_count", 0) or 0)
+        self.industry_cap_ratio = float(kwargs.pop("industry_cap_ratio", 0.0) or 0.0)
+        self.market_state_window = int(kwargs.pop("market_state_window", 20) or 20)
+        super().__init__(*args, **kwargs)
+
+
+class RedisMomentumStrategy(RedisTopkStrategy):
+    """
+    趋势动量策略 (Momentum Strategy)
+    继承 RedisTopkStrategy 复用 TopK-Dropout 低换手、Redis 记录与动态风控，
+    在选股前用「过去 momentum_period 日累计收益率」作为动量因子与模型分数融合，
+    使得动量强（近期涨幅领先）的标的获得更高排名，符合 A 股趋势跟随逻辑。
+
+    融合方式：rank_score = model_score + lambda * momentum_factor
+    - momentum_factor 为过去 N 日累计收益（截面归一化到 [-1,1]）
+    - lambda 为动量强度，保守默认 0.5（模型分数仍占主导）
+    """
+
+    def __init__(self, *args, **kwargs):
+        self.momentum_period = int(kwargs.pop("momentum_period", 20))
+        self.momentum_weight = float(kwargs.pop("momentum_weight", 0.5))
+        super().__init__(*args, **kwargs)
+        StructuredTaskLogger(
+            logger,
+            "redis-momentum-strategy",
+            {"backtest_id": getattr(self, "backtest_id", None), "momentum_period": self.momentum_period, "momentum_weight": self.momentum_weight},
+        ).info("init", "RedisMomentumStrategy initialized")
+
+    def _compute_momentum(self, stocks: list[str], ref_date) -> pd.Series:
+        """计算各标的过去 momentum_period 交易日的累计收益率。"""
+        try:
+            lookback_buf = int(self.momentum_period * 2.0)
+            start_dt = ref_date - pd.Timedelta(days=lookback_buf)
+            price_df = D.features(stocks, ["$close"], start_dt, ref_date, freq="day")
+            if price_df is None or price_df.empty:
+                raise ValueError("empty price data")
+            prices = price_df["$close"].unstack(level="instrument")
+            # 累计收益率 = 最后价格 / 区间初价格 - 1（仅用最新 period 个交易日）
+            momentum = prices.iloc[-self.momentum_period :].iloc[-1] / prices.iloc[-self.momentum_period :].iloc[0] - 1
+            # 截面归一化到 [-1, 1]，避免量纲影响
+            std = momentum.std(ddof=1)
+            if std is None or std == 0 or float(std) == 0:
+                return pd.Series(0.0, index=stocks)
+            norm = ((momentum - momentum.mean()) / std).clip(-1, 1)
+            return norm.reindex(stocks).fillna(0.0)
+        except Exception as exc:
+            StructuredTaskLogger(
+                logger,
+                "redis-momentum-strategy",
+                {"backtest_id": getattr(self, "backtest_id", None)},
+            ).warning("momentum_computation_failed", "Momentum computation failed, falling back to model score only", error=exc)
+            return pd.Series(0.0, index=stocks)
+
+    def generate_target_weight_position(self, score, current=None, trade_exchange=None, *args, **kwargs):
+        if self.check_account_stop_loss():
+            return {}
+        if score is None or score.empty:
+            return {}
+        if isinstance(score, pd.DataFrame):
+            score = score.iloc[:, 0]
+        t_start = kwargs.get("trade_start_time") or kwargs.get("t_start")
+        if t_start is not None:
+            stocks = list(score.index)
+            momentum = self._compute_momentum(stocks, pd.Timestamp(t_start))
+            # 模型分数占主导 + 动量增强（融合后保留正负号以区分多空强度）
+            score = score.add(momentum.reindex(score.index) * self.momentum_weight)
+        return super().generate_target_weight_position(score, current, trade_exchange, *args, **kwargs)
 
 
 class RedisAdvancedAlphaStrategy(RedisTopkStrategy):

@@ -176,8 +176,19 @@ class QlibDataBuilder:
         df = self._hub.fetch_calendar()
         dates = self._extract_dates(df) if not df.empty else None
 
-        # hub 日历缺失时，从 daily_forward parquet 推导
-        if not dates:
+        # 上游日历发布可能滞后于行情分区（如 QuantDB trading_calendar 落后 daily_forward 1-2 天）。
+        # 取日历与行情日期的并集，保证日历覆盖最新行情，避免回测区间截断。
+        parquet_dates = self._dates_from_recent_parquet()
+        if dates and parquet_dates:
+            merged = set(dates) | set(parquet_dates)
+            if merged != set(dates):
+                logger.info(
+                    "Qlib[%s] 日历补齐行情日期: %d -> %d",
+                    self._market, len(dates), len(merged),
+                )
+            dates = sorted(merged)
+        elif not dates:
+            # hub 日历缺失时（US/HK/BC/FUTURES 首次构建），全量行情推导
             dates = self._dates_from_parquet()
 
         if not dates:
@@ -201,6 +212,32 @@ class QlibDataBuilder:
             return None
         dates = pd.to_datetime(df[date_col]).dt.strftime("%Y-%m-%d").unique()
         return sorted(dates.tolist()) if len(dates) else None
+
+    def _dates_from_recent_parquet(self, recent_days: int = 14) -> list[str]:
+        """从 daily_forward 最近分区推导交易日（只扫最新分区，避免全表扫描）。"""
+        fwd = self._hub.data_dir / "1_kline_data" / "daily_forward"
+        if not fwd.is_dir():
+            return []
+        import duckdb
+
+        partitions = sorted(p.name for p in fwd.glob("dt=*"))[-recent_days:]
+        if not partitions:
+            return []
+        files = ",".join(f"'{fwd / p / 'data.parquet'}'" for p in partitions)
+        try:
+            con = duckdb.connect(config={"memory_limit": "4GB", "threads": "2"})
+            try:
+                df = con.execute(
+                    f"SELECT DISTINCT CAST(time AS DATE) d FROM read_parquet([{files}])"
+                ).fetchdf()
+            finally:
+                con.close()
+            if df.empty:
+                return []
+            return sorted(df["d"].astype(str).tolist())
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("从最近分区推导日历失败: %s", exc)
+            return []
 
     def _dates_from_parquet(self) -> list[str]:
         """从 daily_forward 分区的 time 列推导全部交易日。"""

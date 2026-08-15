@@ -1050,3 +1050,30 @@ def build_smooth_history(lookback_days: int = 5) -> dict[str, Any]:
     except Exception as e:
         logger.exception("[SmoothHistory] 失败: %s", e)
         return {"status": "failed", "error": str(e)}
+
+
+# ---------------------------------------------------------------------------
+# 市场定时同步调度（前端每市场配置 HH:MM，beat 每分钟派发检查）
+# ---------------------------------------------------------------------------
+@celery_app.task(name="engine.tasks.dispatch_market_sync")
+def dispatch_market_sync() -> dict[str, Any]:
+    """每分钟检查各市场定时同步配置，到点派发同步任务。"""
+    try:
+        from backend.services.engine.tasks.market_sync_scheduler import dispatch_due_syncs
+
+        return dispatch_due_syncs()
+    except Exception as e:
+        logger.exception("[SyncSchedule] 派发检查失败: %s", e)
+        return {"status": "failed", "error": str(e)}
+
+
+@celery_app.task(name="engine.tasks.run_market_scheduled_sync")
+def run_market_scheduled_sync(market: str, cfg: dict[str, Any]) -> dict[str, Any]:
+    """执行某市场的定时同步（由 dispatch_market_sync 派发）。"""
+    try:
+        from backend.services.engine.tasks.market_sync_scheduler import run_market_sync
+
+        return run_market_sync(market, cfg)
+    except Exception as e:
+        logger.exception("[SyncSchedule] %s 定时同步失败: %s", market, e)
+        return {"market": market, "status": "failed", "error": str(e)}

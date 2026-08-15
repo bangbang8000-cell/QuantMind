@@ -73,7 +73,18 @@ SLOW_FIELDS_WORKERS = 3
 RATE_LIMIT_MAX_RETRIES = 5  # 限流最大重试次数
 
 # QuantDB 日线 schema（10 列）
-KLINE_COLS = ["symbol", "time", "open", "high", "low", "close", "volume", "amount", "release_id", "published_at"]
+KLINE_COLS = [
+    "symbol",
+    "time",
+    "open",
+    "high",
+    "low",
+    "close",
+    "volume",
+    "amount",
+    "release_id",
+    "published_at",
+]
 
 # 时间序列数据段 → 落盘到 3_financial_data/{dir}/{symbol}.parquet（增量追加）
 # 键 = adapter 字段名，dir = 落盘目录名
@@ -128,25 +139,66 @@ def _make_adapter():
 
 
 def _universe(market: str) -> list[str]:
-    """获取全市场标的池（复用 rd_agent data_pipeline 的标的清单）。"""
+    """获取全市场标的池。
+
+    HK: security_master 主表（新浪全市场快照，新上市股票自动进入）
+    US: rd_agent data_pipeline 的 US_SYMBOLS
+    """
+    if market == "HK":
+        try:
+            from backend.scripts.market_cn_names import _read_security_master
+
+            mapping = _read_security_master("HK")
+            if mapping:
+                syms = sorted(mapping)
+                log.info("HK 标的池来自 security_master: %d 只", len(syms))
+                return syms
+        except Exception as exc:  # noqa: BLE001
+            log.warning("读取 security_master 失败，回退 HK_SYMBOLS: %s", exc)
     if market == "US":
         try:
-            from backend.services.engine.rd_agent.data_pipeline.us_data import US_SYMBOLS
+            from backend.services.engine.rd_agent.data_pipeline.us_data import (
+                US_SYMBOLS,
+            )
 
             if US_SYMBOLS:
                 return list(US_SYMBOLS)
         except Exception as exc:  # noqa: BLE001
             log.warning("导入 US_SYMBOLS 失败，回退内置列表: %s", exc)
-        return ["AAPL", "MSFT", "GOOGL", "AMZN", "NVDA", "META", "TSLA", "BRK-B", "JPM", "V"]
-    elif market == "HK":
+        return [
+            "AAPL",
+            "MSFT",
+            "GOOGL",
+            "AMZN",
+            "NVDA",
+            "META",
+            "TSLA",
+            "BRK-B",
+            "JPM",
+            "V",
+        ]
+    if market == "HK":
         try:
-            from backend.services.engine.rd_agent.data_pipeline.hk_data import HK_SYMBOLS
+            from backend.services.engine.rd_agent.data_pipeline.hk_data import (
+                HK_SYMBOLS,
+            )
 
             if HK_SYMBOLS:
                 return list(HK_SYMBOLS)
         except Exception as exc:  # noqa: BLE001
             log.warning("导入 HK_SYMBOLS 失败，回退内置列表: %s", exc)
-        return ["0700.HK", "9988.HK", "0388.HK", "0005.HK", "1299.HK", "2318.HK", "0941.HK", "1398.HK", "3988.HK", "0883.HK"]
+        return [
+            "0700.HK",
+            "9988.HK",
+            "0388.HK",
+            "0005.HK",
+            "1299.HK",
+            "2318.HK",
+            "0941.HK",
+            "1398.HK",
+            "3988.HK",
+            "0883.HK",
+        ]
     raise ValueError(f"market 必须是 US/HK，收到 {market}")
 
 
@@ -156,7 +208,9 @@ def _resolve_symbols(market: str, symbols: str | None) -> list[str]:
     return _universe(market)
 
 
-def _fetch_daily_one(adapter, symbol: str, start: date, end: date) -> pd.DataFrame | None:
+def _fetch_daily_one(
+    adapter, symbol: str, start: date, end: date
+) -> pd.DataFrame | None:
     try:
         df = _retry_on_rate_limit(adapter.fetch_daily, symbol, start, end, adjust="qfq")
         if df is None or df.empty:
@@ -169,23 +223,30 @@ def _fetch_daily_one(adapter, symbol: str, start: date, end: date) -> pd.DataFra
 
 def _normalise_kline(df: pd.DataFrame, symbol: str) -> pd.DataFrame:
     """yahoo 输出 → QuantDB 日线 schema。"""
-    out = pd.DataFrame({
-        "symbol": symbol,
-        "time": pd.to_datetime(df["trade_date"]),
-        "open": pd.to_numeric(df["open"], errors="coerce"),
-        "high": pd.to_numeric(df["high"], errors="coerce"),
-        "low": pd.to_numeric(df["low"], errors="coerce"),
-        "close": pd.to_numeric(df["close"], errors="coerce"),
-        "volume": pd.to_numeric(df["volume"], errors="coerce").fillna(0.0),
-        "amount": pd.to_numeric(df["close"], errors="coerce")
-        * pd.to_numeric(df["volume"], errors="coerce").fillna(0.0),
-    })
+    out = pd.DataFrame(
+        {
+            "symbol": symbol,
+            "time": pd.to_datetime(df["trade_date"]),
+            "open": pd.to_numeric(df["open"], errors="coerce"),
+            "high": pd.to_numeric(df["high"], errors="coerce"),
+            "low": pd.to_numeric(df["low"], errors="coerce"),
+            "close": pd.to_numeric(df["close"], errors="coerce"),
+            "volume": pd.to_numeric(df["volume"], errors="coerce").fillna(0.0),
+            "amount": pd.to_numeric(df["close"], errors="coerce")
+            * pd.to_numeric(df["volume"], errors="coerce").fillna(0.0),
+        }
+    )
     out["release_id"] = "yahoo"
     out["published_at"] = datetime.now().isoformat(timespec="seconds")
     return out[KLINE_COLS].dropna(subset=["close"])
 
 
-def _write_partition(root: Path, date_str: str, chunk: pd.DataFrame, dedup_cols: tuple[str, ...] | None = None) -> Path:
+def _write_partition(
+    root: Path,
+    date_str: str,
+    chunk: pd.DataFrame,
+    dedup_cols: tuple[str, ...] | None = None,
+) -> Path:
     """写单个 Hive 分区 dt=YYYYMMDD/data.parquet。"""
     dt_dir = root / f"dt={date_str}"
     dt_dir.mkdir(parents=True, exist_ok=True)
@@ -206,7 +267,11 @@ def _write_series_file(root: Path, symbol: str, df: pd.DataFrame) -> Path:
     root.mkdir(parents=True, exist_ok=True)
     target = root / f"{symbol}.parquet"
     # 确定去重键：report_date（财务）或 trade_date（分红/拆股）
-    date_col = "report_date" if "report_date" in df.columns else ("trade_date" if "trade_date" in df.columns else None)
+    date_col = (
+        "report_date"
+        if "report_date" in df.columns
+        else ("trade_date" if "trade_date" in df.columns else None)
+    )
     if target.exists():
         old = pd.read_parquet(target)
         combined = pd.concat([old, df], ignore_index=True)
@@ -240,8 +305,12 @@ def _normalise_valuation(symbol: str, data: dict) -> pd.DataFrame | None:
             "circulating_capital": None,
             "total_mv": float(mv) if mv else None,
             "float_mv": None,
-            "net_profit_ttm": float(data.get("netIncomeToCommon")) if data.get("netIncomeToCommon") else None,
-            "revenue_ttm": float(data.get("totalRevenue")) if data.get("totalRevenue") else None,
+            "net_profit_ttm": float(data.get("netIncomeToCommon"))
+            if data.get("netIncomeToCommon")
+            else None,
+            "revenue_ttm": float(data.get("totalRevenue"))
+            if data.get("totalRevenue")
+            else None,
             "equity": None,
             "annual_net_profit": None,
             "pe_ttm": float(pe) if pe else None,
@@ -277,7 +346,12 @@ def _retry_on_rate_limit(fn, *args, retries: int = RATE_LIMIT_MAX_RETRIES, **kwa
         except Exception as exc:  # noqa: BLE001
             if not _is_rate_limited(exc) or attempt == retries - 1:
                 raise
-            log.warning("限流(%s)，等待 %.0fs 后重试 %s", args[-1] if args else "?", wait, type(exc).__name__)
+            log.warning(
+                "限流(%s)，等待 %.0fs 后重试 %s",
+                args[-1] if args else "?",
+                wait,
+                type(exc).__name__,
+            )
             time.sleep(wait)
             wait = min(wait * 2, 300)
     return None
@@ -295,7 +369,14 @@ def _fetch_series_one(adapter, field: str, symbol: str) -> pd.DataFrame | None:
         return None
 
 
-def sync_kline(market: str, symbols: list[str], start: date, end: date, *, workers: int = SYNC_WORKERS) -> dict:
+def sync_kline(
+    market: str,
+    symbols: list[str],
+    start: date,
+    end: date,
+    *,
+    workers: int = SYNC_WORKERS,
+) -> dict:
     """拉取日线并按交易日分区落盘。"""
     adapter = _make_adapter()
     root = _data_dir(market) / "1_kline_data" / "daily_forward"
@@ -304,7 +385,9 @@ def sync_kline(market: str, symbols: list[str], start: date, end: date, *, worke
     frames = []
     errors = 0
     with ThreadPoolExecutor(max_workers=workers) as pool:
-        futures = {pool.submit(_fetch_daily_one, adapter, s, start, end): s for s in symbols}
+        futures = {
+            pool.submit(_fetch_daily_one, adapter, s, start, end): s for s in symbols
+        }
         for future in as_completed(futures):
             symbol = futures[future]
             df = future.result()
@@ -314,10 +397,18 @@ def sync_kline(market: str, symbols: list[str], start: date, end: date, *, worke
                 errors += 1
 
     if not frames:
-        return {"market": market, "symbols": len(symbols), "rows": 0, "partitions": 0, "errors": errors}
+        return {
+            "market": market,
+            "symbols": len(symbols),
+            "rows": 0,
+            "partitions": 0,
+            "errors": errors,
+        }
 
     all_df = pd.concat(frames, ignore_index=True)
-    grouped = {ts.strftime("%Y%m%d"): g for ts, g in all_df.groupby(all_df["time"].dt.date)}
+    grouped = {
+        ts.strftime("%Y%m%d"): g for ts, g in all_df.groupby(all_df["time"].dt.date)
+    }
     written = 0
     for date_str, chunk in sorted(grouped.items()):
         _write_partition(root, date_str, chunk)
@@ -334,7 +425,9 @@ def sync_kline(market: str, symbols: list[str], start: date, end: date, *, worke
     }
 
 
-def sync_series(market: str, symbols: list[str], field: str, *, workers: int = SLOW_FIELDS_WORKERS) -> dict:
+def sync_series(
+    market: str, symbols: list[str], field: str, *, workers: int = SLOW_FIELDS_WORKERS
+) -> dict:
     """拉取时间序列字段（分红/拆股/财务三表）到标的级 parquet。"""
     adapter = _make_adapter()
     rel_dir = "3_financial_data/" + SERIES_FIELDS[field]["dir"]
@@ -343,7 +436,9 @@ def sync_series(market: str, symbols: list[str], field: str, *, workers: int = S
     written = 0
     errors = 0
     with ThreadPoolExecutor(max_workers=workers) as pool:
-        futures = {pool.submit(_fetch_series_one, adapter, field, s): s for s in symbols}
+        futures = {
+            pool.submit(_fetch_series_one, adapter, field, s): s for s in symbols
+        }
         for future in as_completed(futures):
             symbol = futures[future]
             df = future.result()
@@ -357,7 +452,13 @@ def sync_series(market: str, symbols: list[str], field: str, *, workers: int = S
             else:
                 errors += 1
 
-    return {"field": field, "symbols": len(symbols), "written": written, "errors": errors, "dir": rel_dir}
+    return {
+        "field": field,
+        "symbols": len(symbols),
+        "written": written,
+        "errors": errors,
+        "dir": rel_dir,
+    }
 
 
 def _fetch_snapshot_one(adapter, field: str, symbol: str) -> pd.DataFrame | None:
@@ -372,7 +473,9 @@ def _fetch_snapshot_one(adapter, field: str, symbol: str) -> pd.DataFrame | None
         return None
 
 
-def sync_snapshot(market: str, symbols: list[str], field: str, *, workers: int = SLOW_FIELDS_WORKERS) -> dict:
+def sync_snapshot(
+    market: str, symbols: list[str], field: str, *, workers: int = SLOW_FIELDS_WORKERS
+) -> dict:
     """拉取快照字段（估值/评级/持仓/期权）到标的级文件。"""
     adapter = _make_adapter()
     rel_dir = SNAPSHOT_FIELDS[field]
@@ -403,12 +506,19 @@ def sync_snapshot(market: str, symbols: list[str], field: str, *, workers: int =
         all_df = pd.concat(frames, ignore_index=True)
         max_date = all_df["time"].max().strftime("%Y%m%d")
         _write_partition(root, max_date, all_df)
-        return {"field": field, "written": len(all_df), "partition": max_date, "dir": rel_dir}
+        return {
+            "field": field,
+            "written": len(all_df),
+            "partition": max_date,
+            "dir": rel_dir,
+        }
 
     written = 0
     errors = 0
     with ThreadPoolExecutor(max_workers=workers) as pool:
-        futures = {pool.submit(_fetch_snapshot_one, adapter, field, s): s for s in symbols}
+        futures = {
+            pool.submit(_fetch_snapshot_one, adapter, field, s): s for s in symbols
+        }
         for future in as_completed(futures):
             symbol = futures[future]
             df = future.result()
@@ -422,7 +532,13 @@ def sync_snapshot(market: str, symbols: list[str], field: str, *, workers: int =
             else:
                 errors += 1
 
-    return {"field": field, "symbols": len(symbols), "written": written, "errors": errors, "dir": rel_dir}
+    return {
+        "field": field,
+        "symbols": len(symbols),
+        "written": written,
+        "errors": errors,
+        "dir": rel_dir,
+    }
 
 
 def _business_days(end: date, n: int) -> list[date]:
@@ -466,7 +582,11 @@ def run(
     south_enabled = market == "HK" and is_source_enabled(market, "hsgt_south")
     log.info(
         "[%s] 数据源勾选: akshare=%s ccass=%s 南向=%s yahoo=%s",
-        market, akshare_enabled, ccass_enabled, south_enabled, yahoo_enabled,
+        market,
+        akshare_enabled,
+        ccass_enabled,
+        south_enabled,
+        yahoo_enabled,
     )
 
     syms = _resolve_symbols(market, symbols)
@@ -510,6 +630,22 @@ def run(
             log.warning("[%s] 南向资金同步失败: %s", market, exc)
             result["sources"]["hsgt_south"] = {"status": "error", "error": str(exc)}
 
+    # 证券主表 + f10 中文名回填（HK: 新浪全市场 / US: 腾讯行情）。
+    # 放在 yahoo 段之前：即使雅虎未勾选，主表与中文名也保持新鲜。
+    try:
+        from backend.scripts.market_cn_names import (
+            backfill as cn_backfill,
+            build_security_master as cn_master,
+        )
+
+        master_r = cn_master(market)
+        backfill_r = cn_backfill(market, syms, rebuild_master=False)
+        result["cn_names"] = {"master": master_r, "backfill": backfill_r}
+        log.info("[%s] 证券主表=%s 中文名回填=%s", market, master_r, backfill_r)
+    except Exception as exc:  # noqa: BLE001
+        log.warning("[%s] 中文名回填失败: %s", market, exc)
+        result["cn_names"] = {"status": "error", "error": str(exc)}
+
     # yahoo 数据段（雅虎勾选才同步：估值/财务/分析师/持仓等）
     if not yahoo_enabled:
         log.info("[%s] 雅虎数据源未启用（数据源配置），跳过 yahoo 同步", market)
@@ -547,15 +683,31 @@ def run(
         if i < len(snapshot_fields) - 1:
             time.sleep(5)
 
+    # yahoo f10 的 name 是英文长名，同步后再次回填中文名（防覆盖）
+    try:
+        from backend.scripts.market_cn_names import backfill as cn_backfill
+
+        r = cn_backfill(market, syms, rebuild_master=False)
+        result["cn_names"]["backfill_after_yahoo"] = r
+        log.info("[%s] 中文名回填（yahoo 后）: %s", market, r)
+    except Exception as exc:  # noqa: BLE001
+        log.warning("[%s] 中文名回填（yahoo 后）失败: %s", market, exc)
+
     return result
 
 
 def main() -> int:
     parser = argparse.ArgumentParser(description="QuantUS/QuantHK 全量数据摄取")
-    parser.add_argument("--market", required=True, choices=["US", "HK"], help="市场: US=美股, HK=港股")
-    parser.add_argument("--days", type=int, default=5, help="同步最近多少个交易日（日线）")
+    parser.add_argument(
+        "--market", required=True, choices=["US", "HK"], help="市场: US=美股, HK=港股"
+    )
+    parser.add_argument(
+        "--days", type=int, default=5, help="同步最近多少个交易日（日线）"
+    )
     parser.add_argument("--symbols", default=None, help="逗号分隔标的池（默认全市场）")
-    parser.add_argument("--fast", action="store_true", help="跳过慢速数据段（财务三表/持仓/期权）")
+    parser.add_argument(
+        "--fast", action="store_true", help="跳过慢速数据段（财务三表/持仓/期权）"
+    )
     parser.add_argument("--skip-kline", action="store_true", help="跳过日线")
     args = parser.parse_args()
 

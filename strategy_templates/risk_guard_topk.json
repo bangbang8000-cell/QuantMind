@@ -73,7 +73,7 @@
     {
       "name": "beta_20_max",
       "description": "20日 Beta 上限",
-      "default": 1.8,
+      "default": 1.5,
       "min": 0.5,
       "max": 3.0
     },

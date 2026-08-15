@@ -31,7 +31,7 @@
     {
       "name": "max_weight",
       "type": "float",
-      "default": 0.1,
+      "default": 0.08,
       "description": "单只股票持仓权重上限"
     },
     {

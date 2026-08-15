@@ -271,6 +271,27 @@ class AdminService {
         return resp.data;
     }
 
+    async getSyncSchedule(market: string): Promise<any> {
+        const resp = await this.axiosInstance.get(`/admin/data-platform/sync-schedule/${market}`);
+        return resp.data;
+    }
+
+    async saveSyncSchedule(market: string, cfg: {
+        enabled: boolean;
+        time: string;
+        days: number;
+        datasets: string[];
+        with_qlib: boolean;
+    }): Promise<any> {
+        const resp = await this.axiosInstance.post(`/admin/data-platform/sync-schedule/${market}`, cfg);
+        return resp.data;
+    }
+
+    async runSyncScheduleNow(market: string): Promise<any> {
+        const resp = await this.axiosInstance.post(`/admin/data-platform/sync-schedule/${market}/run`);
+        return resp.data;
+    }
+
     async getModelDirectoryDetail(modelPath: string): Promise<ModelDirectoryInfo> {
         const resp = await this.axiosInstance.get<ModelDirectoryInfo>(`/admin/models/directory/${modelPath}`);
         return resp.data;

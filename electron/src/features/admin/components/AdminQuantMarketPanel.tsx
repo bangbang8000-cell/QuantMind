@@ -13,6 +13,7 @@ import {
     QuantDBPreview,
 } from '../services/dataPlatformService';
 import { describeError, formatPartitionDate, formatSize } from './quantdb/utils';
+import { SyncSchedulePanel } from './data-management/SyncSchedulePanel';
 
 const { Text } = Typography;
 
@@ -20,6 +21,13 @@ const JOB_POLL_INTERVAL_MS = 3000;
 const MAX_PREVIEW_LIMIT = 200;
 
 type MarketKey = 'quantus' | 'quanthk' | 'quantbc' | 'quantfutures';
+
+const MARKET_KEY_TO_SCHEDULE: Record<MarketKey, string> = {
+    quantus: 'US',
+    quanthk: 'HK',
+    quantbc: 'BC',
+    quantfutures: 'FUTURES',
+};
 
 const LAYOUT_LABELS: Record<QuantDBDataset['layout'], { text: string; color: string }> = {
     partition: { text: '按日分区', color: 'blue' },
@@ -447,6 +455,12 @@ export function AdminQuantMarketPanel({ market, marketLabel, color }: AdminQuant
                 />
             </div>
 
+            <SyncSchedulePanel
+                market={MARKET_KEY_TO_SCHEDULE[market]}
+                selectedDatasets={selected}
+                defaultDays={market === 'quantbc' ? 365 : 5}
+            />
+
             {activeJob && <MarketSyncJobProgress job={activeJob} />}
 
             <MarketDataModal
@@ -670,12 +684,18 @@ function MarketDataModal({ market, dataset, activeJob, onClose, onRefreshCatalog
                             <AutoComplete
                                 value={symbol}
                                 onChange={setSymbol}
-                                options={(preview?.symbol_choices ?? []).map((s) => ({ value: s }))}
+                                options={(preview?.symbol_choices ?? []).map((s) => ({
+                                    value: s,
+                                    label: preview?.symbol_names?.[s]
+                                        ? `${s} · ${preview.symbol_names[s]}`
+                                        : s,
+                                }))}
                                 filterOption={(input, option) =>
                                     String(option?.value ?? '').toUpperCase().includes(input.toUpperCase())
+                                    || String(option?.label ?? '').includes(input)
                                 }
                                 placeholder="检索标的代码"
-                                style={{ width: 220 }}
+                                style={{ width: 260 }}
                                 onSelect={() => load()}
                             />
                         )}
