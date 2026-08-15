@@ -45,8 +45,16 @@ logging.basicConfig(
 log = logging.getLogger("akshare_kline")
 
 OUT_COLS = [
-    "symbol", "time", "open", "high", "low", "close",
-    "volume", "amount", "release_id", "published_at",
+    "symbol",
+    "time",
+    "open",
+    "high",
+    "low",
+    "close",
+    "volume",
+    "amount",
+    "release_id",
+    "published_at",
 ]
 
 DEFAULT_THREADS = 6
@@ -104,8 +112,16 @@ def _existing_partitions(market: str) -> set[str]:
 
 
 def _stock_list(market: str) -> list[str]:
-    """代码池。HK: hk.csv；US: rd_agent us_data 的 US_SYMBOLS。"""
+    """代码池。HK: security_master 主表（新浪全市场，新股票自动进入）；US: US_SYMBOLS。"""
     if market == "HK":
+        try:
+            from backend.scripts.market_cn_names import _read_security_master
+
+            mapping = _read_security_master("HK")
+            if mapping:
+                return sorted(mapping)
+        except Exception as exc:  # noqa: BLE001
+            log.warning("读取 security_master 失败，回退 hk.csv: %s", exc)
         for csv_path in (
             Path(__file__).parent / "hk.csv",
             Path("/data/hk.csv"),
@@ -118,16 +134,40 @@ def _stock_list(market: str) -> list[str]:
                         return df["id"].astype(str).str.zfill(5).tolist()
                 except Exception:
                     pass
-        return ["00001", "00002", "00005", "00006", "00700", "00939", "00941", "00998", "01299", "02318"]
+        return [
+            "00001",
+            "00002",
+            "00005",
+            "00006",
+            "00700",
+            "00939",
+            "00941",
+            "00998",
+            "01299",
+            "02318",
+        ]
     else:
         try:
-            from backend.services.engine.rd_agent.data_pipeline.us_data import US_SYMBOLS
+            from backend.services.engine.rd_agent.data_pipeline.us_data import (
+                US_SYMBOLS,
+            )
 
             if US_SYMBOLS:
                 return list(US_SYMBOLS)
         except Exception as exc:  # noqa: BLE001
             log.warning("导入 US_SYMBOLS 失败: %s", exc)
-        return ["AAPL", "MSFT", "GOOGL", "AMZN", "NVDA", "META", "TSLA", "BRK-B", "JPM", "V"]
+        return [
+            "AAPL",
+            "MSFT",
+            "GOOGL",
+            "AMZN",
+            "NVDA",
+            "META",
+            "TSLA",
+            "BRK-B",
+            "JPM",
+            "V",
+        ]
 
 
 def _fetch_stock(market: str, symbol: str, min_date: str) -> pd.DataFrame | None:
@@ -151,10 +191,14 @@ def _fetch_stock(market: str, symbol: str, min_date: str) -> pd.DataFrame | None
         df["symbol"] = _to_symbol(market, symbol)
         for c in ("open", "high", "low", "close"):
             df[c] = pd.to_numeric(df[c], errors="coerce")
-        df["volume"] = pd.to_numeric(df["volume"], errors="coerce").fillna(0).astype("int64")
+        df["volume"] = (
+            pd.to_numeric(df["volume"], errors="coerce").fillna(0).astype("int64")
+        )
         # 美股 akshare 无 amount，用 close*volume 估算（美元）；港股有 amount
         if "amount" not in df.columns:
-            df["amount"] = pd.to_numeric(df["close"], errors="coerce") * pd.to_numeric(df["volume"], errors="coerce").fillna(0.0)
+            df["amount"] = pd.to_numeric(df["close"], errors="coerce") * pd.to_numeric(
+                df["volume"], errors="coerce"
+            ).fillna(0.0)
         else:
             df["amount"] = pd.to_numeric(df["amount"], errors="coerce").fillna(0.0)
         df["release_id"] = "akshare"
@@ -192,10 +236,18 @@ def sync(
         min_date = start.strftime("%Y%m%d")
 
     syms = symbols or _stock_list(market)
-    log.info("[%s] 待同步标的: %d 只，从 %s (days=%s)", market, len(syms), min_date, days)
+    log.info(
+        "[%s] 待同步标的: %d 只，从 %s (days=%s)", market, len(syms), min_date, days
+    )
 
     if dry_run:
-        return {"market": market, "stocks": len(syms), "min_date": min_date, "existing_partitions": len(existing), "dry_run": True}
+        return {
+            "market": market,
+            "stocks": len(syms),
+            "min_date": min_date,
+            "existing_partitions": len(existing),
+            "dry_run": True,
+        }
 
     frames: list[pd.DataFrame] = []
     ok = 0
@@ -216,7 +268,9 @@ def sync(
     all_df = pd.concat(frames, ignore_index=True)
     target_dir = _data_dir(market) / MARKET_CONFIG[market]["rel_dir"]
 
-    grouped = {ts.strftime("%Y%m%d"): g for ts, g in all_df.groupby(all_df["time"].dt.date)}
+    grouped = {
+        ts.strftime("%Y%m%d"): g for ts, g in all_df.groupby(all_df["time"].dt.date)
+    }
     written = 0
     for date_str, chunk in sorted(grouped.items()):
         dt_dir = target_dir / f"dt={date_str}"
@@ -248,16 +302,32 @@ def main() -> int:
     parser = argparse.ArgumentParser(description="akshare 港美股日线 → QuantUS/QuantHK")
     parser.add_argument("--market", required=True, choices=["HK", "US"], help="市场")
     parser.add_argument("--days", type=int, default=5, help="同步最近多少个交易日")
-    parser.add_argument("--start-date", default=None, help="历史起点 YYYY-MM-DD（全量回拉，如 2001-01-01）")
+    parser.add_argument(
+        "--start-date",
+        default=None,
+        help="历史起点 YYYY-MM-DD（全量回拉，如 2001-01-01）",
+    )
     parser.add_argument("--symbol", default=None, help="指定股票代码，逗号分隔多个")
-    parser.add_argument("--concurrent", type=int, default=DEFAULT_THREADS, help="并发数")
+    parser.add_argument(
+        "--concurrent", type=int, default=DEFAULT_THREADS, help="并发数"
+    )
     parser.add_argument("--dry-run", action="store_true", help="仅预览，不抓取")
     args = parser.parse_args()
 
     try:
-        syms = [s.strip() for s in args.symbol.split(",") if s.strip()] if args.symbol else None
-        result = sync(args.market, symbols=syms, days=args.days, start_date=args.start_date,
-                      concurrent=args.concurrent, dry_run=args.dry_run)
+        syms = (
+            [s.strip() for s in args.symbol.split(",") if s.strip()]
+            if args.symbol
+            else None
+        )
+        result = sync(
+            args.market,
+            symbols=syms,
+            days=args.days,
+            start_date=args.start_date,
+            concurrent=args.concurrent,
+            dry_run=args.dry_run,
+        )
         print(result)
         return 0
     except Exception as exc:  # noqa: BLE001
