@@ -238,25 +238,25 @@ function CreateSessionForm({ onCreate }: { onCreate: (s: ReplaySession) => void 
 
     // --- Render step indicator ---
     const renderStepIndicator = () => (
-        <div className="flex items-center gap-1 mb-4">
+        <div className="flex items-center gap-1.5 mb-5 flex-wrap">
             {WIZARD_STEPS.map((s, i) => {
                 const Icon = s.icon;
                 const isActive = s.key === step;
                 const isDone = i < stepIndex;
                 return (
                     <React.Fragment key={s.key}>
-                        {i > 0 && <ChevronRight size={14} className="text-gray-300" />}
+                        {i > 0 && <ChevronRight size={14} className="text-slate-300 mx-0.5" />}
                         <button
                             onClick={() => setStep(s.key)}
-                            className={`flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-medium transition-colors ${
+                            className={`flex items-center gap-1.5 px-3.5 py-1.5 rounded-xl text-xs font-semibold transition-all duration-200 ${
                                 isActive
-                                    ? 'bg-blue-500 text-white'
+                                    ? 'bg-blue-600 text-white shadow-xs shadow-blue-500/20'
                                     : isDone
-                                        ? 'bg-blue-50 text-blue-600'
-                                        : 'bg-gray-100 text-gray-400'
+                                        ? 'bg-blue-50 text-blue-600 hover:bg-blue-100/70 border border-blue-100'
+                                        : 'bg-slate-100 text-slate-400 hover:bg-slate-200/70 hover:text-slate-600'
                             }`}
                         >
-                            <Icon size={13} />
+                            <Icon size={14} />
                             {s.label}
                         </button>
                     </React.Fragment>
@@ -314,11 +314,11 @@ function CreateSessionForm({ onCreate }: { onCreate: (s: ReplaySession) => void 
         const selectedOpt = allModelOptions.find(o => o.id === selectedModelId);
 
         return (
-            <div className="space-y-3">
-                <p className="text-xs text-gray-500">选择用于生成交易信号的模型。不选则使用系统默认模型。</p>
+            <div className="space-y-3.5">
+                <p className="text-xs text-slate-500 font-medium">选择用于生成交易信号的模型。不选则使用系统默认模型。</p>
 
                 {modelsLoading ? (
-                    <div className="flex items-center gap-2 py-4 text-gray-400">
+                    <div className="flex items-center gap-2 py-4 text-slate-400">
                         <Loader2 size={16} className="animate-spin" />
                         <span className="text-xs">加载模型列表…</span>
                     </div>
@@ -327,7 +327,7 @@ function CreateSessionForm({ onCreate }: { onCreate: (s: ReplaySession) => void 
                         <select
                             value={selectedModelId ?? ''}
                             onChange={e => setSelectedModelId(e.target.value || null)}
-                            className="w-full px-3 py-2.5 rounded-lg border border-gray-200 text-sm focus:outline-none focus:ring-2 focus:ring-blue-200 bg-white"
+                            className="w-full px-3.5 py-2.5 rounded-xl border border-slate-200 text-sm focus:outline-none focus:ring-2 focus:ring-blue-100 focus:border-blue-500 bg-white transition-all shadow-2xs font-medium text-slate-800"
                         >
                             <option value="">— 使用默认模型 —</option>
                             {/* Group: user models */}
@@ -357,13 +357,13 @@ function CreateSessionForm({ onCreate }: { onCreate: (s: ReplaySession) => void 
 
                         {/* Selected model detail card */}
                         {selectedOpt && (
-                            <div className="px-3 py-2.5 rounded-lg border border-blue-100 bg-blue-50/50 space-y-1">
+                            <div className="px-3.5 py-3 rounded-xl border border-blue-100 bg-blue-50/50 space-y-1.5">
                                 <div className="flex items-center gap-2">
-                                    <span className="text-sm font-medium text-gray-800">{selectedOpt.label}</span>
+                                    <span className="text-sm font-semibold text-slate-800">{selectedOpt.label}</span>
                                     {selectedOpt.isDefault && (
-                                        <span className="px-1.5 py-0.5 rounded bg-green-50 text-green-600 text-[10px] font-medium">默认</span>
+                                        <span className="px-2 py-0.5 rounded-lg bg-emerald-50 text-emerald-600 text-[10px] font-bold border border-emerald-200">默认</span>
                                     )}
-                                    <span className="text-[10px] text-gray-400">{selectedOpt.sublabel}</span>
+                                    <span className="text-xs text-slate-400">{selectedOpt.sublabel}</span>
                                 </div>
                                 {selectedOpt.metrics && (
                                     <ModelMetricsBadge metrics={selectedOpt.metrics} label="测试集" />
@@ -372,7 +372,7 @@ function CreateSessionForm({ onCreate }: { onCreate: (s: ReplaySession) => void 
                         )}
 
                         {allModelOptions.length === 0 && (
-                            <p className="text-xs text-gray-400 py-2">暂无可用模型，将使用系统默认模型。</p>
+                            <p className="text-xs text-slate-400 py-2">暂无可用模型，将使用系统默认模型。</p>
                         )}
                     </>
                 )}
@@ -392,22 +392,22 @@ function CreateSessionForm({ onCreate }: { onCreate: (s: ReplaySession) => void 
             d === 'beginner' ? '入门' : d === 'intermediate' ? '进阶' : '高级';
 
         return (
-            <div className="space-y-3">
-                <p className="text-xs text-gray-500">选择策略模板，自动填充调仓参数和止损规则。不选则使用默认参数。</p>
+            <div className="space-y-3.5">
+                <p className="text-xs text-slate-500 font-medium">选择策略模板，自动填充调仓参数和止损规则。不选则使用默认参数。</p>
 
                 {templatesLoading ? (
-                    <div className="flex items-center gap-2 py-4 text-gray-400">
+                    <div className="flex items-center gap-2 py-4 text-slate-400">
                         <Loader2 size={16} className="animate-spin" />
                         <span className="text-xs">加载策略模板…</span>
                     </div>
                 ) : templates.length === 0 ? (
-                    <p className="text-xs text-gray-400 py-2">暂无策略模板，将使用默认参数。</p>
+                    <p className="text-xs text-slate-400 py-2">暂无策略模板，将使用默认参数。</p>
                 ) : (
                     <>
                         <select
                             value={selectedTemplateId ?? ''}
                             onChange={e => setSelectedTemplateId(e.target.value || null)}
-                            className="w-full px-3 py-2.5 rounded-lg border border-gray-200 text-sm focus:outline-none focus:ring-2 focus:ring-blue-200 bg-white"
+                            className="w-full px-3.5 py-2.5 rounded-xl border border-slate-200 text-sm focus:outline-none focus:ring-2 focus:ring-blue-100 focus:border-blue-500 bg-white transition-all shadow-2xs font-medium text-slate-800"
                         >
                             <option value="">— 使用默认参数 —</option>
                             {categories.map(cat => (
@@ -423,21 +423,21 @@ function CreateSessionForm({ onCreate }: { onCreate: (s: ReplaySession) => void 
 
                         {/* Selected template detail card */}
                         {selectedTemplate && (
-                            <div className="px-3 py-2.5 rounded-lg border border-blue-100 bg-blue-50/50 space-y-1.5">
+                            <div className="px-3.5 py-3 rounded-xl border border-blue-100 bg-blue-50/50 space-y-2">
                                 <div className="flex items-center gap-2">
-                                    <span className="text-sm font-medium text-gray-800">{selectedTemplate.name}</span>
-                                    <span className="px-1.5 py-0.5 rounded bg-gray-100 text-gray-500 text-[10px]">{selectedTemplate.category}</span>
-                                    <span className={`px-1.5 py-0.5 rounded text-[10px] font-medium ${
-                                        selectedTemplate.difficulty === 'beginner' ? 'bg-green-50 text-green-600' :
-                                        selectedTemplate.difficulty === 'intermediate' ? 'bg-amber-50 text-amber-600' :
-                                        'bg-red-50 text-red-600'
+                                    <span className="text-sm font-semibold text-slate-800">{selectedTemplate.name}</span>
+                                    <span className="px-2 py-0.5 rounded-lg bg-slate-100 text-slate-600 text-[10px] font-medium border border-slate-200">{selectedTemplate.category}</span>
+                                    <span className={`px-2 py-0.5 rounded-lg text-[10px] font-bold border ${
+                                        selectedTemplate.difficulty === 'beginner' ? 'bg-emerald-50 text-emerald-600 border-emerald-200' :
+                                        selectedTemplate.difficulty === 'intermediate' ? 'bg-amber-50 text-amber-600 border-amber-200' :
+                                        'bg-red-50 text-red-600 border-red-200'
                                     }`}>
                                         {difficultyLabel(selectedTemplate.difficulty)}
                                     </span>
                                 </div>
-                                <p className="text-[10px] text-gray-500 leading-relaxed">{selectedTemplate.description}</p>
+                                <p className="text-xs text-slate-500 leading-relaxed">{selectedTemplate.description}</p>
                                 {/* Key replay params preview */}
-                                <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-[10px] text-gray-600">
+                                <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-slate-600">
                                     {selectedTemplate.replay_params.topk != null && <span>TopK={String(selectedTemplate.replay_params.topk)}</span>}
                                     {selectedTemplate.replay_params.weight_mode != null && <span>权重={String(selectedTemplate.replay_params.weight_mode)}</span>}
                                     {selectedTemplate.replay_params.max_position_pct != null && <span>最大持仓={String(selectedTemplate.replay_params.max_position_pct)}</span>}
@@ -457,42 +457,42 @@ function CreateSessionForm({ onCreate }: { onCreate: (s: ReplaySession) => void 
         return (
             <div className="space-y-4">
                 {/* Date range + cash */}
-                <div className="grid grid-cols-3 gap-3">
+                <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
                     <div>
-                        <label className="block text-xs text-gray-500 mb-1">起始日</label>
+                        <label className="block text-xs font-semibold text-slate-600 mb-1.5">起始日</label>
                         <input
                             type="date"
                             value={startDate}
                             onChange={e => setStartDate(e.target.value)}
-                            className="w-full px-3 py-2 rounded-lg border border-gray-200 text-sm focus:outline-none focus:ring-2 focus:ring-blue-200"
+                            className="w-full px-3.5 py-2.5 rounded-xl border border-slate-200 text-sm focus:outline-none focus:ring-2 focus:ring-blue-100 focus:border-blue-500 bg-white transition-all shadow-2xs font-medium text-slate-800"
                         />
                     </div>
                     <div>
-                        <label className="block text-xs text-gray-500 mb-1">结束日</label>
+                        <label className="block text-xs font-semibold text-slate-600 mb-1.5">结束日</label>
                         <input
                             type="date"
                             value={endDate}
                             onChange={e => setEndDate(e.target.value)}
-                            className="w-full px-3 py-2 rounded-lg border border-gray-200 text-sm focus:outline-none focus:ring-2 focus:ring-blue-200"
+                            className="w-full px-3.5 py-2.5 rounded-xl border border-slate-200 text-sm focus:outline-none focus:ring-2 focus:ring-blue-100 focus:border-blue-500 bg-white transition-all shadow-2xs font-medium text-slate-800"
                         />
                     </div>
                     <div>
-                        <label className="block text-xs text-gray-500 mb-1">初始资金</label>
+                        <label className="block text-xs font-semibold text-slate-600 mb-1.5">初始资金</label>
                         <input
                             type="number"
                             value={initialCash}
                             onChange={e => setInitialCash(e.target.value)}
-                            className="w-full px-3 py-2 rounded-lg border border-gray-200 text-sm focus:outline-none focus:ring-2 focus:ring-blue-200"
+                            className="w-full px-3.5 py-2.5 rounded-xl border border-slate-200 text-sm focus:outline-none focus:ring-2 focus:ring-blue-100 focus:border-blue-500 bg-white transition-all shadow-2xs font-medium text-slate-800"
                         />
                     </div>
                 </div>
 
                 {/* Stop loss */}
                 <div>
-                    <label className="block text-xs text-gray-500 mb-1">
+                    <label className="block text-xs font-semibold text-slate-600 mb-1.5">
                         止损比例 (%)
                         {selectedTemplate?.replay_params.stop_loss_pct != null && (
-                            <span className="ml-1 text-gray-400">
+                            <span className="ml-1.5 font-normal text-slate-400">
                                 （模板默认 {(Number(selectedTemplate.replay_params.stop_loss_pct) * 100).toFixed(1)}%）
                             </span>
                         )}
@@ -507,14 +507,14 @@ function CreateSessionForm({ onCreate }: { onCreate: (s: ReplaySession) => void 
                         min={0}
                         max={100}
                         step={0.5}
-                        className="w-full px-3 py-2 rounded-lg border border-gray-200 text-sm focus:outline-none focus:ring-2 focus:ring-blue-200"
+                        className="w-full px-3.5 py-2.5 rounded-xl border border-slate-200 text-sm focus:outline-none focus:ring-2 focus:ring-blue-100 focus:border-blue-500 bg-white transition-all shadow-2xs font-medium text-slate-800"
                     />
                 </div>
 
                 {/* Template params overrides */}
                 {templateParams.length > 0 && (
-                    <div className="space-y-2">
-                        <h5 className="text-[10px] font-semibold text-gray-400 uppercase tracking-wider">策略参数</h5>
+                    <div className="space-y-2.5 pt-1">
+                        <h5 className="text-[11px] font-bold text-slate-400 uppercase tracking-wider">策略参数</h5>
                         {templateParams.map(p => (
                             <TemplateParamInput
                                 key={p.name}
@@ -537,35 +537,35 @@ function CreateSessionForm({ onCreate }: { onCreate: (s: ReplaySession) => void 
         const finalParams = buildStrategyParams();
         const finalStopLoss = buildStopLossPct();
         return (
-            <div className="space-y-3">
+            <div className="space-y-3.5">
                 {/* Summary */}
-                <div className="rounded-lg bg-gray-50 border border-gray-100 p-3 space-y-2">
-                    <div className="grid grid-cols-2 gap-x-4 gap-y-1.5 text-xs">
-                        <div className="text-gray-400">模型</div>
-                        <div className="text-gray-800 font-medium">
+                <div className="rounded-xl bg-slate-50/80 border border-slate-200/80 p-4 space-y-2.5">
+                    <div className="grid grid-cols-2 gap-x-4 gap-y-2 text-xs">
+                        <div className="text-slate-500 font-medium">模型</div>
+                        <div className="text-slate-800 font-semibold">
                             {selectedSystemModel?.display_name ?? (selectedUserModel ? modelDisplayName(selectedUserModel) : null) ?? '系统默认'}
                         </div>
-                        <div className="text-gray-400">策略模板</div>
-                        <div className="text-gray-800 font-medium">{selectedTemplate?.name ?? '默认参数'}</div>
-                        <div className="text-gray-400">日期区间</div>
-                        <div className="text-gray-800 font-medium">{startDate} ~ {endDate}</div>
-                        <div className="text-gray-400">初始资金</div>
-                        <div className="text-gray-800 font-medium">{parseFloat(initialCash).toLocaleString('zh-CN')}</div>
-                        <div className="text-gray-400">止损</div>
-                        <div className="text-gray-800 font-medium">
+                        <div className="text-slate-500 font-medium">策略模板</div>
+                        <div className="text-slate-800 font-semibold">{selectedTemplate?.name ?? '默认参数'}</div>
+                        <div className="text-slate-500 font-medium">日期区间</div>
+                        <div className="text-slate-800 font-semibold font-mono">{startDate} ~ {endDate}</div>
+                        <div className="text-slate-500 font-medium">初始资金</div>
+                        <div className="text-slate-800 font-semibold font-mono">{parseFloat(initialCash).toLocaleString('zh-CN')}</div>
+                        <div className="text-slate-500 font-medium">止损</div>
+                        <div className="text-slate-800 font-semibold">
                             {finalStopLoss != null ? `${(finalStopLoss * 100).toFixed(1)}%` : '无'}
                         </div>
-                        <div className="text-gray-400">模式</div>
-                        <div className="text-gray-800 font-medium">{autoTrade ? '自动执行' : '手动确认'}</div>
+                        <div className="text-slate-500 font-medium">模式</div>
+                        <div className="text-slate-800 font-semibold">{autoTrade ? '自动执行' : '手动确认'}</div>
                     </div>
 
                     {/* Strategy params summary */}
                     {Object.keys(finalParams).length > 0 && (
-                        <div className="pt-1.5 border-t border-gray-200">
-                            <div className="text-[10px] text-gray-400 mb-1">策略参数</div>
+                        <div className="pt-2 border-t border-slate-200">
+                            <div className="text-[11px] font-semibold text-slate-400 mb-1.5">策略参数</div>
                             <div className="flex flex-wrap gap-1.5">
                                 {Object.entries(finalParams).map(([k, v]) => (
-                                    <span key={k} className="px-1.5 py-0.5 rounded bg-white border border-gray-100 text-[10px] text-gray-600">
+                                    <span key={k} className="px-2 py-0.5 rounded-lg bg-white border border-slate-200 text-xs font-mono text-slate-700">
                                         {k}={String(v)}
                                     </span>
                                 ))}
@@ -578,31 +578,31 @@ function CreateSessionForm({ onCreate }: { onCreate: (s: ReplaySession) => void 
                 <div className="grid grid-cols-2 gap-3">
                     <button
                         onClick={() => setAutoTrade(true)}
-                        className={`px-4 py-3 rounded-lg border text-left transition-colors ${
+                        className={`px-4 py-3.5 rounded-xl border text-left transition-all ${
                             autoTrade
-                                ? 'border-blue-300 bg-blue-50'
-                                : 'border-gray-100 hover:border-gray-200'
+                                ? 'border-blue-400 bg-blue-50/70 shadow-2xs'
+                                : 'border-slate-200 bg-white hover:border-slate-300'
                         }`}
                     >
                         <div className="flex items-center gap-2 mb-1">
-                            <Zap size={14} className={autoTrade ? 'text-blue-500' : 'text-gray-400'} />
-                            <span className="text-sm font-medium">自动执行</span>
+                            <Zap size={15} className={autoTrade ? 'text-blue-600' : 'text-slate-400'} />
+                            <span className="text-sm font-bold text-slate-800">自动执行</span>
                         </div>
-                        <p className="text-[10px] text-gray-400">按策略信号自动买卖，支持自动推进</p>
+                        <p className="text-xs text-slate-500">按策略信号自动买卖，支持自动推进</p>
                     </button>
                     <button
                         onClick={() => setAutoTrade(false)}
-                        className={`px-4 py-3 rounded-lg border text-left transition-colors ${
+                        className={`px-4 py-3.5 rounded-xl border text-left transition-all ${
                             !autoTrade
-                                ? 'border-purple-300 bg-purple-50'
-                                : 'border-gray-100 hover:border-gray-200'
+                                ? 'border-purple-400 bg-purple-50/70 shadow-2xs'
+                                : 'border-slate-200 bg-white hover:border-slate-300'
                         }`}
                     >
                         <div className="flex items-center gap-2 mb-1">
-                            <ShieldCheck size={14} className={!autoTrade ? 'text-purple-500' : 'text-gray-400'} />
-                            <span className="text-sm font-medium">手动确认</span>
+                            <ShieldCheck size={15} className={!autoTrade ? 'text-purple-600' : 'text-slate-400'} />
+                            <span className="text-sm font-bold text-slate-800">手动确认</span>
                         </div>
-                        <p className="text-[10px] text-gray-400">逐日生成提案，勾选/改量后确认执行</p>
+                        <p className="text-xs text-slate-500">逐日生成提案，勾选/改量后确认执行</p>
                     </button>
                 </div>
             </div>
@@ -610,7 +610,7 @@ function CreateSessionForm({ onCreate }: { onCreate: (s: ReplaySession) => void 
     };
 
     return (
-        <div className="space-y-3">
+        <div className="space-y-4">
             {renderStepIndicator()}
 
             {/* Step content */}
@@ -624,11 +624,11 @@ function CreateSessionForm({ onCreate }: { onCreate: (s: ReplaySession) => void 
             {error && <p className="text-xs text-red-500">{error}</p>}
 
             {/* Navigation */}
-            <div className="flex items-center justify-between pt-2 border-t border-gray-100">
+            <div className="flex items-center justify-between pt-3 border-t border-slate-100">
                 <button
                     onClick={goPrev}
                     disabled={stepIndex === 0}
-                    className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-gray-200 text-gray-600 text-xs font-medium hover:bg-gray-50 disabled:opacity-30 disabled:cursor-not-allowed transition-colors"
+                    className="inline-flex items-center gap-1.5 px-4 py-2 rounded-xl border border-slate-200 text-slate-600 text-xs font-semibold hover:bg-slate-50 disabled:opacity-30 disabled:cursor-not-allowed transition-all"
                 >
                     <ChevronLeft size={14} />
                     上一步
@@ -638,7 +638,7 @@ function CreateSessionForm({ onCreate }: { onCreate: (s: ReplaySession) => void 
                         <button
                             onClick={goNext}
                             disabled={!canGoNext()}
-                            className="inline-flex items-center gap-1.5 px-4 py-1.5 rounded-lg bg-blue-500 text-white text-xs font-medium hover:bg-blue-600 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
+                            className="inline-flex items-center gap-1.5 px-5 py-2 rounded-xl bg-gradient-to-r from-blue-600 to-indigo-600 hover:from-blue-700 hover:to-indigo-700 text-white text-xs font-semibold shadow-xs disabled:opacity-40 disabled:cursor-not-allowed transition-all"
                         >
                             下一步
                             <ChevronRight size={14} />
@@ -647,7 +647,7 @@ function CreateSessionForm({ onCreate }: { onCreate: (s: ReplaySession) => void 
                         <button
                             onClick={handleSubmit}
                             disabled={loading}
-                            className="inline-flex items-center gap-2 px-4 py-1.5 rounded-lg bg-green-500 text-white text-xs font-medium hover:bg-green-600 disabled:opacity-50 transition-colors"
+                            className="inline-flex items-center gap-2 px-5 py-2 rounded-xl bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-700 hover:to-teal-700 text-white text-xs font-semibold shadow-xs disabled:opacity-50 transition-all"
                         >
                             {loading ? <Loader2 size={14} className="animate-spin" /> : <Play size={14} />}
                             创建回放
@@ -676,9 +676,9 @@ function TemplateParamInput({
         <div className="flex items-center gap-3">
             <div className="flex-1">
                 <div className="flex items-center gap-1.5">
-                    <label className="text-xs text-gray-600 font-medium">{param.name}</label>
+                    <label className="text-xs text-slate-600 font-medium">{param.name}</label>
                     {param.description && (
-                        <span className="text-[10px] text-gray-400" title={param.description}>
+                        <span className="text-[10px] text-slate-400" title={param.description}>
                             <Info size={11} className="inline" />
                         </span>
                     )}
@@ -694,19 +694,19 @@ function TemplateParamInput({
                         min={param.min ?? undefined}
                         max={param.max ?? undefined}
                         step="any"
-                        className="w-full mt-0.5 px-2.5 py-1.5 rounded-lg border border-gray-200 text-sm focus:outline-none focus:ring-2 focus:ring-blue-200"
+                        className="w-full mt-1 px-3.5 py-2 rounded-xl border border-slate-200 text-sm focus:outline-none focus:ring-2 focus:ring-blue-100 focus:border-blue-500 bg-white transition-all shadow-2xs font-medium text-slate-800"
                     />
                 ) : (
                     <input
                         type="text"
                         value={strVal}
                         onChange={e => onChange(e.target.value)}
-                        className="w-full mt-0.5 px-2.5 py-1.5 rounded-lg border border-gray-200 text-sm focus:outline-none focus:ring-2 focus:ring-blue-200"
+                        className="w-full mt-1 px-3.5 py-2 rounded-xl border border-slate-200 text-sm focus:outline-none focus:ring-2 focus:ring-blue-100 focus:border-blue-500 bg-white transition-all shadow-2xs font-medium text-slate-800"
                     />
                 )}
             </div>
             {(param.min !== null || param.max !== null) && (
-                <span className="text-[10px] text-gray-400 mt-3">
+                <span className="text-xs text-slate-400 font-mono mt-4">
                     {param.min != null && param.max != null
                         ? `[${param.min}, ${param.max}]`
                         : param.min != null
@@ -748,35 +748,36 @@ function rowReducer(state: ProposalRowState[], action: RowAction): ProposalRowSt
         case 'RESET':
             return initRows(action.proposals);
         case 'TOGGLE': {
-            if (!action.cancellable) return state;
             const next = [...state];
+            if (!action.cancellable) return next;
             next[action.idx] = { ...next[action.idx], checked: !next[action.idx].checked };
             return next;
         }
         case 'SET_QTY': {
-            const val = parseInt(action.raw, 10);
-            if (isNaN(val) || val < 0) return state;
-            const p = action.proposal;
-            const capped = Math.min(val, p.quantity);
-            const finalQty = p.side === 'BUY' && action.lotSize > 0
-                ? Math.floor(capped / action.lotSize) * action.lotSize
-                : capped;
             const next = [...state];
-            next[action.idx] = { ...next[action.idx], quantity: finalQty, rejectReason: null };
+            const val = parseInt(action.raw, 10);
+            if (isNaN(val) || val < 0) {
+                next[action.idx] = { ...next[action.idx], quantity: 0, rejectReason: '数量无效' };
+            } else if (val > action.proposal.quantity) {
+                next[action.idx] = { ...next[action.idx], quantity: action.proposal.quantity, rejectReason: `不能超过建议数量 ${action.proposal.quantity}` };
+            } else if (action.proposal.side === 'BUY' && val % action.lotSize !== 0) {
+                next[action.idx] = { ...next[action.idx], quantity: val, rejectReason: `买入须为整手（${action.lotSize} 的倍数）` };
+            } else {
+                next[action.idx] = { ...next[action.idx], quantity: val, rejectReason: null };
+            }
             return next;
         }
         case 'TOGGLE_ALL': {
-            const allChecked = state.every((r, i) => r.checked || !action.proposals[i].cancellable);
-            return state.map((r, i) => ({
-                ...r,
-                checked: action.proposals[i].cancellable ? !allChecked : true,
-            }));
+            const allChecked = state.every(r => r.checked);
+            return state.map(r => ({ ...r, checked: !allChecked }));
         }
         case 'SET_REJECT': {
             const next = [...state];
             next[action.idx] = { ...next[action.idx], rejectReason: action.reason };
             return next;
         }
+        default:
+            return state;
     }
 }
 
@@ -789,156 +790,130 @@ function ProposalTable({
 }: {
     proposals: ProposalItem[];
     lotSize: number;
-    onConfirm: (confirmed: ConfirmedOrder[]) => void;
+    onConfirm: (orders: ConfirmedOrder[]) => void;
     onSkip: () => void;
     loading: boolean;
 }) {
     const [rows, dispatch] = useReducer(rowReducer, proposals, initRows);
 
-    // Sync when proposals change
     useEffect(() => {
         dispatch({ type: 'RESET', proposals });
     }, [proposals]);
 
-    const toggleRow = (idx: number) => {
-        dispatch({ type: 'TOGGLE', idx, cancellable: proposals[idx].cancellable });
-    };
-
-    const updateQuantity = (idx: number, raw: string) => {
-        dispatch({ type: 'SET_QTY', idx, raw, proposal: proposals[idx], lotSize });
-    };
-
-    const toggleAll = () => {
-        dispatch({ type: 'TOGGLE_ALL', proposals });
-    };
-
     const handleConfirm = () => {
         const confirmed: ConfirmedOrder[] = [];
-
-        rows.forEach((r, i) => {
+        for (let i = 0; i < proposals.length; i++) {
             const p = proposals[i];
-            if (!r.checked && p.cancellable) return; // unchecked non-stop-loss → skip
-            if (r.quantity <= 0) {
-                dispatch({ type: 'SET_REJECT', idx: i, reason: 'INVALID_QUANTITY' });
-                return;
+            const r = rows[i];
+            const isStopLoss = p.origin === 'stop_loss';
+            if ((r.checked || isStopLoss) && r.quantity > 0) {
+                confirmed.push({
+                    symbol: p.symbol,
+                    side: p.side,
+                    quantity: r.quantity,
+                    price: p.est_price,
+                    order_type: p.order_type || 'LIMIT',
+                });
             }
-            if (r.quantity > p.quantity) {
-                dispatch({ type: 'SET_REJECT', idx: i, reason: `EXCEED_PROPOSED_QTY:${p.quantity}` });
-                return;
-            }
-            confirmed.push({ symbol: p.symbol, side: p.side, quantity: r.quantity });
-        });
-
-        // Only send if there are valid items (stop-loss forced by server anyway)
-        if (confirmed.length > 0) {
-            onConfirm(confirmed);
         }
+        onConfirm(confirmed);
     };
 
-    const allChecked = rows.every((r, i) => r.checked || !proposals[i].cancellable);
-    const checkedCount = rows.filter((r, i) => r.checked || !proposals[i].cancellable).length;
-    const totalEstAmount = rows.reduce((sum, r, i) => {
-        if (!r.checked && proposals[i].cancellable) return sum;
-        return sum + r.quantity * proposals[i].est_price;
+    const checkedCount = rows.filter((r, i) => r.checked || proposals[i].origin === 'stop_loss').length;
+    const totalEstAmount = proposals.reduce((acc, p, i) => {
+        const r = rows[i];
+        if (r.checked || p.origin === 'stop_loss') {
+            return acc + r.quantity * p.est_price;
+        }
+        return acc;
     }, 0);
 
     return (
         <div className="space-y-3">
-            <div className="flex items-center justify-between">
-                <h4 className="text-xs font-semibold text-gray-500 uppercase tracking-wider">
-                    调仓提案
-                </h4>
-                <button
-                    onClick={toggleAll}
-                    className="inline-flex items-center gap-1 text-xs text-blue-500 hover:text-blue-600"
-                >
-                    {allChecked ? <CheckSquare size={14} /> : <Square size={14} />}
-                    {allChecked ? '全不选' : '全选'}
-                </button>
-            </div>
-
             {/* Table */}
-            <div className="overflow-x-auto">
+            <div className="overflow-x-auto rounded-xl border border-slate-200">
                 <table className="w-full text-xs">
                     <thead>
-                        <tr className="border-b border-gray-100 text-gray-400">
-                            <th className="py-1.5 px-2 text-left w-8"></th>
-                            <th className="py-1.5 px-2 text-left">标的</th>
-                            <th className="py-1.5 px-2 text-left">方向</th>
-                            <th className="py-1.5 px-2 text-right">数量</th>
-                            <th className="py-1.5 px-2 text-right">预估价</th>
-                            <th className="py-1.5 px-2 text-right">预估金额</th>
-                            <th className="py-1.5 px-2 text-right">成本/盈亏</th>
-                            <th className="py-1.5 px-2 text-left">来源</th>
+                        <tr className="bg-slate-50 border-b border-slate-200 text-slate-500 font-semibold">
+                            <th className="py-2.5 px-3 text-left w-8">
+                                <button
+                                    onClick={() => dispatch({ type: 'TOGGLE_ALL', proposals })}
+                                    className="text-slate-400 hover:text-slate-600"
+                                >
+                                    {rows.every(r => r.checked) ? <CheckSquare size={14} className="text-blue-600" /> : <Square size={14} />}
+                                </button>
+                            </th>
+                            <th className="py-2.5 px-2 text-left">标的</th>
+                            <th className="py-2.5 px-2 text-center">方向</th>
+                            <th className="py-2.5 px-2 text-right">建议股数</th>
+                            <th className="py-2.5 px-2 text-right">预估价</th>
+                            <th className="py-2.5 px-2 text-right">预计金额</th>
+                            <th className="py-2.5 px-2 text-right">预估盈亏</th>
+                            <th className="py-2.5 px-2 text-left">来源</th>
                         </tr>
                     </thead>
-                    <tbody>
+                    <tbody className="divide-y divide-slate-100 bg-white">
                         {proposals.map((p, i) => {
                             const r = rows[i];
-                            const isStopLoss = !p.cancellable;
+                            const isStopLoss = p.origin === 'stop_loss';
                             const isBuy = p.side === 'BUY';
                             return (
-                                <tr
-                                    key={`${p.symbol}-${p.side}`}
-                                    className={`border-b border-gray-50 ${isStopLoss ? 'bg-amber-50/50' : ''}`}
-                                >
-                                    <td className="py-1.5 px-2">
-                                        {isStopLoss ? (
-                                            <span className="inline-flex items-center gap-1 text-amber-600" title="风控·不可取消">
-                                                <Shield size={12} />
-                                            </span>
-                                        ) : (
-                                            <button onClick={() => toggleRow(i)} className="text-gray-400 hover:text-blue-500">
-                                                {r.checked ? <CheckSquare size={14} className="text-blue-500" /> : <Square size={14} />}
-                                            </button>
-                                        )}
+                                <tr key={p.symbol} className={r.checked || isStopLoss ? 'bg-white' : 'bg-slate-50/50 opacity-60'}>
+                                    <td className="py-2 px-3">
+                                        <button
+                                            onClick={() => dispatch({ type: 'TOGGLE', idx: i, cancellable: p.cancellable !== false })}
+                                            disabled={!p.cancellable}
+                                            className="text-slate-400 hover:text-slate-600 disabled:opacity-40 disabled:cursor-not-allowed"
+                                        >
+                                            {r.checked || isStopLoss ? <CheckSquare size={14} className="text-blue-600" /> : <Square size={14} />}
+                                        </button>
                                     </td>
-                                    <td className="py-1.5 px-2 font-mono font-medium">{p.symbol}</td>
-                                    <td className="py-1.5 px-2">
-                                        <span className={isBuy ? 'text-red-600' : 'text-green-600'}>
+                                    <td className="py-2 px-2 font-mono font-medium text-slate-800">{p.symbol}</td>
+                                    <td className="py-2 px-2 text-center">
+                                        <span className={`inline-flex items-center px-1.5 py-0.5 rounded-md text-[10px] font-bold border ${isBuy ? 'bg-red-50 text-red-600 border-red-200' : 'bg-emerald-50 text-emerald-600 border-emerald-200'}`}>
                                             {isBuy ? '买入' : '卖出'}
                                         </span>
                                     </td>
-                                    <td className="py-1.5 px-2 text-right">
+                                    <td className="py-2 px-2 text-right">
                                         {isStopLoss ? (
-                                            <span className="font-mono">{p.quantity}</span>
+                                            <span className="font-mono font-semibold">{p.quantity}</span>
                                         ) : (
                                             <input
                                                 type="number"
                                                 value={r.quantity}
-                                                onChange={e => updateQuantity(i, e.target.value)}
+                                                onChange={e => dispatch({ type: 'SET_QTY', idx: i, raw: e.target.value, proposal: p, lotSize })}
                                                 step={isBuy ? lotSize : 1}
                                                 min={0}
                                                 max={p.quantity}
-                                                className="w-20 px-1.5 py-0.5 text-right font-mono rounded border border-gray-200 focus:outline-none focus:ring-1 focus:ring-blue-200"
+                                                className="w-20 px-2 py-1 text-right font-mono rounded-lg border border-slate-200 focus:outline-none focus:ring-2 focus:ring-blue-100 focus:border-blue-500 font-semibold"
                                             />
                                         )}
                                     </td>
-                                    <td className="py-1.5 px-2 text-right font-mono">{p.est_price.toFixed(2)}</td>
-                                    <td className="py-1.5 px-2 text-right font-mono">
+                                    <td className="py-2 px-2 text-right font-mono text-slate-700">{p.est_price.toFixed(2)}</td>
+                                    <td className="py-2 px-2 text-right font-mono font-semibold text-slate-900">
                                         {((r.checked || isStopLoss) ? r.quantity * p.est_price : 0).toLocaleString('zh-CN', { maximumFractionDigits: 0 })}
                                     </td>
-                                    <td className="py-1.5 px-2 text-right">
+                                    <td className="py-2 px-2 text-right">
                                         {isBuy ? (
-                                            <span className="text-gray-400">—</span>
+                                            <span className="text-slate-400">—</span>
                                         ) : p.avg_cost != null && p.est_pnl != null ? (
-                                            <span className={p.est_pnl >= 0 ? 'text-green-600' : 'text-red-600'}>
+                                            <span className={`font-mono font-semibold ${p.est_pnl >= 0 ? 'text-red-600' : 'text-emerald-600'}`}>
                                                 {p.est_pnl >= 0 ? '+' : ''}{p.est_pnl.toFixed(0)}
                                             </span>
                                         ) : (
-                                            <span className="text-gray-400">—</span>
+                                            <span className="text-slate-400">—</span>
                                         )}
                                     </td>
-                                    <td className="py-1.5 px-2">
+                                    <td className="py-2 px-2">
                                         {isStopLoss ? (
-                                            <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded bg-amber-100 text-amber-700 text-[10px] font-medium">
+                                            <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-lg bg-amber-50 text-amber-700 text-[10px] font-bold border border-amber-200">
                                                 <Shield size={10} />
                                                 风控·强制
                                             </span>
                                         ) : p.origin === 'signal' ? (
-                                            <span className="text-gray-400">信号</span>
+                                            <span className="text-slate-400">信号</span>
                                         ) : (
-                                            <span className="text-gray-400">{p.origin}</span>
+                                            <span className="text-slate-400">{p.origin}</span>
                                         )}
                                     </td>
                                 </tr>
@@ -952,9 +927,9 @@ function ProposalTable({
             {rows.some(r => r.rejectReason) && (
                 <div className="space-y-1">
                     {rows.map((r, i) => r.rejectReason && (
-                        <div key={i} className="flex items-center gap-2 px-3 py-1.5 rounded-lg bg-red-50 border border-red-100 text-xs text-red-700">
-                            <AlertTriangle size={12} />
-                            <span className="font-mono">{proposals[i].symbol}</span>
+                        <div key={i} className="flex items-center gap-2 px-3.5 py-2 rounded-xl bg-red-50 border border-red-100 text-xs text-red-700">
+                            <AlertTriangle size={13} />
+                            <span className="font-mono font-semibold">{proposals[i].symbol}</span>
                             <span>{r.rejectReason}</span>
                         </div>
                     ))}
@@ -962,15 +937,15 @@ function ProposalTable({
             )}
 
             {/* Actions */}
-            <div className="flex items-center justify-between pt-2 border-t border-gray-100">
-                <span className="text-xs text-gray-500">
-                    已选 {checkedCount} / {proposals.length} 笔 · 预计动用 {totalEstAmount.toLocaleString('zh-CN', { maximumFractionDigits: 0 })}
+            <div className="flex items-center justify-between pt-2 border-t border-slate-100">
+                <span className="text-xs text-slate-500 font-medium">
+                    已选 {checkedCount} / {proposals.length} 笔 · 预计动用 <b className="text-slate-800">{totalEstAmount.toLocaleString('zh-CN', { maximumFractionDigits: 0 })}</b>
                 </span>
                 <div className="flex items-center gap-2">
                     <button
                         onClick={onSkip}
                         disabled={loading}
-                        className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-gray-200 text-gray-600 text-xs font-medium hover:bg-gray-50 disabled:opacity-40 transition-colors"
+                        className="inline-flex items-center gap-1.5 px-4 py-2 rounded-xl border border-slate-200 text-slate-600 text-xs font-semibold hover:bg-slate-50 disabled:opacity-40 transition-all"
                     >
                         <SkipForward size={14} />
                         跳过今日
@@ -978,7 +953,7 @@ function ProposalTable({
                     <button
                         onClick={handleConfirm}
                         disabled={loading || checkedCount === 0}
-                        className="inline-flex items-center gap-1.5 px-4 py-1.5 rounded-lg bg-blue-500 text-white text-xs font-medium hover:bg-blue-600 disabled:opacity-40 transition-colors"
+                        className="inline-flex items-center gap-1.5 px-5 py-2 rounded-xl bg-gradient-to-r from-blue-600 to-indigo-600 text-white text-xs font-semibold hover:from-blue-700 hover:to-indigo-700 disabled:opacity-40 shadow-xs transition-all"
                     >
                         {loading ? <Loader2 size={14} className="animate-spin" /> : <Play size={14} />}
                         确认执行 {checkedCount} 笔
@@ -1138,16 +1113,16 @@ function SessionCard({
     const lotSize = Number((session.strategy_params as Record<string, unknown>)?.lot_size) || 100;
 
     return (
-        <div className="border border-gray-200 rounded-xl overflow-hidden">
+        <div className="border border-slate-200/80 bg-white/95 rounded-2xl shadow-xs overflow-hidden">
             {/* Header */}
-            <div className="flex items-center justify-between px-4 py-3 bg-gray-50/50 border-b border-gray-100">
-                <div className="flex items-center gap-3">
-                    <Clock size={16} className="text-gray-400" />
-                    <span className="text-sm font-medium text-gray-800">{session.name || '回放会话'}</span>
+            <div className="flex items-center justify-between px-4 py-3 bg-slate-50/60 border-b border-slate-100">
+                <div className="flex items-center gap-2.5">
+                    <Clock size={16} className="text-slate-400" />
+                    <span className="text-sm font-bold text-slate-800">{session.name || '回放会话'}</span>
                     <StatusBadge status={session.status} />
                     {isManual && (
-                        <span className="inline-flex items-center px-1.5 py-0.5 rounded bg-purple-50 text-purple-600 text-[10px] font-medium">
-                            手动
+                        <span className="inline-flex items-center px-2 py-0.5 rounded-lg bg-purple-50 text-purple-700 text-[10px] font-bold border border-purple-200">
+                            手动确认
                         </span>
                     )}
                 </div>
