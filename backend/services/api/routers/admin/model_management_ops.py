@@ -46,18 +46,6 @@ from .model_management_utils import (
 
 router = APIRouter(dependencies=[Depends(require_admin)])  # 路由器级认证兜底
 
-DAILY_SYNC_SHELL_SCRIPT = (
-    Path(os.getcwd()) / "scripts" / "data" / "maintenance" / "run_daily_pg_parquet_and_qlib_sync.sh"
-)
-
-
-class OfficialDataUpdateRequest(BaseModel):
-    api_base_url: str | None = Field(default=None)
-    access_key: str | None = Field(default=None)
-    secret_key: str | None = Field(default=None)
-    version: str | None = Field(default=None)
-    dry_run: bool = Field(default=False)
-
 
 @router.get("/scan", summary="扫描本地模型目录")
 async def scan_model_directories(
@@ -307,86 +295,6 @@ async def sync_stock_daily_latest(
     raise HTTPException(
         status_code=410, detail="该接口已废弃，数据由官方服务器统一推送，无需手动同步"
     )
-
-
-@router.post(
-    "/sync-official-data-update",
-    summary="一键拉取并应用官方数据增量包",
-)
-async def sync_official_data_update(
-    payload: OfficialDataUpdateRequest,
-    current_user: dict = Depends(require_admin),
-):
-    _ = current_user
-
-    # OSS 部署模式：直接在当前容器内执行 Python 同步脚本
-    # 脚本路径在容器内为 /app/scripts/data/maintenance/
-    scripts_dir = Path("/app/scripts/data/maintenance")
-    processing_dir = Path("/app/scripts/data/processing")
-
-    # 按顺序执行同步步骤（完整流程：远程PG → parquet → qlib/stock_daily → 收益计算）
-    steps = [
-        ("Step 0: 从远程PG拉取最新数据", "sync_parquets_from_remote_pg.py"),
-        ("Step 1: 同步 qlib_data", "sync_qlib_from_fundamental_parquet.py"),
-        ("Step 2: 同步 stock_daily_latest", "sync_stock_daily_latest_from_parquet.py"),
-        ("Step 3: 滚动计算一日/三日收益", "../processing/backfill_return_fields.py"),
-    ]
-
-    results = []
-    for step_name, script_name in steps:
-        # 处理相对路径
-        if script_name.startswith("../"):
-            script_path = processing_dir / script_name[3:]
-        else:
-            script_path = scripts_dir / script_name
-
-        if not script_path.exists():
-            results.append({
-                "step": step_name,
-                "success": False,
-                "error": f"脚本不存在: {script_path}",
-            })
-            continue
-
-        # 收益计算脚本需要 --recent-days 参数
-        cmd = ["python", str(script_path)]
-        if "backfill_return" in script_name:
-            cmd.extend(["--recent-days", "5"])
-
-        try:
-            proc = subprocess.run(
-                cmd,
-                cwd="/app",
-                capture_output=True,
-                text=True,
-                timeout=1800,
-                check=False,
-            )
-            results.append({
-                "step": step_name,
-                "success": proc.returncode == 0,
-                "exit_code": proc.returncode,
-                "stdout": proc.stdout[-2000:] if proc.stdout else "",
-                "stderr": proc.stderr[-2000:] if proc.stderr else "",
-            })
-        except subprocess.TimeoutExpired as exc:
-            results.append({
-                "step": step_name,
-                "success": False,
-                "error": f"执行超时: {exc}",
-            })
-        except Exception as exc:
-            results.append({
-                "step": step_name,
-                "success": False,
-                "error": str(exc),
-            })
-
-    all_success = all(r.get("success", False) for r in results)
-    return {
-        "success": all_success,
-        "steps": results,
-    }
 
 
 @router.post(

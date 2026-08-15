@@ -37,7 +37,7 @@ export interface UserModelRecord {
 export interface CreateEnsembleParams {
   source_model_ids: string[];
   display_name?: string;
-  weight_strategy?: 'equal' | 'icir' | 'manual';
+  weight_strategy?: 'equal' | 'icir' | 'manual' | 'recent_ic';
   manual_weights?: Record<string, number>;
   fusion_strategy?: 'linear' | 'majority_vote' | 'periodic_hierarchy' | 'confidence_gate';
   strategy_config?: Record<string, number>;
@@ -614,6 +614,21 @@ class ModelTrainingService {
 
   async archiveUserModel(modelId: string): Promise<UserModelRecord> {
     const resp = await this.client.post<UserModelRecord>(`/models/${modelId}/archive`);
+    return resp.data;
+  }
+
+  async activateUserModel(modelId: string): Promise<UserModelRecord> {
+    const resp = await this.client.post<UserModelRecord>(`/models/${modelId}/activate`);
+    return resp.data;
+  }
+
+  async getModelQuality(modelId: string, window = 60): Promise<any> {
+    const resp = await this.client.get<any>(`/models/${modelId}/quality`, { params: { window } });
+    return resp.data;
+  }
+
+  async compareModels(modelIds: string[]): Promise<any> {
+    const resp = await this.client.post<any>('/models/compare', { model_ids: modelIds });
     return resp.data;
   }
 

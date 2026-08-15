@@ -326,6 +326,20 @@ class RDLoopWrapper:
             if not h5_generated:
                 logger.warning("[%s] H5 generation failed or QuantDB dir missing, falling back to copy", self.market)
                 self._copy_h5_source(source_all, target_all, source_debug, target_debug)
+        elif self.market == "futures":
+            # 期货：从 QuantFutures parquet 生成（无预生成文件，fut_ 前缀 instrument）
+            futures_dir = self._resolve_market_data_dir("/data/quantfutures")
+            h5_generated = False
+            if futures_dir.is_dir():
+                ok_all = self._generate_futures_h5(futures_dir, target_all, debug=False)
+                ok_debug = self._generate_futures_h5(futures_dir, target_debug, debug=True)
+                h5_generated = ok_all and ok_debug
+            if not h5_generated:
+                logger.warning(
+                    "[%s] Futures h5 generation failed or QuantFutures dir missing, falling back to copy",
+                    self.market,
+                )
+                self._copy_h5_source(source_all, target_all, source_debug, target_debug)
         else:
             self._copy_h5_source(source_all, target_all, source_debug, target_debug)
 
@@ -433,6 +447,7 @@ class RDLoopWrapper:
             "/data/quantus": "QM_QUANTUS_DATA_DIR",
             "/data/quantbc": "QM_QUANTBC_DATA_DIR",
             "/data/quantdb": "QM_QUANTDB_DATA_DIR",
+            "/data/quantfutures": "QM_QUANTFUTURES_DATA_DIR",
         }
         env_name = env_map.get(container_path)
         if env_name:
@@ -573,6 +588,121 @@ class RDLoopWrapper:
             code, exchange = s.split(".", 1)
             return f"{exchange.lower()}{code}"
         return s.lower()
+
+    def _generate_futures_h5(
+        self, futures_dir: Path | str, output_path: str, *, debug: bool = False
+    ) -> bool:
+        """从 QuantFutures parquet 生成 RD-Agent 的 daily_pv.h5。
+
+        与 A 股版区别:
+        - instrument 用 fut_ 前缀（对齐 QlibDataBuilder._MARKET_QLIB_PREFIX）
+        - 期货无复权概念，$factor 恒为 1
+        - 行情从 2016 年起量价才完整，起点对齐 Qlib 因子训练窗口
+        """
+        import numpy as np
+
+        if os.path.exists(output_path):
+            try:
+                h5_mtime = os.path.getmtime(output_path)
+                kline_dir = Path(futures_dir) / "1_kline_data" / "daily_forward"
+                if kline_dir.is_dir():
+                    partitions = sorted(d for d in os.listdir(kline_dir) if d.startswith("dt="))
+                    if partitions:
+                        latest_parquet = kline_dir / partitions[-1] / "data.parquet"
+                        if os.path.exists(latest_parquet) and os.path.getmtime(latest_parquet) > h5_mtime:
+                            logger.info("[%s] Parquet newer than h5, regenerating: %s", self.market, output_path)
+                        else:
+                            return True
+                    else:
+                        return True
+                else:
+                    return True
+            except Exception:
+                return True
+
+        try:
+            from backend.services.engine.data_platform.quantfutures_hub import (
+                QuantFuturesDataHub,
+            )
+
+            hub = QuantFuturesDataHub(Path(futures_dir))
+            if not hub.available:
+                logger.error("[%s] QuantFuturesDataHub not available for h5 generation", self.market)
+                return False
+
+            # 期货无 instrument_detail parquet，从 daily_forward 分区推导 symbol 列表
+            symbols: set[str] = set()
+            kline_dir = Path(futures_dir) / "1_kline_data" / "daily_forward"
+            if not kline_dir.is_dir():
+                logger.error("[%s] QuantFutures daily_forward missing", self.market)
+                return False
+            import duckdb
+
+            con = duckdb.connect(config={"memory_limit": "4GB", "threads": "2"})
+            try:
+                df_syms = con.execute(
+                    f"SELECT DISTINCT symbol FROM read_parquet('{kline_dir / 'dt=*' / 'data.parquet'}', hive_partitioning=1)"
+                ).fetchdf()
+            finally:
+                con.close()
+            symbols = {str(s) for s in df_syms["symbol"].dropna().unique()}
+            if not symbols:
+                logger.error("[%s] No futures symbols found in parquet", self.market)
+                return False
+
+            symbol_list = sorted(symbols)
+            if debug:
+                symbol_list = symbol_list[:50]
+
+            # 行情起点对齐 Qlib 因子训练窗口（2016 起量价完整）
+            df = hub.fetch_daily_kline_batch(
+                symbol_list, date(2016, 1, 1), date(2026, 12, 31), adjust="qfq"
+            )
+            if df is None or df.empty:
+                logger.error("[%s] No futures K-line data read", self.market)
+                return False
+
+            # 剔除无效行情行（价格 <= 0 或非有限值会污染因子计算）
+            cols = ["open", "high", "low", "close"]
+            valid = np.isfinite(df[cols].to_numpy(dtype="float64")).all(axis=1) & (
+                df[cols].to_numpy(dtype="float64") > 0
+            ).all(axis=1)
+            dropped = int((~valid).sum())
+            if dropped:
+                logger.warning("[%s] Dropped %d invalid futures rows", self.market, dropped)
+                df = df.loc[valid].reset_index(drop=True)
+            if df.empty:
+                logger.error("[%s] No valid futures K-line rows", self.market)
+                return False
+
+            instruments = [f"fut_{s}" for s in df["symbol"]]
+            combined = pd.DataFrame(
+                {
+                    "$open": df["open"].to_numpy(dtype="float64"),
+                    "$high": df["high"].to_numpy(dtype="float64"),
+                    "$low": df["low"].to_numpy(dtype="float64"),
+                    "$close": df["close"].to_numpy(dtype="float64"),
+                    "$volume": df["volume"].to_numpy(dtype="float64"),
+                    "$factor": np.ones(len(df)),
+                },
+                index=pd.MultiIndex.from_arrays(
+                    [pd.to_datetime(df["trade_date"]), instruments],
+                    names=["datetime", "instrument"],
+                ),
+            )
+            combined = combined.sort_index()
+
+            os.makedirs(os.path.dirname(output_path), exist_ok=True)
+            combined.to_hdf(output_path, key="data", mode="w")
+            logger.info(
+                "[%s] Generated futures h5 from parquet: %s (%d rows, %d symbols)",
+                self.market, output_path, len(combined), len(symbol_list),
+            )
+            return True
+
+        except Exception as exc:
+            logger.error("[%s] Failed to generate futures h5 from parquet: %s", self.market, exc)
+            return False
 
     @property
     def is_running(self) -> bool:

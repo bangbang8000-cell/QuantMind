@@ -226,6 +226,18 @@ def main():
     assert normalize_stock_code("600519") == "600519.SH"
     print("  ✅ codec 校验正确")
 
+    # parser 方向解析回归 (BSFlag=0 是合法买入值, 不能被 falsy 吞掉)
+    print("\n=== parser 委托方向解析 ===")
+    from src.tdx.parser import parse_order
+    assert parse_order({"BSFlag": 0, "Status": 3, "WtVol": "217", "CjVol": "217",
+                        "Code": "688256.SH", "WtPrice": "1147.08",
+                        "CjPrice": "1147.08", "Wtbh": "1", "Time": "103542"})["side"] == "buy"
+    assert parse_order({"BSFlag": 1, "Status": 1, "WtVol": "100", "Code": "600664.SH",
+                        "Wtbh": "2", "Time": "142720"})["side"] == "sell"
+    assert parse_order({"Code": "600664.SH", "WtVol": "100", "Wtbh": "3"})["side"] == "cancel"
+    assert parse_order({"BSFlag": 0, "Code": "x", "WtVol": "100", "Wtbh": "4"})["status"] == "submitted"
+    print("  ✅ parser 方向解析正确")
+
     # SQLite 缓存验证
     print("\n=== SQLite 缓存层 ===")
     import tempfile

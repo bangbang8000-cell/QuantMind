@@ -503,15 +503,15 @@ const StrategyManagement: React.FC<StrategyManagementProps> = ({
         ? (runtimeMode === 'SHADOW'
             ? '影子运行中'
             : (runtimeMode === 'REAL'
-                ? '模拟运行中'
-                : (runtimeMode === 'SIMULATION' ? '模拟运行中' : '运行中')))
+                ? '实盘模拟运行中'
+                : (runtimeMode === 'SIMULATION' ? '实盘模拟运行中' : '运行中')))
         : (runtimeStatus === 'starting'
             ? '启动中'
             : (runtimeMode === 'SHADOW'
                 ? '影子已接入'
                 : (runtimeMode === 'REAL'
-                    ? '模拟已接入'
-                    : (runtimeMode === 'SIMULATION' ? '模拟已接入' : '未启动'))));
+                    ? '实盘模拟已接入'
+                    : (runtimeMode === 'SIMULATION' ? '实盘模拟已接入' : '未启动'))));
 
     const runtimeModeTone = runtimeStatus === 'running'
         ? (runtimeMode === 'SHADOW'
@@ -707,14 +707,14 @@ const StrategyManagement: React.FC<StrategyManagementProps> = ({
                         <div className="flex items-center gap-3 mb-2">
                             <div className={`w-2.5 h-2.5 rounded-full ${isRunning ? 'bg-green-500 animate-pulse' : 'bg-slate-300'}`}></div>
                             <h2 className="text-xl font-bold text-slate-800">
-                                {isGlobalSim ? '全自动模拟控制台' : '模拟策略控制台'}
+                                {isGlobalSim ? '全自动实盘模拟控制台' : '实盘模拟策略控制台'}
                             </h2>
                         </div>
                         <div className="flex items-center gap-4 text-slate-500 text-sm">
                             <span className="flex items-center gap-1.5">
                                 <Activity size={14} className={isGlobalSim ? 'text-indigo-500' : 'text-rose-500'} />
                                 模式: <span className={`font-bold ${isGlobalSim ? 'text-indigo-600' : 'text-rose-600'}`}>
-                                    {isGlobalSim ? '模拟运行' : '模拟交易'}
+                                    {isGlobalSim ? '实盘模拟运行' : '实盘模拟交易'}
                                 </span>
                             </span>
                             <span className="text-slate-200">|</span>

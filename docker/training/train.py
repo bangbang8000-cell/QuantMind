@@ -80,15 +80,15 @@ DEFAULT_LGB_PARAMS: dict[str, Any] = {
     "metric":            "l2",
     "boosting":          "gbdt",
     "num_leaves":        31,
-    "learning_rate":     0.05,
+    "learning_rate":     0.02,
     "feature_fraction":  0.6,
     "bagging_fraction":  0.7,
     "bagging_freq":      5,
-    "min_child_samples": 50,
+    "min_child_samples": 150,
+    "path_smooth":       1.0,
     "lambda_l1":         0.5,
     "lambda_l2":         1.0,
     "max_depth":         -1,
-    "path_smooth":       0.5,
     "n_jobs":            -1,
     "verbosity":         -1,
 }
@@ -102,7 +102,7 @@ DEFAULT_XGB_PARAMS: dict[str, Any] = {
     "colsample_bytree": 0.65,
     "reg_alpha":        0.5,
     "reg_lambda":       2.0,
-    "min_child_weight": 50,
+    "min_child_weight": 100,
     "tree_method":      "hist",
     "nthread":          -1,
     "verbosity":        0,
@@ -117,15 +117,15 @@ DEFAULT_CATBOOST_PARAMS: dict[str, Any] = {
     "random_strength":  1.5,
     "bagging_temperature": 0.8,
     "od_type":          "Iter",
-    "od_wait":          50,
+    "od_wait":          100,
     "thread_count":     -1,
     "verbose":          100,
 }
 
 # 支持的模型类型集合
-_TREE_MODEL_TYPES = {"lightgbm", "xgboost", "catboost", "linear"}
-_DL_MODEL_TYPES = {"gru", "lstm", "alstm", "transformer", "tabnet", "tcn", "nativetft"}
-_CUSTOM_DL_MODEL_TYPES = {"nativetft"}  # 非 Qlib 的自定义 DL 模型
+_TREE_MODEL_TYPES = {"lightgbm", "xgboost", "catboost", "linear", "random_forest"}
+_DL_MODEL_TYPES = {"gru", "lstm", "alstm", "transformer", "tabnet", "tcn", "nativetft", "mlp", "hybrid_gru_tree"}
+_CUSTOM_DL_MODEL_TYPES = {"nativetft", "mlp", "hybrid_gru_tree"}  # 非 Qlib 的自定义 DL 模型
 _ALL_MODEL_TYPES = _TREE_MODEL_TYPES | _DL_MODEL_TYPES
 _ENSEMBLE_MODEL_TYPES = _TREE_MODEL_TYPES - {"linear"}  # 可参与集成的树模型
 
@@ -230,6 +230,18 @@ def _rank_ic_series(df: pd.DataFrame, pred_col: str, label_col: str) -> list[flo
 
 
 def _compute_metrics(df: pd.DataFrame, y_true: np.ndarray, y_pred: np.ndarray) -> dict:
+    # 剔除 NaN/Inf 对，避免 rmse/auc 传播为 NaN
+    y_true = np.asarray(y_true, dtype=np.float64)
+    y_pred = np.asarray(y_pred, dtype=np.float64)
+    valid = np.isfinite(y_true) & np.isfinite(y_pred)
+    if valid.sum() < 10:
+        return {"ic": float("nan"), "rank_ic": float("nan"), "rank_icir": float("nan"),
+                "rmse": 0.0, "auc": 0.0, "score_direction": "normal"}
+    y_true = y_true[valid]
+    y_pred = y_pred[valid]
+    # df 与 y 长度一致时同步过滤，避免 assign 长度不匹配
+    if len(df) == len(valid):
+        df = df.iloc[valid].copy()
     ic     = _ic(y_pred, y_true)
     series = _rank_ic_series(df.assign(_pred=y_pred, _label=y_true), "_pred", "_label")
     rank_ic   = float(np.nanmean(series)) if series else float("nan")
@@ -626,6 +638,7 @@ def load_data(
     train_end: str,
     features: list[str],
     target_horizon_days: int = 1,
+    target_mode: str = "return",
     cache_dir: str | None = None,
     valid_end: str | None = None,
     test_end: str | None = None,
@@ -814,7 +827,10 @@ def load_data(
                         ind_map["ind_code_l1"] = pd.Categorical(ind_map["ind_code_l1"]).codes.astype(np.float32)
                         df["symbol"] = df["symbol"].astype(str).str.zfill(6)
                         df = df.merge(ind_map, on="symbol", how="left")
-                        df["ind_code_l1"] = df["ind_code_l1"].fillna(-1).astype(np.float32)
+                        # 缺失行业映射到 max(code)+1 的独立类别 id（而非 fillna(-1) 或 0）：
+                        # 负 id 会被 CatBoost 拒绝；并入 0 会与第一个真实行业混淆。
+                        _ind_max = float(ind_map["ind_code_l1"].max()) if len(ind_map) else -1.0
+                        df["ind_code_l1"] = df["ind_code_l1"].fillna(_ind_max + 1).astype(np.float32)
                         logger.info("Industry mapping merged: %d/%d rows have ind_code_l1",
                                     (df["ind_code_l1"] >= 0).sum(), len(df))
                     else:
@@ -894,6 +910,16 @@ def load_data(
     valid_count_before = len(df)
     df = df[df["label"].notna()].copy()
     logger.info(f"After label shift & dropna: {len(df)} rows (dropped {valid_count_before - len(df)} rows with missing labels)")
+
+    # 分类目标：基于原始远期收益二值化（label>0 → 1），再进入截面 rank 前的统一流程。
+    # 必须在 rank 之前做：rank 后是 -0.5~0.5 连续值，binary objective 无法拟合。
+    _target_mode = str(target_mode or "return").lower()
+    if _target_mode == "classification":
+        from preprocessing import binarize_labels
+        df["label"] = binarize_labels(df["label"].to_numpy())
+        _n_pos = int((df["label"] == 1).sum())
+        _n_neg = int((df["label"] == 0).sum())
+        logger.info(f"Classification target: positive={_n_pos}, negative={_n_neg} (ratio={_n_pos / max(1, _n_pos + _n_neg):.3f})")
 
     # 裁剪到请求日期范围
     mask = (df["trade_date"] >= train_start) & (df["trade_date"] <= train_end)
@@ -1177,7 +1203,7 @@ def _train_wfa_single(
 
     try:
         fill_values, X_train, y_train, X_val, y_val, _fill = _prepare_arrays(
-            train_df, val_df, features
+            train_df, val_df, features, prep_cfg=cfg.get("preprocessing") or {}
         )
         if X_train.shape[0] < 100 or X_val.shape[0] < 10:
             logger.warning("[WFA] window %d: too few samples train=%d val=%d", idx, X_train.shape[0], X_val.shape[0])
@@ -1291,9 +1317,36 @@ def train_wfa(df: pd.DataFrame, features: list[str], cfg: dict) -> dict:
     return {"enabled": True, **summary, "windows": windows}
 
 
-def _prepare_arrays(train_df: pd.DataFrame, val_df: pd.DataFrame, features: list[str]) -> tuple:
-    """计算 fill_values 并转换为 numpy 数组。返回 (fill_values, X_train, y_train, X_val, y_val, _fill_fn)。"""
+def _prepare_arrays(
+    train_df: pd.DataFrame,
+    val_df: pd.DataFrame,
+    features: list[str],
+    prep_cfg: dict | None = None,
+) -> tuple:
+    """计算 fill_values 并转换为 numpy 数组。
+
+    prep_cfg 启用时（`preprocessing.enabled=true`），对特征做截面预处理：
+    per (trade_date, feature) 中位数填充 + 分位缩尾 + 截面 Z-score。
+    类别特征（ind_code_l1/l2）不参与变换（保持原始编码）。
+    返回 (fill_values, X_train, y_train, X_val, y_val, _fill_fn)。
+    """
     import math
+    from preprocessing import cross_sectional_preprocess
+
+    prep_cfg = prep_cfg or {}
+    prep_enabled = bool(prep_cfg.get("enabled", False))
+    _exclude = {"ind_code_l1", "ind_code_l2"}
+    _prep_feats = [f for f in features if f not in _exclude]
+
+    if prep_enabled and _prep_feats:
+        _winsor = bool(prep_cfg.get("winsor", True))
+        train_df = cross_sectional_preprocess(train_df, _prep_feats, enabled=True, winsor=_winsor)
+        val_df = cross_sectional_preprocess(val_df, _prep_feats, enabled=True, winsor=_winsor)
+        logger.info(
+            "Cross-sectional preprocessing enabled: %d features (exclude %s)",
+            len(_prep_feats), sorted(_exclude & set(features)),
+        )
+
     fill_values_raw = train_df[features].median().to_dict()
     fill_values = {k: (0.0 if (isinstance(v, float) and math.isnan(v)) else v) for k, v in fill_values_raw.items()}
 
@@ -1427,10 +1480,25 @@ def _train_catboost(cfg: dict, features: list[str], X_train: np.ndarray, y_train
             X_train[:, idx] = X_train[:, idx].astype(int)
             X_val[:, idx] = X_val[:, idx].astype(int)
 
-    train_pool = Pool(X_train, label=y_train, feature_names=features,
-                      cat_features=cat_feature_indices if cat_feature_indices else None)
-    val_pool = Pool(X_val, label=y_val, feature_names=features,
-                    cat_features=cat_feature_indices if cat_feature_indices else None)
+    # has_time：数据按时间顺序排列时开启，CatBoost 按时间处理序列数据，
+    # 避免未来信息影响过去预测。需行序为时间序（load_data 已按 symbol+trade_date 排序）。
+    # 注意：旧版 catboost 的 Pool 不支持 has_time 参数，需 try/except 降级。
+    has_time = str(params.get("has_time", "false")).lower() in ("1", "true", "yes", "on")
+    _pool_kwargs: dict = {
+        "feature_names": features,
+        "cat_features": cat_feature_indices if cat_feature_indices else None,
+    }
+    if has_time:
+        try:
+            train_pool = Pool(X_train, label=y_train, has_time=True, **_pool_kwargs)
+            val_pool = Pool(X_val, label=y_val, has_time=True, **_pool_kwargs)
+        except TypeError:
+            logger.warning("当前 catboost 版本不支持 has_time，降级为不带该参数")
+            train_pool = Pool(X_train, label=y_train, **_pool_kwargs)
+            val_pool = Pool(X_val, label=y_val, **_pool_kwargs)
+    else:
+        train_pool = Pool(X_train, label=y_train, **_pool_kwargs)
+        val_pool = Pool(X_val, label=y_val, **_pool_kwargs)
 
     model = CatBoost(params)
     model.fit(train_pool, eval_set=val_pool, early_stopping_rounds=max(1, int(model_cfg.get("early_stopping_rounds", 100) or 100)))
@@ -1445,6 +1513,62 @@ def _train_linear(cfg: dict, features: list[str], X_train: np.ndarray, y_train: 
     dl_params = model_cfg.get("dl_params", {})
     alpha = float(dl_params.get("alpha", 3.0))
     model = Ridge(alpha=alpha, random_state=int((cfg.get("seed") or 42)))
+    model.fit(X_train, y_train)
+    return model
+
+
+def _train_rf(cfg: dict, features: list[str], X_train: np.ndarray, y_train: np.ndarray,
+              X_val: np.ndarray, y_val: np.ndarray) -> Any:
+    """随机森林：Bagging 基线，用于对比 Boosting 是否真优于 Bagging。
+
+    与 LightGBM/XGBoost 走同一 _prepare_arrays 数据流（含可选截面预处理）。
+    参数：n_estimators（默认 300）、max_depth（默认 None=不限）、max_features（默认 sqrt）。
+    """
+    from sklearn.ensemble import RandomForestRegressor
+    model_cfg = cfg.get("model", {})
+    dl_params = model_cfg.get("dl_params", {})
+    seed = int((cfg.get("seed") or 42))
+    n_estimators = int(dl_params.get("n_estimators", 300))
+    max_depth = dl_params.get("max_depth", None)
+    max_features = str(dl_params.get("max_features", "sqrt"))
+    model = RandomForestRegressor(
+        n_estimators=n_estimators,
+        max_depth=int(max_depth) if max_depth else None,
+        max_features=max_features,
+        n_jobs=_TRAIN_NTHREAD,
+        random_state=seed,
+    )
+    model.fit(X_train, y_train)
+    return model
+
+
+def _train_mlp(cfg: dict, features: list[str], X_train: np.ndarray, y_train: np.ndarray,
+               X_val: np.ndarray, y_val: np.ndarray) -> Any:
+    """MLP 基线：神经网络最简对照，验证 RNN/Transformer 是否真优于全连接。
+
+    用 sklearn MLPRegressor（结构化表格数据基线足够），与树模型共享数据流。
+    参数：hidden_layer_sizes（默认 [64, 32]）、alpha（L2，默认 1e-3）、
+    early_stopping（默认 True，用 val 集早停）。
+    """
+    from sklearn.neural_network import MLPRegressor
+    model_cfg = cfg.get("model", {})
+    dl_params = model_cfg.get("dl_params", {})
+    seed = int((cfg.get("seed") or 42))
+    hidden = dl_params.get("hidden_layer_sizes") or dl_params.get("hidden_size")
+    if isinstance(hidden, (int, float)):
+        hidden = [int(hidden), max(1, int(hidden) // 2)]
+    elif not isinstance(hidden, (list, tuple)):
+        hidden = [64, 32]
+    alpha = float(dl_params.get("alpha", 1e-3))
+    model = MLPRegressor(
+        hidden_layer_sizes=[int(h) for h in hidden],
+        alpha=alpha,
+        learning_rate_init=float(dl_params.get("lr", 0.001)),
+        max_iter=int(dl_params.get("n_epochs", 500)),
+        early_stopping=True,
+        n_iter_no_change=10,
+        random_state=seed,
+    )
     model.fit(X_train, y_train)
     return model
 
@@ -1518,6 +1642,7 @@ def _build_ts_dataloader(
     batch_size: int,
     shuffle: bool = True,
     feat_norm: tuple[np.ndarray, np.ndarray] | None = None,
+    drop_last: bool = True,
 ) -> "tuple[torch.utils.data.DataLoader, tuple[np.ndarray, np.ndarray]]":
     """将扁平 DataFrame (MultiIndex: instrument x datetime) 转为 3D DataLoader。
 
@@ -1582,6 +1707,9 @@ def _build_ts_dataloader(
         offsets = [0, len(X_values)]
 
     dataset = _TSLazyDataset(X_values, y_values, offsets, step_len)
+    # 记录排序索引（相对 df_X 的行），供推理 scatter 回原始行号
+    if isinstance(df_X.index, pd.MultiIndex):
+        dataset.original_rows = order
     logger.info("TS DataLoader: %d samples from %d rows (step_len=%d)", len(dataset), len(X_values), step_len)
     # drop_last=True 与 Qlib 官方 fit() 一致：末批若只剩 1 个样本，
     # collate 会把 weight 压成 0 维标量，Qlib loss_fn 内的 weight[mask] 会抛
@@ -1590,7 +1718,7 @@ def _build_ts_dataloader(
         dataset,
         batch_size=batch_size,
         shuffle=shuffle,
-        drop_last=True,
+        drop_last=drop_last,
         num_workers=0,
     )
     return loader, (_feat_mean, _feat_std)
@@ -1837,10 +1965,6 @@ def _train_dl(
     torch.save(best_state, str(output_dir / "model.pth"))
     logger.info("DL model saved: model.pth (best_epoch=%d, best_score=%.6f)", best_epoch, best_score)
 
-    # 计算指标
-    train_m = {"ic": evals["train"][best_epoch] if evals["train"] else float("nan"), "rank_ic": float("nan"), "rank_icir": float("nan"), "rmse": float("nan"), "auc": float("nan")}
-    val_m = {"ic": evals["valid"][best_epoch] if evals["valid"] else float("nan"), "rank_ic": float("nan"), "rank_icir": float("nan"), "rmse": float("nan"), "auc": float("nan")}
-
     # DL 元数据 (供推理重建模型)
     dl_metadata = {
         "model_class_name": cls_name,
@@ -1852,6 +1976,41 @@ def _train_dl(
         },
         "dl_params": {k: v for k, v in dl_params.items()},
     }
+    # feat_norm: TS 模型训练时用训练集 mean/std 标准化（验证集复用），
+    # 推理必须用同一统计量，否则输入分布漂移导致预测不可信。
+    if is_ts and _feat_norm is not None:
+        _fm, _fs = _feat_norm
+        dl_metadata["feat_norm"] = {
+            "mean": [float(v) for v in _fm],
+            "std": [float(v) for v in _fs],
+        }
+
+    # 计算指标：train/val 用模型预测算真实 rmse/auc（不再硬编码 NaN）
+    # test 指标由 train_model 基于 test_df 计算。
+    def _dl_metrics(frame: pd.DataFrame) -> dict:
+        try:
+            pred_df = _predict_dl(output_dir, frame, features, dl_metadata)
+            frame_m = frame.copy()
+            if "symbol" not in frame_m.columns or "trade_date" not in frame_m.columns:
+                frame_m = frame.reset_index()
+                if "instrument" in frame_m.columns:
+                    frame_m["symbol"] = frame_m["instrument"]
+                    frame_m["trade_date"] = frame_m["datetime"] if "datetime" in frame_m.columns else 0
+            merged = frame_m.merge(pred_df[["symbol", "trade_date", "pred"]], on=["symbol", "trade_date"], how="left")
+            if merged["pred"].notna().sum() < 10:
+                logger.warning("DL metrics: 预测不足 10 行有效，rmse/auc 置 0")
+                return {"ic": float("nan"), "rank_ic": float("nan"), "rank_icir": float("nan"), "rmse": 0.0, "auc": 0.0}
+            y_true = merged["label"].astype("float32").to_numpy()
+            y_pred = merged["pred"].fillna(0).astype("float32").to_numpy()
+            return _compute_metrics(merged, y_true, y_pred)
+        except Exception as exc:
+            logger.warning("DL metrics 计算失败: %s", exc)
+            return {"ic": float("nan"), "rank_ic": float("nan"), "rank_icir": float("nan"), "rmse": 0.0, "auc": 0.0}
+
+    train_m = _dl_metrics(train_df)
+    val_m = _dl_metrics(val_df)
+    train_m.setdefault("rmse", 0.0); train_m.setdefault("auc", 0.0)
+    val_m.setdefault("rmse", 0.0); val_m.setdefault("auc", 0.0)
 
     return model_obj, train_m, val_m, dl_metadata
 
@@ -1935,10 +2094,26 @@ def _train_nativetft(
                 d_feat, hidden_dim, num_heads, step_len, device)
 
     # ── 构建 DataLoader ──
-    train_loader = _build_ts_dataloader(
-        train_df[features], train_df["label"], step_len, batch_size, shuffle=True)
-    val_loader = _build_ts_dataloader(
-        val_df[features], val_df["label"], step_len, batch_size, shuffle=False)
+    # TS 滑窗必须按 symbol 分组，否则窗口会跨越不同股票边界产生污染样本。
+    # train_df/val_df 是扁平 RangeIndex，这里用 (symbol, trade_date) 建 MultiIndex
+    # 供 _build_ts_dataloader 计算每只股票的连续区间 offset。
+    # 训练集计算 mean/std 统计量，验证集复用（避免 look-ahead）；
+    # feat_norm 持久化进 dl_metadata 供推理复现标准化。
+    def _ts_indexed(frame: pd.DataFrame) -> tuple[pd.DataFrame, pd.Series]:
+        f = frame.sort_values(["symbol", "trade_date"])
+        idx = pd.MultiIndex.from_arrays(
+            [f["symbol"].to_numpy(), f["trade_date"].to_numpy()],
+            names=["instrument", "datetime"],
+        )
+        return f[features].set_axis(idx), f["label"].set_axis(idx)
+
+    _xt, _yt = _ts_indexed(train_df)
+    _xv, _yv = _ts_indexed(val_df)
+    train_loader, _feat_norm = _build_ts_dataloader(
+        _xt, _yt, step_len, batch_size, shuffle=True)
+    val_loader, _ = _build_ts_dataloader(
+        _xv, _yv, step_len, batch_size, shuffle=False,
+        feat_norm=_feat_norm)
 
     optimizer = torch.optim.Adam(model.parameters(), lr=lr)
     loss_fn = nn.MSELoss()
@@ -2012,15 +2187,13 @@ def _train_nativetft(
 
     if best_state is not None:
         model.load_state_dict(best_state)
+    else:
+        logger.warning("NativeTFT best_state 为 None（可能 val_score 全 NaN），使用最终权重")
+        best_state = copy.deepcopy(model.state_dict())
 
     # 保存模型
     torch.save(best_state, str(output_dir / "model.pth"))
     logger.info("NativeTFT saved: model.pth (best_epoch=%d, best_ic=%.6f)", best_epoch, best_score)
-
-    train_m = {"ic": evals["train"][best_epoch] if evals["train"] else float("nan"),
-               "rank_ic": float("nan"), "rank_icir": float("nan"), "rmse": float("nan"), "auc": float("nan")}
-    val_m = {"ic": evals["valid"][best_epoch] if evals["valid"] else float("nan"),
-             "rank_ic": float("nan"), "rank_icir": float("nan"), "rmse": float("nan"), "auc": float("nan")}
 
     dl_metadata = {
         "model_type": "NativeTFT",
@@ -2037,6 +2210,38 @@ def _train_nativetft(
         },
         "dl_params": {k: v for k, v in dl_params.items()},
     }
+    # feat_norm: 训练集 mean/std（验证集已复用），推理必须用同一统计量
+    if _feat_norm is not None:
+        _fm, _fs = _feat_norm
+        dl_metadata["feat_norm"] = {
+            "mean": [float(v) for v in _fm],
+            "std": [float(v) for v in _fs],
+        }
+
+    # 计算真实 train/val 指标（不再硬编码 NaN rmse/auc）
+    def _tft_metrics(frame: pd.DataFrame) -> dict:
+        try:
+            pred_df = _predict_nativetft(output_dir, frame, features, dl_metadata)
+            frame_m = frame.copy()
+            if "symbol" not in frame_m.columns or "trade_date" not in frame_m.columns:
+                frame_m = frame.reset_index()
+                if "instrument" in frame_m.columns:
+                    frame_m["symbol"] = frame_m["instrument"]
+                    frame_m["trade_date"] = frame_m["datetime"] if "datetime" in frame_m.columns else 0
+            merged = frame_m.merge(pred_df[["symbol", "trade_date", "pred"]], on=["symbol", "trade_date"], how="left")
+            if merged["pred"].notna().sum() < 10:
+                return {"ic": float("nan"), "rank_ic": float("nan"), "rank_icir": float("nan"), "rmse": 0.0, "auc": 0.0}
+            y_true = merged["label"].astype("float32").to_numpy()
+            y_pred = merged["pred"].fillna(0).astype("float32").to_numpy()
+            return _compute_metrics(merged, y_true, y_pred)
+        except Exception as exc:
+            logger.warning("NativeTFT metrics 计算失败: %s", exc)
+            return {"ic": float("nan"), "rank_ic": float("nan"), "rank_icir": float("nan"), "rmse": 0.0, "auc": 0.0}
+
+    train_m = _tft_metrics(train_df)
+    val_m = _tft_metrics(val_df)
+    train_m.setdefault("rmse", 0.0); train_m.setdefault("auc", 0.0)
+    val_m.setdefault("rmse", 0.0); val_m.setdefault("auc", 0.0)
 
     return model, train_m, val_m, dl_metadata
 
@@ -2093,7 +2298,27 @@ def _predict_dl(
     # 预测
     if is_ts:
         step_len = dl_metadata.get("dl_params", {}).get("dl_step_len", 20)
-        loader = _build_ts_dataloader(df_X[features], pd.Series(0.0, index=df_X.index), step_len, batch_size, shuffle=False)
+        # 复用训练集标准化统计量（推理输入必须与训练同分布）
+        feat_norm = None
+        _fn = dl_metadata.get("feat_norm")
+        if isinstance(_fn, dict) and _fn.get("mean") and _fn.get("std"):
+            feat_norm = (np.asarray(_fn["mean"], dtype=np.float32),
+                         np.asarray(_fn["std"], dtype=np.float32))
+        # TS 滑窗必须按 symbol 分组：df_X 是扁平 RangeIndex，
+        # 用 (symbol, trade_date) 建 MultiIndex 供 loader 计算股票连续区间。
+        _pred_df = df_X.copy()
+        if "symbol" in _pred_df.columns and "trade_date" in _pred_df.columns:
+            _pred_df = _pred_df.sort_values(["symbol", "trade_date"])
+            _idx = pd.MultiIndex.from_arrays(
+                [_pred_df["symbol"].to_numpy(), _pred_df["trade_date"].to_numpy()],
+                names=["instrument", "datetime"],
+            )
+            _X = _pred_df[features].set_axis(_idx)
+            _y = pd.Series(0.0, index=_idx)
+        else:
+            _X = df_X[features]
+            _y = pd.Series(0.0, index=df_X.index)
+        loader, _ = _build_ts_dataloader(_X, _y, step_len, batch_size, shuffle=False, feat_norm=feat_norm, drop_last=False)
         # 找到内部模型
         inner_model = None
         for attr_name in ("model", "GRU_model", "gru_model", "LSTM_model", "lstm_model",
@@ -2104,9 +2329,14 @@ def _predict_dl(
                 break
         inner_model.eval() if inner_model is not None else None
         preds = []
+        is_tcn = "TCN" in cls_name
         for batch in loader:
             data = batch[0] if isinstance(batch, (list, tuple)) else batch
             feature = data[:, :, 0:-1]
+            # TCN 期望 channels-first [batch, d_feat, seq]（训练时 qlib 内部 transpose，
+            # 推理需手动补）；GRU/LSTM/ALSTM batch_first，Transformer 内部自处理。
+            if is_tcn:
+                feature = feature.transpose(1, 2)
             with torch.no_grad():
                 pred = inner_model(feature.float())
                 if isinstance(pred, tuple):
@@ -2114,9 +2344,35 @@ def _predict_dl(
                 if hasattr(pred, 'dim') and pred.dim() == 2 and pred.shape[1] == 1:
                     pred = pred.squeeze(-1)
                 preds.append(pred.detach().cpu().numpy())
-        return np.concatenate(preds)
+        raw_pred = np.concatenate(preds)
+
+        # 时序滑窗预测天然比全量行少（每只股票前 step_len-1 行无完整窗口）。
+        # 用 dataset.original_rows（排序索引→原始 df_X 行）把预测 scatter
+        # 回原始行的窗口末端位置，其余填 NaN，返回 DataFrame(symbol,trade_date,pred)。
+        n_total = len(_pred_df)
+        out = np.full(n_total, np.nan, dtype=np.float32)
+        if raw_pred.shape[0] > 0 and hasattr(loader.dataset, "original_rows"):
+            ds = loader.dataset
+            orig = ds.original_rows[ds.indices] + step_len - 1
+            if orig.max() < n_total and len(orig) == raw_pred.shape[0]:
+                out[orig] = raw_pred
+            else:
+                logger.warning("DL predict scatter 不匹配: pred=%d orig=%d n_total=%d -> 全 NaN",
+                               raw_pred.shape[0], len(orig), n_total)
+        else:
+            logger.warning("DL predict 无 original_rows 或无预测: pred=%d", raw_pred.shape[0])
+        return pd.DataFrame({
+            "symbol": _pred_df["symbol"].to_numpy(),
+            "trade_date": _pred_df["trade_date"].to_numpy(),
+            "pred": out,
+        })
     else:
         X_values = df_X[features].values.astype(np.float32)
+        # 填充 NaN/Inf：tabnet 内部断言禁止 NaN 输入
+        if np.isnan(X_values).any() or np.isinf(X_values).any():
+            logger.warning("DL flat predict: 特征含 %d NaN/%d Inf，填 0",
+                           int(np.isnan(X_values).sum()), int(np.isinf(X_values).sum()))
+            X_values = np.nan_to_num(X_values, nan=0.0, posinf=0.0, neginf=0.0)
         X_tensor = torch.from_numpy(X_values)
         inner_model = None
         for attr_name in ("model", "GRU_model", "gru_model", "LSTM_model", "lstm_model",
@@ -2126,17 +2382,28 @@ def _predict_dl(
             if inner_model is not None:
                 break
         inner_model.eval() if inner_model is not None else None
+        is_tabnet = "Tabnet" in cls_name
         preds = []
         for i in range(0, len(X_tensor), batch_size):
             batch = X_tensor[i:i+batch_size]
             with torch.no_grad():
-                pred = inner_model(batch.float())
+                if is_tabnet:
+                    # qlib TabNet.forward(x, priors) 需要 priors 参数（训练时 qlib 内部构造）
+                    priors = torch.ones(batch.shape[0], batch.shape[1], dtype=batch.dtype)
+                    pred = inner_model(batch.float(), priors)
+                else:
+                    pred = inner_model(batch.float())
                 if isinstance(pred, tuple):
                     pred = pred[0]
                 if hasattr(pred, 'dim') and pred.dim() == 2 and pred.shape[1] == 1:
                     pred = pred.squeeze(-1)
                 preds.append(pred.detach().cpu().numpy())
-        return np.concatenate(preds)
+        _flat_pred = np.concatenate(preds)
+        return pd.DataFrame({
+            "symbol": df_X["symbol"].to_numpy(),
+            "trade_date": df_X["trade_date"].to_numpy(),
+            "pred": _flat_pred,
+        })
 
 
 def _predict_nativetft(
@@ -2202,9 +2469,29 @@ def _predict_nativetft(
     model.load_state_dict(state_dict)
     model.eval()
 
+    # 复用训练集标准化统计量（推理输入必须与训练同分布）
+    feat_norm = None
+    _fn = dl_metadata.get("feat_norm")
+    if isinstance(_fn, dict) and _fn.get("mean") and _fn.get("std"):
+        feat_norm = (np.asarray(_fn["mean"], dtype=np.float32),
+                     np.asarray(_fn["std"], dtype=np.float32))
+    # TS 滑窗必须按 symbol 分组，否则窗口跨股票边界产生污染样本
+    _pred_df = df_X.copy()
+    if "symbol" in _pred_df.columns and "trade_date" in _pred_df.columns:
+        _pred_df = _pred_df.sort_values(["symbol", "trade_date"])
+        _idx = pd.MultiIndex.from_arrays(
+            [_pred_df["symbol"].to_numpy(), _pred_df["trade_date"].to_numpy()],
+            names=["instrument", "datetime"],
+        )
+        _X = _pred_df[features].set_axis(_idx)
+        _y = pd.Series(0.0, index=_idx)
+    else:
+        _X = df_X[features]
+        _y = pd.Series(0.0, index=df_X.index)
+
     # 构建 TS DataLoader 并预测
-    loader = _build_ts_dataloader(
-        df_X[features], pd.Series(0.0, index=df_X.index), step_len, batch_size, shuffle=False)
+    loader, _ = _build_ts_dataloader(
+        _X, _y, step_len, batch_size, shuffle=False, feat_norm=feat_norm, drop_last=False)
 
     preds = []
     with torch.no_grad():
@@ -2213,8 +2500,21 @@ def _predict_nativetft(
             feature = data[:, :, 0:-1].float()
             pred = model(feature)
             preds.append(pred.cpu().numpy())
+    raw_pred = np.concatenate(preds)
 
-    return np.concatenate(preds)
+    # 与 _predict_dl 相同的 scatter 逻辑：用 original_rows 映射回原始行
+    n_total = len(_pred_df)
+    out = np.full(n_total, np.nan, dtype=np.float32)
+    if raw_pred.shape[0] > 0 and hasattr(loader.dataset, "original_rows"):
+        ds = loader.dataset
+        orig = ds.original_rows[ds.indices] + step_len - 1
+        if orig.max() < n_total and len(orig) == raw_pred.shape[0]:
+            out[orig] = raw_pred
+    return pd.DataFrame({
+        "symbol": _pred_df["symbol"].to_numpy(),
+        "trade_date": _pred_df["trade_date"].to_numpy(),
+        "pred": out,
+    })
 
 
 def _predict_with_model(model: Any, X: np.ndarray, model_type: str, features: list[str] | None = None) -> np.ndarray:
@@ -2255,6 +2555,16 @@ def _save_model(model: Any, model_type: str, out_dir: Path) -> str:
             pickle.dump(model, f)
         return "model.pkl"
     elif model_type in _DL_MODEL_TYPES:
+        # MLP 用 sklearn 实现（存 pkl）；其余 DL 模型在 _train_dl() 中已保存 model.pth
+        if model_type == "mlp":
+            import pickle
+            path = out_dir / "model.pkl"
+            with open(path, "wb") as f:
+                pickle.dump(model, f)
+            return "model.pkl"
+        # hybrid_gru_tree 由专用训练管线保存 gru_encoder.pth + 树模型文件
+        if model_type == "hybrid_gru_tree":
+            return "model.pkl"
         # DL 模型在 _train_dl() 中已保存 model.pth，此处仅返回文件名
         return "model.pth"
     else:
@@ -2272,6 +2582,7 @@ def _get_model_framework(model_type: str) -> str:
         "xgboost": "xgboost",
         "catboost": "catboost",
         "linear": "sklearn",
+        "random_forest": "sklearn",
         "gru": "pytorch",
         "lstm": "pytorch",
         "alstm": "pytorch",
@@ -2281,13 +2592,17 @@ def _get_model_framework(model_type: str) -> str:
         "tabnet": "pytorch",
         "tcn": "pytorch",
         "nativetft": "pytorch",
+        "mlp": "pytorch",
+        "hybrid_gru_tree": "pytorch",
     }
     return mapping.get(model_type, "unknown")
 
 
-def train_model(df: pd.DataFrame, features: list[str], cfg: dict, hardware: dict | None = None) -> tuple:
+def train_model(df: pd.DataFrame, features: list[str], cfg: dict, hardware: dict | None = None,
+                need_full_pred: bool = True) -> tuple:
     """统一训练入口：根据 model_type 路由到对应训练函数。"""
     model_cfg = cfg.get("model", {})
+    _optuna_result = None
     model_type = str(model_cfg.get("type", "lightgbm")).strip().lower()
 
     if model_type not in _ALL_MODEL_TYPES:
@@ -2299,20 +2614,47 @@ def train_model(df: pd.DataFrame, features: list[str], cfg: dict, hardware: dict
 
     # 数据切分
     train_df, val_df, test_df = _split_data(df, cfg)
-    fill_values, X_train, y_train, X_val, y_val, _fill = _prepare_arrays(train_df, val_df, features)
+    fill_values, X_train, y_train, X_val, y_val, _fill = _prepare_arrays(
+        train_df, val_df, features, prep_cfg=cfg.get("preprocessing") or {}
+    )
 
     # 路由到对应训练函数
     logger.info("Training model: %s (framework=%s)", model_type, _get_model_framework(model_type))
     train_t0 = time.time()
 
-    if model_type == "lightgbm":
-        model = _train_lgb(cfg, features, X_train, y_train, X_val, y_val)
-    elif model_type == "xgboost":
-        model = _train_xgb(cfg, features, X_train, y_train, X_val, y_val)
-    elif model_type == "catboost":
-        model = _train_catboost(cfg, features, X_train, y_train, X_val, y_val)
+    if model_type in ("lightgbm", "xgboost", "catboost"):
+        # Optuna 自动超参搜索：显式 optuna.enabled=true 时，先搜索最优参数再训练。
+        # _train_single_model 的 OOF fold（need_full_pred=False）不触发，避免重复搜索。
+        _optuna_cfg = cfg.get("optuna", {}) or {}
+        if _optuna_cfg.get("enabled") and need_full_pred:
+            _optuna_result = _tune_tree_hyperparams(
+                cfg, model_type, features, X_train, y_train, X_val, y_val, val_df
+            )
+            if _optuna_result and _optuna_result.get("best_params"):
+                # 将最优参数合并进模型参数后重新训练
+                _best = _optuna_result["best_params"]
+                _merge_cfg = dict(cfg)
+                _model_cfg = dict(cfg.get("model", {}))
+                if model_type == "lightgbm":
+                    _model_cfg["params"] = {**(_model_cfg.get("params") or {}), **_best}
+                elif model_type == "xgboost":
+                    _model_cfg["xgb_params"] = {**(_model_cfg.get("xgb_params") or {}), **_best}
+                elif model_type == "catboost":
+                    _model_cfg["catboost_params"] = {**(_model_cfg.get("catboost_params") or {}), **_best}
+                _merge_cfg["model"] = _model_cfg
+                cfg = _merge_cfg
+        if model_type == "lightgbm":
+            model = _train_lgb(cfg, features, X_train, y_train, X_val, y_val)
+        elif model_type == "xgboost":
+            model = _train_xgb(cfg, features, X_train, y_train, X_val, y_val)
+        elif model_type == "catboost":
+            model = _train_catboost(cfg, features, X_train, y_train, X_val, y_val)
     elif model_type == "linear":
         model = _train_linear(cfg, features, X_train, y_train, X_val, y_val)
+    elif model_type == "random_forest":
+        model = _train_rf(cfg, features, X_train, y_train, X_val, y_val)
+    elif model_type == "mlp":
+        model = _train_mlp(cfg, features, X_train, y_train, X_val, y_val)
     elif model_type == "nativetft":
         dl_params = model_cfg.get("dl_params", {})
         output_dir = Path("/workspace")
@@ -2325,7 +2667,11 @@ def train_model(df: pd.DataFrame, features: list[str], cfg: dict, hardware: dict
 
         y_full_pred = _predict_nativetft(output_dir, df, features, dl_metadata)
         full_pred_df = df[["symbol", "trade_date", "label"]].copy()
-        full_pred_df["pred"] = y_full_pred
+        # 时序 DL 预测返回 DataFrame(symbol,trade_date,pred)，按 key 对齐合并
+        full_pred_df = full_pred_df.merge(
+            y_full_pred[["symbol", "trade_date", "pred"]],
+            on=["symbol", "trade_date"], how="left",
+        )
         full_pred_df["split"] = "train"
         full_pred_df.loc[
             (full_pred_df["trade_date"] >= val_df["trade_date"].min()) &
@@ -2371,7 +2717,11 @@ def train_model(df: pd.DataFrame, features: list[str], cfg: dict, hardware: dict
         # DL 模型生成全窗口预测
         y_full_pred = _predict_dl(output_dir, df, features, dl_metadata)
         full_pred_df = df[["symbol", "trade_date", "label"]].copy()
-        full_pred_df["pred"] = y_full_pred
+        # 时序 DL 预测返回 DataFrame(symbol,trade_date,pred)，按 key 对齐合并
+        full_pred_df = full_pred_df.merge(
+            y_full_pred[["symbol", "trade_date", "pred"]],
+            on=["symbol", "trade_date"], how="left",
+        )
         full_pred_df["split"] = "train"
         full_pred_df.loc[
             (full_pred_df["trade_date"] >= val_df["trade_date"].min()) &
@@ -2449,6 +2799,7 @@ def train_model(df: pd.DataFrame, features: list[str], cfg: dict, hardware: dict
             "test": test_df.reset_index(drop=True),
         },
         model_type,
+        _optuna_result,
     )
 
 
@@ -2466,14 +2817,19 @@ def select_top_factors(
 
     返回 (selected_features, ic_results)。
     """
-    from scipy.stats import spearmanr
-
     logger.info("=== Factor Selection: IC/ICIR screening ===")
     logger.info("Input: %d features, target top-%d", len(features), n_top)
 
-    # Step 1: 日频 Rank IC 计算
+    # Step 1: 日频 Rank IC 计算（原始 spearmanr 算法，数值 100% 正确）
+    # 质量优先：不使用降采样或向量化近似，逐特征逐交易日算 Spearman IC。
+    # 虽然较慢（约 18 分钟），但 IC/ICIR 估计精确，因子选择可靠。
+    from scipy.stats import spearmanr
+
+    t0_sel = time.time()
     ic_results: dict[str, dict] = {}
     for feat in features:
+        if feat not in df.columns:
+            continue
         daily_ics = []
         for _, g in df.groupby("trade_date", sort=False):
             valid = g[[feat, label_col]].dropna()
@@ -2491,7 +2847,9 @@ def select_top_factors(
             "icir": float(np.mean(arr) / (np.std(arr) + 1e-9)),
             "ic_positive_rate": float(np.mean(arr > 0)),
             "n_days": len(arr),
+            "daily_ics": daily_ics,  # 供 Step 4 稳定性检验复用，避免二次计算
         }
+    logger.info("IC/ICIR screening done in %.1fs (%d features)", time.time() - t0_sel, len(ic_results))
 
     # Step 2: IC阈值初筛
     candidates = {
@@ -2522,23 +2880,18 @@ def select_top_factors(
     logger.info("After correlation pruning (thresh=%.2f): %d selected",
                 correlation_threshold, len(selected))
 
-    # Step 4: 稳定性检验（滚动窗口 IC 标准差）
+    # Step 4: 稳定性检验（复用 Step 1 已算的逐日 IC 序列，避免二次双重循环）
+    # 滚动60日 IC 标准差 / 均值 → 稳定性比率
     stable = []
     for feat in selected:
-        daily_ics = []
-        for _, g in df.groupby("trade_date", sort=False):
-            valid = g[[feat, label_col]].dropna()
-            if len(valid) < 30:
-                continue
-            ic, _ = spearmanr(valid[feat], valid[label_col])
-            if np.isfinite(ic):
-                daily_ics.append(ic)
-        if daily_ics:
-            # 滚动60日 IC 标准差 / 均值 → 稳定性比率
-            rolling_std = pd.Series(daily_ics).rolling(60, min_periods=20).std()
-            mean_ic = abs(np.mean(daily_ics))
-            if mean_ic > 0 and rolling_std.mean() / (mean_ic + 1e-9) < 2.0:
-                stable.append(feat)
+        daily_series = ic_results[feat].get("daily_ics")
+        if not daily_series or len(daily_series) < 20:
+            continue
+        daily_ics = np.asarray(daily_series, dtype=np.float64)
+        rolling_std = pd.Series(daily_ics).rolling(60, min_periods=20).std()
+        mean_ic = abs(float(np.mean(daily_ics)))
+        if mean_ic > 0 and rolling_std.mean() / (mean_ic + 1e-9) < 2.0:
+            stable.append(feat)
 
     if len(stable) >= 30:
         selected = stable[:n_top]
@@ -2551,6 +2904,84 @@ def select_top_factors(
                     i + 1, feat, r["ic_mean"], r["icir"], r["ic_positive_rate"] * 100)
 
     return selected, ic_results
+
+
+# ── Optuna 自动超参搜索 ────────────────────────────────────────────────────────
+def _tune_tree_hyperparams(
+    cfg: dict,
+    model_type: str,
+    features: list[str],
+    X_train: np.ndarray,
+    y_train: np.ndarray,
+    X_val: np.ndarray,
+    y_val: np.ndarray,
+    val_df: pd.DataFrame,
+) -> dict | None:
+    """Optuna 自动搜索树模型超参，以验证集 Rank ICIR 为目标。
+
+    返回最优参数 dict（合并进模型参数）；未安装 optuna 时返回 None（优雅降级）。
+    搜索空间面向 A 股选股场景（截面 rank 收益标签、防过拟合优先）。
+    """
+    try:
+        import optuna
+    except ImportError:
+        logger.warning("optuna 未安装，跳过超参搜索（pip install optuna 可启用）")
+        return None
+
+    optuna_cfg = cfg.get("optuna", {}) or {}
+    n_trials = max(5, int(optuna_cfg.get("n_trials", 20)))
+    seed = int((cfg.get("seed") or 42))
+    optuna.logging.set_verbosity(optuna.logging.WARNING)
+
+    def _objective(trial) -> float:
+        params: dict[str, Any] = {}
+        if model_type == "lightgbm":
+            params.update({
+                "learning_rate": trial.suggest_float("learning_rate", 0.005, 0.1, log=True),
+                "num_leaves": trial.suggest_int("num_leaves", 15, 127),
+                "min_child_samples": trial.suggest_int("min_child_samples", 20, 500),
+                "feature_fraction": trial.suggest_float("feature_fraction", 0.4, 0.9),
+                "bagging_fraction": trial.suggest_float("bagging_fraction", 0.4, 0.9),
+                "lambda_l1": trial.suggest_float("lambda_l1", 0.0, 5.0),
+                "lambda_l2": trial.suggest_float("lambda_l2", 0.0, 10.0),
+            })
+            model = _train_lgb({**cfg, "model": {**cfg.get("model", {}), "params": {**cfg.get("model", {}).get("params", {}), **params}}}, features, X_train, y_train, X_val, y_val)
+        elif model_type == "xgboost":
+            params.update({
+                "learning_rate": trial.suggest_float("learning_rate", 0.005, 0.1, log=True),
+                "max_depth": trial.suggest_int("max_depth", 3, 8),
+                "subsample": trial.suggest_float("subsample", 0.5, 0.9),
+                "colsample_bytree": trial.suggest_float("colsample_bytree", 0.4, 0.9),
+                "min_child_weight": trial.suggest_int("min_child_weight", 20, 300),
+                "reg_alpha": trial.suggest_float("reg_alpha", 0.0, 5.0),
+            })
+            model = _train_xgb({**cfg, "model": {**cfg.get("model", {}), "xgb_params": {**cfg.get("model", {}).get("xgb_params", {}), **params}}}, features, X_train, y_train, X_val, y_val)
+        elif model_type == "catboost":
+            params.update({
+                "learning_rate": trial.suggest_float("learning_rate", 0.005, 0.1, log=True),
+                "depth": trial.suggest_int("depth", 4, 10),
+                "l2_leaf_reg": trial.suggest_float("l2_leaf_reg", 1.0, 10.0, log=True),
+                "random_strength": trial.suggest_float("random_strength", 0.5, 5.0),
+            })
+            model = _train_catboost({**cfg, "model": {**cfg.get("model", {}), "catboost_params": {**cfg.get("model", {}).get("catboost_params", {}), **params}}}, features, X_train, y_train, X_val, y_val)
+        else:
+            return -1.0
+
+        y_pred = _predict_with_model(model, X_val, model_type, features)
+        m = _compute_metrics(val_df, y_val.astype("float32"), np.asarray(y_pred, dtype=np.float32).flatten())
+        return float(m["rank_icir"]) if np.isfinite(m["rank_icir"]) else -1.0
+
+    study = optuna.create_study(direction="maximize", sampler=optuna.samplers.TPESampler(seed=seed))
+    study.optimize(_objective, n_trials=n_trials, show_progress_bar=False)
+
+    best = study.best_params
+    logger.info("Optuna %s best params (trial=%d, val_rank_icir=%.4f): %s",
+                model_type, study.best_trial.number, study.best_value, best)
+    return {
+        "best_params": best,
+        "best_value": float(study.best_value),
+        "n_trials": n_trials,
+    }
 
 
 # ── 多模型并行训练 ──────────────────────────────────────────────────────────────
@@ -2575,16 +3006,44 @@ def _train_single_model(
     t0 = time.time()
 
     model_cfg = cfg.get("model", {})
-    fill_values, X_train, y_train, X_val, y_val, _fill = _prepare_arrays(train_df, val_df, features)
+    _optuna_result = None
+    fill_values, X_train, y_train, X_val, y_val, _fill = _prepare_arrays(
+        train_df, val_df, features, prep_cfg=cfg.get("preprocessing") or {}
+    )
 
-    if model_type == "lightgbm":
-        model = _train_lgb(cfg, features, X_train, y_train, X_val, y_val)
-    elif model_type == "xgboost":
-        model = _train_xgb(cfg, features, X_train, y_train, X_val, y_val)
-    elif model_type == "catboost":
-        model = _train_catboost(cfg, features, X_train, y_train, X_val, y_val)
+    if model_type in ("lightgbm", "xgboost", "catboost"):
+        # Optuna 自动超参搜索：显式 optuna.enabled=true 时，先搜索最优参数再训练。
+        # _train_single_model 的 OOF fold（need_full_pred=False）不触发，避免重复搜索。
+        _optuna_cfg = cfg.get("optuna", {}) or {}
+        if _optuna_cfg.get("enabled") and need_full_pred:
+            _optuna_result = _tune_tree_hyperparams(
+                cfg, model_type, features, X_train, y_train, X_val, y_val, val_df
+            )
+            if _optuna_result and _optuna_result.get("best_params"):
+                # 将最优参数合并进模型参数后重新训练
+                _best = _optuna_result["best_params"]
+                _merge_cfg = dict(cfg)
+                _model_cfg = dict(cfg.get("model", {}))
+                if model_type == "lightgbm":
+                    _model_cfg["params"] = {**(_model_cfg.get("params") or {}), **_best}
+                elif model_type == "xgboost":
+                    _model_cfg["xgb_params"] = {**(_model_cfg.get("xgb_params") or {}), **_best}
+                elif model_type == "catboost":
+                    _model_cfg["catboost_params"] = {**(_model_cfg.get("catboost_params") or {}), **_best}
+                _merge_cfg["model"] = _model_cfg
+                cfg = _merge_cfg
+        if model_type == "lightgbm":
+            model = _train_lgb(cfg, features, X_train, y_train, X_val, y_val)
+        elif model_type == "xgboost":
+            model = _train_xgb(cfg, features, X_train, y_train, X_val, y_val)
+        elif model_type == "catboost":
+            model = _train_catboost(cfg, features, X_train, y_train, X_val, y_val)
     elif model_type == "linear":
         model = _train_linear(cfg, features, X_train, y_train, X_val, y_val)
+    elif model_type == "random_forest":
+        model = _train_rf(cfg, features, X_train, y_train, X_val, y_val)
+    elif model_type == "mlp":
+        model = _train_mlp(cfg, features, X_train, y_train, X_val, y_val)
     elif model_type == "nativetft":
         output_dir = Path("/workspace")
         dl_params = model_cfg.get("dl_params", {})
@@ -2593,7 +3052,11 @@ def _train_single_model(
         )
         y_full_pred = _predict_nativetft(output_dir, df, features, dl_metadata)
         full_pred_df = df[["symbol", "trade_date", "label"]].copy()
-        full_pred_df["pred"] = y_full_pred
+        # 时序 DL 预测返回 DataFrame(symbol,trade_date,pred)，按 key 对齐合并
+        full_pred_df = full_pred_df.merge(
+            y_full_pred[["symbol", "trade_date", "pred"]],
+            on=["symbol", "trade_date"], how="left",
+        )
         full_pred_df["split"] = "train"
         full_pred_df.loc[
             (full_pred_df["trade_date"] >= val_df["trade_date"].min()) &
@@ -2625,7 +3088,11 @@ def _train_single_model(
         )
         y_full_pred = _predict_dl(output_dir, df, features, dl_metadata)
         full_pred_df = df[["symbol", "trade_date", "label"]].copy()
-        full_pred_df["pred"] = y_full_pred
+        # 时序 DL 预测返回 DataFrame(symbol,trade_date,pred)，按 key 对齐合并
+        full_pred_df = full_pred_df.merge(
+            y_full_pred[["symbol", "trade_date", "pred"]],
+            on=["symbol", "trade_date"], how="left",
+        )
         full_pred_df["split"] = "train"
         full_pred_df.loc[
             (full_pred_df["trade_date"] >= val_df["trade_date"].min()) &
@@ -2697,6 +3164,7 @@ def _train_single_model(
         "pred_df": full_pred_df.reset_index(drop=True) if full_pred_df is not None else None,
         "split_frames": {"train": train_df.reset_index(drop=True), "valid": val_df.reset_index(drop=True), "test": test_df.reset_index(drop=True)},
         "best_iteration": best_iteration,
+        "optuna": _optuna_result,
         "elapsed": elapsed,
     }
 
@@ -2860,6 +3328,7 @@ def train_stacking(
     """
     from sklearn.linear_model import Ridge
 
+    model_cfg = cfg.get("model", {})
     train_df, val_df, test_df = _split_data(df, cfg)
 
     # Step 1: 生成各基模型 OOF 预测 + 全量基模型
@@ -2905,10 +3374,11 @@ def train_stacking(
     logger.info("Meta-learner training samples: %d (from %d train samples)",
                 len(meta_y_train), len(train_df))
 
-    # Step 3: 训练 Ridge 元学习器
-    meta_model = Ridge(alpha=1.0, fit_intercept=True, random_state=42)
+    # Step 3: 训练 Ridge 元学习器（alpha 可配，默认 1.0）
+    meta_alpha = float(model_cfg.get("meta_alpha", 1.0))
+    meta_model = Ridge(alpha=meta_alpha, fit_intercept=True, random_state=42)
     meta_model.fit(meta_X_train, meta_y_train)
-    logger.info("Ridge meta-learner coefficients: %s", dict(zip(
+    logger.info("Ridge meta-learner (alpha=%.3f) coefficients: %s", meta_alpha, dict(zip(
         [f"oof_{mt}" for mt in model_types], meta_model.coef_.round(4)
     )))
 
@@ -3121,6 +3591,7 @@ def main() -> int:
             cfg["data"]["train_end"],
             features,
             target_horizon_days=int((cfg.get("label", {}) or {}).get("target_horizon_days") or 1),
+            target_mode=str((cfg.get("label", {}) or {}).get("target_mode") or "return"),
             cache_dir=cfg.get("cache", {}).get("dir"),
             valid_end=cfg.get("split", {}).get("valid", [None, None])[1],
             test_end=cfg.get("split", {}).get("test", [None, None])[1],
@@ -3313,6 +3784,7 @@ def main() -> int:
                 "best_iteration": best_iteration,
                 "target_horizon_days": int((cfg.get("label", {}) or {}).get("target_horizon_days") or 1),
                 "target_mode": str((cfg.get("label", {}) or {}).get("target_mode") or "return"),
+                "preprocessing": (cfg.get("preprocessing") or {}) if (cfg.get("preprocessing") or {}).get("enabled") else None,
                 "label_formula": str((cfg.get("label", {}) or {}).get("label_formula") or ""),
                 "effective_trade_date": str((cfg.get("label", {}) or {}).get("effective_trade_date") or ""),
                 "training_window": str((cfg.get("label", {}) or {}).get("training_window") or ""),
@@ -3393,12 +3865,16 @@ def main() -> int:
         else:
             # ── 单模型训练路径（向后兼容） ──
             train_result = train_model(df, valid_features, cfg, hardware=hardware)
-            # train_model 返回 8-tuple (树模型) 或 9-tuple (DL 模型，含 dl_metadata)
-            if len(train_result) == 9:
+            # train_model 返回 10-tuple (树模型含 optuna) / 9-tuple (DL 含 dl_metadata) / 8-tuple
+            if len(train_result) == 10:
+                model, fill_values, train_m, val_m, test_m, pred_df, split_frames, actual_model_type, dl_metadata, optuna_result = train_result
+            elif len(train_result) == 9:
                 model, fill_values, train_m, val_m, test_m, pred_df, split_frames, actual_model_type, dl_metadata = train_result
+                optuna_result = None
             else:
                 model, fill_values, train_m, val_m, test_m, pred_df, split_frames, actual_model_type = train_result
                 dl_metadata = None
+                optuna_result = None
             elapsed = float(time.time() - train_t0)
 
             # 获取 best_iteration（不同框架方式不同）
@@ -3489,6 +3965,7 @@ def main() -> int:
                 "best_iteration": best_iteration,
                 "target_horizon_days": int((cfg.get("label", {}) or {}).get("target_horizon_days") or 1),
                 "target_mode": str((cfg.get("label", {}) or {}).get("target_mode") or "return"),
+                "preprocessing": (cfg.get("preprocessing") or {}) if (cfg.get("preprocessing") or {}).get("enabled") else None,
                 "label_formula": str((cfg.get("label", {}) or {}).get("label_formula") or ""),
                 "effective_trade_date": str((cfg.get("label", {}) or {}).get("effective_trade_date") or ""),
                 "training_window": str((cfg.get("label", {}) or {}).get("training_window") or ""),
@@ -3505,6 +3982,9 @@ def main() -> int:
                 "generated_at": datetime.utcnow().isoformat(),
                 "elapsed_seconds": elapsed,
             }
+            # Optuna 搜索结果写入 metadata（若启用）
+            if optuna_result:
+                metadata["optuna"] = optuna_result
             # DL 模型特有元数据 (model_class_name, model_params, input_spec 等)
             if dl_metadata:
                 metadata.update(dl_metadata)

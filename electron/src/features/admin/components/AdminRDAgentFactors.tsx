@@ -476,7 +476,7 @@ export const AdminRDAgentFactors: React.FC = () => {
         <Form
           form={form}
           layout="inline"
-          initialValues={{ factor_type: 'momentum', loop_n: 3 }}
+          initialValues={{ factor_type: 'momentum', loop_n: 5 }}
           onFinish={onSubmit}
         >
           <Form.Item label="因子类型" name="factor_type" rules={[{ required: true }]}>
@@ -487,7 +487,7 @@ export const AdminRDAgentFactors: React.FC = () => {
             </Select>
           </Form.Item>
           <Form.Item label="演化轮数" name="loop_n" rules={[{ required: true }]}>
-            <InputNumber min={1} max={10} style={{ width: 100 }} />
+            <InputNumber min={1} max={20} style={{ width: 100 }} />
           </Form.Item>
           <Form.Item label="附加描述" name="description" style={{ flex: 1, minWidth: 240 }}>
             <Input placeholder="可选：偏向短周期 / 偏向行业中性 等" allowClear />

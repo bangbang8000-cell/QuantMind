@@ -31,7 +31,6 @@ import {
     AdminFeatureSnapshotsOlderSample,
     AdminFeatureSnapshotsInvalidSample,
     AdminDataStatusResult,
-    AdminOfficialDataUpdateSyncResult,
 } from '../types';
 import { MARKET_CONFIG } from './data-management/constants';
 import { MultiMarketSection } from './data-management/MultiMarketSection';
@@ -42,8 +41,6 @@ const { Title, Text, Paragraph } = Typography;
 export const AdminDataManagement: React.FC = () => {
     const [loading, setLoading] = useState(false);
     const [data, setData] = useState<AdminDataStatusResult | null>(null);
-    const [syncLoading, setSyncLoading] = useState(false);
-    const [syncResult, setSyncResult] = useState<AdminOfficialDataUpdateSyncResult | null>(null);
     const [dailySyncLoading, setDailySyncLoading] = useState(false);
     const [syncStatus, setSyncStatus] = useState<any>(null);
     const [syncStatusLoading, setSyncStatusLoading] = useState(false);
@@ -225,29 +222,6 @@ export const AdminDataManagement: React.FC = () => {
         }
     };
 
-    const handleSyncOfficialData = async () => {
-        setSyncLoading(true);
-        try {
-            const resp = await adminService.syncOfficialDataUpdate({
-                apiBaseUrl: '',
-                accessKey: '',
-                secretKey: '',
-            });
-            setSyncResult(resp);
-            if (resp.success) {
-                message.success('数据全自动增量同步已启动');
-                await loadDataStatus(true, selectedMarket);
-            } else {
-                message.error(resp.error || '同步任务执行异常');
-            }
-        } catch (err: unknown) {
-            const msg = err instanceof Error ? err.message : '未知网络错误';
-            message.error(`同步失败: ${msg}`);
-        } finally {
-            setSyncLoading(false);
-        }
-    };
-
     const [syncTaskId, setSyncTaskId] = useState<string | null>(null);
     const [syncTaskProgress, setSyncTaskProgress] = useState<string>('');
     const [syncStepProgress, setSyncStepProgress] = useState<{ step: string; detail: string; pct: number; current: number; total: number } | null>(null);
@@ -302,12 +276,12 @@ export const AdminDataManagement: React.FC = () => {
         loadMarketsData();
     }, [loadMarketsData]);
 
-    const handleDailySync = async (incremental = true) => {
+    const handleDailySync = async () => {
         setDailySyncLoading(true);
         setSyncTaskProgress('提交任务...');
         setSyncStepProgress(null);
         try {
-            const resp = await adminService.triggerDailySync({ incremental, calibrate: true });
+            const resp = await adminService.triggerDailySync({ calibrate: true });
             if (resp?.success && resp.data?.task_id) {
                 const taskId = resp.data.task_id;
                 setSyncTaskId(taskId);
@@ -765,7 +739,6 @@ export const AdminDataManagement: React.FC = () => {
                     currentMarketCfg={currentMarketCfg}
                     currentMarket={currentMarket}
                     dailySyncLoading={dailySyncLoading}
-                    syncLoading={syncLoading}
                     parquetLoading={parquetLoading}
                     fundamentalsLoading={fundamentalsLoading}
                     marketSyncing={marketSyncing}
@@ -784,7 +757,6 @@ export const AdminDataManagement: React.FC = () => {
                     invalidColumns={invalidColumns}
                     onReloadSyncStatus={loadSyncStatus}
                     onDailySync={handleDailySync}
-                    onSyncOfficialData={handleSyncOfficialData}
                     onUpdateFeatureParquet={handleUpdateFeatureParquet}
                     onUpdateMarketFeatures={handleUpdateMarketFeatures}
                     onSyncFundamentals={handleSyncFundamentals}

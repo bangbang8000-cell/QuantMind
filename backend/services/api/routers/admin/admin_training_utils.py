@@ -29,14 +29,14 @@ _ALLOWED_TARGET_MODE = {"return", "classification"}
 _ALLOWED_DEAL_PRICE = {"open", "close"}
 _ALLOWED_MODEL_TYPES = {
     # Tree models (Tier 1) — share same tabular data pipeline
-    "lightgbm", "xgboost", "catboost", "linear",
+    "lightgbm", "xgboost", "catboost", "linear", "random_forest",
     # Deep learning models (Tier 2) — require sequential data / Qlib
     "gru", "lstm", "alstm", "transformer", "tabnet", "tcn",
     # Custom DL models (Tier 3) — non-Qlib PyTorch models
-    "nativetft",
+    "nativetft", "mlp", "hybrid_gru_tree",
 }
-_TREE_MODEL_TYPES = {"lightgbm", "xgboost", "catboost", "linear"}
-_DL_MODEL_TYPES = {"gru", "lstm", "alstm", "transformer", "tabnet", "tcn", "nativetft"}
+_TREE_MODEL_TYPES = {"lightgbm", "xgboost", "catboost", "linear", "random_forest"}
+_DL_MODEL_TYPES = {"gru", "lstm", "alstm", "transformer", "tabnet", "tcn", "nativetft", "mlp", "hybrid_gru_tree"}
 # 市场 → exchange_calendars 日历名。CRYPTO 为 7x24 无休市，不在此映射中。
 _MARKET_TO_XCAL = {"CN": "XSHG", "US": "XNYS", "HK": "XHKG"}
 
@@ -124,7 +124,10 @@ def _coerce_float(value: Any) -> float | None:
     try:
         if value is None:
             return None
-        return float(value)
+        f = float(value)
+        if f != f or f in (float("inf"), float("-inf")):  # NaN/Inf 视为无效
+            return None
+        return f
     except Exception:
         return None
 
@@ -501,6 +504,24 @@ def _normalize_payload(payload: dict[str, Any], allowed_features: list[str]) -> 
         "dl_params": dl_params,
         "ensemble": ensemble_method,
     }
+    # Stacking 集成参数 + Optuna 超参搜索 + 截面预处理（显式透传）
+    if "n_folds" in payload:
+        normalized["n_folds"] = _clamp_int(payload.get("n_folds"), 3, 2, 10)
+    if "meta_alpha" in payload:
+        try:
+            normalized["meta_alpha"] = float(payload.get("meta_alpha"))
+        except (TypeError, ValueError):
+            pass
+    if isinstance(payload.get("optuna"), dict):
+        normalized["optuna"] = {
+            "enabled": bool(payload["optuna"].get("enabled", False)),
+            "n_trials": _clamp_int(payload["optuna"].get("n_trials"), 20, 5, 100),
+        }
+    if isinstance(payload.get("preprocessing"), dict):
+        normalized["preprocessing"] = {
+            "enabled": bool(payload["preprocessing"].get("enabled", False)),
+            "winsor": bool(payload["preprocessing"].get("winsor", True)),
+        }
     if horizons:
         normalized["horizons"] = horizons
     # 训练时长预算（分钟），默认 120

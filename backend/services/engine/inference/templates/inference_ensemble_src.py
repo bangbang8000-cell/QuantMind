@@ -351,7 +351,75 @@ def predict_with_model(model, meta: dict, day_df: pd.DataFrame) -> dict[str, flo
 # 5. 融合逻辑
 # ═══════════════════════════════════════════════════════════════════════════
 
-_Z_CLIP = 3.0  # Winsorize: 单模型 z-score 截尾到 ±3σ, 防单点劫持
+_Z_CLIP = 3.0  # 保留（兼容 detail 展示用），融合主通道改为截面 rank 百分位
+_RANK_DECAY = 0.6  # 时间平滑指数衰减（近5日）
+_IC_DECAY = 0.1  # 动态权重 IC 指数衰减（exp(-d/10)）
+
+
+def _cross_sectional_rank(scores: dict[str, float]) -> dict[str, float]:
+    """单模型当日分数 → 截面 rank 百分位 (0,1)。
+
+    消除不同模型分数量纲/分布差异，与训练标签截面 rank 口径一致。
+    """
+    if not scores:
+        return {}
+    syms = list(scores.keys())
+    vals = [scores[s] for s in syms]
+    s = pd.Series(vals)
+    ranks = s.rank(method="average", pct=True)  # 0~1
+    return {sym: float(ranks.iloc[i]) for i, sym in enumerate(syms)}
+
+
+def _apply_time_smoothing(ranked: dict[str, float], history: dict[str, dict] | None,
+                          model_id: str) -> dict[str, float]:
+    """L2 时间平滑：当日 rank 分数与近5日历史分数指数加权 (0.6^d)。
+
+    history = {model_id: {symbol: rank_score, ...}}（近5日聚合后的历史分数）。
+    无历史则原样返回（冷启动单日）。
+    """
+    if not history or not history.get(model_id):
+        return ranked
+    hist = history[model_id]
+    out = {}
+    for sym, cur in ranked.items():
+        h = hist.get(sym)
+        if h is None:
+            out[sym] = cur
+        else:
+            # 指数加权：当日权重 1，历史权重 0.6
+            out[sym] = (cur + _RANK_DECAY * h) / (1 + _RANK_DECAY)
+    return out
+
+
+def _load_dynamic_weights(model_dir: Path, static_weights: dict[str, float]) -> dict[str, float]:
+    """读 weight_snapshot.json 动态权重；缺失/异常回退静态权重。"""
+    snap = model_dir / "weight_snapshot.json"
+    if not snap.exists():
+        return dict(static_weights)
+    try:
+        with open(snap, encoding="utf-8") as f:
+            data = json.load(f)
+        weights = {k: float(v) for k, v in data.items() if k != "_updated_at" and v is not None}
+        tot = sum(weights.values())
+        if tot <= 0:
+            return dict(static_weights)
+        return {k: v / tot for k, v in weights.items()}
+    except Exception as e:
+        logger.warning("weight_snapshot.json 加载失败，回退静态权重: %s", e)
+        return dict(static_weights)
+
+
+def _load_smooth_history(model_dir: Path) -> dict[str, dict] | None:
+    """读 smooth_history.json（近5日各模型各 symbol 的 rank 分数）。"""
+    f = model_dir / "smooth_history.json"
+    if not f.exists():
+        return None
+    try:
+        with open(f, encoding="utf-8") as fh:
+            return json.load(fh)
+    except Exception as e:
+        logger.warning("smooth_history.json 加载失败: %s", e)
+        return None
 
 
 def fuse_scores(
@@ -360,134 +428,129 @@ def fuse_scores(
     fusion_strategy: str = "linear",
     strategy_config: dict | None = None,
     model_horizons: dict[str, int] | None = None,
+    model_dir: Path | None = None,
 ) -> list[dict]:
-    """多源模型分数融合（按 fusion_strategy 选择算法）。
+    """生产级五层融合。
 
-    公共预处理：
-    1. 每个源模型的原始分做 z-score 标准化
-    2. Winsorize: 单模型 z-score 截尾到 ±_Z_CLIP, 防极端值劫持
-
-    融合算法（fusion_strategy）：
-      - linear            线性加权平均（默认，原逻辑）
-      - majority_vote     方向一致性投票（仅方向一致的模型参与加权，乘一致率）
-      - periodic_hierarchy 周期分层（长周期定方向，短周期定时，按 target_horizon 分界）
-      - confidence_gate   共识度门控（共识不足按阈值降权/丢弃）
+    L1 截面 rank 化：每模型当日分数 → rank 百分位 (0,1)，消除量纲
+    L2 时间平滑：与近5日历史分数指数加权（读 smooth_history.json）
+    L3 动态权重：读 weight_snapshot.json（recent_ic 动态权）或静态权重
+    L4 共识调节：方向一致率放大、分歧度收缩
+    L5 置信度：agreement × coverage，输出 confidence 字段
 
     Returns:
-        [{"symbol": "...", "score": <fused_z>, "consensus": n, "zfusion": <fused_z>,
-          "detail": {...}}, ...]
+        [{"symbol", "score"(-1~1), "consensus", "confidence", "zfusion", "detail"}, ...]
     """
     strategy_config = strategy_config or {}
     model_horizons = model_horizons or {}
     boundary = float(strategy_config.get("periodic_boundary", 10))
     gate_threshold = float(strategy_config.get("confidence_threshold", 0.6))
 
-    all_symbols = set()
-    for scores in all_scores.values():
-        all_symbols.update(scores.keys())
-
-    # 1. 每个源模型独立 z-score 标准化
-    z_scores: dict[str, dict[str, float]] = {}
+    # L1: 每模型截面 rank 化
+    ranked: dict[str, dict[str, float]] = {}
     for mid, scores in all_scores.items():
         if not scores:
             continue
-        vals = list(scores.values())
-        n = len(vals)
-        if n < 2:
-            continue
-        mu = sum(vals) / n
-        variance = sum((v - mu) ** 2 for v in vals) / n
-        sigma = variance ** 0.5
-        if sigma < 1e-12:
-            z_scores[mid] = {sym: 0.0 for sym in scores}
-        else:
-            z_scores[mid] = {sym: (s - mu) / sigma for sym, s in scores.items()}
+        r = _cross_sectional_rank(scores)
+        if r:
+            ranked[mid] = r
 
-    if not z_scores:
+    if not ranked:
         return []
 
-    n_models = len(z_scores)
+    # L2: 时间平滑（读 smooth_history.json）
+    smooth_history = _load_smooth_history(model_dir) if model_dir else None
+    if smooth_history:
+        ranked = {mid: _apply_time_smoothing(r, smooth_history, mid) for mid, r in ranked.items()}
+
+    # L3: 动态权重（读 weight_snapshot.json 覆盖静态）
+    eff_weights = _load_dynamic_weights(model_dir, weights) if model_dir else dict(weights)
+
+    n_models = len(ranked)
     results = []
 
-    for sym in all_symbols:
+    for sym in set().union(*(r.keys() for r in ranked.values())):
         per_model: dict[str, dict] = {}
-        z_clipped_map: dict[str, float] = {}
         w_map: dict[str, float] = {}
+        rank_map: dict[str, float] = {}
 
-        for mid in sorted(z_scores):
-            if sym in z_scores[mid]:
-                raw = all_scores[mid][sym]
-                z = z_scores[mid][sym]
-                z_clipped = max(-_Z_CLIP, min(_Z_CLIP, z))
-                w = weights.get(mid, 1.0 / n_models)
+        for mid in sorted(ranked):
+            if sym in ranked[mid]:
+                w = eff_weights.get(mid, 1.0 / n_models)
+                rank_map[mid] = ranked[mid][sym]
+                w_map[mid] = w
                 per_model[mid] = {
-                    "raw": round(raw, 6),
-                    "z": round(z, 4),
-                    "z_clipped": round(z_clipped, 4),
+                    "raw": round(all_scores[mid][sym], 6),
+                    "rank": round(ranked[mid][sym], 4),
                     "horizon": model_horizons.get(mid),
                 }
-                z_clipped_map[mid] = z_clipped
-                w_map[mid] = w
 
-        if not z_clipped_map:
+        if not rank_map:
             continue
 
-        # 公共: 共识度 = 独立看多模型数 (z > 0)
-        consensus = sum(1 for z in z_clipped_map.values() if z > 0)
+        # 共识度（rank>0.5 看多）与分歧度（rank 分数 std）
+        vals = list(rank_map.values())
+        n_bull = sum(1 for v in vals if v > 0.5)
+        n_bear = sum(1 for v in vals if v < 0.5)
+        consensus = max(n_bull, n_bear)
+        agreement = consensus / n_models
+        dispersion = float(np.std(vals)) if len(vals) > 1 else 0.0
 
-        # 按策略计算融合分数
+        # 各策略融合（在 rank 分数上执行）
         if fusion_strategy == "majority_vote":
-            # 方向投票：看涨数 vs 看跌数
-            n_bull = sum(1 for z in z_clipped_map.values() if z > 0)
-            n_bear = sum(1 for z in z_clipped_map.values() if z < 0)
-            majority_dir = 1 if n_bull >= n_bear else -1
-            # 仅方向一致的模型参与加权
-            aligned = {mid: z for mid, z in z_clipped_map.items() if (z > 0) == (majority_dir > 0) and z != 0}
+            majority_dir = 1 if n_bull >= n_bear else 0
+            aligned = {mid: v for mid, v in rank_map.items() if (v > 0.5) == (majority_dir > 0) and v != 0.5}
             if not aligned:
-                fused_z = 0.0
+                fused = 0.5
             else:
                 tot_w = sum(w_map[mid] for mid in aligned)
-                fused_z = sum(z * w_map[mid] for mid, z in aligned.items()) / tot_w if tot_w > 0 else 0.0
-                # 乘一致率（方向一致的模型占比），一致率低则弱化
-                fused_z *= (len(aligned) / n_models)
+                fused = sum(v * w_map[mid] for mid, v in aligned.items()) / tot_w if tot_w > 0 else 0.5
+                fused = 0.5 + (fused - 0.5) * (len(aligned) / n_models)
         elif fusion_strategy == "periodic_hierarchy":
-            # 长周期(≥boundary)定方向，短周期(<boundary)定时
-            long_z = [z for mid, z in z_clipped_map.items()
-                      if (model_horizons.get(mid) or boundary) >= boundary]
-            short_z = [z for mid, z in z_clipped_map.items()
-                       if (model_horizons.get(mid) or boundary) < boundary]
-            if not short_z:
-                short_z = list(z_clipped_map.values())  # 无短周期则全用
-            fused_z = sum(short_z) / len(short_z) if short_z else 0.0
-            if long_z:
-                long_dir = sum(1 for z in long_z if z > 0) - sum(1 for z in long_z if z < 0)
-                if long_dir > 0:  # 长趋势向上
-                    fused_z *= (1.5 if fused_z > 0 else 0.3)
-                elif long_dir < 0:  # 长趋势向下
-                    fused_z *= (1.5 if fused_z < 0 else 0.3)
-                else:  # 长周期分裂，中立
-                    fused_z *= 0.5
+            long_v = [v for mid, v in rank_map.items() if (model_horizons.get(mid) or boundary) >= boundary]
+            short_v = [v for mid, v in rank_map.items() if (model_horizons.get(mid) or boundary) < boundary]
+            if not short_v:
+                short_v = list(rank_map.values())
+            fused = sum(short_v) / len(short_v) if short_v else 0.5
+            if long_v:
+                long_dir = sum(1 for v in long_v if v > 0.5) - sum(1 for v in long_v if v < 0.5)
+                if long_dir > 0:
+                    fused = 0.5 + (fused - 0.5) * 1.5
+                elif long_dir < 0:
+                    fused = 0.5 + (fused - 0.5) * 0.3
+                else:
+                    fused = 0.5 + (fused - 0.5) * 0.5
         elif fusion_strategy == "confidence_gate":
-            # 共识度门控
-            consensus_ratio = consensus / n_models
+            consensus_ratio = agreement
             tot_w = sum(w_map.values())
-            fused_z = sum(z * w_map[mid] for mid, z in z_clipped_map.items()) / tot_w if tot_w > 0 else 0.0
+            fused = sum(v * w_map[mid] for mid, v in rank_map.items()) / tot_w if tot_w > 0 else 0.5
             if consensus_ratio >= gate_threshold:
-                pass  # 高共识，保留
+                pass
             elif consensus_ratio >= 0.4:
-                fused_z *= 0.5  # 分歧，降权
+                fused = 0.5 + (fused - 0.5) * 0.5
             else:
-                fused_z = 0.0  # 剧烈分歧，丢弃
+                fused = 0.5
         else:
-            # linear（默认）：加权平均
+            # linear 默认
             tot_w = sum(w_map.values())
-            fused_z = sum(z * w_map[mid] for mid, z in z_clipped_map.items()) / tot_w if tot_w > 0 else 0.0
+            fused = sum(v * w_map[mid] for mid, v in rank_map.items()) / tot_w if tot_w > 0 else 0.5
+
+        # L4: 共识调节 + 分歧收缩（映射到 -1~1 后调节）
+        score01 = max(0.0, min(1.0, fused))
+        score01 = 0.5 + (score01 - 0.5) * (1 + 0.5 * (agreement - 0.5)) / (1 + 1.5 * dispersion)
+        score01 = max(0.0, min(1.0, score01))
+        fused_signal = (score01 - 0.5) * 2.0  # -1~1，正=看涨
+
+        # L5: 置信度
+        confidence = agreement * (1.0 - min(1.0, dispersion * 2.0))
+        confidence = max(0.0, min(1.0, confidence))
 
         results.append({
             "symbol": sym,
-            "score": round(float(fused_z), 6),
+            "score": round(float(fused_signal), 6),
             "consensus": int(consensus),
-            "zfusion": round(float(fused_z), 6),
+            "confidence": round(float(confidence), 4),
+            "zfusion": round(float(fused_signal), 6),
             "detail": per_model,
         })
 
@@ -580,13 +643,14 @@ def main():
         logger.error("所有源模型推理均失败")
         sys.exit(1)
 
-    # 4. 融合
+    # 4. 融合（生产级五层：rank化 + 时间平滑 + 动态权重 + 共识 + 置信度）
     signals = fuse_scores(
         all_scores,
         weights,
         fusion_strategy=fusion_strategy,
         strategy_config=strategy_config,
         model_horizons=model_horizons,
+        model_dir=model_dir,
     )
     signals.sort(key=lambda x: x["score"], reverse=True)
     logger.info("融合完成: %d 条信号 (strategy=%s)", len(signals), fusion_strategy)

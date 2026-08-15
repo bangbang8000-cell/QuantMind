@@ -15,14 +15,12 @@ import {
 } from 'antd';
 import {
     CheckCircleFilled,
-    CloudDownloadOutlined,
     CloudSyncOutlined,
     InfoCircleOutlined,
     LineChartOutlined,
     ReloadOutlined,
     StockOutlined,
     SyncOutlined,
-    ThunderboltOutlined,
     WarningFilled,
 } from '@ant-design/icons';
 import dayjs from 'dayjs';
@@ -205,7 +203,6 @@ interface MaintenancePanelProps {
     };
     currentMarket: any;
     dailySyncLoading: boolean;
-    syncLoading: boolean;
     parquetLoading: boolean;
     fundamentalsLoading: boolean;
     marketSyncing: string | null;
@@ -220,8 +217,7 @@ interface MaintenancePanelProps {
     } | null;
     parquetResult: any;
     fundamentalsResult: any;
-    onDailySync: (incremental: boolean) => void;
-    onSyncOfficialData: () => void;
+    onDailySync: () => void;
     onUpdateFeatureParquet: (rebuild: boolean) => void;
     onUpdateMarketFeatures: (market: string, rebuild: boolean) => void;
     onSyncFundamentals: (market: string) => void;
@@ -233,7 +229,6 @@ const MaintenancePanel: React.FC<MaintenancePanelProps> = ({
     currentMarketCfg,
     currentMarket,
     dailySyncLoading,
-    syncLoading,
     parquetLoading,
     fundamentalsLoading,
     marketSyncing,
@@ -243,7 +238,6 @@ const MaintenancePanel: React.FC<MaintenancePanelProps> = ({
     parquetResult,
     fundamentalsResult,
     onDailySync,
-    onSyncOfficialData,
     onUpdateFeatureParquet,
     onUpdateMarketFeatures,
     onSyncFundamentals,
@@ -375,11 +369,11 @@ const MaintenancePanel: React.FC<MaintenancePanelProps> = ({
                                             message.info(
                                                 `${behind.length} 个数据集有更新，${notSynced.length} 个未同步，开始增量同步...`,
                                             );
-                                            onDailySync(true);
+                                            onDailySync();
                                         }
                                     })
                                     .catch(() => {
-                                        onDailySync(true);
+                                        onDailySync();
                                     });
                             }}
                             icon={<CloudSyncOutlined />}
@@ -391,30 +385,11 @@ const MaintenancePanel: React.FC<MaintenancePanelProps> = ({
                             block
                             className="h-12 rounded-2xl bg-indigo-600 hover:bg-indigo-700 border-none font-black text-sm shadow-lg shadow-indigo-100 transition-all flex items-center justify-center"
                             loading={dailySyncLoading}
-                            onClick={() => onDailySync(true)}
+                            onClick={() => onDailySync()}
                             icon={<SyncOutlined />}
                             disabled={!!syncTaskId}
                         >
                             直接增量同步（QuantDB）
-                        </Button>
-                        <Button
-                            block
-                            className="h-12 rounded-2xl border-slate-200 text-slate-600 font-bold hover:bg-slate-50 transition-all"
-                            loading={dailySyncLoading}
-                            onClick={() => onDailySync(false)}
-                            icon={<CloudDownloadOutlined />}
-                            disabled={!!syncTaskId}
-                        >
-                            全量同步
-                        </Button>
-                        <Button
-                            block
-                            className="h-12 rounded-2xl border-slate-200 text-slate-600 font-bold hover:bg-slate-50 transition-all"
-                            loading={syncLoading}
-                            onClick={onSyncOfficialData}
-                            icon={<ThunderboltOutlined />}
-                        >
-                            旧版全量同步
                         </Button>
                         <Divider className="!my-2" />
                         <Button
@@ -761,7 +736,6 @@ interface AdminRightColumnProps {
     currentMarketCfg: { label: string; gradient: string; color: string };
     currentMarket: any;
     dailySyncLoading: boolean;
-    syncLoading: boolean;
     parquetLoading: boolean;
     fundamentalsLoading: boolean;
     marketSyncing: string | null;
@@ -785,8 +759,7 @@ interface AdminRightColumnProps {
     olderColumns: any[];
     invalidColumns: any[];
     onReloadSyncStatus: () => void;
-    onDailySync: (incremental: boolean) => void;
-    onSyncOfficialData: () => void;
+    onDailySync: () => void;
     onUpdateFeatureParquet: (rebuild: boolean) => void;
     onUpdateMarketFeatures: (market: string, rebuild: boolean) => void;
     onSyncFundamentals: (market: string) => void;
@@ -798,7 +771,6 @@ export const AdminRightColumn: React.FC<AdminRightColumnProps> = ({
     currentMarketCfg,
     currentMarket,
     dailySyncLoading,
-    syncLoading,
     parquetLoading,
     fundamentalsLoading,
     marketSyncing,
@@ -817,7 +789,6 @@ export const AdminRightColumn: React.FC<AdminRightColumnProps> = ({
     invalidColumns,
     onReloadSyncStatus,
     onDailySync,
-    onSyncOfficialData,
     onUpdateFeatureParquet,
     onUpdateMarketFeatures,
     onSyncFundamentals,
@@ -829,7 +800,6 @@ export const AdminRightColumn: React.FC<AdminRightColumnProps> = ({
             currentMarketCfg={currentMarketCfg}
             currentMarket={currentMarket}
             dailySyncLoading={dailySyncLoading}
-            syncLoading={syncLoading}
             parquetLoading={parquetLoading}
             fundamentalsLoading={fundamentalsLoading}
             marketSyncing={marketSyncing}
@@ -839,7 +809,6 @@ export const AdminRightColumn: React.FC<AdminRightColumnProps> = ({
             parquetResult={parquetResult}
             fundamentalsResult={fundamentalsResult}
             onDailySync={onDailySync}
-            onSyncOfficialData={onSyncOfficialData}
             onUpdateFeatureParquet={onUpdateFeatureParquet}
             onUpdateMarketFeatures={onUpdateMarketFeatures}
             onSyncFundamentals={onSyncFundamentals}

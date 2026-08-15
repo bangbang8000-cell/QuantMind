@@ -110,23 +110,24 @@ class CryptoAdapter(MarketAdapter):
     description = "Binance 加密货币合约 (7×24)，CryptoAlpha 因子集 (90+ 因子)"
 
     def get_data_config(self) -> DataConfig:
+        from backend.services.engine.data_platform.quantbc_hub import (
+            _resolve_quantbc_data_dir,
+        )
+
         return DataConfig(
             provider_uri=self.get_qlib_provider_uri(),
-            data_dir="/app/db/crypto_data",
-            calendar="5min",
+            data_dir=_resolve_quantbc_data_dir(),
+            calendar="day",
             market="all",
-            extra={"symbols": "BTCUSDT,ETHUSDT,...", "freq": "5min"},
+            extra={"symbols": "bc_BTCUSDT,bc_ETHUSDT,...", "freq": "day"},
         )
 
     def get_qlib_provider_uri(self) -> str:
-        container_path = "/app/db/qlib_data/crypto_data"
-        if os.path.isdir(container_path):
-            return container_path
-        host_path = os.path.join(
-            os.getenv("PROJECT_ROOT", "/opt/quantmind"),
-            "db", "qlib_data", "crypto_data",
+        from backend.services.engine.data_platform.quantbc_hub import (
+            _resolve_quantbc_data_dir,
         )
-        return host_path
+
+        return str(Path(_resolve_quantbc_data_dir()) / ".qlib_cache" / "bc_data")
 
     def get_backtest_config(self) -> BacktestConfig:
         return BacktestConfig(
@@ -162,15 +163,12 @@ class CryptoAdapter(MarketAdapter):
         }
 
     def prepare_data(self) -> bool:
-        """下载并转换加密货币 5 分钟数据"""
-        from ..data_pipeline.crypto_data import (
-            convert_h5_to_qlib_format,
-            download_all_crypto,
-        )
+        """从 QuantBC parquet 构建 Qlib 二进制缓存（parquet 单源）。"""
+        from backend.services.engine.qlib_data_builder import QlibDataBuilder
 
         try:
-            h5_path = download_all_crypto(interval="5m", start_date="2026-03-01")
-            convert_h5_to_qlib_format(h5_path, self.get_qlib_provider_uri(), freq="5min")
+            builder = QlibDataBuilder.for_market("CRYPTO")
+            builder.build_all(incremental=True)
             return True
         except Exception as e:
             logger = __import__("logging").getLogger(__name__)
@@ -178,5 +176,12 @@ class CryptoAdapter(MarketAdapter):
             return False
 
     def is_data_ready(self) -> bool:
-        from ..data_pipeline.crypto_data import is_crypto_data_ready
-        return is_crypto_data_ready(self.get_qlib_provider_uri())
+        """检查 Qlib 目录 + calendars + instruments + features 是否齐全。"""
+        p = Path(self.get_qlib_provider_uri())
+        return (
+            p.is_dir()
+            and (p / "calendars" / "day.txt").is_file()
+            and (p / "instruments" / "all.txt").is_file()
+            and (p / "features").is_dir()
+            and len(list((p / "features").iterdir())) > 0
+        )

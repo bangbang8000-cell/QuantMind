@@ -53,6 +53,7 @@ async def lifespan(app: FastAPI):
     ledger_settlement_task = None
     manual_execution_task = None
     sandbox_signal_task = None
+    tdx_account_sync_task = None
 
     try:
         await init_unified_config(service_name="quantmind-trade")
@@ -113,12 +114,17 @@ async def lifespan(app: FastAPI):
             run_real_account_ledger_settlement_task,
         )
         from backend.services.trade.services.manual_execution_worker import run_manual_execution_worker
+        from backend.services.trade.services.tdx_account_sync_task import run_tdx_account_sync_task
 
         scanner_task = asyncio.create_task(run_order_timeout_scanner())
         margin_task = asyncio.create_task(run_margin_interest_scanner())
         snapshot_task = asyncio.create_task(run_portfolio_snapshot_task())
         ledger_settlement_task = asyncio.create_task(run_real_account_ledger_settlement_task())
         manual_execution_task = asyncio.create_task(run_manual_execution_worker(), name="manual-execution-worker")
+        tdx_account_sync_task = asyncio.create_task(
+            run_tdx_account_sync_task(interval_seconds=30),
+            name="tdx-account-sync",
+        )
     except Exception as e:
         app.state.startup_healthy = False
         logger.error("trade background scanners start failed: %s", e, exc_info=True)
@@ -134,6 +140,19 @@ async def lifespan(app: FastAPI):
     except Exception as e:
         app.state.startup_healthy = False
         logger.error("trade sandbox pool start failed: %s", e, exc_info=True)
+
+    # 恢复容器重启前的模拟盘沙箱运行状态（trade:active_strategy:* 标记）
+    try:
+        from backend.services.trade.services.simulation_runtime_restorer import (
+            SimulationRuntimeRestorer,
+        )
+
+        restorer = SimulationRuntimeRestorer(redis_client)
+        restored_count = await restorer.restore_all()
+        if restored_count > 0:
+            logger.info("Simulation runtime restored %d sandboxes after restart", restored_count)
+    except Exception as e:
+        logger.warning("Simulation runtime restore failed: %s", e)
 
     # 启动沙箱信号消费者（将沙箱信号转换为模拟盘订单）
     try:

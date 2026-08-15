@@ -589,7 +589,6 @@ async def sweep_market(
 class DailySyncRequest(BaseModel):
     market: str = "A"
     symbols: list[str] = []
-    incremental: bool = True
     calibrate: bool = True
 
 
@@ -598,7 +597,10 @@ async def trigger_daily_sync(
     payload: DailySyncRequest,
     current_user: dict = Depends(require_admin),
 ):
-    """异步提交统一数据同步任务到 Celery，立即返回 task_id。"""
+    """异步提交统一数据同步任务到 Celery，立即返回 task_id。
+
+    A 股固定走 QuantDB 增量同步（parquet → PG → Qlib 缓存），不再支持全量模式。
+    """
     try:
         from backend.services.engine.tasks.celery_tasks import daily_data_sync_task
 
@@ -606,7 +608,7 @@ async def trigger_daily_sync(
         task = daily_data_sync_task.delay(
             market=payload.market,
             symbols=symbols_str,
-            incremental=payload.incremental,
+            incremental=True,
             calibrate=payload.calibrate,
         )
         return {
@@ -990,14 +992,14 @@ async def sync_alpha_agent_market(
 
         adapter = get_adapter(market)
 
-        # A 股数据已通过 investment_data 管理，不走这个接口
+        # A 股数据通过 QuantDB 单源管理（数据管理页「直接增量同步（QuantDB）」）
         if market == "a_share":
             return {
                 "success": True,
                 "data": {
                     "market": market,
                     "status": "skipped",
-                    "message": "A 股数据通过 investment_data 管理，请使用「更新投资数据」功能",
+                    "message": "A 股数据由 QuantDB 单源管理，请使用「直接增量同步（QuantDB）」功能",
                 },
             }
 

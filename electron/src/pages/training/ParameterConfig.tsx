@@ -34,6 +34,12 @@ const MARKET_BENCHMARKS: Record<string, { label: string; value: string }[]> = {
     { label: '比特币', value: 'BTC' },
     { label: '以太坊', value: 'ETH' },
   ],
+  FUTURES: [
+    { label: '原油', value: 'CL.FUT' },
+    { label: '沪铜', value: 'CU.FUT' },
+    { label: '螺纹钢', value: 'RB.FUT' },
+    { label: '黄金', value: 'AU.FUT' },
+  ],
 };
 
 interface ParameterConfigProps {
@@ -209,6 +215,38 @@ export const ParameterConfig: React.FC<ParameterConfigProps> = ({
                   />
                 </div>
               )}
+              {params.ensemble_method === 'stacking' && (
+                <Row gutter={[12, 12]}>
+                  <Col span={12}>
+                    <div className="space-y-1">
+                      <div className="text-xs text-slate-500">OOF 折数 (n_folds)</div>
+                      <InputNumber
+                        value={params.n_folds ?? 3}
+                        min={2}
+                        max={10}
+                        step={1}
+                        className="w-full"
+                        onChange={(v) => onParamsChange({ ...params, n_folds: Number(v ?? 3) })}
+                      />
+                      <div className="text-[10px] text-slate-400">时序扩展窗口折数，越多越稳但越慢</div>
+                    </div>
+                  </Col>
+                  <Col span={12}>
+                    <div className="space-y-1">
+                      <div className="text-xs text-slate-500">元学习器正则 (alpha)</div>
+                      <InputNumber
+                        value={params.meta_alpha ?? 1.0}
+                        min={0.01}
+                        max={100}
+                        step={0.5}
+                        className="w-full"
+                        onChange={(v) => onParamsChange({ ...params, meta_alpha: Number(v ?? 1.0) })}
+                      />
+                      <div className="text-[10px] text-slate-400">Ridge 元学习器 L2 系数，越大越保守</div>
+                    </div>
+                  </Col>
+                </Row>
+              )}
               {params.model_types.some(mt => {
                 const opt = MODEL_TYPE_OPTIONS.find(m => m.value === mt);
                 return opt?.category === 'deep_learning';
@@ -252,6 +290,36 @@ export const ParameterConfig: React.FC<ParameterConfigProps> = ({
 
           <Card className="rounded-2xl border-slate-200" size="small" title="训练超参">
             <div className="space-y-4">
+              {/* Optuna 自动超参搜索 */}
+              <div className="rounded-xl border border-violet-100 bg-violet-50/40 p-3">
+                <div className="flex items-center justify-between gap-3">
+                  <div className="space-y-0.5">
+                    <div className="text-xs font-semibold text-slate-700">Optuna 自动超参搜索</div>
+                    <div className="text-[11px] text-slate-400">
+                      自动搜索树模型最优超参（LGB/XGB/CatBoost），以验证集 Rank ICIR 为目标。开启后训练耗时约 ×trial 数
+                    </div>
+                  </div>
+                  <Switch
+                    checked={!!params.optunaEnabled}
+                    onChange={(checked) => onParamsChange({ ...params, optunaEnabled: checked })}
+                  />
+                </div>
+                {params.optunaEnabled && (
+                  <div className="mt-2 flex items-center gap-2">
+                    <span className="text-xs text-slate-500">搜索次数</span>
+                    <InputNumber
+                      value={params.optunaTrials ?? 20}
+                      min={10}
+                      max={100}
+                      step={5}
+                      className="w-28"
+                      onChange={(v) => onParamsChange({ ...params, optunaTrials: Number(v ?? 20) })}
+                    />
+                    <span className="text-[10px] text-slate-400">默认 20 次，耗时约为普通训练的 20 倍</span>
+                  </div>
+                )}
+              </div>
+
               {/* Objective & Metric - 共享 */}
               <Row gutter={[12, 12]}>
                 <Col span={12}>
@@ -295,6 +363,9 @@ export const ParameterConfig: React.FC<ParameterConfigProps> = ({
                     {[
                       ['num_leaves', '叶子数', { min: 1, max: 1024, step: 1 }],
                       ['min_data_in_leaf', '叶子最小样本', { min: 1, max: 10000, step: 1 }],
+                      ['min_child_samples', '子节点最小样本', { min: 1, max: 10000, step: 1 }],
+                      ['path_smooth', '路径平滑', { min: 0, max: 10, step: 0.1 }],
+                      ['bagging_freq', 'Bagging 频率', { min: 0, max: 100, step: 1 }],
                       ['lambda_l1', 'L1 正则', { min: 0, max: 10, step: 0.1 }],
                       ['lambda_l2', 'L2 正则', { min: 0, max: 10, step: 0.1 }],
                       ['feature_fraction', '特征采样', { min: 0.1, max: 1, step: 0.01 }],
@@ -356,6 +427,7 @@ export const ParameterConfig: React.FC<ParameterConfigProps> = ({
                       ['xgb_colsample_bytree', '列采样', { min: 0.1, max: 1, step: 0.05 }],
                       ['xgb_reg_alpha', 'L1 正则', { min: 0, max: 10, step: 0.1 }],
                       ['xgb_reg_lambda', 'L2 正则', { min: 0, max: 10, step: 0.1 }],
+                      ['xgb_min_child_weight', '最小叶子权重', { min: 1, max: 1000, step: 10 }],
                       ['num_boost_round', '最大迭代轮数', { min: 1, max: 10000, step: 10 }],
                       ['early_stopping_rounds', '早停轮数', { min: 1, max: 1000, step: 5 }],
                     ].map(([key, label, lim]) => (
@@ -412,6 +484,7 @@ export const ParameterConfig: React.FC<ParameterConfigProps> = ({
                       ['cb_l2_leaf_reg', 'L2 正则', { min: 0, max: 10, step: 0.5 }],
                       ['cb_random_strength', '随机扰动', { min: 0, max: 10, step: 0.5 }],
                       ['cb_bagging_temperature', 'Bagging 温度', { min: 0, max: 10, step: 0.5 }],
+                      ['cb_od_wait', '早停等待轮数', { min: 1, max: 1000, step: 10 }],
                       ['num_boost_round', '最大迭代轮数', { min: 1, max: 10000, step: 10 }],
                       ['early_stopping_rounds', '早停轮数', { min: 1, max: 1000, step: 5 }],
                     ].map(([key, label, lim]) => (
@@ -522,6 +595,43 @@ export const ParameterConfig: React.FC<ParameterConfigProps> = ({
                       </Col>
                     ))}
                   </Row>
+                  {/* DL 模型专属参数：按主模型动态显示 */}
+                  {params.model_type === 'tcn' && (
+                    <Row gutter={[12, 12]} className="mt-3">
+                      <Col span={12}>
+                        <div className="space-y-1">
+                          <div className="text-xs text-slate-500">卷积核大小 (kernel_size)</div>
+                          <InputNumber
+                            value={params.tcn_kernel_size ?? 5}
+                            min={3}
+                            max={15}
+                            step={2}
+                            className="w-full"
+                            onChange={(v) => onParamsChange({ ...params, tcn_kernel_size: Number(v ?? 5) })}
+                          />
+                          <div className="text-[10px] text-slate-400">增大到 7+ 捕捉更长期依赖</div>
+                        </div>
+                      </Col>
+                    </Row>
+                  )}
+                  {params.model_type === 'nativetft' && (
+                    <Row gutter={[12, 12]} className="mt-3">
+                      <Col span={12}>
+                        <div className="space-y-1">
+                          <div className="text-xs text-slate-500">注意力头数 (num_heads)</div>
+                          <InputNumber
+                            value={params.tft_num_heads ?? 4}
+                            min={1}
+                            max={16}
+                            step={1}
+                            className="w-full"
+                            onChange={(v) => onParamsChange({ ...params, tft_num_heads: Number(v ?? 4) })}
+                          />
+                          <div className="text-[10px] text-slate-400">需能被隐藏维度整除</div>
+                        </div>
+                      </Col>
+                    </Row>
+                  )}
                 </>
               )}
             </div>
@@ -604,6 +714,20 @@ export const ParameterConfig: React.FC<ParameterConfigProps> = ({
                   <Switch
                     checked={!!context.industry_as_feature}
                     onChange={(checked) => onContextChange({ ...context, industry_as_feature: checked })}
+                  />
+                </Tooltip>
+              </div>
+              <div className="md:col-span-2 flex items-center justify-between rounded-xl border border-slate-200 bg-white px-3 py-2">
+                <div className="space-y-0.5">
+                  <div className="text-xs text-slate-500">特征截面预处理</div>
+                  <div className="text-[11px] text-slate-400">
+                    按交易日截面：中位数填充缺失 + 分位缩尾(1%/99%) + Z-score 标准化。消除量纲差异与极端值
+                  </div>
+                </div>
+                <Tooltip title="对特征做截面预处理：每交易日按特征中位数填充缺失（停牌）、1%/99% 分位缩尾、截面 Z-score。开启后模型输入分布更规范，但会改变特征量纲（与旧模型不可直接对比）">
+                  <Switch
+                    checked={!!params.preprocessingEnabled}
+                    onChange={(checked) => onParamsChange({ ...params, preprocessingEnabled: checked })}
                   />
                 </Tooltip>
               </div>

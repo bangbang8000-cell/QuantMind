@@ -36,15 +36,17 @@ class OrderSide(_CaseInsensitiveEnum):
 
 
 class PositionSide(_CaseInsensitiveEnum):
-    LONG = "long"
-    SHORT = "short"
+    # 值与 db_init.sql 的 PG positionside enum 一致（LONG/SHORT）
+    LONG = "LONG"
+    SHORT = "SHORT"
 
 
 class TradeAction(_CaseInsensitiveEnum):
-    BUY_TO_OPEN = "buy_to_open"
-    SELL_TO_CLOSE = "sell_to_close"
-    SELL_TO_OPEN = "sell_to_open"
-    BUY_TO_CLOSE = "buy_to_close"
+    # 值与 db_init.sql 的 PG tradeaction enum 一致（OPEN/CLOSE/OPEN_REVERSE/CLOSE_REVERSE）
+    BUY_TO_OPEN = "OPEN"
+    SELL_TO_CLOSE = "CLOSE"
+    SELL_TO_OPEN = "OPEN_REVERSE"
+    BUY_TO_CLOSE = "CLOSE_REVERSE"
 
 class OrderType(_CaseInsensitiveEnum):
     MARKET = "market"

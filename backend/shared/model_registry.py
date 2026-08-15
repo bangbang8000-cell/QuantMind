@@ -712,6 +712,47 @@ class ModelRegistryService:
             raise ValueError("archive result unavailable")
         return archived
 
+    async def activate_model(self, *, tenant_id: str, user_id: str, model_id: str) -> dict[str, Any]:
+        """手动激活 candidate 模型 → ready（软门禁触发的模型走此入口）。
+
+        仅 candidate 可激活；激活后保留 quality_warnings（供展示），用户可设默认。
+        """
+        tenant, user = self._normalize_owner(tenant_id=tenant_id, user_id=user_id)
+        mid = str(model_id).strip()
+        if not mid:
+            raise ValueError("model_id is required")
+
+        model = await self.get_model(tenant_id=tenant, user_id=user, model_id=mid)
+        if model is None:
+            raise ValueError("model not found")
+        if model.get("status") != "candidate":
+            raise ValueError(f"only candidate models can be activated, current status: {model.get('status')}")
+
+        now = datetime.now(timezone.utc)
+        async with get_session() as session:
+            await session.execute(
+                text(
+                    """
+                    UPDATE qm_user_models
+                    SET status = 'ready', activated_at = :activated_at, updated_at = :updated_at
+                    WHERE tenant_id = :tenant_id AND user_id = :user_id AND model_id = :model_id
+                    """
+                ),
+                {
+                    "tenant_id": tenant,
+                    "user_id": user,
+                    "model_id": mid,
+                    "activated_at": now,
+                    "updated_at": now,
+                },
+            )
+            await session.commit()
+
+        activated = await self.get_model(tenant_id=tenant, user_id=user, model_id=mid)
+        if activated is None:
+            raise ValueError("activate result unavailable")
+        return activated
+
     async def get_strategy_binding(
         self,
         *,
@@ -1377,6 +1418,24 @@ class ModelRegistryService:
             sync_error = validation_error
             sync_status = "failed"
 
+        # 样本外验证软门禁：test 集 Rank ICIR 低于阈值时保持 candidate，
+        # 不自动设为默认，仅注入 quality_warnings 供用户手动评估后激活。
+        # 门禁只做提示，不阻断（用户可通过 activate 流程手动提升）。
+        gate_triggered = False
+        _test_icir = self._extract_test_rank_icir(metadata, metrics)
+        _gate_threshold = 0.05
+        if sync_status == "ready" and _test_icir is not None and _test_icir < _gate_threshold:
+            logger.warning(
+                "Model %s test_rank_icir=%.4f < %.2f, holding at candidate (soft gate)",
+                model_id, _test_icir, _gate_threshold,
+            )
+            sync_status = "candidate"
+            gate_triggered = True
+            metadata.setdefault("quality_warnings", []).append(
+                f"test_rank_icir={_test_icir:.4f} 低于软门禁阈值 {_gate_threshold}，"
+                "未自动激活。请人工评估后在模型管理页手动激活。"
+            )
+
         async with get_session() as session:
             if sync_status == "ready":
                 has_business_default = (
@@ -1426,6 +1485,28 @@ class ModelRegistryService:
                         "model_file": model_file,
                         "is_default": bool(should_set_default),
                         "activated_at": now,
+                        "updated_at": now,
+                    },
+                )
+            elif gate_triggered:
+                # 软门禁触发：保持 candidate，持久化 quality_warnings
+                await session.execute(
+                    text(
+                        """
+                        UPDATE qm_user_models
+                        SET status = 'candidate',
+                            model_file = :model_file,
+                            metadata_json = :metadata_json,
+                            updated_at = :updated_at
+                        WHERE tenant_id = :tenant_id AND user_id = :user_id AND model_id = :model_id
+                        """
+                    ),
+                    {
+                        "tenant_id": tenant,
+                        "user_id": user,
+                        "model_id": model_id,
+                        "model_file": model_file,
+                        "metadata_json": json.dumps(metadata, ensure_ascii=False),
                         "updated_at": now,
                     },
                 )
@@ -1527,6 +1608,9 @@ class ModelRegistryService:
                 raise ValueError(f"manual 权重缺少源模型: {missing}")
             total = sum(raw.values()) or 1.0
             weights = {k: v / total for k, v in raw.items()}
+        elif weight_strategy == "recent_ic":
+            # 初始等权；每日回填任务按近30日生产 rank_ic 动态刷新 weight_snapshot.json
+            weights = {str(s["model_id"]): 1.0 / len(sources) for s in sources}
         else:
             weights = {str(s["model_id"]): 1.0 / len(sources) for s in sources}
 
@@ -1826,6 +1910,24 @@ class ModelRegistryService:
             return "failed", "no artifacts found in local training workspace or COS path", model_file
 
         return "ready", "", model_file
+
+    @staticmethod
+    def _extract_test_rank_icir(metadata: dict, metrics: dict) -> float | None:
+        """从模型 metadata/metrics 提取 test 集 Rank ICIR（样本外验证指标）。
+
+        优先取 metadata.metrics.test_rank_icir（train.py 写入）；回退 metrics_json。
+        无法确定时返回 None（软门禁不生效，模型按原流程进入 ready）。
+        """
+        for src in (metrics, metadata.get("metrics"), metadata):
+            if not isinstance(src, dict):
+                continue
+            v = src.get("test_rank_icir")
+            if isinstance(v, (int, float)) and not isinstance(v, bool):
+                try:
+                    return float(v)
+                except (TypeError, ValueError):
+                    pass
+        return None
 
     @staticmethod
     def _validate_synced_model(

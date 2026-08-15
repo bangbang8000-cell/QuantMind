@@ -1100,21 +1100,23 @@ class InferenceScriptRunner:
     def _resolve_signal_sides(
         scores: list[float],
         consensus_list: list[int] | None = None,
+        confidence_list: list[float] | None = None,
         buy_pct: float = 0.20,
         sell_pct: float = 0.20,
         min_buy_score: float = 0.2,
         max_sell_score: float = -0.2,
         min_consensus: int = 4,
+        min_confidence: float = 0.3,
     ) -> list[str]:
-        """双指标信号逻辑：百分比排名 + 共识度 + 绝对方向闸门。
+        """双指标信号逻辑：百分比排名 + 共识度 + 绝对方向闸门 + 置信度。
 
         逻辑：
         - Top buy_pct 百分位 AND score > min_buy_score AND consensus >= min_consensus → BUY
         - Bottom sell_pct 百分位 AND score < max_sell_score AND consensus >= min_consensus → SELL
-        - 分歧太大 (consensus < min_consensus) → HOLD
+        - 分歧太大 (consensus < min_consensus) 或低置信 (confidence < min_confidence) → HOLD
         - 其余 → HOLD
 
-        当 consensus_list 为 None 时退化为纯百分位逻辑（兼容旧版JSON输出）。
+        confidence_list 为 None 时跳过置信度门槛（兼容旧版）。
         """
         import numpy as np
 
@@ -1128,14 +1130,20 @@ class InferenceScriptRunner:
         buy_threshold = np.percentile(arr, (1 - buy_pct) * 100)
         sell_threshold = np.percentile(arr, sell_pct * 100)
 
-        # 生成信号（百分位 + 方向 + 共识度 三重约束）
+        # 生成信号（百分位 + 方向 + 共识度 + 置信度 四重约束）
         has_consensus = consensus_list is not None and len(consensus_list) == n
+        has_confidence = confidence_list is not None and len(confidence_list) == n
         sides = []
         for i, s in enumerate(scores):
+            # 置信度门槛（None 视为低置信 → HOLD，避免 NoneType 比较异常）
+            conf = confidence_list[i] if has_confidence else None
+            low_conf = conf is not None and conf < min_confidence
+            if has_confidence and conf is None:
+                low_conf = True
             is_buy = s >= buy_threshold and s > min_buy_score
             is_sell = s <= sell_threshold and s < max_sell_score
-            if has_consensus and consensus_list[i] < min_consensus:
-                sides.append("HOLD")  # 分歧太大
+            if (has_consensus and consensus_list[i] < min_consensus) or low_conf:
+                sides.append("HOLD")  # 分歧太大或低置信
             elif is_buy:
                 sides.append("BUY")
             elif is_sell:
@@ -1316,6 +1324,7 @@ class InferenceScriptRunner:
         consensus_list = [s.get("consensus", 0) for s in signals_sorted]
         zfusion_list = [s.get("zfusion", 0.0) for s in signals_sorted]
         detail_list = [s.get("detail", {}) for s in signals_sorted]
+        confidence_list = [s.get("confidence") for s in signals_sorted]
         feature_dim = max(1, self._resolve_expected_feature_dim())
         model_name = str(active_model_id or self.primary_model_id or "inference_script")
         feature_version = self._resolve_feature_version(model_name)
@@ -1349,11 +1358,12 @@ class InferenceScriptRunner:
                     consensus_list=consensus_list,
                     zfusion_list=zfusion_list,
                     detail_list=detail_list,
+                    confidence_list=confidence_list,
                     feature_dim=feature_dim,
                     model_name=model_name,
                     feature_version=feature_version,
                     inference_date=inference_date,
-                    signal_sides=self._resolve_signal_sides(scores, consensus_list),
+                    signal_sides=self._resolve_signal_sides(scores, consensus_list, confidence_list),
                 )
         except Exception as exc:
             logger.error(f"[InferenceScriptRunner] 写库失败: {exc}")
@@ -1396,41 +1406,72 @@ class InferenceScriptRunner:
                 f"[InferenceScriptRunner] 已发布 {published} 条信号, run_id={run_id}"
             )
 
-            # === 推送到通达信 (选股信号 + 消息提醒) ===
+            # === 推送到通达信 (Top N 选股: 板块 + 预警 + 消息) ===
             if os.getenv("ENABLE_TDX_PUSH", "").strip().lower() == "true":
                 try:
                     import asyncio
 
-                    from backend.services.trade.services.tdx_push_service import (
-                        TdxPushError,
-                        tdx_pusher,
+                    from backend.services.trade.services.tdx_signal_push_service import (
+                        tdx_signal_pusher,
                     )
 
-                    # 组装通达信板块代码列表 (标准化为 600519.SH 格式)
-                    push_stocks = [
-                        (s.get("symbol") or "").replace("sh", "").replace("sz", "").upper()
-                        + (".SH" if (s.get("symbol") or "").startswith("sh") else
-                           ".SZ" if (s.get("symbol") or "").startswith("sz") else "")
-                        for s in signal_events
-                        if s.get("symbol")
-                    ]
-                    push_stocks = [s for s in push_stocks if "." in s]
-
                     async def _push_to_tdx():
-                        if push_stocks:
-                            await tdx_pusher.push_signals_to_block(
-                                push_stocks, block_code="",
-                                block_name="QuantMind今日选股", show=True)
-                        await tdx_pusher.push_message(
-                            f"MSG,QuantMind 今日选股 {len(push_stocks)} 只|"
-                            f"预测日期 {prediction_trade_date}|run_id {run_id}"
+                        result = await tdx_signal_pusher.build_push_payload(
+                            tenant_id=tenant_id,
+                            user_id=str(user_id),
+                            run_id=run_id,
                         )
-                        logger.info(
-                            f"[InferenceScriptRunner] 已推送 {len(push_stocks)} 只选股到通达信"
-                        )
+                        if result.get("success"):
+                            logger.info(
+                                "[InferenceScriptRunner] 已推送 %d 只选股到通达信 (run=%s)",
+                                result.get("pushed", 0),
+                                run_id,
+                            )
+                        else:
+                            logger.warning(
+                                "[InferenceScriptRunner] 通达信选股推送未成功: %s",
+                                result.get("error") or "未知原因",
+                            )
 
-                    asyncio.create_task(_push_to_tdx())
-                except (TdxPushError, Exception) as exc:
+                    try:
+                        asyncio.get_running_loop()
+                    except RuntimeError:
+                        # celery 同步上下文: 没有运行中的事件循环
+                        asyncio.run(_push_to_tdx())
+                    else:
+                        asyncio.create_task(_push_to_tdx())
+
+                    # === 滚动买卖检查 (分数>2.2买/掉下2.2卖/大盘MA20过滤) ===
+                    from backend.services.trade.services.tdx_rolling_trade_service import (
+                        tdx_rolling_trader,
+                    )
+
+                    async def _run_rolling_push():
+                        result = await tdx_rolling_trader.run_rolling_push(
+                            tenant_id=tenant_id,
+                            user_id=str(user_id),
+                            run_id=run_id,
+                        )
+                        if result.get("success"):
+                            logger.info(
+                                "[InferenceScriptRunner] 滚动买卖推送完成 run=%s buys=%d sells=%d",
+                                run_id,
+                                len(result.get("buys") or []),
+                                len(result.get("sells") or []),
+                            )
+                        else:
+                            logger.warning(
+                                "[InferenceScriptRunner] 滚动买卖推送未成功: %s",
+                                result.get("error") or "未知原因",
+                            )
+
+                    try:
+                        asyncio.get_running_loop()
+                    except RuntimeError:
+                        asyncio.run(_run_rolling_push())
+                    else:
+                        asyncio.create_task(_run_rolling_push())
+                except Exception as exc:
                     logger.warning(
                         f"[InferenceScriptRunner] 推送通达信失败（不影响结果）: {exc}"
                     )
@@ -1458,6 +1499,7 @@ class InferenceScriptRunner:
         consensus_list: list[int] | None = None,
         zfusion_list: list[float] | None = None,
         detail_list: list[dict] | None = None,
+        confidence_list: list[float] | None = None,
     ) -> None:
         """写库逻辑（在 _INFER_PERSIST_LOCK 保护下执行）。
 
@@ -1629,6 +1671,8 @@ class InferenceScriptRunner:
                 quality_parts["zfusion"] = round(zfusion_list[idx], 6)
             if has_detail:
                 quality_parts["detail"] = detail_list[idx]
+            if confidence_list is not None and idx < len(confidence_list) and confidence_list[idx] is not None:
+                quality_parts["confidence"] = round(float(confidence_list[idx]), 4)
             quality = json.dumps(quality_parts) if quality_parts else None
             if quote_redis:
                 try:

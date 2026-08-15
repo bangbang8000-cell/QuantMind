@@ -227,9 +227,9 @@ def main():
     parser = argparse.ArgumentParser(description="QuantMind RD-Agent Multi-Market Runner")
     parser.add_argument("--task-id", required=True)
     parser.add_argument("--user-id", required=True)
-    parser.add_argument("--market", default="a_share", help="Market: a_share, crypto, hong_kong, us_stock")
+    parser.add_argument("--market", default="a_share", help="Market: a_share, crypto, hong_kong, us_stock, futures")
     parser.add_argument("--universe", default="csi300", help="Stock universe: csi300, csi500, csi1000, sse50, gem, star, csi800, all_a")
-    parser.add_argument("--loop-n", type=int, default=3)
+    parser.add_argument("--loop-n", type=int, default=5)
     parser.add_argument("--log-dir", default="")
     parser.add_argument("--direction", default="")
     args = parser.parse_args()
@@ -286,6 +286,7 @@ def main():
             "crypto": "/app/db/crypto_data/5min_pv.h5",
             "hong_kong": "/app/db/hk_data/daily_pv.h5",
             "us_stock": "/app/db/us_data/daily_pv.h5",
+            "futures": "/app/db/futures_data/daily_pv.h5",
         }
         data_path = market_data_paths.get(args.market, "/app/alphaagent/scenarios/qlib/experiment/factor_data_template/daily_pv_all.h5")
         if Path(data_path).exists():

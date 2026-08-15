@@ -141,7 +141,9 @@ class AShareAdapter(MarketAdapter):
                 formula = (feat.get("formula") or "").strip()
                 if formula:
                     parts.append(f"公式: {formula}")
-                factors[feat_key] = " | ".join(parts) + "（QuantDB 已预计算，可直接引用）"
+                factors[feat_key] = (
+                    " | ".join(parts) + "（QuantDB 已预计算，仅供参考实现思路，不可直接引用）"
+                )
 
             if not factors:
                 return None
@@ -166,7 +168,7 @@ class AShareAdapter(MarketAdapter):
 
     @staticmethod
     def _fallback_factors() -> dict[str, str]:
-        """Alpha158(20) 默认因子集兜底"""
+        """Alpha158 风格默认因子集兜底（K线形态 + 动量 + 均线 + 波动率 + 量价 + 趋势强度）。"""
         return {
             "KMID": "($close - $open) / $open",
             "KLEN": "($high - $low) / $open",
@@ -182,6 +184,8 @@ class AShareAdapter(MarketAdapter):
             "ROC20": "Ref($close, 20) / $close - 1",
             "ROC30": "Ref($close, 30) / $close - 1",
             "ROC60": "Ref($close, 60) / $close - 1",
+            "ROC120": "Ref($close, 120) / $close - 1",
+            "ROC250": "Ref($close, 250) / $close - 1",
             "MA5": "Mean($close, 5) / $close",
             "MA10": "Mean($close, 10) / $close",
             "MA20": "Mean($close, 20) / $close",
@@ -192,6 +196,17 @@ class AShareAdapter(MarketAdapter):
             "STD20": "Std($close, 20) / $close",
             "STD30": "Std($close, 30) / $close",
             "STD60": "Std($close, 60) / $close",
+            # 量价相关（A股量价背离是最经典 alpha 来源，原兜底集缺失）
+            "CORR5": "Corr(Log($close), Log($volume + 1), 5)",
+            "CORR10": "Corr(Log($close), Log($volume + 1), 10)",
+            "CORR20": "Corr(Log($close), Log($volume + 1), 20)",
+            "VOLCH5": "Log($volume / Ref($volume, 5))",
+            "VOLCH10": "Log($volume / Ref($volume, 10))",
+            # 趋势强度（线性回归斜率/拟合度/残差）
+            "BETA20": "Slope($close, 20) / $close",
+            "BETA60": "Slope($close, 60) / $close",
+            "RSQR20": "Rsquare($close, 20)",
+            "RESI20": "Resi($close, 20) / $close",
         }
 
     def get_prop_setting_class(self) -> str:

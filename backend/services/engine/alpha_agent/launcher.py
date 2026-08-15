@@ -43,7 +43,7 @@ class EvolutionTask:
     progress: str = ""
     phase: str = "pending"
     progress_pct: int = 0
-    loop_n: int = 3
+    loop_n: int = 5
     current_loop: int = 0
     created_at: float = field(default_factory=time.time)
     error_message: str | None = None
@@ -55,11 +55,8 @@ class EvolutionTask:
 
 
 class AlphaAgentLauncher:
-    """Launches factor evolution tasks (AlphaAgent or RD-Agent)."""
+    """Launches factor evolution tasks via the RD-Agent runner."""
 
-    _RUNNER_SCRIPT = str(
-        Path(__file__).resolve().parent.parent.parent.parent.parent / "scripts" / "alpha_agent" / "run.py"
-    )
     _RD_AGENT_RUNNER_SCRIPT = str(
         Path(__file__).resolve().parent.parent.parent.parent.parent / "scripts" / "alpha_agent" / "run_rd_agent.py"
     )
@@ -80,7 +77,7 @@ class AlphaAgentLauncher:
         *,
         market: str = "a_share",
         universe: str = "csi300",
-        loop_n: int = 3,
+        loop_n: int = 5,
         seed: str | None = None,
         provider_uri: str | None = None,
         direction: str | None = None,
@@ -352,19 +349,17 @@ class AlphaAgentLauncher:
         from backend.services.engine.rd_agent.llm_env import build_llm_env
         build_llm_env(env)
 
-        # Add market adapter env overrides
-        if task.market != "a_share" or True:  # Always use RD-Agent runner for all markets
-            try:
-                from backend.services.engine.rd_agent.market_adapters import get_adapter
-                adapter = get_adapter(task.market)
-                adapter_env = adapter.get_env_overrides()
-                env.update(adapter_env)
-            except Exception as e:
-                logger.warning("Failed to get market adapter env: %s", e)
+        # Add market adapter env overrides (RD-Agent runner used for all markets)
+        try:
+            from backend.services.engine.rd_agent.market_adapters import get_adapter
+            adapter = get_adapter(task.market)
+            adapter_env = adapter.get_env_overrides()
+            env.update(adapter_env)
+        except Exception as e:
+            logger.warning("Failed to get market adapter env: %s", e)
 
-        # Select runner script: RD-Agent for all markets, legacy AlphaAgent as fallback
-        use_rd_agent = True
-        runner_script = self._RD_AGENT_RUNNER_SCRIPT if use_rd_agent else self._RUNNER_SCRIPT
+        # RD-Agent runner for all markets
+        runner_script = self._RD_AGENT_RUNNER_SCRIPT
 
         cmd = [
             sys.executable,
@@ -376,11 +371,8 @@ class AlphaAgentLauncher:
             "--log-dir", str(task_log_dir),
             "--direction", direction,
             "--universe", task.universe,
+            "--market", task.market,
         ]
-        if use_rd_agent:
-            cmd.extend(["--market", task.market])
-        else:
-            cmd.extend(["--seed", seed, "--provider-uri", provider_uri])
 
         logger.info("Starting factor mining: market=%s, script=%s", task.market, runner_script)
         logger.info("Command: %s", " ".join(cmd))

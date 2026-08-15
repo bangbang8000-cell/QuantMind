@@ -4,6 +4,7 @@ TDX 桥配置管理路由
 读取/更新通达信桥配置 (环境变量), 查询桥健康状态。
 供前端"模拟交易设置 → 通达信桥"卡片使用。
 """
+import asyncio
 import logging
 import os
 
@@ -29,6 +30,28 @@ class TdxConfigResponse(BaseModel):
 class TdxConfigUpdate(BaseModel):
     bridge_url: str | None = Field(None, description="桥地址")
     bridge_token: str | None = Field(None, description="桥 token")
+
+
+class TdxPushSignalsRequest(BaseModel):
+    run_id: str | None = Field(None, description="推理 run_id，为空取最新推理")
+    top_n: int = Field(20, ge=1, le=100, description="推送股票数量")
+    block_name: str = Field("QuantMind今日选股", description="通达信板块名")
+    push_warnings: bool = Field(True, description="是否推送预警信号")
+    push_message: bool = Field(True, description="是否推送界面消息")
+
+
+class TdxRollingSignalsRequest(BaseModel):
+    run_id: str | None = Field(None, description="推理 run_id，为空取最新推理")
+    trade_date: str | None = Field(None, description="预测日期 YYYY-MM-DD，推送该日分数（推历史）")
+    fixed_buy_amount: float | None = Field(None, gt=0, description="每只固定买入金额（元），空则用已保存配置")
+    push_message: bool = Field(True, description="是否推送界面消息")
+    check_index: bool = Field(True, description="是否按当日大盘 MA20 过滤（推历史时自动跳过）")
+
+
+class TdxRollingConfigUpdate(BaseModel):
+    score_threshold: float = Field(..., gt=0, le=10, description="买入分数阈值（>此分数买入）")
+    fixed_buy_amount: float = Field(..., gt=0, description="每只固定买入金额（元）")
+    auto_place: bool = Field(False, description="是否把买卖信号生成为真实委托推给通达信（客户端确认）")
 
 
 @router.get("/tdx/config", response_model=TdxConfigResponse)
@@ -80,3 +103,205 @@ async def update_tdx_config(
         tdx_pusher.bridge_token = str(getattr(settings, "TDX_BRIDGE_TOKEN", "")).strip()
 
     return {"success": True, "message": "通达信桥配置已更新"}
+
+
+@router.get("/tdx/overview")
+async def get_tdx_overview(auth: AuthContext = Depends(get_auth_context)):
+    """聚合通达信桥的局域网信息，供前端设置页展示。
+
+    返回: 桥基本信息(stats) + 账户资产 + 持仓 + 当日委托 + 缓存/安全状态。
+    桥不可达时返回 available=false 与错误信息，不阻断前端渲染。
+    """
+    from backend.services.trade.services.tdx_push_service import tdx_pusher
+
+    bridge_url = str(getattr(settings, "TDX_BRIDGE_URL", "") or "").strip()
+    bridge_token = str(getattr(settings, "TDX_BRIDGE_TOKEN", "") or "").strip()
+    if not bridge_url or not bridge_token:
+        return {"available": False, "error": "桥地址或 token 未配置"}
+
+    try:
+        import httpx
+
+        headers = {"Authorization": f"Bearer {bridge_token}"}
+        async with httpx.AsyncClient(timeout=httpx.Timeout(5.0, connect=3.0)) as client:
+            stats_task = client.get(f"{bridge_url}/api/v1/stats", headers=headers)
+            account_task = client.post(
+                f"{bridge_url}/api/v1/account/query", json={}, headers=headers
+            )
+            orders_task = client.post(
+                f"{bridge_url}/api/v1/orders/query", json={}, headers=headers
+            )
+            stats_resp, account_resp, orders_resp = await asyncio.gather(
+                stats_task, account_task, orders_task, return_exceptions=True
+            )
+    except Exception as exc:
+        logger.warning("TDX overview 拉取失败: %s", exc)
+        return {"available": False, "error": str(exc)}
+
+    def _ok(resp, status: int = 200):
+        return isinstance(resp, httpx.Response) and resp.status_code == status
+
+    stats_data = {}
+    if _ok(stats_resp):
+        payload = stats_resp.json()
+        stats_data = payload.get("data") or payload if isinstance(payload, dict) else {}
+
+    account_data = {}
+    if _ok(account_resp):
+        payload = account_resp.json()
+        account_data = payload if isinstance(payload, dict) else {}
+
+    orders_data = {}
+    if _ok(orders_resp):
+        payload = orders_resp.json()
+        orders_data = payload if isinstance(payload, dict) else {}
+
+    account = account_data.get("asset") or {}
+    positions = account_data.get("positions") or []
+    orders = orders_data.get("orders") or []
+    cache = stats_data.get("cache") or {}
+    security = stats_data.get("security") or {}
+
+    return {
+        "available": True,
+        "bridge": {
+            "hostname": stats_data.get("hostname"),
+            "local_ips": stats_data.get("local_ips") or [],
+            "bridge_url": stats_data.get("bridge_url") or bridge_url,
+            "port": stats_data.get("port"),
+            "tdx_connected": bool(stats_data.get("tdx_connected")),
+            "server_time": stats_data.get("server_time"),
+            "token_configured": bool(stats_data.get("token_configured")),
+            "shared_dir": stats_data.get("shared_dir"),
+        },
+        "account": {
+            "currency": account.get("currency"),
+            "balance": account.get("balance"),
+            "cash": account.get("cash"),
+            "asset": account.get("asset"),
+            "market_value": account.get("market_value"),
+            "position_count": len(positions),
+        },
+        "positions": positions,
+        "orders": orders,
+        "cache": {
+            "stock_info": cache.get("stock_info", 0),
+            "kline": cache.get("kline", 0),
+            "sector_stocks": cache.get("sector_stocks", 0),
+            "market_snapshot": cache.get("market_snapshot", 0),
+            "tdx_log": cache.get("tdx_log", 0),
+            "financial": cache.get("financial", 0),
+            "trade_log": cache.get("trade_log", 0),
+            "mem_hit_rate": cache.get("mem_hit_rate", 0.0),
+            "mem_entries": cache.get("mem_entries", 0),
+        },
+        "security": {
+            "banned_ips": security.get("banned_ips", 0),
+            "active_ips": security.get("active_ips", 0),
+            "write_active": security.get("write_active", 0),
+        },
+    }
+
+
+@router.post("/tdx/push-signals")
+async def push_signals_to_tdx(
+    data: TdxPushSignalsRequest | None = None,
+    auth: AuthContext = Depends(get_auth_context),
+):
+    """把模型推理 Top N 选股推送到通达信（板块 + 预警 + 消息）。
+
+    手动重推入口，与推理完成后的自动推送共用 TdxSignalPushService。
+    """
+    from backend.services.trade.services.tdx_signal_push_service import (
+        tdx_signal_pusher,
+    )
+
+    payload = data or TdxPushSignalsRequest()
+    result = await tdx_signal_pusher.build_push_payload(
+        tenant_id=(auth.tenant_id or "default").strip() or "default",
+        user_id=str(auth.user_id or "00000001").strip() or "00000001",
+        run_id=(payload.run_id or "").strip() or None,
+        top_n=payload.top_n,
+        block_name=payload.block_name or "QuantMind今日选股",
+        push_warnings=payload.push_warnings,
+        push_message=payload.push_message,
+    )
+    if not result.get("success"):
+        raise HTTPException(status_code=400, detail=result.get("error") or "推送失败")
+    return result
+
+
+@router.post("/tdx/rolling-signals")
+async def push_rolling_signals_to_tdx(
+    data: TdxRollingSignalsRequest | None = None,
+    auth: AuthContext = Depends(get_auth_context),
+):
+    """滚动买卖检查：分数>阈值 买 / 持仓掉下阈值 卖 / 大盘低于 MA20 只卖不买。
+
+    拉取通达信持仓对比推理分数（可指定 trade_date 推历史分数），推送买卖预警
+    （半自动，双击闪电下单确认）。
+    """
+    from backend.services.trade.services.tdx_rolling_trade_service import (
+        tdx_rolling_trader,
+    )
+
+    payload = data or TdxRollingSignalsRequest()
+    if payload.run_id and payload.trade_date:
+        raise HTTPException(status_code=400, detail="run_id 与 trade_date 只能传一个")
+    result = await tdx_rolling_trader.run_rolling_push(
+        tenant_id=(auth.tenant_id or "default").strip() or "default",
+        user_id=str(auth.user_id or "00000001").strip() or "00000001",
+        run_id=(payload.run_id or "").strip() or None,
+        trade_date=(payload.trade_date or "").strip() or None,
+        fixed_buy_amount=payload.fixed_buy_amount,
+        push_message=payload.push_message,
+        check_index=payload.check_index,
+    )
+    if not result.get("success"):
+        raise HTTPException(
+            status_code=400, detail=result.get("error") or "滚动买卖推送失败"
+        )
+    return result
+
+
+@router.get("/tdx/rolling-config")
+async def get_rolling_config(auth: AuthContext = Depends(get_auth_context)):
+    """读取滚动买卖配置（分数阈值 + 每只固定金额）。"""
+    from backend.services.trade.services.tdx_rolling_trade_service import (
+        load_rolling_config,
+    )
+
+    threshold, amount, auto_place = load_rolling_config(
+        (auth.tenant_id or "default").strip() or "default",
+        str(auth.user_id or "00000001").strip() or "00000001",
+    )
+    return {
+        "score_threshold": threshold,
+        "fixed_buy_amount": amount,
+        "auto_place": auto_place,
+    }
+
+
+@router.put("/tdx/rolling-config")
+async def update_rolling_config(
+    data: TdxRollingConfigUpdate,
+    auth: AuthContext = Depends(get_auth_context),
+):
+    """保存滚动买卖配置（分数阈值 + 每只固定金额），推理自动推送即时生效。"""
+    from backend.services.trade.services.tdx_rolling_trade_service import (
+        save_rolling_config,
+    )
+
+    save_rolling_config(
+        (auth.tenant_id or "default").strip() or "default",
+        str(auth.user_id or "00000001").strip() or "00000001",
+        score_threshold=data.score_threshold,
+        fixed_buy_amount=data.fixed_buy_amount,
+        auto_place=data.auto_place,
+    )
+    return {
+        "success": True,
+        "score_threshold": data.score_threshold,
+        "fixed_buy_amount": data.fixed_buy_amount,
+        "auto_place": data.auto_place,
+    }

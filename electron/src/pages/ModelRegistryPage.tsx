@@ -44,6 +44,7 @@ import {
   TrainingSourcePanel,
   AttributionAnalysisPanel,
   InferenceCenterPanel,
+  ProductionMonitorPanel,
   MetricCard,
   TimeItem,
   InfoCell,
@@ -81,6 +82,7 @@ export const ModelRegistryPage: React.FC = () => {
   const [searchQuery, setSearchQuery] = useState('');
   const [settingDefault, setSettingDefault] = useState(false);
   const [archiving, setArchiving] = useState(false);
+  const [activating, setActivating] = useState(false);
   const [mainTab, setMainTab] = useState('detail');
   const [showConfigModal, setShowConfigModal] = useState(false);
   const [activeConfigTab, setActiveConfigTab] = useState<'meta' | 'metrics'>('meta');
@@ -406,6 +408,27 @@ export const ModelRegistryPage: React.FC = () => {
     });
   };
 
+  const handleActivate = () => {
+    if (!selectedModel) return;
+    Modal.confirm({
+      title: '激活模型',
+      content: '该模型因样本外验证未达阈值处于候选状态。确认手动激活？激活后可设为默认模型参与推理。',
+      okText: '确认激活', okButtonProps: { type: 'primary' as const },
+      cancelText: '取消',
+      onOk: async () => {
+        setActivating(true);
+        try {
+          await modelTrainingService.activateUserModel(selectedModel.model_id);
+          message.success('已激活');
+          await loadModels(true);
+          setSelectedId(selectedModel.model_id);
+        } catch (err: any) {
+          message.error(`激活失败: ${err?.message ?? '未知'}`);
+        } finally { setActivating(false); }
+      },
+    });
+  };
+
   const handleRunInference = async () => {
     if (!selectedModel || !inferenceDate) return;
     setInferenceRunning(true);
@@ -690,6 +713,15 @@ export const ModelRegistryPage: React.FC = () => {
                       >配置</Button>
                       {selectedModel.status !== 'archived' && (
                         <>
+                          {selectedModel.status === 'candidate' && (
+                            <Button
+                              type="primary"
+                              icon={<Play size={13} />}
+                              className="rounded-xl h-9 px-4 font-bold text-xs"
+                              onClick={handleActivate}
+                              loading={activating}
+                            >激活</Button>
+                          )}
                           <Button
                             icon={<Archive size={13} />}
                             className="rounded-xl h-9 px-4 font-bold border-slate-200 text-xs text-slate-500"
@@ -753,6 +785,15 @@ export const ModelRegistryPage: React.FC = () => {
                             }}
                           />
                         ),
+                      },
+                      {
+                        key: 'production',
+                        label: (
+                          <span className="text-xs font-black uppercase tracking-widest px-1 flex items-center gap-1.5">
+                            <Activity size={11} />生产监控
+                          </span>
+                        ),
+                        children: <ProductionMonitorPanel model={selectedModel} />,
                       },
                       {
                         key: 'inference',
