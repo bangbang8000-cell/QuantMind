@@ -23,13 +23,13 @@ import { ModelConsensusPanel } from '../features/inference-center/components/Mod
 import { useAppSelector } from '../store';
 import { selectCurrentMarket } from '../store/slices/uiSlice';
 import { getMarketConfig } from '../config/marketConfig';
+import { normalizeStockCode } from '../utils/portfolioUtils';
 
-// 常用标的快捷选项
+// 基础默认标的（用于离线 Mock 基础参考）
 const POPULAR_STOCKS = [
   { symbol: 'SH600519', name: '贵州茅台', basePrice: 1685.0 },
   { symbol: 'SZ300750', name: '宁德时代', basePrice: 198.5 },
   { symbol: 'SZ002594', name: '比亚迪', basePrice: 268.0 },
-  { symbol: 'SH601318', name: '中国平安', basePrice: 48.2 },
   { symbol: 'SH600036', name: '招商银行', basePrice: 34.5 },
   { symbol: 'SZ000001', name: '平安银行', basePrice: 11.2 },
 ];
@@ -204,6 +204,7 @@ export const InferenceCenterPage: React.FC = () => {
 
   // 参数配置状态
   const [symbol, setSymbol] = useState('SH600519');
+  const [inputCode, setInputCode] = useState('SH600519');
   const [selectedModelId, setSelectedModelId] = useState<string>('mdl_tft_v1');
   const [modelCategoryFilter, setModelCategoryFilter] = useState<'all' | 'dl' | 'tree' | 'ensemble'>('all');
   const [horizon, setHorizon] = useState<number>(5);
@@ -225,6 +226,15 @@ export const InferenceCenterPage: React.FC = () => {
   const currentSelectedModel = useMemo(() => {
     return models.find(m => m.modelId === selectedModelId) || models[0];
   }, [models, selectedModelId]);
+
+  // 提交并格式化代码
+  const handleCommitCode = useCallback((raw: string) => {
+    if (!raw.trim()) return;
+    const normalized = normalizeStockCode(raw.trim());
+    setSymbol(normalized);
+    setInputCode(normalized);
+    handleRunInference(normalized);
+  }, []);
 
   // 执行推理
   const handleRunInference = useCallback(async (targetSymbol?: string, targetModelId?: string, targetHorizon?: number) => {
@@ -324,30 +334,27 @@ export const InferenceCenterPage: React.FC = () => {
 
         {/* 控件区 */}
         <div className="flex flex-col gap-3.5 mb-3">
-          {/* 1. 标的选择 */}
+          {/* 1. 标的选择 (单一输入框：左侧代码，右侧名称) */}
           <div className="flex flex-col gap-1">
             <span className="text-[11px] font-bold text-slate-500 flex items-center gap-1">
               <Search className="w-3 h-3 text-blue-500" /> 目标个股
             </span>
-            <div className="grid grid-cols-2 gap-1.5">
+            <div className="flex items-center bg-white border border-slate-200 hover:border-blue-400 focus-within:border-blue-500 focus-within:ring-2 focus-within:ring-blue-100 rounded-xl px-3 py-1 transition-all shadow-2xs">
               <Input
-                placeholder="如 SH600519"
-                value={symbol}
-                onChange={e => setSymbol(e.target.value.toUpperCase())}
-                style={{ height: 32, borderRadius: 8, fontWeight: 700 }}
+                variant="borderless"
+                placeholder="输入代码 (如 600036)"
+                value={inputCode}
+                onChange={e => setInputCode(e.target.value.toUpperCase())}
+                onBlur={() => handleCommitCode(inputCode)}
+                onPressEnter={() => handleCommitCode(inputCode)}
+                className="p-0 font-mono font-bold text-sm text-blue-600 focus:outline-none"
+                style={{ flex: 1, minWidth: 100, padding: 0 }}
               />
-              <Select
-                value={symbol}
-                onChange={val => {
-                  setSymbol(val);
-                  handleRunInference(val);
-                }}
-                style={{ height: 32 }}
-                options={POPULAR_STOCKS.map(s => ({
-                  label: `${s.name}`,
-                  value: s.symbol,
-                }))}
-              />
+              <div className="flex items-center gap-1 pl-2 border-l border-slate-100 shrink-0">
+                <span className="text-xs font-bold text-slate-700 select-none">
+                  {prediction?.stock_name || '标的资产'}
+                </span>
+              </div>
             </div>
           </div>
 

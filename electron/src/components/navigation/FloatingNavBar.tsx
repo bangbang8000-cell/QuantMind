@@ -5,7 +5,6 @@ import {
   Layers,
   CircleUserRound,
   FlaskConical,
-  FlaskRound,
   LayoutDashboard,
   LineChart,
   Orbit,
