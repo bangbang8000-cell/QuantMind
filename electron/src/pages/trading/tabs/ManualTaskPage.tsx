@@ -207,7 +207,7 @@ const ManualTaskPage: React.FC<ManualTaskPageProps> = ({ tradingMode, onBack }) 
     const viewportRef = useRef<HTMLDivElement | null>(null);
 
     const isRealMode = tradingMode !== 'simulation';
-    const effectiveModelId = useMemo(() => manualModelId.trim() || defaultModel?.model_id || 'model_qlib', [defaultModel, manualModelId]);
+    const effectiveModelId = useMemo(() => manualModelId.trim() || defaultModel?.model_id || '', [defaultModel, manualModelId]);
 
     const [modelSearch, setModelSearch] = useState('');
     const [strategySearch, setStrategySearch] = useState('');

@@ -44,18 +44,12 @@ logger = logging.getLogger(__name__)
 
 
 def _resolve_model_dir(model_id: str | None = None) -> Path:
-    """定位模型目录。优先 model_id 对应的子目录，否则主模型。"""
+    """定位模型目录。优先 model_id 对应的子目录。"""
     base = Path(os.getenv("MODELS_PRODUCTION", "/app/models/production"))
     if model_id:
         candidate = base / model_id
         if candidate.is_dir():
             return candidate
-    primary = base / "model_qlib"
-    if primary.is_dir():
-        return primary
-    fallback = base / "alpha158"
-    if fallback.is_dir():
-        return fallback
     raise FileNotFoundError(f"找不到可用模型目录 (base={base}, model_id={model_id})")
 
 

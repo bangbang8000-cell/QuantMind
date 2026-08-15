@@ -4,7 +4,7 @@
 # 功能：
 #   1. 从 Gitee 拉取最新代码
 #   2. 执行数据库升级脚本（如有）
-#   3. 重建后端容器（仅 quantmind/celery-worker）
+#   3. 重建后端容器（核心 quantmind/celery-worker/celery-beat + 可选服务）
 #   4. 自动修复 .env.production 中硬编码的本地地址
 #   5. 构建产物验证（防硬编码 127.0.0.1）
 #
@@ -13,7 +13,7 @@
 #   - 升级脚本会备份并自动执行最新版本
 #   - 不会删除数据库数据（除非升级脚本明确说明）
 #   - 不会重建 db/redis 容器
-#   - 不包含前端构建（前端需单独部署）
+#   - 可选服务（web/data-gateway/dashboard/huntly/rsshub/qwenpaw）更新失败仅警告
 #===============================================================================
 
 set -euo pipefail
@@ -324,8 +324,19 @@ update_backend() {
     log_step "更新后端容器（不操作数据库）"
     cd "$PROJECT_DIR"
 
-    "${COMPOSE_CMD[@]}" -f docker-compose.yml build quantmind celery-worker
-    "${COMPOSE_CMD[@]}" -f docker-compose.yml up -d --no-deps --force-recreate quantmind celery-worker
+    # 构建核心镜像（celery-worker / celery-beat 复用 quantmind-oss 镜像）
+    "${COMPOSE_CMD[@]}" -f docker-compose.yml build quantmind
+    "${COMPOSE_CMD[@]}" -f docker-compose.yml up -d --no-deps --force-recreate quantmind celery-worker celery-beat
+
+    # 可选服务（本地构建镜像：web / data-gateway / dashboard，失败仅警告）
+    log_info "更新可选服务容器 (web / data-gateway / dashboard)..."
+    "${COMPOSE_CMD[@]}" -f docker-compose.yml up -d --no-deps --force-recreate web data-gateway dashboard 2>&1 \
+        || log_warn "部分可选服务更新失败（不影响核心服务）"
+
+    # 外部镜像服务（huntly / rsshub / qwenpaw，失败仅警告）
+    log_info "更新外部服务容器 (huntly / rsshub / qwenpaw)..."
+    "${COMPOSE_CMD[@]}" -f docker-compose.yml up -d --no-deps --force-recreate huntly rsshub qwenpaw 2>&1 \
+        || log_warn "部分外部服务更新失败（不影响核心服务）"
 
     log_info "后端容器更新完成（db/redis 未重建）"
 }
@@ -378,6 +389,35 @@ health_check() {
         log_info "Stream 服务 (8003): ✅"
     else
         log_warn "Stream 服务 (8003): ❌"
+    fi
+
+    # 可选服务检查（未运行/失败仅提示，不影响更新结果）
+    echo ""
+    log_info "可选服务检查："
+    if wait_http_ok "http://127.0.0.1:8004/health" 5 2; then
+        log_info "数据网关 (8004): ✅"
+    else
+        log_info "数据网关 (8004): 未运行（可选）"
+    fi
+    if wait_http_ok "http://127.0.0.1:3000/health" 5 2; then
+        log_info "Web 前端 (3000): ✅"
+    else
+        log_info "Web 前端 (3000): 未运行（可选）"
+    fi
+    if wait_http_ok "http://127.0.0.1:8501/_stcore/health" 5 2; then
+        log_info "数据看板 (8501): ✅"
+    else
+        log_info "数据看板 (8501): 未运行（可选）"
+    fi
+    if wait_http_ok "http://127.0.0.1:8090/api/health" 5 2; then
+        log_info "资讯聚合 (8090): ✅"
+    else
+        log_info "资讯聚合 (8090): 未运行（可选）"
+    fi
+    if wait_http_ok "http://127.0.0.1:1200/healthz" 5 2; then
+        log_info "RSSHub (1200): ✅"
+    else
+        log_info "RSSHub (1200): 未运行（可选）"
     fi
 
     if $all_ok; then

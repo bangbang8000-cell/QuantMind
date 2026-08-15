@@ -227,14 +227,14 @@ const StrategyManagement: React.FC<StrategyManagementProps> = ({
     );
 
     const effectiveModelId = useMemo(
-        () => defaultModel?.model_id || 'model_qlib',
+        () => defaultModel?.model_id || '',
         [defaultModel],
     );
 
     const effectiveModelDisplayName = useMemo(() => {
         const metadata = (defaultModel?.metadata_json || {}) as Record<string, unknown>;
         const displayName = typeof metadata.display_name === 'string' ? metadata.display_name.trim() : '';
-        return displayName || defaultModel?.model_id || 'model_qlib';
+        return displayName || defaultModel?.model_id || '未配置默认模型';
     }, [defaultModel]);
 
     const loadStrategies = useCallback(async () => {
