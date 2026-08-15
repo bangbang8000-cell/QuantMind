@@ -1,8 +1,9 @@
 """
-港股/美股基本面数据同步
-========================
-从 yfinance 获取 PE/PB/ROE/EPS/股息率/市值等基本面数据，
+港股/美股基本面数据同步（Quant 平台单源）
+==========================================
+从 QuantHK / QuantUS 本地 parquet 估值数据读取 PE/PB/PS/市值等基本面指标，
 更新到 stock_daily_latest_hk / stock_daily_latest_us 表。
+不再直连 yfinance/akshare 外部数据源。
 
 用法:
     python sync_market_fundamentals.py [--market HK|US|ALL] [--dry-run]
@@ -12,8 +13,6 @@ import argparse
 import logging
 import os
 import sys
-import time
-from datetime import datetime
 from pathlib import Path
 
 import pandas as pd
@@ -34,146 +33,49 @@ def _get_engine():
     return create_engine(db_url)
 
 
-# ── yfinance 批量获取 ──────────────────────────────────────────────
+# ── Quant 平台估值读取 ──────────────────────────────────────────────
 
-def _fetch_yfinance_batch(symbols: list[str], market: str) -> dict[str, dict]:
-    """批量获取 yfinance 基本面数据。"""
-    import yfinance as yf
+def _fetch_quant_valuation(market: str) -> pd.DataFrame:
+    """从 Quant 平台本地 parquet 读取估值快照。"""
+    if market == "HK":
+        from backend.services.engine.data_platform.quanthk_hub import QuantHKDataHub
 
-    results = {}
-    batch_size = 50  # yfinance 支持批量下载
+        return QuantHKDataHub().fetch_valuation()
+    from backend.services.engine.data_platform.quantus_hub import QuantUSDataHub
 
-    for i in range(0, len(symbols), batch_size):
-        batch = symbols[i:i + batch_size]
-        # 构建 yfinance ticker 格式
-        if market == "HK":
-            tickers = [f"{s.zfill(4)}.HK" for s in batch]
-        elif market == "US":
-            tickers = batch
-        else:
-            continue
-
-        ticker_str = " ".join(tickers)
-        log.info(f"  Fetching {market} batch {i // batch_size + 1}: {len(batch)} symbols")
-
-        try:
-            data = yf.Tickers(ticker_str)
-            for ticker_sym in tickers:
-                try:
-                    info = data.tickers[ticker_sym.replace('.', '-')].info
-                    if not info or info.get('trailingPE') is None:
-                        continue
-
-                    # 提取原始 symbol
-                    if market == "HK":
-                        raw_sym = ticker_sym.replace('.HK', '')
-                    else:
-                        raw_sym = ticker_sym
-
-                    # yfinance ROE 是小数 (0.21 = 21%)，转为百分比
-                    roe_raw = info.get('returnOnEquity')
-                    roe_pct = roe_raw * 100 if roe_raw is not None else None
-
-                    results[raw_sym] = {
-                        'pe_ttm': info.get('trailingPE'),
-                        'forward_pe': info.get('forwardPE'),
-                        'pb': info.get('priceToBook'),
-                        'roe': roe_pct,
-                        'eps_ttm': info.get('epsTrailingTwelveMonths'),
-                        'eps_forward': info.get('epsForward'),
-                        'bv': info.get('bookValue'),
-                        'market_cap': info.get('marketCap'),
-                        'total_revenue': info.get('totalRevenue'),
-                        'net_income': info.get('netIncomeToCommon'),
-                        'profit_margin': info.get('profitMargins'),
-                        'revenue_growth': info.get('revenueGrowth'),
-                        'earnings_growth': info.get('earningsGrowth'),
-                        'beta': info.get('beta'),
-                        'industry': info.get('industry', ''),
-                        'sector': info.get('sector', ''),
-                        'name': info.get('longName', info.get('shortName', '')),
-                    }
-                except Exception:
-                    continue
-        except Exception as e:
-            log.warning(f"  yfinance batch error: {e}")
-
-        # 避免请求过快
-        if i + batch_size < len(symbols):
-            time.sleep(1)
-
-    return results
+    return QuantUSDataHub().fetch_valuation()
 
 
-def _fetch_akshare_hk(symbols: list[str]) -> dict[str, dict]:
-    """获取 akshare 港股财务指标。"""
-    import akshare as ak
-
-    results = {}
-    for i, sym in enumerate(symbols):
-        try:
-            df = ak.stock_hk_financial_indicator_em(symbol=sym.zfill(5))
-            if df is None or df.empty:
-                continue
-
-            row = df.iloc[0]
-            results[sym] = {
-                'pe_ttm': float(row.get('市盈率', 0) or 0),
-                'pb': float(row.get('市净率', 0) or 0),
-                'roe': float(row.get('股东权益回报率(%)', 0) or 0),
-                'eps_ttm': float(row.get('基本每股收益(元)', 0) or 0),
-                'bv': float(row.get('每股净资产(元)', 0) or 0),
-                'dividend_yield': float(row.get('股息率TTM(%)', 0) or 0),
-                'market_cap': float(row.get('总市值(港元)', 0) or 0),
-                'total_revenue': float(row.get('营业总收入', 0) or 0),
-                'net_income': float(row.get('净利润', 0) or 0),
-                'profit_margin': float(row.get('销售净利率(%)', 0) or 0),
-                'revenue_growth': float(row.get('营业总收入滚动环比增长(%)', 0) or 0),
-                'earnings_growth': float(row.get('净利润滚动环比增长(%)', 0) or 0),
-            }
-        except Exception:
-            pass
-
-        if (i + 1) % 50 == 0:
-            log.info(f"  akshare HK progress: {i + 1}/{len(symbols)}")
-            time.sleep(2)
-
-    return results
+def _normalize_symbol(sym: str, market: str) -> str:
+    """Quant parquet symbol → PG 表 symbol 格式。"""
+    if market == "HK":
+        # 0001.HK → 00001（PG 表用 5 位代码）
+        return str(sym).replace(".HK", "").zfill(5)
+    return str(sym)
 
 
 # ── 数据库更新 ──────────────────────────────────────────────────────
 
-def _update_db(engine, table: str, data: dict[str, dict], market: str) -> int:
+def _update_db(engine, table: str, records: list[dict], market: str) -> int:
     """更新数据库中的基本面数据。"""
-    if not data:
+    if not records:
         return 0
 
     updated = 0
     with engine.begin() as conn:
-        for sym, fields in data.items():
-            # 构建 SET 子句
+        for rec in records:
+            sym = rec["symbol"]
             set_parts = []
-            params = {'sym': sym}
+            params = {"sym": sym}
 
-            field_map = {
-                'pe_ttm': 'pe_ttm',
-                'pb': 'pb',
-                'roe': 'roe',
-                'eps_ttm': 'ep_ttm',
-                'bv': 'bp',
-                'market_cap': 'total_mv',
-                'industry': 'industry',
-                'name': 'name',
-            }
-
-            for src_key, db_col in field_map.items():
-                val = fields.get(src_key)
-                if val is not None and val != 0:
-                    if isinstance(val, str):
-                        set_parts.append(f"{db_col} = :{src_key}")
-                    else:
-                        set_parts.append(f"{db_col} = :{src_key}")
-                    params[src_key] = val
+            for db_col in ("pe_ttm", "pb", "roe", "total_mv", "float_mv"):
+                val = rec.get(db_col)
+                if val is None or pd.isna(val):
+                    continue
+                if db_col in ("total_mv", "float_mv") and float(val) <= 0:
+                    continue
+                set_parts.append(f"{db_col} = :{db_col}")
+                params[db_col] = float(val)
 
             if not set_parts:
                 continue
@@ -188,57 +90,66 @@ def _update_db(engine, table: str, data: dict[str, dict], market: str) -> int:
 # ── 主流程 ──────────────────────────────────────────────────────────
 
 def sync_market_fundamentals(market: str, dry_run: bool = False) -> dict:
-    """同步指定市场的基本面数据。"""
-    engine = _get_engine()
+    """同步指定市场的基本面数据（Quant 平台 parquet 单源）。"""
     market = market.upper()
 
     table_map = {
         "HK": "stock_daily_latest_hk",
         "US": "stock_daily_latest_us",
     }
-
     if market not in table_map:
         return {"error": f"unsupported market: {market}"}
 
     table = table_map[market]
 
-    # 获取 symbol 列表
-    with engine.begin() as conn:
-        rows = conn.execute(text(f"SELECT symbol FROM {table}")).fetchall()
-        symbols = [r[0] for r in rows]
+    # 从 Quant 平台读取估值快照
+    df = _fetch_quant_valuation(market)
+    if df.empty:
+        log.warning("%s 估值数据为空，跳过", market)
+        return {"market": market, "symbols_with_data": 0, "rows_updated": 0}
 
-    log.info(f"Syncing {market} fundamentals: {len(symbols)} symbols")
+    # symbol 归一 + 提取可写字段
+    df = df.copy()
+    df["symbol"] = df["symbol"].astype(str).map(
+        lambda s: _normalize_symbol(s, market)
+    )
+    # 取每个 symbol 最新一条快照
+    df = df.sort_values("trade_date", na_position="first").groupby("symbol").tail(1)
+
+    records = []
+    for _, row in df.iterrows():
+        rec = {"symbol": row["symbol"]}
+        for col in ("pe_ttm", "pb", "total_mv", "float_mv"):
+            if col in df.columns:
+                rec[col] = row[col]
+        # roe 由 Quant 字段派生：净利润(TTM) / 股东权益 × 100
+        if {"net_profit_ttm", "equity"} <= set(df.columns):
+            np_ttm = row.get("net_profit_ttm")
+            equity = row.get("equity")
+            if pd.notna(np_ttm) and pd.notna(equity) and float(equity) > 0:
+                rec["roe"] = float(np_ttm) / float(equity) * 100
+        records.append(rec)
+
+    log.info(
+        "%s 估值快照: %d 行 → %d 个标的有数据",
+        market, len(df), len(records),
+    )
 
     if dry_run:
-        log.info("DRY RUN - not updating database")
-        return {"market": market, "symbols": len(symbols), "dry_run": True}
+        return {"market": market, "symbols_with_data": len(records), "dry_run": True}
 
-    # 获取数据
-    if market == "HK":
-        # 港股用 akshare（yfinance 在容器内连不上）
-        log.info("Fetching HK from akshare...")
-        data = _fetch_akshare_hk(symbols)
-        log.info(f"  akshare: {len(data)} symbols with data")
-    else:
-        # US 用 yfinance
-        data = _fetch_yfinance_batch(symbols, market)
-
-    log.info(f"Total symbols with data: {len(data)}")
-
-    # 更新数据库
-    updated = _update_db(engine, table, data, market)
-    log.info(f"Updated {updated} rows in {table}")
+    updated = _update_db(_get_engine(), table, records, market)
+    log.info("Updated %d rows in %s", updated, table)
 
     return {
         "market": market,
-        "symbols_total": len(symbols),
-        "symbols_with_data": len(data),
+        "symbols_with_data": len(records),
         "rows_updated": updated,
     }
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Sync market fundamentals")
+    parser = argparse.ArgumentParser(description="Sync market fundamentals from Quant platforms")
     parser.add_argument("--market", default="ALL", choices=["HK", "US", "ALL"])
     parser.add_argument("--dry-run", action="store_true")
     args = parser.parse_args()

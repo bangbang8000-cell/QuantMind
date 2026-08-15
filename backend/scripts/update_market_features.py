@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""多市场特征工程 — 从 H5 数据计算 OHLCV 特征并保存为 parquet。
+"""多市场特征工程 — 从各 Quant 平台 parquet 计算 OHLCV 特征并保存为 parquet。
 
 支持加密货币、港股、美股市场。复用 update_feature_parquet.py 中的
 compute_features_for_group() 计算纯 OHLCV 特征，跳过 A 股特有列。
@@ -40,13 +40,6 @@ else:
 FEATURE_SNAPSHOT_DIR = PROJECT_ROOT / "db" / "feature_snapshots"
 FEATURE_SNAPSHOT_DIR.mkdir(parents=True, exist_ok=True)
 
-# 市场 → H5 文件路径映射
-MARKET_H5_PATHS = {
-    "crypto": PROJECT_ROOT / "db" / "crypto_data" / "5min_pv.h5",
-    "hong_kong": PROJECT_ROOT / "db" / "hk_data" / "daily_pv.h5",
-    "us_stock": PROJECT_ROOT / "db" / "us_data" / "daily_pv.h5",
-}
-
 # 市场 → 输出 parquet 文件名
 MARKET_PARQUET_NAMES = {
     "crypto": "model_features_crypto.parquet",
@@ -61,109 +54,75 @@ def _log(msg: str) -> None:
     print(f"[{ts}] {msg}")
 
 
-def _aggregate_crypto_to_daily(df: pd.DataFrame) -> pd.DataFrame:
-    """将加密货币 5 分钟 K 线聚合为日线。"""
-    _log(f"  聚合 5min → daily: {len(df):,} 行")
+def load_crypto_parquet() -> pd.DataFrame:
+    """从 QuantBC daily_forward parquet 加载加密货币日线（替代旧 H5）。"""
+    from backend.services.engine.data_platform.quantbc_hub import QuantBCDataHub
 
-    agg_dict = {
-        "open": "first",
-        "high": "max",
-        "low": "min",
-        "close": "last",
-        "volume": "sum",
-    }
-    # 可选列
-    for col in ["amount"]:
-        if col in df.columns:
-            agg_dict[col] = "sum"
+    hub = QuantBCDataHub()
+    data_dir = hub.data_dir
+    fwd_dir = data_dir / "1_kline_data" / "daily_forward"
+    if not fwd_dir.is_dir():
+        raise FileNotFoundError(f"QuantBC 数据目录不可用: {fwd_dir}")
 
-    grouped = df.groupby(["instrument", "trade_date"], as_index=False).agg(agg_dict)
+    _log(f"读取 QuantBC parquet: {fwd_dir}")
+    import glob as _glob
 
-    # 重算 amount（如果需要）
-    if "amount" not in grouped.columns:
-        grouped["amount"] = grouped["close"] * grouped["volume"]
+    files = sorted(_glob.glob(str(fwd_dir / "dt=*" / "data.parquet")))
+    if not files:
+        raise FileNotFoundError(f"QuantBC 无日K分区: {fwd_dir}")
+    _log(f"  日K分区: {len(files)} 个")
 
-    _log(f"  聚合后: {len(grouped):,} 行, {grouped['instrument'].nunique()} 个标的")
-    return grouped
+    frames = []
+    for f in files:
+        try:
+            chunk = pd.read_parquet(f, engine="pyarrow")
+            frames.append(chunk)
+        except Exception as e:  # noqa: BLE001
+            _log(f"  跳过分区 {f}: {e}")
+    if not frames:
+        raise RuntimeError("QuantBC 日K 全部读取失败")
 
+    df = pd.concat(frames, ignore_index=True)
+    _log(f"  合并 {len(df):,} 行")
 
-def load_h5_data(market: str) -> pd.DataFrame:
-    """从 H5 文件加载数据，转换为 compute_features_for_group() 兼容格式。"""
-    h5_path = MARKET_H5_PATHS.get(market)
-    if not h5_path or not h5_path.exists():
-        raise FileNotFoundError(f"H5 文件不存在: {h5_path}")
+    # symbol -> instrument（如 BTCUSDT）
+    if "symbol" in df.columns:
+        df = df.rename(columns={"symbol": "instrument"})
+    elif "instrument" not in df.columns:
+        raise RuntimeError("QuantBC parquet 缺少 symbol/instrument 列")
 
-    _log(f"读取 H5: {h5_path}")
-    df = pd.read_hdf(str(h5_path), key="data")
+    if "time" in df.columns:
+        df["trade_date"] = pd.to_datetime(df["time"], errors="coerce").dt.date
+        df = df.drop(columns=["time"])
+    if "trade_date" not in df.columns:
+        raise RuntimeError("QuantBC parquet 缺少 time/trade_date 列")
 
-    # 重置索引，列名去掉 $ 前缀
-    df = df.reset_index()
-    col_map = {c: c.lstrip("$") for c in df.columns if c.startswith("$")}
-    df = df.rename(columns=col_map)
+    df = df.dropna(subset=["trade_date", "close"])
 
-    # 确保 datetime 列名统一
-    if "datetime" in df.columns:
-        df = df.rename(columns={"datetime": "trade_date"})
-    df["trade_date"] = pd.to_datetime(df["trade_date"]).dt.date
-
-    # 加密货币 5 分钟数据需要聚合到日线
-    if market == "crypto":
-        df = _aggregate_crypto_to_daily(df)
-
-    # 合成 amount（close * volume）
     if "amount" not in df.columns:
         df["amount"] = df["close"] * df["volume"]
-
-    # adj_factor 默认 1.0
     if "adj_factor" not in df.columns:
         df["adj_factor"] = 1.0
-
-    # turnover_rate 默认 0（compute_features_for_group 会重算）
     if "turnover_rate" not in df.columns:
         df["turnover_rate"] = 0.0
 
-    # A 股特有列填 0
-    a_share_cols = [
-        "pe_ttm", "pb", "roe", "bp", "ep_ttm",
-        "float_mv", "total_mv",
-    ]
-    for col in a_share_cols:
+    # A 股特有列填 0 / NaN
+    for col in ["pe_ttm", "pb", "roe", "bp", "ep_ttm", "float_mv", "total_mv"]:
         if col not in df.columns:
             df[col] = 0.0
-
-    # ln_mv_total 用 amount 近似
     if "ln_mv_total" not in df.columns:
         df["ln_mv_total"] = np.log(df["amount"].clip(lower=1))
-
-    # 分类列
     for col in ["industry", "is_st", "listing_market"]:
         if col not in df.columns:
             df[col] = ""
-
-    # 指数成分 / 概念标签
-    index_concept_cols = [
-        "idx_all", "idx_hs300", "idx_zz1000", "idx_chinext", "idx_margin",
-        "concept_ai", "concept_chip", "concept_new_energy", "concept_pv",
-        "concept_military", "concept_medical", "concept_fintech",
-        "concept_consumption", "concept_state_owned", "concept_lithium",
-    ]
-    for col in index_concept_cols:
-        if col not in df.columns:
-            df[col] = 0
-
-    # 技术指标列（DB 已有的，这里没有就填 NaN，compute_features_for_group 会重算）
-    tech_cols = [
-        "return_1d", "return_5d", "return_20d", "ma5", "ma20", "ma60",
-        "rsi_14", "kdj_k", "macd_hist", "vol_std_20", "vol_atr_14",
-        "beta_20", "flow_net_amount", "volume_ma_5", "amount_ma_5",
-    ]
-    for col in tech_cols:
+    for col in ["return_1d", "return_5d", "return_20d", "ma5", "ma20", "ma60",
+                "rsi_14", "kdj_k", "macd_hist", "vol_std_20", "vol_atr_14",
+                "beta_20", "flow_net_amount", "volume_ma_5", "amount_ma_5"]:
         if col not in df.columns:
             df[col] = np.nan
 
     _log(f"  加载 {len(df):,} 行, {df['instrument'].nunique()} 个标的")
     _log(f"  日期范围: {df['trade_date'].min()} ~ {df['trade_date'].max()}")
-
     return df
 
 
@@ -534,10 +493,10 @@ def compute_market_features(df: pd.DataFrame, market: str, batch_size: int = 100
             import pyarrow.parquet as pq_writer
             pq_writer.write_table(pa.Table.from_pandas(pd.read_parquet(str(merged_path), engine="pyarrow"), preserve_index=False), str(final_path))
             os.remove(str(merged_path))
-        # 返回轻量信息：读取 parquet 元数据而非全量数据
+        # 返回轻量信息：读取 parquet 元数据验证可读性，而非全量数据
         try:
             import pyarrow.parquet as pq_file
-            pf = pq_file.ParquetFile(str(final_path))
+            pq_file.ParquetFile(str(final_path))
             return pd.DataFrame({"__placeholder__": [0]})
         except Exception:
             return pd.DataFrame({"__placeholder__": [0]})
@@ -595,7 +554,7 @@ def main():
     _log(f"市场: {market}")
     _log(f"输出: {parquet_path}")
 
-    # 加载数据（期货/港股/美股走各自 parquet 单源，其他走 H5）
+    # 加载数据（各市场走各自 Quant 平台 parquet 单源）
     if market == "futures":
         df = load_futures_parquet()
     elif market == "us_stock":
@@ -604,8 +563,11 @@ def main():
         # 港股默认 2010 起，避免 1980 全量读取
         hk_start = args.start_year or 2010
         df = load_hk_parquet(start_year=hk_start)
+    elif market == "crypto":
+        df = load_crypto_parquet()
     else:
-        df = load_h5_data(market)
+        _log(f"ERROR: 不支持的市场: {market}")
+        sys.exit(1)
 
     if df.empty:
         _log(f"ERROR: {market} 数据为空")
