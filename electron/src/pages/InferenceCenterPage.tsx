@@ -338,7 +338,7 @@ export const InferenceCenterPage: React.FC = () => {
   };
 
   return (
-    <div className="w-full h-full relative overflow-hidden flex gap-5 p-6 pb-20 select-none">
+    <div className="w-full h-full relative overflow-hidden flex gap-4 p-5 pt-2 pb-20 select-none">
       {/* ================= 左侧：模型库与推理引擎栏 ================= */}
       <div className="w-80 shrink-0 flex flex-col bg-white/75 backdrop-blur-xl rounded-3xl border border-white/80 shadow-xs p-4 overflow-hidden">
         {/* 头部标题 */}
@@ -348,11 +348,11 @@ export const InferenceCenterPage: React.FC = () => {
               <Cpu className="w-4 h-4" />
             </div>
             <div>
-              <h3 className="text-sm font-black text-slate-800 m-0">模型推理引擎</h3>
-              <p className="text-[10px] text-slate-400 m-0">选择推理架构与分位数模型</p>
+              <h3 className="text-sm font-black text-slate-800 m-0 whitespace-nowrap">模型推理引擎</h3>
+              <p className="text-[10px] text-slate-400 m-0 whitespace-nowrap">选择推理架构与分位数模型</p>
             </div>
           </div>
-          <span className="text-[10px] font-bold text-blue-600 bg-blue-50 px-2 py-0.5 rounded-md border border-blue-100">
+          <span className="text-[10px] font-bold text-blue-600 bg-blue-50 px-2 py-0.5 rounded-md border border-blue-100 whitespace-nowrap">
             {models.length} 个模型
           </span>
         </div>
@@ -369,7 +369,7 @@ export const InferenceCenterPage: React.FC = () => {
               key={tab.id}
               type="button"
               onClick={() => setModelCategoryFilter(tab.id as any)}
-              className={`text-[11px] font-bold py-1 rounded-lg transition-all ${
+              className={`text-[11px] font-bold py-1 rounded-lg transition-all whitespace-nowrap ${
                 modelCategoryFilter === tab.id
                   ? 'bg-white text-blue-600 shadow-xs'
                   : 'text-slate-500 hover:text-slate-800'
@@ -407,7 +407,7 @@ export const InferenceCenterPage: React.FC = () => {
                   </div>
                   <Tag
                     color={m.quantileSupport ? 'green' : 'default'}
-                    className="text-[9px] font-mono px-1.5 py-0 m-0 rounded border-0"
+                    className="text-[9px] font-mono px-1.5 py-0 m-0 rounded border-0 whitespace-nowrap"
                   >
                     {m.tag}
                   </Tag>
@@ -419,11 +419,11 @@ export const InferenceCenterPage: React.FC = () => {
 
                 <div className="flex items-center justify-between pt-2 border-t border-slate-100/80 text-[10px]">
                   <div className="flex items-center gap-3">
-                    <span className="text-slate-400">IC: <strong className="text-slate-700 font-mono">{m.accuracy}</strong></span>
-                    <span className="text-slate-400">Sharpe: <strong className="text-slate-700 font-mono">{m.sharpe}</strong></span>
+                    <span className="text-slate-400 whitespace-nowrap">IC: <strong className="text-slate-700 font-mono">{m.accuracy}</strong></span>
+                    <span className="text-slate-400 whitespace-nowrap">Sharpe: <strong className="text-slate-700 font-mono">{m.sharpe}</strong></span>
                   </div>
                   {m.quantileSupport && (
-                    <span className="text-emerald-600 font-bold flex items-center gap-0.5">
+                    <span className="text-emerald-600 font-bold flex items-center gap-0.5 whitespace-nowrap">
                       <Sparkles className="w-2.5 h-2.5" /> 10-50-90%
                     </span>
                   )}
@@ -436,41 +436,42 @@ export const InferenceCenterPage: React.FC = () => {
         {/* 底部当前模型技术规格 */}
         <div className="mt-3 pt-3 border-t border-slate-100 bg-slate-50/80 rounded-2xl p-3 text-[11px]">
           <div className="flex items-center justify-between text-slate-500 mb-1">
-            <span>当前架构:</span>
+            <span className="whitespace-nowrap">当前架构:</span>
             <span className="font-bold text-slate-800 uppercase font-mono">{currentSelectedModel.modelType}</span>
           </div>
           <div className="flex items-center justify-between text-slate-500">
-            <span>推荐周期:</span>
+            <span className="whitespace-nowrap">推荐周期:</span>
             <span className="font-bold text-blue-600">{currentSelectedModel.horizonDesc}</span>
           </div>
         </div>
       </div>
 
       {/* ================= 右侧：标的日期选择 + 预测核心看板 ================= */}
-      <div className="flex-1 min-w-0 flex flex-col gap-4 overflow-hidden">
+      <div className="flex-1 min-w-0 flex flex-col gap-3.5 overflow-hidden">
         {/* 上方：标的与日期选择器 Bar */}
-        <div className="bg-white/75 backdrop-blur-xl rounded-3xl px-6 py-3.5 border border-white/80 shadow-xs flex items-center justify-between shrink-0">
-          <div className="flex items-center gap-4 flex-1">
+        <div className="bg-white/75 backdrop-blur-xl rounded-3xl px-5 py-3 border border-white/80 shadow-xs flex flex-wrap lg:flex-nowrap items-center justify-between gap-3 shrink-0">
+          {/* 左侧：标的搜索 + 快捷标的 */}
+          <div className="flex items-center gap-3 flex-1 min-w-0">
             {/* 标的搜索框 */}
-            <div className="flex items-center gap-2">
-              <div className="w-8 h-8 rounded-xl bg-blue-50 border border-blue-100 flex items-center justify-center text-blue-600">
+            <div className="flex items-center gap-2 shrink-0">
+              <div className="w-8 h-8 rounded-xl bg-blue-50 border border-blue-100 flex items-center justify-center text-blue-600 shrink-0">
                 <Search className="w-4 h-4" />
               </div>
               <div className="flex flex-col">
-                <span className="text-[10px] font-bold text-slate-400">目标个股代码/名称</span>
+                <span className="text-[10px] font-bold text-slate-400 whitespace-nowrap">目标标的</span>
                 <Input
-                  placeholder="如 SH600519 / 茅台"
+                  placeholder="代码/名称 (如 SH600519)"
                   value={symbol}
                   onChange={e => setSymbol(e.target.value.toUpperCase())}
                   onPressEnter={() => handleRunInference()}
-                  style={{ width: 170, height: 32, borderRadius: 8, fontWeight: 700 }}
+                  style={{ width: 155, height: 32, borderRadius: 8, fontWeight: 700 }}
                 />
               </div>
             </div>
 
-            {/* 热门个股快捷胶囊 */}
-            <div className="hidden xl:flex items-center gap-1.5 border-l border-slate-200 pl-4">
-              <span className="text-[11px] text-slate-400 font-bold">快捷:</span>
+            {/* 热门个股快捷胶囊（防止换行） */}
+            <div className="hidden xl:flex items-center gap-1 border-l border-slate-200 pl-3 overflow-x-auto no-scrollbar">
+              <span className="text-[10px] text-slate-400 font-bold shrink-0 mr-1 whitespace-nowrap">快捷:</span>
               {POPULAR_STOCKS.map(s => (
                 <button
                   key={s.symbol}
@@ -479,27 +480,30 @@ export const InferenceCenterPage: React.FC = () => {
                     setSymbol(s.symbol);
                     handleRunInference(s.symbol);
                   }}
-                  className={`text-[11px] font-bold px-2 py-1 rounded-lg transition-all ${
+                  className={`text-[11px] font-bold px-2.5 py-1 rounded-lg transition-all shrink-0 whitespace-nowrap ${
                     symbol === s.symbol
                       ? 'bg-blue-600 text-white shadow-xs'
-                      : 'bg-slate-100/80 text-slate-600 hover:bg-slate-200'
+                      : 'bg-slate-100/90 text-slate-600 hover:bg-slate-200'
                   }`}
                 >
                   {s.name}
                 </button>
               ))}
             </div>
+          </div>
 
+          {/* 右侧：预测参数控制组 */}
+          <div className="flex items-center gap-3 shrink-0">
             {/* 预测周期选择器 */}
-            <div className="flex flex-col border-l border-slate-200 pl-4">
-              <span className="text-[10px] font-bold text-slate-400">预测周期 (Horizon)</span>
+            <div className="flex flex-col border-l border-slate-200 pl-3">
+              <span className="text-[10px] font-bold text-slate-400 whitespace-nowrap">预测周期</span>
               <Select
                 value={horizon}
                 onChange={val => {
                   setHorizon(val);
                   handleRunInference(symbol, selectedModelId, val);
                 }}
-                style={{ width: 110, height: 32 }}
+                style={{ width: 105, height: 32 }}
                 options={[
                   { label: 'T+1 次日', value: 1 },
                   { label: 'T+3 周期', value: 3 },
@@ -509,37 +513,37 @@ export const InferenceCenterPage: React.FC = () => {
               />
             </div>
 
-            {/* 基准日期 (支持历史盲测) */}
+            {/* 基准日期 */}
             <div className="flex flex-col">
-              <span className="text-[10px] font-bold text-slate-400">基准日期 (支持历史盲测)</span>
+              <span className="text-[10px] font-bold text-slate-400 whitespace-nowrap">基准日期 (盲测)</span>
               <DatePicker
                 value={inferenceDate}
                 onChange={d => setInferenceDate(d)}
-                style={{ width: 130, height: 32, borderRadius: 8 }}
+                style={{ width: 125, height: 32, borderRadius: 8 }}
                 allowClear={false}
               />
             </div>
-          </div>
 
-          {/* 触发预测按钮 */}
-          <Button
-            type="primary"
-            icon={loading ? <RefreshCw className="w-4 h-4 animate-spin" /> : <Play className="w-4 h-4 fill-current" />}
-            loading={loading}
-            onClick={() => handleRunInference()}
-            style={{
-              height: 38,
-              paddingLeft: 20,
-              paddingRight: 20,
-              borderRadius: 12,
-              fontWeight: 800,
-              fontSize: 13,
-              background: 'linear-gradient(135deg, #2563eb, #3b82f6)',
-              boxShadow: '0 4px 14px rgba(37, 99, 235, 0.3)',
-            }}
-          >
-            开始预测
-          </Button>
+            {/* 触发预测按钮 */}
+            <Button
+              type="primary"
+              icon={loading ? <RefreshCw className="w-4 h-4 animate-spin" /> : <Play className="w-4 h-4 fill-current" />}
+              loading={loading}
+              onClick={() => handleRunInference()}
+              style={{
+                height: 36,
+                paddingLeft: 18,
+                paddingRight: 18,
+                borderRadius: 10,
+                fontWeight: 800,
+                fontSize: 12,
+                background: 'linear-gradient(135deg, #2563eb, #3b82f6)',
+                boxShadow: '0 4px 12px rgba(37, 99, 235, 0.25)',
+              }}
+            >
+              开始预测
+            </Button>
+          </div>
         </div>
 
         {/* 下方：预测结果看板 */}
