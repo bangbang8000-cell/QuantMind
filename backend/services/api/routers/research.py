@@ -8,6 +8,7 @@ import backend.services.api.routers.research_service as _research_service
 from backend.services.api.routers.research_schemas import (
     BatchFeaturesRequest,
     PoolAddRequest,
+    SingleStockPredictionRequest,
     SymbolsFeaturesRequest,
     WatchlistAddRequest,
 )
@@ -26,6 +27,7 @@ from backend.services.api.routers.research_service import (
     get_symbols_features as get_symbols_features_service,
     get_user_research_pool as get_user_research_pool_service,
     get_user_watchlist as get_user_watchlist_service,
+    predict_single_stock as predict_single_stock_service,
     remove_from_research_pool as remove_from_research_pool_service,
     remove_from_watchlist as remove_from_watchlist_service,
 )
@@ -173,3 +175,22 @@ async def get_batch_features(
     """批量 QuantDB 特征：fields 传入时走投影模式（仅返回指定字段），否则返回全量。"""
     _ = current_user
     return await get_batch_full_features_service(req.symbols, req.fields)
+
+
+@router.post("/predict-stock")
+async def predict_single_stock(
+    req: SingleStockPredictionRequest,
+    current_user: dict = Depends(get_current_user),
+):
+    """个股未来预测与 10%-50%-90% 置信区间分位数推理。"""
+    tid, uid = str(current_user["tenant_id"]), str(current_user["user_id"])
+    return await predict_single_stock_service(
+        tid,
+        uid,
+        symbol=req.symbol,
+        model_id=req.model_id,
+        target_date=req.date,
+        horizon=req.horizon,
+        market=req.market,
+    )
+

@@ -15,7 +15,8 @@ import {
   SquareTerminal,
   TestTube2,
   Brain,
-  BarChart3
+  BarChart3,
+  Cpu
 } from 'lucide-react';
 import { useSelector } from 'react-redux';
 import { selectCurrentMarket } from '../../store/slices/uiSlice';
@@ -47,6 +48,7 @@ export const FloatingNavBar: React.FC<FloatingNavBarProps> = ({ current, onChang
     { id: 'agent', label: 'QuantBot', icon: Orbit },
     { id: 'model-training', label: '模型训练', icon: Layers },
     { id: 'model-registry', label: '模型管理', icon: Boxes },
+    { id: 'inference-center', label: '推理中心', icon: Cpu },
     { id: 'research', label: '投研平台', icon: Search },
     { id: 'trading', label: '模拟交易', icon: ArrowLeftRight },
     { id: 'rss-news', label: 'RSS信息流', icon: Rss },
@@ -61,7 +63,7 @@ export const FloatingNavBar: React.FC<FloatingNavBarProps> = ({ current, onChang
 
   const groupedNavItems: NavItemConfig[][] = [
     navItems.filter((item) => ['dashboard', 'market-analysis', 'strategy', 'ai-ide', 'backtest', 'agent'].includes(item.id)),
-    navItems.filter((item) => ['model-training', 'model-registry', 'research', 'trading', 'rss-news', 'alpha-research', 'trading-agents'].includes(item.id)),
+    navItems.filter((item) => ['model-training', 'model-registry', 'inference-center', 'research', 'trading', 'rss-news', 'alpha-research', 'trading-agents'].includes(item.id)),
     navItems.filter((item) => ['profile', 'admin'].includes(item.id))
   ].filter((group) => group.length > 0);
 

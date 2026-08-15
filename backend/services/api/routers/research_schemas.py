@@ -33,3 +33,65 @@ class PoolAddRequest(BaseModel):
     fusion_score: float | None = None
     thesis_summary: str | None = None
     features_snapshot: dict[str, Any] | None = None
+
+
+class SingleStockPredictionRequest(BaseModel):
+    symbol: str
+    model_id: str | None = None
+    date: str | None = None
+    horizon: int = 5
+    market: str = "CN"
+
+
+class FeatureDriverItem(BaseModel):
+    name: str
+    category: str | None = None
+    value: float | None = None
+    impact: float
+    direction: str  # "positive" | "negative"
+
+
+class ModelConsensusItem(BaseModel):
+    model_id: str
+    model_name: str
+    model_type: str
+    score: float
+    rating: str
+    horizon: int
+    expected_return: float
+
+
+class ForecastPoint(BaseModel):
+    step: int
+    date: str
+    p10: float
+    p50: float
+    p90: float
+    predicted_price: float
+    upper_price: float
+    lower_price: float
+
+
+class SingleStockPredictionResponse(BaseModel):
+    status: str
+    symbol: str
+    stock_name: str
+    model_id: str
+    model_name: str
+    model_type: str
+    as_of_date: str
+    current_price: float
+    horizon: int
+    predicted_score: float
+    expected_return: float
+    confidence: float
+    rating: str
+    p10_return: float
+    p50_return: float
+    p90_return: float
+    forecast_curve: list[ForecastPoint]
+    drivers: list[FeatureDriverItem]
+    consensus: list[ModelConsensusItem]
+    consensus_score: float
+    error: str | None = None
+
