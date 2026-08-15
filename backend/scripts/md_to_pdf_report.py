@@ -177,8 +177,11 @@ def main(md_path: str, pdf_path: str) -> None:
     if in_code:
         flush_code()
 
+    element_count = len(story)
     doc.build(story)
-    print(f'PDF 已生成: {pdf_path}（{len(story)} 个元素）')
+    # 注意：reportlab 的 doc.build() 会原地清空 story 列表，
+    # 所以必须在 build 之前统计元素个数
+    print(f'PDF 已生成: {pdf_path}（{element_count} 个元素）')
 
 
 if __name__ == '__main__':

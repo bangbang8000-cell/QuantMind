@@ -210,6 +210,22 @@ def _run(ticker: str, trade_date: str, config: dict, tracker: ProgressTracker, a
     if analysis_id:
         _save_to_database(analysis_id, ticker, trade_date, signal, config, tracker, last_chunk)
 
+    # 自动导出 md + PDF 报告（默认行为；失败只告警，不阻断）
+    try:
+        from backend.services.engine.trading_agents.report_exporter import (
+            export_report_files,
+        )
+
+        export_report_files(
+            ticker,
+            trade_date,
+            signal,
+            tracker,
+            market=getattr(tracker, "market", "CN"),
+        )
+    except Exception as exc:  # noqa: BLE001 — 导出失败绝不影响主流程
+        logger.warning("投研报告自动导出调用失败: %s", exc)
+
 
 def run_analysis_in_thread(
     ticker: str,

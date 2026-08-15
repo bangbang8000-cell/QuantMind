@@ -314,7 +314,7 @@ const ReportManagerPage: React.FC = () => {
             <Info style={{ width: 14, height: 14, flexShrink: 0 }} />
             <div style={{ fontSize: 12, lineHeight: 1.5, flex: 1 }}>
               在 <b>QuantBot</b> 输入「深度分析某只股票」（如：深度分析 002594 比亚迪），
-              技能会自动分析并导出 PDF，报告即显示在左侧。
+              分析完成后自动导出 md + PDF 报告，即显示在左侧。
             </div>
             <button
               onClick={() => setBannerDismissed(true)}
@@ -587,7 +587,7 @@ const ReportManagerPage: React.FC = () => {
                       <div style={{ fontSize: 13, color: '#64748b', lineHeight: 1.6 }}>
                         暂无分析报告<br />
                         <span style={{ fontSize: 11, color: '#94a3b8' }}>
-                          去 QuantBot 深度分析股票，导出 PDF 后会显示在这里
+                          去 QuantBot 深度分析股票，分析完成后自动导出 PDF 显示在这里
                         </span>
                       </div>
                     </div>
@@ -609,7 +609,7 @@ const ReportManagerPage: React.FC = () => {
               color: '#94a3b8',
               lineHeight: 1.5,
             }}>
-              提示：勾选文件可多选删除；PDF 报告由 QuantBot 技能生成后自动归档。
+              提示：勾选文件可多选删除；分析完成后 md + PDF 自动归档到对应市场文件夹。
             </div>
           </div>
 
@@ -690,7 +690,7 @@ const ReportManagerPage: React.FC = () => {
                   选择左侧报告查看 PDF 预览
                 </div>
                 <div style={{ fontSize: 13, color: '#64748b', maxWidth: 360, lineHeight: 1.7 }}>
-                  在 QuantBot 中输入「深度分析某只股票」，技能生成报告并导出 PDF 后，
+                  在 QuantBot 中输入「深度分析某只股票」，分析完成后自动导出 md + PDF，
                   这里就能预览完整分析内容（7 分析师 → 多空辩论 → 风控评估 → 最终决策）。
                 </div>
               </div>

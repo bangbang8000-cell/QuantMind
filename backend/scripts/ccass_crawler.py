@@ -853,6 +853,8 @@ class AsyncHKEXFetcher:
     
     URL = "https://www3.hkexnews.hk/sdw/search/searchsdw_c.aspx"
     TIMEOUT = aiohttp.ClientTimeout(total=20, connect=10)
+    # ViewState 连续失败达到该次数判定 HKEX 封禁，调用方应立即中止而非空转
+    BAN_THRESHOLD = 5
     
     USER_AGENTS = [
         "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
@@ -868,6 +870,12 @@ class AsyncHKEXFetcher:
         self.request_count = 0
         self.last_request_time = time.time()
         self.min_interval = 0.3
+        # ViewState 复用：一次 GET 获取后供所有 POST 复用，避免每只股票
+        # 额外一次 GET（2800 只 = 省 2800 个请求，显著降低 HKEX 封禁概率）
+        self._viewstate: dict | None = None
+        # 连续封禁标记：ViewState 连续失败 N 次视为被封，调用方应中止
+        self._consecutive_viewstate_fails = 0
+        self.banned = False
     
     async def __aenter__(self):
         ssl_context = ssl.create_default_context()
@@ -913,59 +921,69 @@ class AsyncHKEXFetcher:
         self.last_request_time = time.time()
     
     async def fetch_data(
-        self, 
-        stock_code: str, 
+        self,
+        stock_code: str,
         query_date: str
     ) -> Optional[pd.DataFrame]:
         async with self.semaphore:
             try:
                 await self._rate_limit()
                 self.request_count += 1
-                
-                viewstate_data = await self._get_viewstate()
+
+                viewstate_data = self._viewstate
+                if viewstate_data is None:
+                    viewstate_data = await self._get_viewstate()
                 if not viewstate_data:
-                    logger.error(f"❌ [{stock_code}] 无法获取 ViewState")
+                    self._consecutive_viewstate_fails += 1
+                    if self._consecutive_viewstate_fails >= self.BAN_THRESHOLD:
+                        self.banned = True
+                        logger.error("⛔ ViewState 连续失败 %d 次，HKEX 疑似封禁，中止抓取", self._consecutive_viewstate_fails)
+                    else:
+                        logger.error(f"❌ [{stock_code}] 无法获取 ViewState")
                     return None
-                
+                self._consecutive_viewstate_fails = 0
+
                 logger.info(f"🔍 [{self.request_count}] 查询: {stock_code} @ {query_date}")
                 html = await self._post_query(stock_code, query_date, viewstate_data)
-                
+
                 if not html:
                     return None
-                
+
                 loop = asyncio.get_event_loop()
                 df = await loop.run_in_executor(None, self._parse_html, html)
-                
+
                 return df
-                
+
             except asyncio.TimeoutError:
                 logger.error(f"❌ [{stock_code}] 请求超时")
                 return None
             except Exception as e:
                 logger.error(f"❌ [{stock_code}] 抓取失败: {e}")
                 return None
-    
+
     async def _get_viewstate(self) -> Optional[dict]:
         try:
             async with self.session.get(self.URL) as response:
                 response.raise_for_status()
                 html = await response.text()
-                
+
                 loop = asyncio.get_event_loop()
                 soup = await loop.run_in_executor(None, BeautifulSoup, html, 'lxml')
-                
+
                 fields = ['__VIEWSTATE', '__VIEWSTATEGENERATOR', 'today']
                 data = {}
-                
+
                 for field in fields:
                     element = soup.find(id=field)
                     if not element or 'value' not in element.attrs:
                         logger.error(f"❌ 缺少必需字段: {field}")
                         return None
                     data[field] = element['value']
-                
+
+                # 缓存供后续所有查询复用（ASP.NET ViewState 为会话级令牌）
+                self._viewstate = data
                 return data
-                
+
         except Exception as e:
             logger.error(f"❌ 获取 ViewState 失败: {e}")
             return None
