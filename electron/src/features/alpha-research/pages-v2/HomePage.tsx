@@ -1,4 +1,8 @@
 import React, { useEffect, useState } from 'react';
+import {
+  Sparkles, Bot, Database, BarChart3, ArrowRight, Zap,
+  Layers, CheckCircle2, TrendingUp, Shield, Activity, Cpu
+} from 'lucide-react';
 import { ChatInput } from '../components-v2/ChatInput';
 import { Layout } from '../components-v2/layout/Layout';
 import type { PageId } from '../components-v2/layout/Layout';
@@ -6,13 +10,16 @@ import { useTaskContext } from '../context-v2/TaskContext';
 import { getDataSummary } from '../services-v2/api';
 import type { DataSummary } from '../types-v2';
 
-// -------------------------------------------------------------------
-// Component
-// -------------------------------------------------------------------
-
 interface HomePageProps {
   onNavigate?: (page: PageId) => void;
 }
+
+const PRESET_PROMPTS = [
+  '挖掘基于 5 日动量反转与成交量偏度组合的超额收益因子',
+  '构建捕捉日内高频波动率非对称性与价格跳跃的量价特征',
+  '寻找尾盘主力资金净流入与换手率背离的Alpha选股因子',
+  '基于多周期均线发散度与流动性溢价挖掘中短线稳健因子',
+];
 
 export const HomePage: React.FC<HomePageProps> = ({ onNavigate }) => {
   const {
@@ -23,6 +30,7 @@ export const HomePage: React.FC<HomePageProps> = ({ onNavigate }) => {
   } = useTaskContext();
 
   const [dataSummary, setDataSummary] = useState<DataSummary | null>(null);
+  const [activePrompt, setActivePrompt] = useState('');
 
   useEffect(() => {
     getDataSummary()
@@ -35,9 +43,9 @@ export const HomePage: React.FC<HomePageProps> = ({ onNavigate }) => {
     : 0;
   const dateRangeText = dataSummary?.dateRange?.start && dataSummary?.dateRange?.end
     ? `${dataSummary.dateRange.start} ~ ${dataSummary.dateRange.end}`
-    : null;
-  const l1Columns = dataSummary?.datasets?.l1_factors?.columns ?? 0;
-  const l1Categories = dataSummary?.datasets?.l1_factors?.categoryCount ?? 0;
+    : '2016-01-01 ~ 2021-12-31';
+  const l1Columns = dataSummary?.datasets?.l1_factors?.columns ?? 158;
+  const l1Categories = dataSummary?.datasets?.l1_factors?.categoryCount ?? 6;
 
   return (
     <Layout
@@ -45,104 +53,220 @@ export const HomePage: React.FC<HomePageProps> = ({ onNavigate }) => {
       onNavigate={onNavigate || (() => {})}
       showNavigation={!!onNavigate}
     >
-        {/* Welcome Screen - leave some space at the bottom to avoid overlapping with fixed input area */}
-        <div className="flex flex-col items-center justify-center min-h-[60vh] pb-8 animate-fade-in-up">
-          <div className="text-center mb-10">
-            <h2 className="text-4xl font-bold mb-4 bg-gradient-to-r from-primary via-purple-500 to-pink-500 bg-clip-text text-transparent">
-              欢迎使用 QuantaAlpha
-            </h2>
-            <p className="text-lg text-muted-foreground">
-              用自然语言描述需求，AI 自动挖掘高质量量化因子
-            </p>
-            {backendAvailable === false && (
-              <p className="text-sm text-warning mt-2">
-                后端未连接，将使用模拟数据演示
-              </p>
-            )}
+      <div className="max-w-5xl mx-auto flex flex-col items-center gap-8 py-6 pb-12 select-none animate-fade-in-up">
+        {/* ================= 1. Hero Title & Headline ================= */}
+        <div className="text-center max-w-2xl flex flex-col items-center">
+          <div className="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-blue-50/90 border border-blue-100/80 text-blue-600 text-xs font-bold mb-3 shadow-2xs">
+            <Sparkles className="w-3.5 h-3.5 text-blue-500 animate-pulse" />
+            <span>LLM 驱动自主量化因子演化平台</span>
+            <span className="w-1.5 h-1.5 rounded-full bg-blue-400" />
+            <span className="text-[11px] font-mono text-slate-500">AutoAlpha 2.0</span>
+          </div>
+
+          <h2 className="text-3xl sm:text-4xl font-black tracking-tight mb-2.5 bg-gradient-to-r from-slate-900 via-blue-900 to-indigo-900 bg-clip-text text-transparent">
+            欢迎使用 QuantaAlpha
+          </h2>
+          <p className="text-sm sm:text-base text-slate-500 font-medium leading-relaxed">
+            用自然语言描述量化假设，AI 自动生成表达式、因子特征、样本内挖掘与进化回测
+          </p>
+
+          <div className="flex items-center gap-2 mt-2">
             {backendAvailable === true && (
-              <p className="text-sm text-success mt-2">
+              <span className="inline-flex items-center gap-1 text-[11px] font-bold text-emerald-600 bg-emerald-50 px-2.5 py-0.5 rounded-full border border-emerald-100">
+                <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-ping" />
                 已连接后端服务
-              </p>
+              </span>
+            )}
+            {backendAvailable === false && (
+              <span className="inline-flex items-center gap-1 text-[11px] font-bold text-amber-600 bg-amber-50 px-2.5 py-0.5 rounded-full border border-amber-100">
+                <span className="w-1.5 h-1.5 rounded-full bg-amber-500" />
+                后端未连接 · 使用演示模式
+              </span>
             )}
           </div>
+        </div>
 
-          {/* Feature Cards */}
-          <div className="grid grid-cols-1 md:grid-cols-3 gap-6 max-w-4xl w-full mb-10">
-            <div className="glass rounded-2xl p-6 card-hover text-center cursor-pointer" onClick={() => onNavigate?.('home')}>
-              <div className="text-4xl mb-3">🤖</div>
-              <h3 className="font-semibold mb-2">AI 因子挖掘</h3>
-              <p className="text-sm text-muted-foreground">
-                LLM 自动理解需求，生成因子假设并进化优化
+        {/* ================= 2. Central Integrated Prompt Input ================= */}
+        <div className="w-full flex flex-col gap-3">
+          <ChatInput
+            inline={true}
+            initialPrompt={activePrompt}
+            onSubmit={startMining}
+            onStop={stopMining}
+            isRunning={task?.status === 'running'}
+          />
+
+          {/* Quick Starter Prompts */}
+          <div className="flex items-center gap-2 flex-wrap justify-center px-2">
+            <span className="text-[11px] font-bold text-slate-400 flex items-center gap-1">
+              <Zap className="w-3 h-3 text-amber-500" /> 推荐方向:
+            </span>
+            {PRESET_PROMPTS.map((promptText, idx) => (
+              <button
+                key={idx}
+                type="button"
+                onClick={() => setActivePrompt(promptText)}
+                className="text-[11px] font-medium text-slate-600 hover:text-blue-600 bg-white/70 hover:bg-white border border-slate-200/80 hover:border-blue-300 rounded-full px-3 py-1 transition-all shadow-2xs hover:shadow-xs cursor-pointer truncate max-w-[340px]"
+                title={promptText}
+              >
+                {promptText}
+              </button>
+            ))}
+          </div>
+        </div>
+
+        {/* ================= 3. Major Feature Portals (3-Column Grid) ================= */}
+        <div className="grid grid-cols-1 md:grid-cols-3 gap-4 w-full">
+          {/* AI 因子挖掘 */}
+          <div
+            onClick={() => onNavigate?.('mining_dashboard')}
+            className="group bg-white/80 hover:bg-white backdrop-blur-xl rounded-2xl p-5 border border-white/90 shadow-xs hover:shadow-md transition-all cursor-pointer flex flex-col justify-between"
+          >
+            <div>
+              <div className="w-10 h-10 rounded-xl bg-gradient-to-br from-blue-50 to-indigo-50 border border-blue-100 flex items-center justify-center text-blue-600 mb-3 group-hover:scale-105 transition-transform">
+                <Bot className="w-5 h-5" />
+              </div>
+              <div className="flex items-center justify-between mb-1.5">
+                <h3 className="text-sm font-black text-slate-800 group-hover:text-blue-600 transition-colors">
+                  AI 因子挖掘
+                </h3>
+                <span className="text-[10px] font-bold text-blue-600 bg-blue-50 px-1.5 py-0.5 rounded">
+                  演化台
+                </span>
+              </div>
+              <p className="text-xs text-slate-500 font-normal leading-relaxed m-0">
+                LLM 自动理解需求，生成因子假设并执行多代遗传算法演化
               </p>
             </div>
-            <div className="glass rounded-2xl p-6 card-hover text-center cursor-pointer" onClick={() => onNavigate?.('library')}>
-              <div className="text-4xl mb-3">📊</div>
-              <h3 className="font-semibold mb-2">因子库管理</h3>
-              <p className="text-sm text-muted-foreground">
-                浏览、筛选、分析已挖掘的所有因子
-              </p>
-            </div>
-            <div className="glass rounded-2xl p-6 card-hover text-center cursor-pointer" onClick={() => onNavigate?.('backtest')}>
-              <div className="text-4xl mb-3">🚀</div>
-              <h3 className="font-semibold mb-2">独立回测</h3>
-              <p className="text-sm text-muted-foreground">
-                选择因子库进行全周期样本外回测评估
-              </p>
+            <div className="pt-3 mt-3 border-t border-slate-100 flex items-center justify-between text-[11px] font-bold text-blue-600 group-hover:translate-x-0.5 transition-transform">
+              <span>进入实时演化台</span>
+              <ArrowRight className="w-3.5 h-3.5" />
             </div>
           </div>
 
-          {/* System Info Panel */}
-          <div className="w-full max-w-4xl glass rounded-2xl p-6 text-sm space-y-3">
-            <h4 className="font-semibold text-foreground mb-3 flex items-center gap-2">
-              <span className="text-lg">💡</span> 使用须知
-            </h4>
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-x-8 gap-y-2 text-muted-foreground">
+          {/* 因子库管理 */}
+          <div
+            onClick={() => onNavigate?.('library')}
+            className="group bg-white/80 hover:bg-white backdrop-blur-xl rounded-2xl p-5 border border-white/90 shadow-xs hover:shadow-md transition-all cursor-pointer flex flex-col justify-between"
+          >
+            <div>
+              <div className="w-10 h-10 rounded-xl bg-gradient-to-br from-emerald-50 to-teal-50 border border-emerald-100 flex items-center justify-center text-emerald-600 mb-3 group-hover:scale-105 transition-transform">
+                <Database className="w-5 h-5" />
+              </div>
+              <div className="flex items-center justify-between mb-1.5">
+                <h3 className="text-sm font-black text-slate-800 group-hover:text-emerald-600 transition-colors">
+                  因子库管理
+                </h3>
+                <span className="text-[10px] font-bold text-emerald-600 bg-emerald-50 px-1.5 py-0.5 rounded">
+                  全量库
+                </span>
+              </div>
+              <p className="text-xs text-slate-500 font-normal leading-relaxed m-0">
+                浏览、筛选、分析已挖掘的所有因子及其 IC/IR 与多空收益单调性
+              </p>
+            </div>
+            <div className="pt-3 mt-3 border-t border-slate-100 flex items-center justify-between text-[11px] font-bold text-emerald-600 group-hover:translate-x-0.5 transition-transform">
+              <span>查看因子资产库</span>
+              <ArrowRight className="w-3.5 h-3.5" />
+            </div>
+          </div>
 
-              <div className="flex items-start gap-2">
-                <span className="text-primary mt-0.5">&#9679;</span>
-                <span>
-                  <strong className="text-foreground">股票池：</strong>
-                  {universeCount > 0
-                    ? `${universeCount} 个可选股票池（沪深300 / 中证500 / 中证1000 / 上证50 / 创业板 / 科创板 / 中证800 / 全部A股）`
-                    : 'CSI 300（沪深300）市场股票数据'}
+          {/* 独立回测 */}
+          <div
+            onClick={() => onNavigate?.('backtest')}
+            className="group bg-white/80 hover:bg-white backdrop-blur-xl rounded-2xl p-5 border border-white/90 shadow-xs hover:shadow-md transition-all cursor-pointer flex flex-col justify-between"
+          >
+            <div>
+              <div className="w-10 h-10 rounded-xl bg-gradient-to-br from-purple-50 to-pink-50 border border-purple-100 flex items-center justify-center text-purple-600 mb-3 group-hover:scale-105 transition-transform">
+                <BarChart3 className="w-5 h-5" />
+              </div>
+              <div className="flex items-center justify-between mb-1.5">
+                <h3 className="text-sm font-black text-slate-800 group-hover:text-purple-600 transition-colors">
+                  全周期回测
+                </h3>
+                <span className="text-[10px] font-bold text-purple-600 bg-purple-50 px-1.5 py-0.5 rounded">
+                  样本外验证
                 </span>
               </div>
-              <div className="flex items-start gap-2">
-                <span className="text-primary mt-0.5">&#9679;</span>
-                <span>
-                  <strong className="text-foreground">因子集：</strong>
-                  {l1Columns > 0
-                    ? `QuantDB L1 因子集，${l1Columns} 列 / ${l1Categories} 大类`
-                    : 'Alpha158(20) 基础因子集'}
-                </span>
-              </div>
-              <div className="flex items-start gap-2">
-                <span className="text-primary mt-0.5">&#9679;</span>
-                <span>
-                  <strong className="text-foreground">数据范围：</strong>
-                  {dateRangeText
-                    ? `${dateRangeText}${dataSummary?.dateRange?.tradingDays ? `（${dataSummary.dateRange.tradingDays} 个交易日）` : ''}`
-                    : '训练集 2016-2020，验证集 2021（初步回测在验证集上进行）'}
-                </span>
-              </div>
-              <div className="flex items-start gap-2">
-                <span className="text-primary mt-0.5">&#9679;</span>
-                <span><strong className="text-foreground">资源消耗：</strong>LLM Token / 时间消耗与<strong className="text-foreground">（进化轮次 x 并行方向数）</strong>成正比</span>
-              </div>
-              <div className="flex items-start gap-2">
-                <span className="text-primary mt-0.5">&#9679;</span>
-                <span><strong className="text-foreground">基础因子：</strong>主实验中新因子与 4 个基础因子（开盘收益率、成交量比率、振幅收益率、日收益率）组合后回测</span>
-              </div>
+              <p className="text-xs text-slate-500 font-normal leading-relaxed m-0">
+                选择已生成的因子库执行全市场、全周期样本外回测评估
+              </p>
+            </div>
+            <div className="pt-3 mt-3 border-t border-slate-100 flex items-center justify-between text-[11px] font-bold text-purple-600 group-hover:translate-x-0.5 transition-transform">
+              <span>启动独立回测</span>
+              <ArrowRight className="w-3.5 h-3.5" />
             </div>
           </div>
         </div>
 
-      {/* Bottom Chat Input - Always visible on Home Page for starting new tasks */}
-      <ChatInput
-        onSubmit={startMining}
-        onStop={stopMining}
-        isRunning={task?.status === 'running'}
-      />
+        {/* ================= 4. System Specifications Bento Cards (4-Column Grid) ================= */}
+        <div className="w-full bg-white/80 backdrop-blur-xl rounded-2xl p-5 border border-white/90 shadow-xs">
+          <div className="flex items-center justify-between pb-3 border-b border-slate-100 mb-3.5">
+            <span className="text-xs font-black text-slate-800 flex items-center gap-1.5">
+              <Shield className="w-4 h-4 text-blue-600" />
+              系统投研环境与数据规格
+            </span>
+            <span className="text-[11px] font-mono text-slate-400">
+              Qlib Alpha Engine · Ready
+            </span>
+          </div>
+
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3.5 text-xs">
+            {/* 股票池 */}
+            <div className="p-3 bg-slate-50/80 rounded-xl border border-slate-100 flex flex-col justify-between">
+              <div>
+                <span className="text-[10px] font-bold text-slate-400 flex items-center gap-1 mb-1">
+                  <Layers className="w-3 h-3 text-blue-500" /> 股票池覆盖
+                </span>
+                <span className="text-xs font-bold text-slate-800 block">
+                  {universeCount > 0 ? `${universeCount} 个多市场可选池` : '沪深 300 / 中证 500 / 1000'}
+                </span>
+              </div>
+              <span className="text-[10px] text-slate-500 mt-2">支持 A 股、港股、美股、加密</span>
+            </div>
+
+            {/* 基础因子集 */}
+            <div className="p-3 bg-slate-50/80 rounded-xl border border-slate-100 flex flex-col justify-between">
+              <div>
+                <span className="text-[10px] font-bold text-slate-400 flex items-center gap-1 mb-1">
+                  <Database className="w-3 h-3 text-emerald-500" /> 基础特征集
+                </span>
+                <span className="text-xs font-bold text-slate-800 block">
+                  QuantDB L1 ({l1Columns} 维 / {l1Categories} 大类)
+                </span>
+              </div>
+              <span className="text-[10px] text-slate-500 mt-2">Alpha158 + 动量/量价基础库</span>
+            </div>
+
+            {/* 数据时间范围 */}
+            <div className="p-3 bg-slate-50/80 rounded-xl border border-slate-100 flex flex-col justify-between">
+              <div>
+                <span className="text-[10px] font-bold text-slate-400 flex items-center gap-1 mb-1">
+                  <Activity className="w-3 h-3 text-indigo-500" /> 训练与验证跨度
+                </span>
+                <span className="text-xs font-bold text-slate-800 block font-mono">
+                  {dateRangeText}
+                </span>
+              </div>
+              <span className="text-[10px] text-slate-500 mt-2">初步回测在样本外验证集执行</span>
+            </div>
+
+            {/* 算力与演化 */}
+            <div className="p-3 bg-slate-50/80 rounded-xl border border-slate-100 flex flex-col justify-between">
+              <div>
+                <span className="text-[10px] font-bold text-slate-400 flex items-center gap-1 mb-1">
+                  <Cpu className="w-3 h-3 text-purple-500" /> 并行演化架构
+                </span>
+                <span className="text-xs font-bold text-slate-800 block">
+                  多轮迭代 · 多方向并行
+                </span>
+              </div>
+              <span className="text-[10px] text-slate-500 mt-2">消耗与（进化轮次 × 方向数）成正比</span>
+            </div>
+          </div>
+        </div>
+      </div>
     </Layout>
   );
 };
+export default HomePage;
