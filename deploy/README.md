@@ -50,29 +50,18 @@ sudo ./deploy/deploy.sh
 ### 第一阶段：系统准备
 - 更新系统依赖
 - 安装 Docker & Docker Compose
-- 安装 Node.js 20.x LTS
-- 安装 Nginx
 
 ### 第二阶段：代码部署
 - 从 Gitee 克隆代码
 - 配置环境变量
 - 创建数据目录
 
-### 第三阶段：后端部署
-- 构建 Docker 镜像
-- 启动 PostgreSQL、Redis、QuantMind 服务
-- 初始化数据库
+### 第三阶段：服务部署
+- 构建 Docker 镜像（quantmind-oss 核心镜像，可选镜像由 compose 自动构建）
+- 启动全部服务：PostgreSQL、Redis、QuantMind（4 业务服务）、Celery（worker/beat）、Web 前端、数据网关、数据看板、资讯聚合、RSSHub、QwenPaw
+- 初始化数据库并创建默认管理员
 
-### 第四阶段：前端部署
-- 安装 npm 依赖
-- 构建生产版本
-- PM2 启动服务
-
-### 第五阶段：Nginx 配置
-- 配置反向代理
-- 启动 Nginx
-
-### 第六阶段：验证
+### 第四阶段：验证
 - 健康检查
 - 防火墙配置
 
@@ -82,13 +71,19 @@ sudo ./deploy/deploy.sh
 
 | 服务 | 地址 |
 |-----|------|
-| 前端 | http://服务器IP 或 http://localhost |
+| Web 前端 | http://服务器IP:3000 |
 | 后端 API | http://服务器IP:8000 |
 | Engine | http://服务器IP:8001 |
 | Trade | http://服务器IP:8002 |
 | Stream | http://服务器IP:8003 |
+| 数据网关 | http://服务器IP:8004 |
+| 数据看板 | http://服务器IP:8501 |
+| 资讯聚合 | http://服务器IP:8090 |
+| RSSHub | http://服务器IP:1200 |
+| QwenPaw | http://服务器IP:8089 |
 
-> 本机部署时，使用 `http://localhost` 访问前端
+> 本机部署时，使用 `http://localhost` 访问各服务。
+> 桌面客户端（Electron）下载后直接连接后端 API 地址即可，无需服务器端前端。
 
 ## 默认账号
 
@@ -98,24 +93,17 @@ sudo ./deploy/deploy.sh
 ## 常用命令
 
 ```bash
+# 查看所有服务状态
+docker compose -f /opt/quantmind/docker-compose.yml ps
+
 # 查看后端日志
-docker compose -f /opt/quantmind/docker-compose.yml logs -f
+docker compose -f /opt/quantmind/docker-compose.yml logs -f quantmind
 
-# 查看前端日志
-pm2 logs quantmind-web
-
-# 重启后端
+# 重启所有服务
 docker compose -f /opt/quantmind/docker-compose.yml restart
 
-# 重启前端
-pm2 restart quantmind-web
-
-# 重启 Nginx
-systemctl restart nginx
-
-# 查看服务状态
-docker compose -f /opt/quantmind/docker-compose.yml ps
-pm2 status
+# 重启单个服务
+docker compose -f /opt/quantmind/docker-compose.yml restart <服务名>
 ```
 
 ## 目录结构
@@ -138,8 +126,6 @@ pm2 status
 
 | 端口 | 服务 | 说明 |
 |-----|------|------|
-| 80 | Nginx | HTTP 入口 |
-| 443 | Nginx | HTTPS 入口 |
 | 3000 | Web Frontend | Web 前端（容器）|
 | 8000 | API | 后端 API |
 | 8001 | Engine | 回测引擎 |
@@ -168,24 +154,17 @@ docker exec quantmind-db pg_isready -U quantmind
 docker exec quantmind-redis redis-cli ping
 ```
 
-### 前端无法访问
+### Web 前端无法访问
 
 ```bash
-# 检查 PM2 状态
-pm2 status
+# 检查 web 容器状态
+docker compose -f /opt/quantmind/docker-compose.yml ps web
 
-# 重启前端
-pm2 restart quantmind-web
-```
+# 查看 web 容器日志
+docker compose -f /opt/quantmind/docker-compose.yml logs web
 
-### Nginx 错误
-
-```bash
-# 测试配置
-nginx -t
-
-# 查看日志
-tail -f /var/log/nginx/error.log
+# 重启 web 容器
+docker compose -f /opt/quantmind/docker-compose.yml restart web
 ```
 
 ## 更新部署
@@ -196,14 +175,9 @@ cd /opt/quantmind
 # 拉取最新代码
 git pull origin master
 
-# 重新构建后端
+# 重新构建并启动
 docker compose build
 docker compose up -d
-
-# 重新构建前端
-npm install
-npm run dashboard:build
-pm2 restart quantmind-web
 ```
 
 ## 一键更新脚本（推荐）
@@ -212,10 +186,10 @@ pm2 restart quantmind-web
 
 特点：
 - 自动从 Gitee 拉取最新代码
-- 自动重建后端容器（quantmind、celery-worker）
+- 自动重建后端容器（quantmind、celery-worker、celery-beat + 可选服务）
 - 不执行数据库初始化，不删除数据库数据
 - 不重建 db/redis 容器
-- 前端为桌面客户端，无需在服务器构建
+- 可选服务（web/data-gateway/dashboard/huntly/rsshub/qwenpaw）更新失败仅警告
 
 ```bash
 cd /opt/quantmind
@@ -232,10 +206,8 @@ sudo bash deploy/update.sh --force-sync
 ## 卸载
 
 ```bash
-# 停止服务
+# 停止并移除所有服务
 docker compose -f /opt/quantmind/docker-compose.yml down
-pm2 delete quantmind-web
-systemctl stop nginx
 
 # 删除数据（谨慎操作）
 rm -rf /opt/quantmind

@@ -45,7 +45,6 @@ NC='\033[0m'
 PROJECT_DIR="/opt/quantmind"
 DATA_DIR="${PROJECT_DIR}/data"
 REPO_URL="https://gitee.com/qusong0627/QuantMind.git"
-NODE_VERSION="20.19.0"
 PROGRESS_FILE="/tmp/quantmind_deploy_progress"
 DOCKER_DAEMON_FILE="/etc/docker/daemon.json"
 DOCKER_DAEMON_BACKUP="/tmp/quantmind_docker_daemon_backup.json"
@@ -64,12 +63,6 @@ DOCKER_MIRRORS+=(
     "https://hub.rat.dev"
 )
 
-# npm 镜像加速器列表（自动选择最快）
-NPM_MIRRORS=(
-    "https://registry.npmmirror.com"
-    "https://mirrors.cloud.tencent.com/npm"
-)
-
 # 镜像源配置（用户选择，pip 和 apt 统一）
 MIRROR_ALIYUN="aliyun"
 MIRROR_TENCENT="tencent"
@@ -77,7 +70,6 @@ MIRROR_CHOICE="${QUANTMIND_MIRROR:-}"
 
 # 解析参数
 BACKEND_ONLY=false
-FRONTEND_ONLY=false
 RESUME=false
 RESET=false
 FORCE_SYNC=false
@@ -86,13 +78,12 @@ SERVER_IP_OVERRIDE="${QUANTMIND_SERVER_IP:-}"
 for arg in "$@"; do
     case $arg in
         --backend-only) BACKEND_ONLY=true ;;
-        --frontend-only) FRONTEND_ONLY=true ;;
         --resume) RESUME=true ;;
         --reset) RESET=true ;;
         --force-sync) FORCE_SYNC=true ;;
         --*)
             echo "错误: 未知参数: $arg" >&2
-            echo "支持参数: --backend-only --frontend-only --resume --reset --force-sync [server_ip]" >&2
+            echo "支持参数: --backend-only --resume --reset --force-sync [server_ip]" >&2
             exit 1
             ;;
         *)
@@ -105,11 +96,6 @@ for arg in "$@"; do
             ;;
     esac
 done
-
-if $BACKEND_ONLY && $FRONTEND_ONLY; then
-    echo "错误: --backend-only 和 --frontend-only 不能同时使用" >&2
-    exit 1
-fi
 
 # 自动检测服务器IP
 detect_server_ip() {
@@ -230,30 +216,6 @@ select_docker_mirror() {
     done
     log_warn "未找到可用镜像加速器，使用默认源" >&2
     echo ""
-}
-
-# 测试 npm 镜像加速器
-test_npm_mirror() {
-    local mirror=$1
-    if curl -s --connect-timeout 5 "${mirror}/" > /dev/null 2>&1; then
-        return 0
-    fi
-    return 1
-}
-
-# 选择最佳 npm 镜像
-select_npm_mirror() {
-    log_info "测试 npm 镜像加速器..." >&2
-    for mirror in "${NPM_MIRRORS[@]}"; do
-        log_info "测试: $mirror" >&2
-        if test_npm_mirror "$mirror"; then
-            log_info "选择镜像: $mirror" >&2
-            echo "$mirror"
-            return
-        fi
-    done
-    log_warn "未找到可用镜像加速器，使用默认源" >&2
-    echo "https://registry.npmjs.org"
 }
 
 backup_docker_daemon_config() {
@@ -1069,11 +1031,7 @@ main() {
     fi
 
     # 根据部署模式执行步骤
-    if $FRONTEND_ONLY; then
-        log_warn "前端已集成到桌面客户端，不再支持独立 Web 部署"
-        log_info "请下载桌面客户端: https://oss.quantmindai.cn/desktop-download.html"
-        exit 0
-    elif $BACKEND_ONLY; then
+    if $BACKEND_ONLY; then
         log_info "仅部署后端..."
         [[ $CURRENT_STEP -lt 1 ]] && step1_update_system
         [[ $CURRENT_STEP -lt 2 ]] && step2_install_docker
