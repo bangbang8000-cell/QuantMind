@@ -78,38 +78,57 @@ interface DashboardModule {
   isVisible: boolean;
 }
 
-// 默认模块配置
+// 默认模块配置（quantmind 六宫格布局）
 const defaultModules: DashboardModule[] = [
-  { id: 'all-markets', title: '大盘概览', component: 'all-markets', size: 'medium', position: { x: 0, y: 0 }, isVisible: true }
+  { id: 'market', title: '市场概览', component: 'market', size: 'medium', position: { x: 0, y: 0 }, isVisible: true },
+  { id: 'fund', title: '资金概览', component: 'fund', size: 'medium', position: { x: 1, y: 0 }, isVisible: true },
+  { id: 'trade', title: '交易记录', component: 'trade', size: 'medium', position: { x: 2, y: 0 }, isVisible: true },
+  { id: 'strategy', title: '策略监控', component: 'strategy', size: 'medium', position: { x: 0, y: 1 }, isVisible: true },
+  { id: 'charts', title: '智能图表', component: 'charts', size: 'medium', position: { x: 1, y: 1 }, isVisible: true },
+  { id: 'ai-quick', title: '信息通知', component: 'ai-quick', size: 'medium', position: { x: 2, y: 1 }, isVisible: true },
 ];
 
-// 按市场选择默认看板模块组合（未自定义布局时生效）
+// 按市场选择默认看板模块组合（未自定义布局时生效，均使用六宫格，市场概览卡随切换联动）
 const MARKET_DEFAULT_MODULES: Record<string, DashboardModule[]> = {
   CN: [
-    { id: 'all-markets', title: '大盘概览', component: 'all-markets', size: 'medium', position: { x: 0, y: 0 }, isVisible: true },
-    { id: 'market', title: 'A股概览', component: 'market', size: 'medium', position: { x: 1, y: 0 }, isVisible: true },
-    { id: 'strategy', title: '策略监控', component: 'strategy', size: 'medium', position: { x: 2, y: 0 }, isVisible: true },
-    { id: 'ai-quick', title: '通知中心', component: 'ai-quick', size: 'medium', position: { x: 0, y: 1 }, isVisible: true },
+    { id: 'market', title: 'A股概览', component: 'market', size: 'medium', position: { x: 0, y: 0 }, isVisible: true },
+    { id: 'fund', title: '资金概览', component: 'fund', size: 'medium', position: { x: 1, y: 0 }, isVisible: true },
+    { id: 'trade', title: '交易记录', component: 'trade', size: 'medium', position: { x: 2, y: 0 }, isVisible: true },
+    { id: 'strategy', title: '策略监控', component: 'strategy', size: 'medium', position: { x: 0, y: 1 }, isVisible: true },
+    { id: 'charts', title: '智能图表', component: 'charts', size: 'medium', position: { x: 1, y: 1 }, isVisible: true },
+    { id: 'ai-quick', title: '信息通知', component: 'ai-quick', size: 'medium', position: { x: 2, y: 1 }, isVisible: true },
   ],
   HK: [
-    { id: 'all-markets', title: '大盘概览', component: 'all-markets', size: 'medium', position: { x: 0, y: 0 }, isVisible: true },
-    { id: 'market', title: '港股概览', component: 'market', size: 'medium', position: { x: 1, y: 0 }, isVisible: true },
-    { id: 'ai-quick', title: '通知中心', component: 'ai-quick', size: 'medium', position: { x: 2, y: 0 }, isVisible: true },
+    { id: 'market', title: '港股概览', component: 'market', size: 'medium', position: { x: 0, y: 0 }, isVisible: true },
+    { id: 'fund', title: '资金概览', component: 'fund', size: 'medium', position: { x: 1, y: 0 }, isVisible: true },
+    { id: 'trade', title: '交易记录', component: 'trade', size: 'medium', position: { x: 2, y: 0 }, isVisible: true },
+    { id: 'strategy', title: '策略监控', component: 'strategy', size: 'medium', position: { x: 0, y: 1 }, isVisible: true },
+    { id: 'charts', title: '智能图表', component: 'charts', size: 'medium', position: { x: 1, y: 1 }, isVisible: true },
+    { id: 'ai-quick', title: '信息通知', component: 'ai-quick', size: 'medium', position: { x: 2, y: 1 }, isVisible: true },
   ],
   US: [
-    { id: 'all-markets', title: '大盘概览', component: 'all-markets', size: 'medium', position: { x: 0, y: 0 }, isVisible: true },
-    { id: 'market', title: '美股概览', component: 'market', size: 'medium', position: { x: 1, y: 0 }, isVisible: true },
-    { id: 'ai-quick', title: '通知中心', component: 'ai-quick', size: 'medium', position: { x: 2, y: 0 }, isVisible: true },
+    { id: 'market', title: '美股概览', component: 'market', size: 'medium', position: { x: 0, y: 0 }, isVisible: true },
+    { id: 'fund', title: '资金概览', component: 'fund', size: 'medium', position: { x: 1, y: 0 }, isVisible: true },
+    { id: 'trade', title: '交易记录', component: 'trade', size: 'medium', position: { x: 2, y: 0 }, isVisible: true },
+    { id: 'strategy', title: '策略监控', component: 'strategy', size: 'medium', position: { x: 0, y: 1 }, isVisible: true },
+    { id: 'charts', title: '智能图表', component: 'charts', size: 'medium', position: { x: 1, y: 1 }, isVisible: true },
+    { id: 'ai-quick', title: '信息通知', component: 'ai-quick', size: 'medium', position: { x: 2, y: 1 }, isVisible: true },
   ],
   CRYPTO: [
-    { id: 'all-markets', title: '大盘概览', component: 'all-markets', size: 'medium', position: { x: 0, y: 0 }, isVisible: true },
-    { id: 'market', title: '区块链概览', component: 'market', size: 'medium', position: { x: 1, y: 0 }, isVisible: true },
-    { id: 'ai-quick', title: '通知中心', component: 'ai-quick', size: 'medium', position: { x: 2, y: 0 }, isVisible: true },
+    { id: 'market', title: '区块链概览', component: 'market', size: 'medium', position: { x: 0, y: 0 }, isVisible: true },
+    { id: 'fund', title: '资金概览', component: 'fund', size: 'medium', position: { x: 1, y: 0 }, isVisible: true },
+    { id: 'trade', title: '交易记录', component: 'trade', size: 'medium', position: { x: 2, y: 0 }, isVisible: true },
+    { id: 'strategy', title: '策略监控', component: 'strategy', size: 'medium', position: { x: 0, y: 1 }, isVisible: true },
+    { id: 'charts', title: '智能图表', component: 'charts', size: 'medium', position: { x: 1, y: 1 }, isVisible: true },
+    { id: 'ai-quick', title: '信息通知', component: 'ai-quick', size: 'medium', position: { x: 2, y: 1 }, isVisible: true },
   ],
   FUTURES: [
-    { id: 'all-markets', title: '大盘概览', component: 'all-markets', size: 'medium', position: { x: 0, y: 0 }, isVisible: true },
-    { id: 'market', title: '期货概览', component: 'market', size: 'medium', position: { x: 1, y: 0 }, isVisible: true },
-    { id: 'ai-quick', title: '通知中心', component: 'ai-quick', size: 'medium', position: { x: 2, y: 0 }, isVisible: true },
+    { id: 'market', title: '期货概览', component: 'market', size: 'medium', position: { x: 0, y: 0 }, isVisible: true },
+    { id: 'fund', title: '资金概览', component: 'fund', size: 'medium', position: { x: 1, y: 0 }, isVisible: true },
+    { id: 'trade', title: '交易记录', component: 'trade', size: 'medium', position: { x: 2, y: 0 }, isVisible: true },
+    { id: 'strategy', title: '策略监控', component: 'strategy', size: 'medium', position: { x: 0, y: 1 }, isVisible: true },
+    { id: 'charts', title: '智能图表', component: 'charts', size: 'medium', position: { x: 1, y: 1 }, isVisible: true },
+    { id: 'ai-quick', title: '信息通知', component: 'ai-quick', size: 'medium', position: { x: 2, y: 1 }, isVisible: true },
   ],
 };
 

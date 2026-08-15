@@ -1,0 +1,17 @@
+# 强制文本文件使用 LF 换行（避免 Windows 检出 CRLF 破坏 shell 脚本/Dockerfile）
+* text=auto
+
+# Shell 脚本必须 LF（CRLF 的 shebang 会导致 Docker 构建时 "not found"）
+*.sh text eol=lf
+*.bash text eol=lf
+
+# 配置文件与代码保持 LF
+*.py text eol=lf
+*.sql text eol=lf
+Dockerfile* text eol=lf
+*.yml text eol=lf
+*.yaml text eol=lf
+*.md text eol=lf
+*.json text eol=lf
+*.ts text eol=lf
+*.tsx text eol=lf

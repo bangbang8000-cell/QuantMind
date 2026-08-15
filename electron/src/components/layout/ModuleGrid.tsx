@@ -1,17 +1,21 @@
 import React, { useEffect, useState } from 'react';
 import { HeaderBar } from './HeaderBar';
 import { MarketOverviewCard } from '../modules/MarketOverviewCard';
-import { AllMarketOverviewCard } from '../modules/AllMarketOverviewCard';
+import { FundOverviewCard } from '../modules/FundOverviewCard';
+import { TradeRecordsCard } from '../modules/TradeRecordsCard';
 import { StrategyMonitorCard } from '../modules/StrategyMonitorCard';
+import IntelligenceChartsCard from '../modules/IntelligenceChartsCard';
 import { NotificationQuickCard } from '../modules/NotificationQuickCard';
 import { AnimatePresence, motion } from 'framer-motion';
 import { useAppSelector } from '../../store';
 import { selectCurrentMarket } from '../../store/slices/uiSlice';
 
 const moduleComponents: { [key: string]: React.ComponentType } = {
-  'all-markets': AllMarketOverviewCard,
   market: MarketOverviewCard,
+  fund: FundOverviewCard,
+  trade: TradeRecordsCard,
   strategy: StrategyMonitorCard,
+  charts: IntelligenceChartsCard,
   'ai-quick': NotificationQuickCard,
 };
 
@@ -85,7 +89,6 @@ export const ModuleGrid: React.FC<ModuleGridProps> = ({ modules, onLayoutChange 
         }}
       >
         {modules.map((module) => {
-          const isFullWidth = module.component === 'all-markets';
           return (
             <motion.div
               key={`${module.id}-${currentMarket}`}
@@ -93,7 +96,6 @@ export const ModuleGrid: React.FC<ModuleGridProps> = ({ modules, onLayoutChange 
               animate={{ opacity: 1, scale: 1 }}
               transition={{ duration: 0.4 }}
               className="flex flex-col h-full"
-              style={isFullWidth ? { gridColumn: '1 / -1' } : undefined}
             >
               {renderModule(module.component)}
             </motion.div>

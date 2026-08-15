@@ -102,6 +102,8 @@ export const MARKET_INDICES: Record<MarketId, { symbol: string; name: string; ba
     { symbol: 'rb', name: '螺纹钢', basePrice: 3200 },
     { symbol: 'au', name: '沪金', basePrice: 780 },
     { symbol: 'cu', name: '沪铜', basePrice: 72000 },
+    { symbol: 'ag', name: '沪银', basePrice: 7500 },
+    { symbol: 'sc', name: '原油主力', basePrice: 520 },
   ],
 };
 

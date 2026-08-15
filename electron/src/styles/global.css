@@ -693,18 +693,6 @@ html.platform-win32.os-win10 .module-grid-container {
   border-color: rgba(59, 130, 246, 0.35);
 }
 
-.dock-active-indicator {
-  position: absolute;
-  bottom: 3px;
-  left: 50%;
-  transform: translateX(-50%);
-  width: 4px;
-  height: 4px;
-  border-radius: 50%;
-  background: var(--primary-blue);
-  box-shadow: 0 0 6px rgba(37, 99, 235, 0.5);
-}
-
 .dock-icon {
   width: 18px;
   height: 18px;

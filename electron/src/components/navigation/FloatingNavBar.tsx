@@ -17,7 +17,6 @@ import {
   Brain,
   BarChart3
 } from 'lucide-react';
-import { motion } from 'framer-motion';
 import { useSelector } from 'react-redux';
 import { selectCurrentMarket } from '../../store/slices/uiSlice';
 import { getMarketConfig } from '../../config/marketConfig';
@@ -85,14 +84,6 @@ export const FloatingNavBar: React.FC<FloatingNavBarProps> = ({ current, onChang
                     aria-current={isActive ? 'page' : undefined}
                     title={item.label}
                   >
-                    {isActive && (
-                      <motion.span
-                        layoutId="dock-active-indicator"
-                        className="dock-active-indicator"
-                        transition={{ type: 'spring', bounce: 0.15, duration: 0.32 }}
-                        aria-hidden="true"
-                      />
-                    )}
                     <Icon className="dock-icon" />
                     <span className="dock-label">{item.label}</span>
                   </button>

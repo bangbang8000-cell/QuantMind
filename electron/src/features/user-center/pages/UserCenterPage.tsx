@@ -1,6 +1,6 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { useNavigate, useLocation } from 'react-router-dom';
-import { User, UserCircle, Mail, MapPin, Calendar, LogOut, Shield, Laptop, Settings2 } from 'lucide-react';
+import { User, UserCircle, Mail, MapPin, Calendar, LogOut, Shield, Laptop, Settings2, Server } from 'lucide-react';
 import { Tabs } from 'antd';
 import { useAuth } from '../../auth/hooks';
 import { useProfile } from '../hooks';
@@ -11,6 +11,7 @@ import { logout } from '../../auth/store/authSlice';
 import { ProfileInfo } from '../components/ProfileInfo';
 import { SecuritySettings } from '../components/SecuritySettings';
 import CloudStrategyManagement from '../components/CloudStrategyManagement';
+import CloudNodeSettings from '../components/CloudNodeSettings';
 import OtherSettings from '../components/OtherSettings';
 
 const UserCenterPage: React.FC = () => {
@@ -181,6 +182,18 @@ const UserCenterPage: React.FC = () => {
       ),
       children: wrapTabContent(<CloudStrategyManagement />),
     },
+    ...(effectiveUser?.is_admin
+      ? [{
+          key: 'cloud-nodes',
+          label: (
+            <span className="flex items-center gap-2">
+              <Server className="w-4 h-4" />
+              云端节点
+            </span>
+          ),
+          children: wrapTabContent(<CloudNodeSettings />),
+        }]
+      : []),
     {
       key: 'other-settings',
       label: (

@@ -55,7 +55,7 @@ services:
       dockerfile: docker/Dockerfile.oss
       args:
         TORCH_DEVICE: ${TORCH_DEVICE:-cpu}
-        TORCH_CPU_INDEX_URL: ${TORCH_CPU_INDEX_URL:-https://mirrors.aliyun.com/pytorch-wheels/cpu}
+        TORCH_CPU_INDEX_URL: ${TORCH_CPU_INDEX_URL:-https://download.pytorch.org/whl/cpu}
     platform: linux/amd64
     # GPU 可选：无 NVIDIA 驱动的主机请保持注释。
     # 有 GPU 加速训练需求时取消注释（需安装 nvidia-container-toolkit）。
@@ -475,6 +475,11 @@ services:
       - ./data:/data
       - ./db:/app/db
     command: celery -A backend.services.engine.qlib_app.celery_config:celery_app beat --loglevel=info --schedule=/tmp/celerybeat-schedule
+    healthcheck:
+      test: ["CMD-SHELL", "pgrep -f 'celery.*beat' || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
     restart: unless-stopped
     networks:
       - quantmind-net

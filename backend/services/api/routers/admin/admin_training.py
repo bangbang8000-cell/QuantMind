@@ -276,6 +276,51 @@ async def get_training_node_status(
     return await NodeStatus.collect(node)
 
 
+@router.post("/training-nodes/config", summary="新增或更新 AutoDL 节点配置")
+async def save_training_node_config(
+    body: dict[str, Any],
+    current_user: dict[str, Any] = Depends(require_admin),
+):
+    """新增或更新节点配置，写回 config/training_nodes.yaml。
+
+    body 字段：id/name/host/port/user/ssh_password/ssh_key/work_dir/docker_image/gpus。
+    密码/密钥留空表示保持不变（编辑场景）；新增节点必须提供其一。
+    """
+    from backend.services.engine.training.node_manager import save_training_node
+
+    try:
+        node = save_training_node(body or {})
+        return {"success": True, "node": node}
+    except ValueError as exc:
+        return {"success": False, "error": str(exc)}
+
+
+@router.delete("/training-nodes/{node_id}", summary="删除 AutoDL 节点配置")
+async def delete_training_node_config(
+    node_id: str,
+    current_user: dict[str, Any] = Depends(require_admin),
+):
+    """从 training_nodes.yaml 删除节点配置。"""
+    from backend.services.engine.training.node_manager import delete_training_node
+
+    deleted = delete_training_node(node_id)
+    return {"success": deleted, "node": node_id}
+
+
+@router.get("/training-nodes/{node_id}/detail", summary="获取 AutoDL 节点配置详情")
+async def get_training_node_detail(
+    node_id: str,
+    current_user: dict[str, Any] = Depends(require_admin),
+):
+    """获取单个节点配置详情（剔除明文密码，仅返回 has_password/has_key 标记）。"""
+    from backend.services.engine.training.node_manager import get_training_node_detail
+
+    node = get_training_node_detail(node_id)
+    if node is None:
+        return {"success": False, "error": "节点未配置"}
+    return {"success": True, "node": node}
+
+
 @router.get("/training-runs/{run_id}", summary="获取训练任务状态")
 async def get_training_run(
     run_id: str,

@@ -415,6 +415,21 @@ class AdminService {
         return resp.data;
     }
 
+    public async saveTrainingNode(node: any): Promise<any> {
+        const resp = await this.axiosInstance.post<any>('/admin/models/training-nodes/config', node);
+        return resp.data;
+    }
+
+    public async deleteTrainingNode(nodeId: string): Promise<any> {
+        const resp = await this.axiosInstance.delete<any>(`/admin/models/training-nodes/${nodeId}`);
+        return resp.data;
+    }
+
+    public async getTrainingNodeDetail(nodeId: string): Promise<any> {
+        const resp = await this.axiosInstance.get<any>(`/admin/models/training-nodes/${nodeId}/detail`);
+        return resp.data;
+    }
+
     public async getTrainingRun(runId: string): Promise<any> {
         const resp = await this.axiosInstance.get<any>(`/admin/models/training-runs/${runId}`);
         return resp.data;
