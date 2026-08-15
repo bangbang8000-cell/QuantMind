@@ -13,9 +13,10 @@ import {
   ShieldCheck,
   SquareTerminal,
   TestTube2,
+  FileText,
   Brain,
   BarChart3,
-  Cpu
+  Cpu,
 } from 'lucide-react';
 import { useSelector } from 'react-redux';
 import { selectCurrentMarket } from '../../store/slices/uiSlice';
@@ -55,7 +56,7 @@ export const FloatingNavBar: React.FC<FloatingNavBarProps> = ({ current, onChang
     // 4. 智能投研区域
     { id: 'research', label: '投研平台', icon: Search },
     { id: 'alpha-research', label: 'Alpha研究', icon: TestTube2 },
-    { id: 'trading-agents', label: '投研分析', icon: Brain },
+    { id: 'trading-agents', label: '股票报告', icon: FileText },
     { id: 'agent', label: 'QuantBot', icon: Orbit },
     // 5. 个人中心
     { id: 'profile', label: '个人中心', icon: CircleUserRound }

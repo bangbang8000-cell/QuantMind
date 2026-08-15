@@ -61,7 +61,7 @@ const AdminFeatureCatalog = lazy(() => import('./features/admin/components/Admin
 const AdminAutoDLNodes = lazy(() => import('./features/admin/components/AdminAutoDLNodes').then(m => ({ default: m.AdminAutoDLNodes })));
 const ComingSoonPage = lazy(() => import('./features/admin/components/ComingSoonPage').then(m => ({ default: m.ComingSoonPage })));
 const AlphaResearchPage = lazy(() => import('./features/alpha-research/pages/AlphaResearchPage'));
-const TradingAgentsPage = lazy(() => import('./features/trading-agents/pages/TradingAgentsPage'));
+const ReportManagerPage = lazy(() => import('./features/trading-agents/pages/ReportManagerPage'));
 
 // 主题切换hook
 // 主题管理已移除 - 应用统一使用浅色主题
@@ -656,7 +656,7 @@ export default function App() {
                     element={
                       <ProtectedRoute>
                         <Suspense fallback={<Spin size="large" />}>
-                          <TradingAgentsPage />
+                          <ReportManagerPage />
                         </Suspense>
                       </ProtectedRoute>
                     }
