@@ -1,6 +1,7 @@
 -- ============================================================
 -- QuantMind OSS Database Initialization Script
 -- Creates all missing tables for a fresh deployment
+-- 含默认管理员 seed（admin / admin123，幂等 ON CONFLICT DO NOTHING）
 -- Run: docker exec -i quantmind-db psql -U quantmind -d quantmind < /tmp/quantmind_init.sql
 -- ============================================================
 
@@ -2144,6 +2145,16 @@ CREATE UNIQUE INDEX IF NOT EXISTS uq_qm_user_models_default_per_user
 -- 彻底清除存量硬编码 model_qlib 与 alpha158 假数据记录
 DELETE FROM qm_user_models
 WHERE model_id IN ('model_qlib', 'alpha158', 'sys-model_qlib', 'sys-alpha158');
+
+-- ========================
+-- 默认管理员（admin / admin123）
+-- NOTE: 幂等，仅在不存在时创建，不覆盖用户已改密码
+-- ========================
+INSERT INTO users (user_id, tenant_id, username, email, password_hash, is_active, is_admin, is_verified, is_locked, login_count, created_at, updated_at, is_deleted)
+VALUES ('admin', 'default', 'admin', 'admin@quantmind.local',
+        '$2b$12$B/yjK9cT.wx4BlB9j.r/t.dADjCbmutIXoDM7PdKZmV6ypuYiiUvW',
+        TRUE, TRUE, TRUE, FALSE, 0, NOW(), NOW(), FALSE)
+ON CONFLICT (user_id) DO NOTHING;
 
 -- ========================
 -- DONE - 所有缺失表已创建

@@ -20,6 +20,7 @@ const UserCenterPage: React.FC = () => {
   const dispatch = useAppDispatch();
   const [activeTab, setActiveTab] = useState('profile');
   const [syncTimeout, setSyncTimeout] = useState(false);
+  const [avatarLoadError, setAvatarLoadError] = useState(false);
   const contentScrollRef = useRef<HTMLDivElement>(null);
 
   // 获取认证用户信息（已由ProtectedRoute保证认证）
@@ -258,10 +259,19 @@ const UserCenterPage: React.FC = () => {
                 <div className="flex items-center gap-10">
                   <div className="relative group">
                     <div className="w-24 h-24 rounded-3xl bg-slate-100 border-4 border-white shadow-xl flex items-center justify-center overflow-hidden">
-                      {profile?.avatar ? (
-                        <img src={profile.avatar} alt="Avatar" className="w-full h-full object-cover" />
+                      {profile?.avatar && !profile.avatar.includes('default_avatar.png') && !avatarLoadError ? (
+                        <img
+                          src={profile.avatar}
+                          alt="Avatar"
+                          className="w-full h-full object-cover"
+                          onError={() => setAvatarLoadError(true)}
+                        />
                       ) : (
-                        <UserCircle className="w-12 h-12 text-slate-300" />
+                        <div className="w-full h-full bg-gradient-to-br from-blue-500 via-indigo-500 to-violet-600 flex items-center justify-center text-white shadow-inner">
+                          <span className="text-3xl font-black tracking-tight select-none">
+                            {(profile?.username || user?.username || 'Admin').slice(0, 1).toUpperCase()}
+                          </span>
+                        </div>
                       )}
                     </div>
                     <div className="absolute -bottom-1 -right-1 w-6 h-6 bg-emerald-500 border-2 border-white rounded-full shadow-sm" />

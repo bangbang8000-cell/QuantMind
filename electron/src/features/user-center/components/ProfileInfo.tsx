@@ -98,7 +98,16 @@ export const ProfileInfo: React.FC<ProfileInfoProps> = ({ userId }) => {
             <div style={{ width: 260, flexShrink: 0, display: 'flex', flexDirection: 'column', gap: 20 }}>
                 {/* 头像区域 */}
                 <div className="bg-white rounded-xl border border-gray-200 p-6 text-center shadow-sm">
-                    <Avatar size={90} icon={<UserOutlined />} src={profile.avatar} className="shadow-lg border-4 border-white mb-4" />
+                    {profile.avatar && !profile.avatar.includes('default_avatar.png') ? (
+                        <Avatar size={90} src={profile.avatar} className="shadow-lg border-4 border-white mb-4" />
+                    ) : (
+                        <Avatar
+                            size={90}
+                            className="shadow-lg border-4 border-white mb-4 bg-gradient-to-br from-blue-500 via-indigo-500 to-violet-600 text-white font-black text-3xl select-none"
+                        >
+                            {(profile.username || user?.username || 'A').slice(0, 1).toUpperCase()}
+                        </Avatar>
+                    )}
                     <Upload
                         showUploadList={false}
                         beforeUpload={(file) => {
