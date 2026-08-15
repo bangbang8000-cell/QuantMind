@@ -1,5 +1,5 @@
 import React from 'react';
-import { Sparkles, Database, BarChart3, Settings as SettingsIcon, LogOut } from 'lucide-react';
+import { Sparkles, Database, BarChart3, Settings as SettingsIcon } from 'lucide-react';
 import { useTaskContext } from '../../context-v2/TaskContext';
 
 export type PageId = 'home' | 'library' | 'backtest' | 'settings' | 'mining_dashboard';
@@ -17,13 +17,11 @@ export const Layout: React.FC<LayoutProps> = ({
   onNavigate,
   showNavigation = true,
 }) => {
-  const { miningTask, resetMiningTask } = useTaskContext();
+  const { miningTask } = useTaskContext();
 
   // Helper to determine where 'Factor Mining' nav item should go
   const handleNavClick = (itemId: PageId) => {
     if (itemId === 'home') {
-      // If there is an active mining task (running, completed, or failed), go to dashboard
-      // Only go to home welcome screen if task is null or idle
       if (miningTask && miningTask.status !== 'idle') {
         onNavigate('mining_dashboard');
       } else {
@@ -42,60 +40,55 @@ export const Layout: React.FC<LayoutProps> = ({
   ];
 
   return (
-    <div className="min-h-screen bg-background gradient-mesh">
-      {/* Header */}
-      <header className="fixed top-0 left-0 right-0 z-40 glass-strong border-b border-border/50">
-        <div className="container mx-auto px-6 py-4">
-          <div className="flex items-center justify-between">
-            <div 
-              className="flex items-center gap-3 cursor-pointer hover:opacity-80 transition-opacity"
-              onClick={() => onNavigate('home')}
-            >
-              <div className="relative">
-                <div className="relative flex h-12 w-12 items-center justify-center rounded-xl bg-gradient-to-br from-primary to-purple-600">
-                  <Sparkles className="h-6 w-6 text-white" />
-                </div>
-              </div>
-              <div>
-                <h1 className="text-xl font-bold">QuantaAlpha</h1>
-                <p className="text-xs text-muted-foreground">智能因子挖掘平台</p>
-              </div>
-            </div>
-
-            {/* Navigation */}
-            <div className="flex items-center gap-4">
-              {showNavigation && (
-                <nav className="flex items-center gap-2">
-                  {navItems.map((item) => {
-                    const Icon = item.icon;
-                    // Highlight 'Factor Mining' if we are on dashboard OR home
-                    const isActive = currentPage === item.id || (item.id === 'home' && currentPage === 'mining_dashboard');
-                    return (
-                      <button
-                        key={item.id}
-                        onClick={() => handleNavClick(item.id)}
-                        className={`flex items-center gap-2 px-4 py-2 rounded-lg transition-all ${
-                          isActive
-                            ? 'bg-primary text-primary-foreground'
-                            : 'text-muted-foreground hover:text-foreground hover:bg-secondary/50'
-                        }`}
-                      >
-                        <Icon className="h-4 w-4" />
-                        <span className="text-sm font-medium">{item.label}</span>
-                      </button>
-                    );
-                  })}
-                </nav>
-              )}
-            </div>
+    <div className="min-h-screen bg-transparent gradient-mesh p-4 pt-2 select-none">
+      {/* 顶部悬浮圆角磨砂胶囊顶栏 (Preserves window rounded corners and window controls) */}
+      <header className="sticky top-2 z-40 max-w-6xl mx-auto w-full px-5 py-2 rounded-2xl bg-white/80 backdrop-blur-xl border border-white/90 shadow-xs flex items-center justify-between transition-all">
+        {/* Left: Brand Logo & Title */}
+        <div 
+          className="flex items-center gap-3 cursor-pointer hover:opacity-85 transition-opacity"
+          onClick={() => onNavigate('home')}
+        >
+          <div className="relative flex h-9 w-9 items-center justify-center rounded-xl bg-gradient-to-br from-blue-600 via-indigo-600 to-purple-600 text-white shadow-xs">
+            <Sparkles className="h-4 w-4" />
+          </div>
+          <div>
+            <h1 className="text-sm font-black text-slate-800 m-0 tracking-tight leading-none">QuantaAlpha</h1>
+            <p className="text-[10px] font-bold text-slate-400 m-0 leading-none mt-1">智能因子挖掘平台</p>
           </div>
         </div>
+
+        {/* Right: Navigation Tabs (with anti-collision spacing for window controls) */}
+        {showNavigation && (
+          <nav className="flex items-center gap-1.5 pr-20">
+            {navItems.map((item) => {
+              const Icon = item.icon;
+              const isActive = currentPage === item.id || (item.id === 'home' && currentPage === 'mining_dashboard');
+              return (
+                <button
+                  key={item.id}
+                  type="button"
+                  onClick={() => handleNavClick(item.id)}
+                  className={`flex items-center gap-1.5 px-3.5 py-1.5 rounded-xl text-xs font-bold transition-all cursor-pointer ${
+                    isActive
+                      ? 'bg-gradient-to-r from-blue-600 to-indigo-600 text-white shadow-xs'
+                      : 'text-slate-500 hover:text-slate-800 hover:bg-slate-100/70'
+                  }`}
+                >
+                  <Icon className="h-3.5 w-3.5" />
+                  <span>{item.label}</span>
+                </button>
+              );
+            })}
+          </nav>
+        )}
       </header>
 
       {/* Main Content */}
-      <main className="pt-20 pb-24">
-        <div className="container mx-auto px-6">{children}</div>
+      <main className="pt-4 pb-20">
+        <div className="max-w-6xl mx-auto">{children}</div>
       </main>
     </div>
   );
 };
+
+export default Layout;
