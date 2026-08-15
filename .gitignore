@@ -57,7 +57,7 @@ electron/out/
 .traeignore
 .antigravityignore
 .workbuddy/
-.claude/
+.claude/settings.local.json
 
 # ==============================================================================
 # 4. Data, ML & Results
@@ -220,3 +220,9 @@ backend/services/tests/test_ccass_sync_resilience.py
 
 # AutoDL 训练节点配置（含 SSH 凭据，禁止提交）
 config/training_nodes.yaml
+
+# PDF 字体冗余变体（脚本只用 WQYMicroHei/WQYZenHei/NotoSansCJK.ttf，
+# 这些 .ttc/SC 变体是同一字体的重复打包，100MB+ 不入仓）
+docker/training/fonts/*.ttc
+docker/training/fonts/NotoSansCJK-*.ttf
+docker/training/fonts/NotoSansCJKSC-*.ttf

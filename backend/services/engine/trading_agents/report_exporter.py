@@ -1,9 +1,11 @@
 """分析完成后自动导出 md + PDF 报告（默认行为，失败不阻断主流程）。
 
 导出规格（与 trading-agents 技能包一致）：
-- 文件命名：{ticker}_{trade_date}_投研分析报告.{md,pdf}
-- 存放目录：{结果目录}/{市场中文名}/（CN→A股市场、US→美股市场、HK→港股市场、
-  CRYPTO→区块链市场、FUTURES→期货市场），结果目录默认 /app/db/trading_agents_results
+- 文件命名：{股票名}{代码}_{trade_date}_投研分析报告.{md,pdf}
+  （股票名查不到时回退 {ticker}_{trade_date}_投研分析报告.{md,pdf}）
+- 存放目录：{结果目录}/{市场中文名}/{股票名}/（CN→A股市场、US→美股市场、
+  HK→港股市场、CRYPTO→区块链市场、FUTURES→期货市场；股票名查不到时不建子文件夹，
+  直接放市场目录下），结果目录默认 /app/db/trading_agents_results
 - md 标题：`{股票名}({ticker}) 投研分析报告`（股票名从本地 QuantDB 数据查，
   查不到回退纯代码）
 - 副标题行：交易日期 / 分析时间 / 耗时 / 最终评级
@@ -153,6 +155,13 @@ def _convert_to_pdf(md_path: Path, pdf_path: Path) -> bool:
         return False
 
 
+def _sanitize_name(raw: str) -> str:
+    """清洗股票名/文件名非法字符（Windows/路径分隔符等）。"""
+    cleaned = raw.replace("/", "").replace("\\", "").replace(":", "").replace("*", "")
+    cleaned = cleaned.replace("?", "").replace('"', "").replace("<", "").replace(">", "")
+    return cleaned.replace("|", "").strip() or "未命名"
+
+
 def export_report_files(
     ticker: str,
     trade_date: str,
@@ -160,16 +169,24 @@ def export_report_files(
     tracker: ProgressTracker,
     market: str,
 ) -> dict[str, Any]:
-    """分析完成后自动导出 md + PDF（默认必做）。任何一步失败都只告警，不抛异常。"""
+    """分析完成后自动导出 md + PDF（默认必做）。任何一步失败都只告警，不抛异常。
+
+    目录结构：{市场名}/{股票名}/ 下，文件 {股票名}{代码}_{trade_date}_投研分析报告.{md,pdf}
+    """
     result: dict[str, Any] = {"md": None, "pdf": None, "dir": None, "error": None}
     try:
         market_dir = _MARKET_NAMES.get(market.upper(), market or "CN")
+        stock_name = _resolve_stock_name(ticker, market)
+        safe_stock_name = _sanitize_name(stock_name) if stock_name else ""
+
         out_dir = _RESULTS_DIR / market_dir
+        if safe_stock_name:
+            out_dir = out_dir / safe_stock_name
         out_dir.mkdir(parents=True, exist_ok=True)
 
-        stock_name = _resolve_stock_name(ticker, market)
-        md_path = out_dir / f"{ticker}_{trade_date}_投研分析报告.md"
-        pdf_path = out_dir / f"{ticker}_{trade_date}_投研分析报告.pdf"
+        file_prefix = f"{safe_stock_name}{ticker}" if safe_stock_name else ticker
+        md_path = out_dir / f"{file_prefix}_{trade_date}_投研分析报告.md"
+        pdf_path = out_dir / f"{file_prefix}_{trade_date}_投研分析报告.pdf"
 
         md_text = _build_report_md(ticker, trade_date, stock_name, signal, tracker, market)
         md_path.write_text(md_text, encoding="utf-8")

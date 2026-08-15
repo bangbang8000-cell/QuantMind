@@ -411,6 +411,15 @@ def _safe_filename(name: str) -> bool:
     return not any(ch in name for ch in ("/", "\\", "\x00"))
 
 
+def _safe_folder_path(path: str) -> bool:
+    """校验文件夹路径：允许「市场/股票名」两级路径，逐段校验，拒绝穿越。"""
+    if not path or path in (".", ".."):
+        return False
+    if path.startswith("/") or path.endswith("/") or "\\" in path or "\x00" in path:
+        return False
+    return all(_safe_filename(part) for part in path.split("/"))
+
+
 def _resolve_results_dir() -> Path:
     """解析报告目录（宿主机/容器均可）。"""
     env_val = os.getenv("TRADING_AGENTS_RESULTS_DIR", "").strip()
@@ -422,10 +431,12 @@ def _resolve_results_dir() -> Path:
 
 
 def _parse_report_meta(filename: str) -> dict:
-    """从文件名解析元数据：{ticker, name, date, signal}。
+    """从文件名解析元数据：{ticker, name(股票名), date, signal}。
 
-    约定格式: {ticker}_{date}_投研分析报告.pdf
-    例: 002594_2026-08-14_投研分析报告.pdf
+    新格式: {股票名}{代码}_{date}_投研分析报告.pdf
+    例: 贵州茅台600519_2026-08-15_投研分析报告.pdf → ticker=600519, name=贵州茅台
+    旧格式: {ticker}_{date}_投研分析报告.pdf
+    例: 002594_2026-08-14_投研分析报告.pdf → ticker=002594, name=""
     """
     stem = filename.rsplit(".", 1)[0]
     parts = stem.split("_")
@@ -434,12 +445,25 @@ def _parse_report_meta(filename: str) -> dict:
         "ticker": "",
         "date": "",
         "time": "",
-        "name": stem,
+        "name": "",
         "signal": None,
     }
     if len(parts) >= 2:
-        meta["ticker"] = parts[0]
-        meta["date"] = parts[1]
+        date_match = re.match(r"^(\d{4}-\d{2}-\d{2})$", parts[1])
+        if date_match:
+            # 新格式：{股票名}{代码}_{date}_...
+            head = parts[0]
+            ticker_match = re.search(r"(\d{4,6})$", head)
+            if ticker_match:
+                meta["ticker"] = ticker_match.group(1)
+                meta["name"] = head[: ticker_match.start()]
+            else:
+                meta["ticker"] = head
+            meta["date"] = parts[1]
+        else:
+            # 旧格式：{ticker}_{date}_...
+            meta["ticker"] = parts[0]
+            meta["date"] = parts[1]
     # 尝试从文件名解析评级（Buy/Overweight/Hold/Underweight/Sell）
     for kw in ("buy", "overweight", "hold", "underweight", "sell"):
         if f"_{kw}" in stem.lower():
@@ -450,7 +474,7 @@ def _parse_report_meta(filename: str) -> dict:
 
 @router.get("/files/list")
 async def list_report_files():
-    """列出报告目录下所有文件，按文件夹分组（含元数据）。"""
+    """列出报告目录下所有文件，按「市场文件夹 → 股票名文件夹 → 文件」分组（含元数据）。"""
     root = _resolve_results_dir()
     if not root.exists():
         return {"code": 200, "data": {"root": str(root), "folders": [], "files": []}}
@@ -458,47 +482,76 @@ async def list_report_files():
     folders: list[dict] = []
     files: list[dict] = []
 
-    # 根目录文件（默认"全部报告"）
-    for f in sorted(root.iterdir(), key=lambda p: p.stat().st_mtime if p.is_file() else 0, reverse=True):
-        if f.is_file() and f.suffix.lower() in (".pdf", ".md"):
-            meta = _parse_report_meta(f.name)
-            meta.update({
-                "size": f.stat().st_size,
-                "modified": f.stat().st_mtime,
-            })
-            files.append(meta)
+    def _file_meta(f: Path) -> dict:
+        meta = _parse_report_meta(f.name)
+        meta.update({
+            "size": f.stat().st_size,
+            "modified": f.stat().st_mtime,
+        })
+        return meta
 
-    # 子文件夹（按市场/自定义）
-    for d in sorted(root.iterdir()):
-        if d.is_dir():
-            sub_files = []
-            for f in sorted(d.iterdir(), key=lambda p: p.stat().st_mtime if p.is_file() else 0, reverse=True):
-                if f.is_file() and f.suffix.lower() in (".pdf", ".md"):
-                    meta = _parse_report_meta(f.name)
-                    meta.update({
-                        "size": f.stat().st_size,
-                        "modified": f.stat().st_mtime,
-                    })
-                    sub_files.append(meta)
-            folders.append({"name": d.name, "files": sub_files})
+    # 根目录文件（未分类，历史遗留）
+    for f in sorted(
+        (p for p in root.iterdir() if p.is_file() and p.suffix.lower() in (".pdf", ".md")),
+        key=lambda p: p.stat().st_mtime,
+        reverse=True,
+    ):
+        files.append(_file_meta(f))
+
+    # 子文件夹：市场文件夹（可含股票名子文件夹）
+    for market_dir in sorted(root.iterdir()):
+        if not market_dir.is_dir():
+            continue
+        # 股票名子文件夹（{市场名}/{股票名}/{文件}）
+        nested_folders: list[dict] = []
+        direct_files: list[dict] = []
+        for entry in sorted(market_dir.iterdir()):
+            if entry.is_dir():
+                sub_files = [
+                    _file_meta(f)
+                    for f in sorted(entry.iterdir())
+                    if f.is_file() and f.suffix.lower() in (".pdf", ".md")
+                ]
+                nested_folders.append({"name": entry.name, "files": sub_files})
+            elif entry.is_file() and entry.suffix.lower() in (".pdf", ".md"):
+                direct_files.append(_file_meta(entry))
+        # 兼容旧结构：{市场名} 直接放文件（无股票名子文件夹）
+        if direct_files:
+            direct_files.sort(key=lambda m: m["modified"], reverse=True)
+        if nested_folders:
+            nested_folders.sort(key=lambda f: f["name"])
+        folders.append({
+            "name": market_dir.name,
+            "files": direct_files,
+            "subfolders": nested_folders,
+        })
 
     return {"code": 200, "data": {"root": str(root), "folders": folders, "files": files}}
 
 
+def _iter_report_files(root: Path):
+    """递归产出报告目录下所有 .md/.pdf 文件（根 + 任意层级子文件夹）。"""
+    if not root.is_dir():
+        return
+    for entry in root.rglob("*"):
+        if entry.is_file() and entry.suffix.lower() in (".pdf", ".md"):
+            yield entry
+
+
 @router.get("/files/pdf/{filename}")
 async def get_report_pdf(filename: str):
-    """返回 PDF 文件（供前端 iframe 内联预览，不触发下载）。"""
+    """返回 PDF 文件（供前端 iframe 内联预览，不触发下载）。
+
+    支持任意层级：根目录、市场文件夹、股票名子文件夹。同名文件取修改时间最新的。
+    """
     if not _safe_filename(filename):
         raise HTTPException(status_code=400, detail="非法文件名")
     root = _resolve_results_dir()
-    # 支持根目录与子文件夹
-    candidates = [root / filename]
-    if root.is_dir():
-        for d in root.iterdir():
-            if d.is_dir():
-                candidates.append(d / filename)
-    for p in candidates:
-        if p.is_file() and p.suffix.lower() == ".pdf":
+    candidates = [p for p in _iter_report_files(root) if p.name == filename]
+    if candidates:
+        candidates.sort(key=lambda p: p.stat().st_mtime, reverse=True)
+        p = candidates[0]
+        if p.suffix.lower() == ".pdf":
             from fastapi.responses import FileResponse
 
             # 不传 filename 参数：保持 Content-Disposition 为空 → 浏览器 iframe 内联预览
@@ -515,44 +568,43 @@ class FileDeleteRequest(BaseModel):
 
 class FileMoveRequest(BaseModel):
     files: list[str] = Field(default_factory=list, description="待移动文件名列表")
-    target_folder: str = Field(..., description="目标文件夹名")
+    target_folder: str = Field(..., description="目标文件夹（支持「市场/股票名」两级路径）")
 
 
 @router.post("/files/move")
 async def move_report_files(req: FileMoveRequest):
-    """批量移动报告文件到目标文件夹。"""
-    if not _safe_filename(req.target_folder):
-        raise HTTPException(status_code=400, detail="非法文件夹名")
+    """批量移动报告文件到目标文件夹（target_folder 支持两级路径）。"""
+    if not _safe_folder_path(req.target_folder):
+        raise HTTPException(status_code=400, detail="非法文件夹路径")
     root = _resolve_results_dir()
     root.mkdir(parents=True, exist_ok=True)
-    target_dir = root / req.target_folder
+    target_dir = root / Path(req.target_folder)
     target_dir.mkdir(parents=True, exist_ok=True)
 
     moved: list[str] = []
     errors: list[str] = []
-    # 收集所有源目录（根 + 子文件夹）
-    source_dirs = [root] + [d for d in root.iterdir() if d.is_dir()]
+    # 收集所有源文件（任意层级，同名取最新）
+    source_map: dict[str, Path] = {}
+    for p in _iter_report_files(root):
+        if p.name not in source_map or p.stat().st_mtime > source_map[p.name].stat().st_mtime:
+            source_map[p.name] = p
     for name in req.files:
         if not _safe_filename(name):
             errors.append(f"非法文件名: {name}")
             continue
-        found = False
-        for src_dir in source_dirs:
-            src = src_dir / name
-            if src.is_file() and src.suffix.lower() in (".pdf", ".md"):
-                try:
-                    dest = target_dir / name
-                    # 已在目标文件夹则跳过
-                    if src.resolve() == dest.resolve():
-                        continue
-                    src.replace(dest)
-                    moved.append(name)
-                    found = True
-                    break
-                except Exception as exc:
-                    errors.append(f"{name}: {exc}")
-        if not found and name not in moved:
+        src = source_map.get(name)
+        if src is None:
             errors.append(f"文件不存在: {name}")
+            continue
+        try:
+            dest = target_dir / name
+            # 已在目标文件夹则跳过
+            if src.resolve() == dest.resolve():
+                continue
+            src.replace(dest)
+            moved.append(name)
+        except Exception as exc:
+            errors.append(f"{name}: {exc}")
     return {"code": 200, "data": {"moved": moved, "errors": errors}}
 
 
@@ -567,31 +619,31 @@ async def delete_report_files(req: FileDeleteRequest):
             errors.append(f"非法文件名: {name}")
             continue
         found = False
-        for p in [root / name] + [d / name for d in root.iterdir() if d.is_dir()]:
-            if p.is_file() and p.suffix.lower() in (".pdf", ".md"):
+        for p in _iter_report_files(root):
+            if p.name == name:
                 try:
                     p.unlink()
                     deleted.append(name)
                     found = True
-                    break
                 except Exception as exc:
                     errors.append(f"{name}: {exc}")
+                break
         if not found:
             errors.append(f"文件不存在: {name}")
     return {"code": 200, "data": {"deleted": deleted, "errors": errors}}
 
 
 class FolderDeleteRequest(BaseModel):
-    folder: str = Field(..., description="文件夹名")
+    folder: str = Field(..., description="文件夹（支持「市场/股票名」两级路径）")
 
 
 @router.post("/files/delete-folder")
 async def delete_report_folder(req: FolderDeleteRequest):
-    """删除报告文件夹（含其中文件）。"""
-    if not _safe_filename(req.folder):
-        raise HTTPException(status_code=400, detail="非法文件夹名")
+    """删除报告文件夹（含其中所有文件与子文件夹）。"""
+    if not _safe_folder_path(req.folder):
+        raise HTTPException(status_code=400, detail="非法文件夹路径")
     root = _resolve_results_dir()
-    target = root / req.folder
+    target = root / Path(req.folder)
     if not target.is_dir():
         raise HTTPException(status_code=404, detail=f"文件夹不存在: {req.folder}")
     import shutil
@@ -601,16 +653,16 @@ async def delete_report_folder(req: FolderDeleteRequest):
 
 
 class FolderCreateRequest(BaseModel):
-    folder: str = Field(..., description="新建文件夹名")
+    folder: str = Field(..., description="新建文件夹（支持「市场/股票名」两级路径）")
 
 
 @router.post("/files/create-folder")
 async def create_report_folder(req: FolderCreateRequest):
-    """新建报告文件夹。"""
-    if not _safe_filename(req.folder):
-        raise HTTPException(status_code=400, detail="非法文件夹名")
+    """新建报告文件夹（支持两级路径，如「A股市场/贵州茅台」）。"""
+    if not _safe_folder_path(req.folder):
+        raise HTTPException(status_code=400, detail="非法文件夹路径")
     root = _resolve_results_dir()
     root.mkdir(parents=True, exist_ok=True)
-    target = root / req.folder
+    target = root / Path(req.folder)
     target.mkdir(parents=True, exist_ok=True)
     return {"code": 200, "data": {"created": req.folder}}

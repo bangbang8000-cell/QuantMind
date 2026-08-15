@@ -63,6 +63,8 @@ interface ReportFile {
 interface ReportFolder {
   name: string;
   files: ReportFile[];
+  /** 股票名子文件夹（市场文件夹内第二层） */
+  subfolders?: ReportFolder[];
 }
 
 interface FileListResponse {
@@ -139,6 +141,16 @@ const ReportManagerPage: React.FC = () => {
   const rootFiles = list.files;
   const allFolders = list.folders;
 
+  // 文件夹内文件数（含股票名子文件夹）
+  const countFolderFiles = (folder: ReportFolder): number =>
+    folder.files.length + (folder.subfolders || []).reduce((s, sf) => s + sf.files.length, 0);
+
+  // 展开文件夹全路径选项（顶层市场 + 二级股票名）
+  const folderPathOptions: string[] = allFolders.flatMap((f) => [
+    f.name,
+    ...(f.subfolders || []).map((sf) => `${f.name}/${sf.name}`),
+  ]);
+
   const toggleExpand = (folder: string) => {
     (setExpandedFolders as any)((prev: Set<string>) => {
       const next = new Set(prev);
@@ -172,7 +184,8 @@ const ReportManagerPage: React.FC = () => {
       });
       setNewFolderName('');
       setShowNewFolder(false);
-      (setExpandedFolders as any)((prev: Set<string>) => new Set(prev).add(name));
+      const top = name.split('/')[0];
+      (setExpandedFolders as any)((prev: Set<string>) => new Set(prev).add(top));
       await loadFiles();
     } catch (err: any) {
       setError(err.message);
@@ -211,15 +224,15 @@ const ReportManagerPage: React.FC = () => {
   };
 
   // 文件总数（用于判断是否显示引导）
-  const totalFiles = rootFiles.length + allFolders.reduce((s, f) => s + f.files.length, 0);
+  const totalFiles = rootFiles.length + allFolders.reduce((s, f) => s + countFolderFiles(f), 0);
   const showBanner = !bannerDismissed && totalFiles === 0;
 
-  const handleDeleteFolder = async (folder: string) => {
-    if (!window.confirm(`确认删除文件夹「${folder}」及其中所有文件？`)) return;
+  const handleDeleteFolder = async (path: string) => {
+    if (!window.confirm(`确认删除文件夹「${path}」及其中所有文件？`)) return;
     try {
       await request('/files/delete-folder', {
         method: 'POST',
-        body: JSON.stringify({ folder }),
+        body: JSON.stringify({ folder: path }),
       });
       await loadFiles();
     } catch (err: any) {
@@ -261,10 +274,10 @@ const ReportManagerPage: React.FC = () => {
         )}
         <div style={{ flex: 1, minWidth: 0 }}>
           <div style={{ fontSize: 12, fontWeight: 500, color: '#1e293b', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
-            {file.ticker || file.name.split('_')[0] || file.filename}
+            {file.name || file.ticker || file.filename}
           </div>
           <div style={{ fontSize: 10, color: '#94a3b8' }}>
-            {file.date || ''} {formatTime(file.modified)}
+            {file.ticker || ''} {file.date || ''} {formatTime(file.modified)}
           </div>
         </div>
         {file.signal && (
@@ -381,7 +394,7 @@ const ReportManagerPage: React.FC = () => {
                   padding: '2px 8px',
                   borderRadius: 6,
                 }}>
-                  {rootFiles.length + allFolders.reduce((s, f) => s + f.files.length, 0)} 份
+                  {rootFiles.length + allFolders.reduce((s, f) => s + countFolderFiles(f), 0)} 份
                 </span>
               </div>
               <div style={{ display: 'flex', gap: 6, marginTop: 12 }}>
@@ -458,8 +471,8 @@ const ReportManagerPage: React.FC = () => {
                     }}
                   >
                     <option value="">选择目标文件夹...</option>
-                    {allFolders.map((f) => (
-                      <option key={f.name} value={f.name}>{f.name}</option>
+                    {folderPathOptions.map((path) => (
+                      <option key={path} value={path}>{path}</option>
                     ))}
                   </select>
                   <button
@@ -485,7 +498,7 @@ const ReportManagerPage: React.FC = () => {
                     value={newFolderName}
                     onChange={(e) => setNewFolderName(e.target.value)}
                     onKeyDown={(e) => e.key === 'Enter' && handleCreateFolder()}
-                    placeholder="文件夹名"
+                    placeholder="文件夹名（可写 市场/股票名）"
                     style={{
                       flex: 1,
                       padding: '5px 10px',
@@ -531,55 +544,91 @@ const ReportManagerPage: React.FC = () => {
                     </div>
                   )}
 
-                  {/* 文件夹 */}
-                  {allFolders.map((folder) => (
-                    <div key={folder.name} style={{ marginBottom: 8 }}>
-                      <div
-                        onClick={() => toggleExpand(folder.name)}
-                        style={{
-                          display: 'flex',
-                          alignItems: 'center',
-                          gap: 6,
-                          padding: '6px 12px',
-                          cursor: 'pointer',
-                          borderRadius: 8,
-                          fontSize: 13,
-                          fontWeight: 600,
-                          color: '#334155',
-                        }}
-                      >
-                        {expandedFolders.has(folder.name) ? (
-                          <ChevronDown style={{ width: 14, height: 14, color: '#94a3b8' }} />
-                        ) : (
-                          <ChevronRight style={{ width: 14, height: 14, color: '#94a3b8' }} />
-                        )}
-                        <Folder style={{ width: 15, height: 15, color: '#f59e0b' }} />
-                        <span style={{ flex: 1 }}>{folder.name}</span>
-                        <span style={{ fontSize: 10, color: '#94a3b8' }}>{folder.files.length}</span>
-                        <button
-                          onClick={(e) => {
-                            e.stopPropagation();
-                            handleDeleteFolder(folder.name);
-                          }}
+                  {/* 文件夹（市场 → 股票名 二级） */}
+                  {allFolders.map((folder) => {
+                    const subfolders = folder.subfolders || [];
+                    return (
+                      <div key={folder.name} style={{ marginBottom: 8 }}>
+                        <div
+                          onClick={() => toggleExpand(folder.name)}
                           style={{
-                            border: 'none',
-                            background: 'transparent',
-                            color: '#cbd5e1',
+                            display: 'flex',
+                            alignItems: 'center',
+                            gap: 6,
+                            padding: '6px 12px',
                             cursor: 'pointer',
-                            padding: 2,
+                            borderRadius: 8,
+                            fontSize: 13,
+                            fontWeight: 600,
+                            color: '#334155',
                           }}
-                          title={`删除 ${folder.name}`}
                         >
-                          <Trash2 style={{ width: 12, height: 12 }} />
-                        </button>
-                      </div>
-                      {expandedFolders.has(folder.name) && (
-                        <div style={{ marginTop: 2 }}>
-                          {folder.files.map((f) => renderFileItem(f, 12))}
+                          {expandedFolders.has(folder.name) ? (
+                            <ChevronDown style={{ width: 14, height: 14, color: '#94a3b8' }} />
+                          ) : (
+                            <ChevronRight style={{ width: 14, height: 14, color: '#94a3b8' }} />
+                          )}
+                          <Folder style={{ width: 15, height: 15, color: '#f59e0b' }} />
+                          <span style={{ flex: 1 }}>{folder.name}</span>
+                          <span style={{ fontSize: 10, color: '#94a3b8' }}>{countFolderFiles(folder)}</span>
+                          <button
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              handleDeleteFolder(folder.name);
+                            }}
+                            style={{
+                              border: 'none',
+                              background: 'transparent',
+                              color: '#cbd5e1',
+                              cursor: 'pointer',
+                              padding: 2,
+                            }}
+                            title={`删除 ${folder.name}`}
+                          >
+                            <Trash2 style={{ width: 12, height: 12 }} />
+                          </button>
                         </div>
-                      )}
-                    </div>
-                  ))}
+                        {expandedFolders.has(folder.name) && (
+                          <div style={{ marginTop: 2 }}>
+                            {folder.files.map((f) => renderFileItem(f, 12))}
+                            {subfolders.map((sub) => (
+                              <div key={sub.name} style={{ marginTop: 4 }}>
+                                <div
+                                  style={{
+                                    display: 'flex',
+                                    alignItems: 'center',
+                                    gap: 6,
+                                    padding: '5px 12px 5px 26px',
+                                    fontSize: 12,
+                                    fontWeight: 500,
+                                    color: '#475569',
+                                  }}
+                                >
+                                  <Folder style={{ width: 13, height: 13, color: '#94a3b8', flexShrink: 0 }} />
+                                  <span style={{ flex: 1 }}>{sub.name}</span>
+                                  <span style={{ fontSize: 10, color: '#94a3b8' }}>{sub.files.length}</span>
+                                  <button
+                                    onClick={() => handleDeleteFolder(`${folder.name}/${sub.name}`)}
+                                    style={{
+                                      border: 'none',
+                                      background: 'transparent',
+                                      color: '#cbd5e1',
+                                      cursor: 'pointer',
+                                      padding: 2,
+                                    }}
+                                    title={`删除 ${sub.name}`}
+                                  >
+                                    <Trash2 style={{ width: 11, height: 11 }} />
+                                  </button>
+                                </div>
+                                {sub.files.map((f) => renderFileItem(f, 26))}
+                              </div>
+                            ))}
+                          </div>
+                        )}
+                      </div>
+                    );
+                  })}
 
                   {rootFiles.length === 0 && allFolders.length === 0 && (
                     <div style={{ textAlign: 'center', padding: 40 }}>
@@ -609,7 +658,7 @@ const ReportManagerPage: React.FC = () => {
               color: '#94a3b8',
               lineHeight: 1.5,
             }}>
-              提示：勾选文件可多选删除；分析完成后 md + PDF 自动归档到对应市场文件夹。
+              提示：勾选文件可多选删除；分析完成后 md + PDF 自动归档到「市场文件夹 → 股票名文件夹」。
             </div>
           </div>
 
