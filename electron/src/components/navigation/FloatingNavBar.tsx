@@ -86,6 +86,7 @@ export const FloatingNavBar: React.FC<FloatingNavBarProps> = ({ current, onChang
                   >
                     <Icon className="dock-icon" />
                     <span className="dock-label">{item.label}</span>
+                    {isActive && <span className="dock-active-dot" aria-hidden="true" />}
                   </button>
                 );
               })}

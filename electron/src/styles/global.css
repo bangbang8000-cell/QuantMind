@@ -615,7 +615,7 @@ html.platform-win32.os-win10 .module-grid-container {
 .status-indicator { animation: pulse 2s infinite; }
 
 
-/* 底部 Dock 导航栏 */
+/* 底部 Dock 导航栏 - macOS 风格悬浮毛玻璃胶囊 Dock */
 .bottom-dock {
   flex: 0 0 auto;
   height: var(--dock-height);
@@ -623,28 +623,45 @@ html.platform-win32.os-win10 .module-grid-container {
   display: flex;
   align-items: center;
   justify-content: center;
-  padding: 6px 0;
+  padding: 0 16px 8px;
   box-sizing: border-box;
-  background: var(--bg-main);
-  border-top: 1px solid rgba(226, 232, 240, 0.8);
+  background: transparent;
   z-index: 1050;
+  pointer-events: none;
 }
 
-/* 图标容器 - 透明，不包裹长条 */
+/* macOS 风格悬浮毛玻璃胶囊容器 */
 .bottom-dock-inner {
+  pointer-events: auto;
   display: flex;
   align-items: center;
   justify-content: center;
-  gap: 4px;
-  height: 100%;
+  gap: 3px;
+  height: 52px;
   max-width: 100%;
   padding: 0 10px;
   overflow-x: auto;
   overflow-y: hidden;
   scrollbar-width: none;
-  background: transparent;
-  border: none;
-  box-shadow: none;
+  background: rgba(255, 255, 255, 0.78);
+  backdrop-filter: blur(24px) saturate(180%);
+  -webkit-backdrop-filter: blur(24px) saturate(180%);
+  border-radius: 20px;
+  border: 1px solid rgba(255, 255, 255, 0.85);
+  box-shadow: 
+    0 12px 32px -4px rgba(15, 23, 42, 0.12),
+    0 4px 12px -2px rgba(15, 23, 42, 0.06),
+    0 0 0 1px rgba(0, 0, 0, 0.03),
+    inset 0 1px 1px 0 rgba(255, 255, 255, 0.95);
+  transition: box-shadow 0.25s ease, transform 0.25s ease;
+}
+
+.bottom-dock-inner:hover {
+  box-shadow: 
+    0 16px 40px -4px rgba(15, 23, 42, 0.16),
+    0 6px 16px -2px rgba(15, 23, 42, 0.08),
+    0 0 0 1px rgba(0, 0, 0, 0.04),
+    inset 0 1px 1px 0 rgba(255, 255, 255, 0.95);
 }
 
 .bottom-dock-inner::-webkit-scrollbar {
@@ -653,7 +670,7 @@ html.platform-win32.os-win10 .module-grid-container {
 
 .dock-group {
   display: flex;
-  align-items: stretch;
+  align-items: center;
   gap: 2px;
 }
 
@@ -661,8 +678,8 @@ html.platform-win32.os-win10 .module-grid-container {
   width: 1px;
   align-self: center;
   height: 24px;
-  margin: 0 6px;
-  background: linear-gradient(180deg, rgba(148, 163, 184, 0.05), rgba(148, 163, 184, 0.34), rgba(148, 163, 184, 0.05));
+  margin: 0 5px;
+  background: linear-gradient(180deg, rgba(148, 163, 184, 0.08), rgba(148, 163, 184, 0.4), rgba(148, 163, 184, 0.08));
 }
 
 .dock-item {
@@ -671,44 +688,45 @@ html.platform-win32.os-win10 .module-grid-container {
   flex-direction: column;
   align-items: center;
   justify-content: center;
-  gap: 3px;
-  width: 54px;
+  gap: 2px;
+  width: 52px;
   height: 44px;
   padding: 0;
-  background: rgba(255, 255, 255, 0.4);
-  border: 1px solid rgba(226, 232, 240, 0.5);
+  background: transparent;
+  border: 1px solid transparent;
   border-radius: 12px;
   cursor: pointer;
   flex: 0 0 auto;
-  box-shadow: 0 1px 4px rgba(15, 23, 42, 0.04);
-  transition: background-color 0.18s ease, box-shadow 0.18s ease, transform 0.18s ease;
+  transition: all 0.22s cubic-bezier(0.34, 1.56, 0.64, 1);
 }
 
 .dock-item:hover {
-  background: rgba(255, 255, 255, 0.7);
+  background: rgba(255, 255, 255, 0.88);
   box-shadow: 0 4px 12px rgba(15, 23, 42, 0.08);
-  transform: translateY(-1px);
+  transform: translateY(-3px) scale(1.08);
+  border-color: rgba(255, 255, 255, 0.9);
 }
 
 .dock-item.active {
-  background: rgba(219, 234, 254, 0.7);
-  border-color: rgba(59, 130, 246, 0.35);
+  background: rgba(255, 255, 255, 0.96);
+  border-color: rgba(59, 130, 246, 0.25);
+  box-shadow: 0 2px 8px rgba(37, 99, 235, 0.12), inset 0 1px 1px rgba(255, 255, 255, 0.9);
 }
 
 .dock-icon {
   width: 18px;
   height: 18px;
   stroke-width: 2;
-  color: var(--nav-icon);
-  transition: color 0.18s ease;
+  color: #64748b;
+  transition: color 0.18s ease, transform 0.18s ease;
 }
 
 .dock-item:hover .dock-icon {
-  color: var(--nav-icon-hover);
+  color: #0f172a;
 }
 
 .dock-item.active .dock-icon {
-  color: var(--primary-blue);
+  color: #2563eb;
   stroke-width: 2.25;
 }
 
@@ -717,13 +735,29 @@ html.platform-win32.os-win10 .module-grid-container {
   font-weight: 600;
   letter-spacing: 0.01em;
   line-height: 1;
-  color: var(--nav-label);
+  color: #64748b;
   white-space: nowrap;
   transition: color 0.18s ease;
 }
 
+.dock-item:hover .dock-label {
+  color: #0f172a;
+}
+
 .dock-item.active .dock-label {
-  color: var(--primary-blue);
+  color: #2563eb;
+  font-weight: 700;
+}
+
+/* macOS 风格活跃状态指示小圆点 */
+.dock-active-dot {
+  position: absolute;
+  bottom: 2px;
+  width: 3.5px;
+  height: 3.5px;
+  border-radius: 50%;
+  background: #2563eb;
+  box-shadow: 0 0 4px rgba(37, 99, 235, 0.6);
 }
 
 .dock-item:focus-visible {
@@ -742,8 +776,8 @@ html.platform-win32.os-win10 .module-grid-container {
   }
 
   .dock-item {
-    min-width: 52px;
-    padding: 0 6px;
+    min-width: 48px;
+    width: 48px;
   }
 }
 
