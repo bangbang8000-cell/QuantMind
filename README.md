@@ -560,17 +560,33 @@ QuantMind 采用**机构级 AI 量化技术栈**，覆盖从数据到模型到�
 
 > 🤖 **推荐：先装技能包，让 AI 帮你部署**
 > 
-> QuantMind 提供 **Claude Code / QuantBot 技能包**（`quantmind-operations-skill.zip`），安装后 AI 能自动识别"部署/装不上/帮我部署"等意图，**一步步指导你完成部署、检查、排查**（含环境要求、网络预检、数据库初始化、users 表验证等专业指导，避免 AI 乱猜）：
+> QuantMind 提供**技能包**（`quantmind-operations-skill.zip`），包含 **11 个技能**（部署运维、模型训练/推理、数据同步、回测中心、AI-IDE、模拟交易、市场分析、因子挖掘、投研分析等）。安装后主流 AI 编程工具都能自动识别"部署/装不上/帮我部署"等意图，**一步步指导你完成部署、检查、排查**（含环境要求、网络预检、数据库初始化、users 表验证等专业指导，避免 AI 乱猜）。
+> 
+> **各主流工具安装方式：**
 > 
 > ```bash
-> # 1. 安装技能包（解压到 Claude Code 全局技能目录）
+> # ① Claude Code / QuantBot（推荐，SKILL.md 原生格式）
 > unzip quantmind-operations-skill.zip -d ~/.claude/
-> # 2. 验证
-> ls ~/.claude/skills/quantmind-deploy/SKILL.md
-> # 3. 打开 Claude Code，直接说：帮我部署 QuantMind / 部署不上帮我排查
+> # 验证: ls ~/.claude/skills/quantmind-deploy/SKILL.md
+> # 然后对 Claude Code 说：帮我部署 QuantMind / 部署不上帮我排查
+> 
+> # ② OpenAI Codex（.codex 目录，读取 AGENTS.md 指令）
+> unzip quantmind-operations-skill.zip -d ~/.codex/
+> # Codex 读取 ~/.codex/AGENTS.md；技能目录内容可在 AGENTS.md 中引用
+> 
+> # ③ OpenCode（opencode 通用 Agent 指令）
+> unzip quantmind-operations-skill.zip -d ~/.config/opencode/
+> # 或项目级: 解压到项目根后，把 SKILL.md 要点写入 AGENTS.md
+> 
+> # ④ 腾讯 Trae / CodeBuddy（.trae 目录）
+> unzip quantmind-operations-skill.zip -d ~/.trae/
+> 
+> # ⑤ 字节豆包 MarsCode / 其他工具
+> #    克隆仓库后，把 .claude/skills/*/SKILL.md 的关键流程导入项目的 AGENTS.md
+> #    （所有工具都读 AGENTS.md / 项目级指令文件，把本技能包要点粘进去即可）
 > ```
 > 
-> 技能包含 **11 个技能**：部署运维、模型训练/推理、数据同步、回测中心、AI-IDE、模拟交易、市场分析、因子挖掘、投研分析等。
+> **通用做法**：无论哪个工具，最稳妥的方式是把技能包内容导入该工具的 **AGENTS.md**（项目根 `AGENTS.md` 或全局指令文件），AI 就能按部署流程一步步来。直接对 AI 说"帮我部署 QuantMind"即可。
 
 ```bash
 # 1. 克隆仓库
