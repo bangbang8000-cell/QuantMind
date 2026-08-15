@@ -39,20 +39,25 @@ export const FloatingNavBar: React.FC<FloatingNavBarProps> = ({ current, onChang
   const marketLabel = getMarketConfig(currentMarket).label;
 
   const navItems: NavItemConfig[] = [
+    // 1. 大盘分析模块
     { id: 'dashboard', label: marketLabel, icon: LayoutDashboard },
     { id: 'market-analysis', label: '市场分析', icon: BarChart3 },
+    { id: 'rss-news', label: 'RSS信息流', icon: Rss },
+    // 2. 回测与交易区域
     { id: 'strategy', label: '智能策略', icon: LineChart },
     { id: 'ai-ide', label: 'AI-IDE', icon: SquareTerminal },
     { id: 'backtest', label: '回测中心', icon: FlaskConical },
-    { id: 'agent', label: 'QuantBot', icon: Orbit },
+    { id: 'trading', label: '模拟交易', icon: ArrowLeftRight },
+    // 3. 模型区域
     { id: 'model-training', label: '模型训练', icon: Layers },
     { id: 'model-registry', label: '模型管理', icon: Boxes },
     { id: 'inference-center', label: '推理中心', icon: Cpu },
+    // 4. 智能投研区域
     { id: 'research', label: '投研平台', icon: Search },
-    { id: 'trading', label: '模拟交易', icon: ArrowLeftRight },
-    { id: 'rss-news', label: 'RSS信息流', icon: Rss },
     { id: 'alpha-research', label: 'Alpha研究', icon: TestTube2 },
     { id: 'trading-agents', label: '投研分析', icon: Brain },
+    { id: 'agent', label: 'QuantBot', icon: Orbit },
+    // 5. 个人中心
     { id: 'profile', label: '个人中心', icon: CircleUserRound }
   ];
 
@@ -61,8 +66,15 @@ export const FloatingNavBar: React.FC<FloatingNavBarProps> = ({ current, onChang
   }
 
   const groupedNavItems: NavItemConfig[][] = [
-    navItems.filter((item) => ['dashboard', 'market-analysis', 'strategy', 'ai-ide', 'backtest', 'agent'].includes(item.id)),
-    navItems.filter((item) => ['model-training', 'model-registry', 'inference-center', 'research', 'trading', 'rss-news', 'alpha-research', 'trading-agents'].includes(item.id)),
+    // 1. 大盘分析模块
+    navItems.filter((item) => ['dashboard', 'market-analysis', 'rss-news'].includes(item.id)),
+    // 2. 回测与交易区域
+    navItems.filter((item) => ['strategy', 'ai-ide', 'backtest', 'trading'].includes(item.id)),
+    // 3. 模型区域
+    navItems.filter((item) => ['model-training', 'model-registry', 'inference-center'].includes(item.id)),
+    // 4. 智能投研区域
+    navItems.filter((item) => ['research', 'alpha-research', 'trading-agents', 'agent'].includes(item.id)),
+    // 5. 个人与系统组
     navItems.filter((item) => ['profile', 'admin'].includes(item.id))
   ].filter((group) => group.length > 0);
 
