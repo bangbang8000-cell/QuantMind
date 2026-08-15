@@ -1358,9 +1358,26 @@ class QlibBacktestServiceRuntimeMixin(QlibBacktestServiceQueryMixin):
                 ):
                     merged_meta["resolved_pred_path"] = resolved_path
                 return signal_data, merged_meta
+            # 显式指定了模型但无预测文件：抛明确错误，避免静默 fallback $close 空转
+            explicit_model_id = str(getattr(request, "model_id", "") or "").strip()
+            allow_fallback = bool(
+                getattr(request, "allow_feature_signal_fallback", True)
+            )
+            if explicit_model_id:
+                raise ValueError(
+                    f"模型 {explicit_model_id} 无可用预测文件（pred.pkl/pred.parquet）。"
+                    "请先在模型管理页对该模型执行推理生成预测，再运行回测。"
+                    f"（已检查: {registry_pred_path or registry_meta.get('resolved_pred_path', '')}）"
+                )
+            if not allow_fallback:
+                raise ValueError(
+                    "未找到预测文件（pred.pkl）且未允许特征信号回退。"
+                    "请先在模型管理页执行推理生成预测，或启用 allow_feature_signal_fallback。"
+                )
+
             task_logger.warning(
                 "pred_path_not_found",
-                "QLIB_PRED_PATH not found, fallback to $close",
+                "QLIB_PRED_PATH not found, fallback to $close (no model_id)",
                 pred_path=pred_path,
                 resolved_path=resolved_path,
             )
