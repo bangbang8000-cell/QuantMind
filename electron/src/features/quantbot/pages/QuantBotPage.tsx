@@ -145,11 +145,11 @@ const QuantBotPage: React.FC = () => {
                 <AlertTriangle className="w-7 h-7 text-red-400" />
               </div>
               <div>
-                <p className="text-sm font-medium text-gray-200">QwenPaw 服务不可达</p>
-                <p className="text-xs text-gray-500 mt-2">
-                  QuantBot 需要 QwenPaw 容器运行在端口 8089。请确认服务已启动：
+                <p className="text-sm font-medium text-gray-300">QwenPaw 未部署或未启动</p>
+                <p className="text-xs text-gray-400 mt-2">
+                  请按文档部署并启动 QwenPaw 智能体服务：
                 </p>
-                <code className="block mt-2 px-3 py-1.5 bg-[#2a2a2a] rounded text-xs text-emerald-400 font-mono">
+                <code className="block mt-2 px-3 py-1.5 bg-[#2a2a2a] rounded text-xs text-emerald-400/90 font-mono">
                   docker-compose up -d qwenpaw
                 </code>
               </div>
