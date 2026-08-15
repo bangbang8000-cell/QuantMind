@@ -173,16 +173,15 @@ export const OtherSettings: React.FC<OtherSettingsProps> = ({ userId, tenantId }
               value={selectedModel}
               onChange={handleModelChange}
               style={{ width: '100%' }}
-              size="small"
+              className="[&_.ant-select-selector]:!h-8 [&_.ant-select-selector]:!rounded-[8px] [&_.ant-select-selector]:!items-center"
               options={MODEL_PRESETS.map(p => ({ label: p.label, value: p.value }))}
             />
             {isCustomModel && (
               <Input
-                size="small"
                 value={customModel}
                 onChange={(e) => setCustomModel(e.target.value)}
                 placeholder="输入模型名称，如 gpt-4o、deepseek-chat"
-                className="rounded-lg"
+                className="!h-8 !rounded-[8px]"
               />
             )}
           </div>
@@ -191,11 +190,10 @@ export const OtherSettings: React.FC<OtherSettingsProps> = ({ userId, tenantId }
           <div className="space-y-1.5">
             <label className="text-xs font-medium text-gray-600">API 地址</label>
             <Input
-              size="small"
               value={baseUrl}
               onChange={(e) => setBaseUrl(e.target.value)}
               placeholder="https://api.openai.com/v1"
-              className="rounded-lg"
+              className="!h-8 !rounded-[8px]"
             />
           </div>
 
@@ -207,7 +205,7 @@ export const OtherSettings: React.FC<OtherSettingsProps> = ({ userId, tenantId }
                 value={apiKey}
                 onChange={(e) => setApiKey(e.target.value)}
                 placeholder={hasKey ? '输入新 Key 以更新' : 'sk-xxxxxxxxxxxxxxxx'}
-                className="!pr-9 rounded-xl h-9"
+                className="!pr-9 !h-8 !rounded-[8px]"
                 onPressEnter={handleSaveApiKey}
               />
               <button
@@ -224,7 +222,7 @@ export const OtherSettings: React.FC<OtherSettingsProps> = ({ userId, tenantId }
               onClick={handleSaveApiKey}
               loading={isSaving}
               disabled={!apiKey.trim()}
-              className="rounded-xl h-9"
+              className="!h-8 !rounded-[8px]"
             >
               保存
             </Button>
