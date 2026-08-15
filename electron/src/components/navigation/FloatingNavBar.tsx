@@ -14,7 +14,7 @@ import {
   ShieldCheck,
   SquareTerminal,
   TestTube2,
-  Brain,
+  FileText,
   BarChart3
 } from 'lucide-react';
 import { useSelector } from 'react-redux';
@@ -51,7 +51,7 @@ export const FloatingNavBar: React.FC<FloatingNavBarProps> = ({ current, onChang
     { id: 'trading', label: '模拟交易', icon: ArrowLeftRight },
     { id: 'rss-news', label: 'RSS信息流', icon: Rss },
     { id: 'alpha-research', label: 'Alpha研究', icon: TestTube2 },
-    { id: 'trading-agents', label: '投研分析', icon: Brain },
+    { id: 'trading-agents', label: '股票报告', icon: FileText },
     { id: 'profile', label: '个人中心', icon: CircleUserRound }
   ];
 
