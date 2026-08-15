@@ -18,7 +18,7 @@ const MARKET_LABELS: Record<MarketId, string> = {
 
 export const MarketOverviewCard: React.FC = () => {
   const currentMarket = useAppSelector(selectCurrentMarket);
-  const { data, loading, error, timedOut } = useMarketData({ market: currentMarket, timeoutMs: 1000 });
+  const { data, loading, error, timedOut } = useMarketData({ market: currentMarket, timeoutMs: 8000 });
 
   // 市场默认数据
   const fallbackData: Partial<MarketIndex>[] = (MARKET_INDICES[currentMarket] || MARKET_INDICES.CN).map(
@@ -46,9 +46,9 @@ export const MarketOverviewCard: React.FC = () => {
   const lastUpdate = data?.lastUpdate ? String(data.lastUpdate).slice(0, 10) : '';
   const isRealData = Boolean(data?.sourceUsed) || (data?.indices && data.indices.length > 0 && data.indices.some((x) => x.change !== 0));
 
-  // 固定渲染 5 行，数据不足时补占位行，保证各市场卡片高度一致
-  const viewRows = displayData.slice(0, 5);
-  const placeholderCount = Math.max(5 - viewRows.length, 0);
+  // 固定渲染 6 行，数据不足时补占位行，保证各市场卡片高度一致
+  const viewRows = displayData.slice(0, 6);
+  const placeholderCount = Math.max(6 - viewRows.length, 0);
 
   return (
     <Card title={`${MARKET_LABELS[currentMarket]}概览`} height="100%" background="market">
@@ -126,7 +126,7 @@ export const MarketOverviewCard: React.FC = () => {
           );
         })}
 
-        {/* 占位行：数据不足 5 条时填充，统一各市场卡片高度 */}
+        {/* 占位行：数据不足 6 条时填充，统一各市场卡片高度 */}
         {Array.from({ length: placeholderCount }).map((_, index) => (
           <div
             key={`placeholder-${index}`}

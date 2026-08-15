@@ -85,10 +85,10 @@ class InferenceRouterService:
 
     def __init__(self, inference_service: InferenceService | None = None):
         self.inference_service = inference_service or InferenceService()
-        self.primary_model_id = os.getenv("PRIMARY_MODEL_ID", "model_qlib")
-        self.fallback_model_id = os.getenv("FALLBACK_MODEL_ID", "alpha158")
-        self.primary_model_dir = os.getenv("MODELS_PRODUCTION", "/app/models/production/model_qlib")
-        self.fallback_model_dir = os.getenv("MODELS_FALLBACK_PRODUCTION", "/app/models/production/alpha158")
+        self.primary_model_id = os.getenv("PRIMARY_MODEL_ID", "")
+        self.fallback_model_id = os.getenv("FALLBACK_MODEL_ID", "")
+        self.primary_model_dir = os.getenv("MODELS_PRODUCTION", "/app/models/production")
+        self.fallback_model_dir = os.getenv("MODELS_FALLBACK_PRODUCTION", "")
         self.primary_data_source = os.getenv("QLIB_PRIMARY_DATA_PATH", "db/feature_snapshots")
         self.fallback_data_source = os.getenv("QLIB_FALLBACK_DATA_PATH", "db/qlib_data")
 

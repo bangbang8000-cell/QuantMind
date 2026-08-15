@@ -4,6 +4,7 @@ import { UserOutlined, UploadOutlined } from '@ant-design/icons';
 import { useProfile } from '../hooks';
 import type { UserProfileUpdate } from '../types';
 import { useAuth } from '../../auth/hooks';
+import defaultLogo from '../../../assets/logo.png';
 
 interface ProfileInfoProps {
     userId: string;
@@ -98,7 +99,11 @@ export const ProfileInfo: React.FC<ProfileInfoProps> = ({ userId }) => {
             <div style={{ width: 260, flexShrink: 0, display: 'flex', flexDirection: 'column', gap: 20 }}>
                 {/* 头像区域 */}
                 <div className="bg-white rounded-xl border border-gray-200 p-6 text-center shadow-sm">
-                    <Avatar size={90} icon={<UserOutlined />} src={profile.avatar} className="shadow-lg border-4 border-white mb-4" />
+                    <Avatar
+                        size={90}
+                        src={profile.avatar && !profile.avatar.includes('default_avatar.png') ? profile.avatar : defaultLogo}
+                        className="shadow-lg border-4 border-white mb-4 bg-white"
+                    />
                     <Upload
                         showUploadList={false}
                         beforeUpload={(file) => {

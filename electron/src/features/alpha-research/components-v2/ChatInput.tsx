@@ -16,10 +16,19 @@ interface ChatInputProps {
   onSubmit: (config: TaskConfig) => void;
   onStop?: () => void;
   isRunning?: boolean;
+  inline?: boolean;
+  initialPrompt?: string;
+  onSelectPrompt?: (prompt: string) => void;
 }
 
-export const ChatInput: React.FC<ChatInputProps> = ({ onSubmit, onStop, isRunning = false }) => {
-  const [input, setInput] = useState('');
+export const ChatInput: React.FC<ChatInputProps> = ({
+  onSubmit,
+  onStop,
+  isRunning = false,
+  inline = false,
+  initialPrompt = '',
+}) => {
+  const [input, setInput] = useState(initialPrompt);
   const [useCustomMiningDirection, setUseCustomMiningDirection] = useState(false);
   const [miningMarket, setMiningMarket] = useState<string>('a_share');
   const [universe, setUniverse] = useState<UniverseId>('csi300');
@@ -28,6 +37,12 @@ export const ChatInput: React.FC<ChatInputProps> = ({ onSubmit, onStop, isRunnin
   const [markets, setMarkets] = useState<MarketInfo[]>([]);
   const [config] = useState<Partial<TaskConfig>>({ librarySuffix: '' });
   const textareaRef = useRef<HTMLTextAreaElement>(null);
+
+  useEffect(() => {
+    if (initialPrompt) {
+      setInput(initialPrompt);
+    }
+  }, [initialPrompt]);
 
   useEffect(() => {
     alphaAgentService.listMarkets().then(setMarkets).catch(() => {});
@@ -76,12 +91,158 @@ export const ChatInput: React.FC<ChatInputProps> = ({ onSubmit, onStop, isRunnin
 
   const selectedNotReady = marketList.find(m => m.id === miningMarket)?.ready === false;
 
+  const content = (
+    <div className={`relative w-full ${inline ? 'max-w-4xl mx-auto' : 'container mx-auto px-6 max-w-3xl'}`}>
+      {/* Animated gradient border ring */}
+      <div className="relative rounded-2xl bg-gradient-to-r from-blue-500/30 via-purple-500/30 to-pink-500/30 p-[1px] shadow-xl shadow-blue-500/5 transition-all">
+        <div className="rounded-2xl bg-white/95 backdrop-blur-xl overflow-hidden shadow-xs">
+          {/* Options row — compact inline chips */}
+          <div className="px-4 pt-3.5 pb-1 flex items-center gap-1.5 flex-wrap">
+            <span className="text-[10px] font-semibold uppercase tracking-widest text-slate-400 mr-0.5 select-none">市场</span>
+            {marketList.map((m) => (
+              <button
+                key={m.id}
+                onClick={() => setMiningMarket(m.id)}
+                disabled={isRunning || !m.ready}
+                className={`rounded-full px-2.5 py-[3px] text-[11px] font-semibold transition-all duration-200 flex items-center gap-1 ${
+                  miningMarket === m.id
+                    ? 'bg-blue-50 text-blue-600 ring-1 ring-blue-200 shadow-xs'
+                    : m.ready
+                      ? 'text-slate-500 hover:text-slate-700 hover:bg-slate-100'
+                      : 'text-slate-300 cursor-not-allowed'
+                }`}
+                title={!m.ready ? '数据未就绪，请先在管理后台同步数据' : `${MARKET_LABELS[m.id]}因子挖掘`}
+              >
+                <span className={`inline-block w-1.5 h-1.5 rounded-full ring-1 ${m.ready ? 'bg-emerald-400 ring-emerald-300' : 'bg-slate-300 ring-slate-200'}`} />
+                {m.name}
+              </button>
+            ))}
+
+            {/* Universe selector */}
+            {miningMarket === 'a_share' && (
+              <div className="flex items-center gap-1 ml-2 pl-2 border-l border-slate-200">
+                <span className="text-[10px] font-semibold uppercase tracking-widest text-slate-400 select-none">池</span>
+                <select
+                  value={universe}
+                  onChange={(e) => setUniverse(e.target.value as UniverseId)}
+                  disabled={isRunning}
+                  className="rounded-full bg-slate-50 px-2.5 py-[3px] text-[11px] font-medium text-slate-600 border-0 focus:outline-none focus:ring-1 focus:ring-blue-200 disabled:opacity-40 appearance-none cursor-pointer"
+                  title="选择因子挖掘的股票池"
+                >
+                  {universes.length > 0
+                    ? universes.map((u) => (
+                        <option key={u.id} value={u.id}>
+                          {u.name}{u.stockCount > 0 ? ` (${u.stockCount})` : ''}
+                        </option>
+                      ))
+                    : (
+                      <option value="csi300">沪深300</option>
+                    )}
+                </select>
+              </div>
+            )}
+
+            {/* Data source */}
+            <div className="flex items-center gap-1 ml-1 pl-1 border-l border-slate-200">
+              <span className="text-[10px] font-semibold uppercase tracking-widest text-slate-400 select-none">数据</span>
+              {[
+                { id: 'qlib_bin', name: 'Qlib' },
+                { id: 'parquet', name: 'Parquet' },
+                { id: 'pg', name: 'PG' },
+              ].map((ds) => (
+                <button
+                  key={ds.id}
+                  onClick={() => setDataSource(ds.id)}
+                  disabled={isRunning}
+                  className={`rounded-full px-2.5 py-[3px] text-[11px] font-semibold transition-all duration-200 ${
+                    dataSource === ds.id
+                      ? 'bg-blue-50 text-blue-600 ring-1 ring-blue-200 shadow-xs'
+                      : 'text-slate-500 hover:text-slate-700 hover:bg-slate-100'
+                  }`}
+                >
+                  {ds.name}
+                </button>
+              ))}
+            </div>
+
+            {/* Direction toggle */}
+            <button
+              type="button"
+              onClick={() => setUseCustomMiningDirection(!useCustomMiningDirection)}
+              title={useCustomMiningDirection ? '使用设置中的挖掘方向（已开）' : '使用设置中的挖掘方向（点击开启）'}
+              className={`ml-1 pl-1 border-l border-slate-200 flex items-center gap-1 rounded-full px-2.5 py-[3px] text-[11px] font-semibold transition-all duration-200 ${
+                useCustomMiningDirection
+                  ? 'bg-purple-50 text-purple-600 ring-1 ring-purple-200 shadow-xs'
+                  : 'text-slate-500 hover:text-slate-700 hover:bg-slate-100'
+              }`}
+            >
+              <Compass className="h-3 w-3" />
+              <span>方向</span>
+            </button>
+          </div>
+
+          {/* Divider */}
+          <div className="mx-4 border-t border-slate-100" />
+
+          {/* Textarea + send row */}
+          <div className="flex items-end gap-2.5 px-4 py-3">
+            <textarea
+              ref={textareaRef}
+              value={input}
+              onChange={(e) => setInput(e.target.value)}
+              onKeyDown={handleKeyDown}
+              placeholder={
+                isRunning
+                  ? '实验运行中...可切换页面，任务不会中断'
+                  : selectedNotReady
+                    ? '该市场数据未就绪，请先在管理后台同步数据'
+                    : useCustomMiningDirection
+                      ? '已开启自选挖掘方向，将使用「设置 → 挖掘方向」中的选项'
+                      : miningMarket === 'crypto'
+                        ? '描述加密货币因子需求，如：短期动量反转、量价背离...'
+                        : '描述因子挖掘需求 (如：挖掘基于5日动量反转与成交量偏度组合的Alpha因子)，按 Enter 发送'
+              }
+              disabled={isRunning}
+              className="flex-1 bg-transparent text-sm placeholder:text-slate-400 focus:outline-none resize-none leading-relaxed font-sans"
+              rows={2}
+              style={{ minHeight: '44px', maxHeight: '100px' }}
+            />
+
+            {/* Send / Stop button */}
+            {isRunning && onStop ? (
+              <button
+                onClick={onStop}
+                className="flex-shrink-0 p-2.5 rounded-xl bg-red-500 text-white hover:bg-red-600 transition-all duration-200 hover:scale-105 active:scale-95 shadow-lg shadow-red-500/25 cursor-pointer"
+                title="中断实验"
+              >
+                <Square className="h-4 w-4" />
+              </button>
+            ) : (
+              <button
+                onClick={handleSubmit}
+                disabled={isRunning || !!selectedNotReady}
+                className="flex-shrink-0 p-2.5 rounded-xl bg-gradient-to-br from-blue-500 to-indigo-600 text-white hover:from-blue-600 hover:to-indigo-700 disabled:from-slate-300 disabled:to-slate-400 disabled:cursor-not-allowed transition-all duration-200 hover:scale-105 active:scale-95 shadow-lg shadow-blue-500/25 disabled:shadow-none cursor-pointer"
+                title={selectedNotReady ? '市场数据未就绪' : '发送 (Enter)'}
+              >
+                <Send className="h-4 w-4" />
+              </button>
+            )}
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+
+  if (inline) {
+    return <div className="w-full relative">{content}</div>;
+  }
+
   return (
     <div
       className="fixed left-0 right-0 z-40 flex flex-col items-center"
       style={{ bottom: 0, paddingBottom: '88px' }}
     >
-      {/* Gradient scrim — fades from transparent to opaque so content fades behind the input */}
+      {/* Gradient scrim */}
       <div
         className="pointer-events-none absolute inset-x-0"
         style={{
@@ -90,152 +251,7 @@ export const ChatInput: React.FC<ChatInputProps> = ({ onSubmit, onStop, isRunnin
           background: 'linear-gradient(to bottom, hsl(var(--background) / 0) 0%, hsl(var(--background) / 0.6) 40%, hsl(var(--background) / 0.95) 70%, hsl(var(--background)) 100%)',
         }}
       />
-
-      {/* Input container */}
-      <div className="relative container mx-auto px-6 max-w-3xl">
-        {/* Animated gradient border ring */}
-        <div className="relative rounded-2xl bg-gradient-to-r from-blue-500/30 via-purple-500/30 to-pink-500/30 p-[1px] shadow-2xl shadow-black/10" style={{
-          backgroundSize: '200% 200%',
-          animation: 'gradient-border 4s ease infinite',
-        }}>
-          <div className="rounded-2xl bg-white/95 backdrop-blur-xl overflow-hidden"
-               style={{ backdropFilter: 'blur(20px)', WebkitBackdropFilter: 'blur(20px)' }}>
-
-            {/* Options row — compact inline chips */}
-            <div className="px-4 pt-3.5 pb-1 flex items-center gap-1.5 flex-wrap">
-              <span className="text-[10px] font-semibold uppercase tracking-widest text-slate-400 mr-0.5 select-none">市场</span>
-              {marketList.map((m) => (
-                <button
-                  key={m.id}
-                  onClick={() => setMiningMarket(m.id)}
-                  disabled={isRunning || !m.ready}
-                  className={`rounded-full px-2.5 py-[3px] text-[11px] font-semibold transition-all duration-200 flex items-center gap-1 ${
-                    miningMarket === m.id
-                      ? 'bg-blue-50 text-blue-600 ring-1 ring-blue-200 shadow-sm'
-                      : m.ready
-                        ? 'text-slate-500 hover:text-slate-700 hover:bg-slate-100'
-                        : 'text-slate-300 cursor-not-allowed'
-                  }`}
-                  title={!m.ready ? '数据未就绪，请先在管理后台同步数据' : `${MARKET_LABELS[m.id]}因子挖掘`}
-                >
-                  <span className={`inline-block w-1.5 h-1.5 rounded-full ring-1 ${m.ready ? 'bg-emerald-400 ring-emerald-300' : 'bg-slate-300 ring-slate-200'}`} />
-                  {m.name}
-                </button>
-              ))}
-
-              {/* Universe selector */}
-              {miningMarket === 'a_share' && (
-                <div className="flex items-center gap-1 ml-2 pl-2 border-l border-slate-200">
-                  <span className="text-[10px] font-semibold uppercase tracking-widest text-slate-400 select-none">池</span>
-                  <select
-                    value={universe}
-                    onChange={(e) => setUniverse(e.target.value as UniverseId)}
-                    disabled={isRunning}
-                    className="rounded-full bg-slate-50 px-2.5 py-[3px] text-[11px] font-medium text-slate-600 border-0 focus:outline-none focus:ring-1 focus:ring-blue-200 disabled:opacity-40 appearance-none cursor-pointer"
-                    title="选择因子挖掘的股票池"
-                  >
-                    {universes.length > 0
-                      ? universes.map((u) => (
-                          <option key={u.id} value={u.id}>
-                            {u.name}{u.stockCount > 0 ? ` (${u.stockCount})` : ''}
-                          </option>
-                        ))
-                      : (
-                        <option value="csi300">沪深300</option>
-                      )}
-                  </select>
-                </div>
-              )}
-
-              {/* Data source */}
-              <div className="flex items-center gap-1 ml-1 pl-1 border-l border-slate-200">
-                <span className="text-[10px] font-semibold uppercase tracking-widest text-slate-400 select-none">数据</span>
-                {[
-                  { id: 'qlib_bin', name: 'Qlib' },
-                  { id: 'parquet', name: 'Parquet' },
-                  { id: 'pg', name: 'PG' },
-                ].map((ds) => (
-                  <button
-                    key={ds.id}
-                    onClick={() => setDataSource(ds.id)}
-                    disabled={isRunning}
-                    className={`rounded-full px-2.5 py-[3px] text-[11px] font-semibold transition-all duration-200 ${
-                      dataSource === ds.id
-                        ? 'bg-blue-50 text-blue-600 ring-1 ring-blue-200 shadow-sm'
-                        : 'text-slate-500 hover:text-slate-700 hover:bg-slate-100'
-                    }`}
-                  >
-                    {ds.name}
-                  </button>
-                ))}
-              </div>
-
-              {/* Direction toggle */}
-              <button
-                type="button"
-                onClick={() => setUseCustomMiningDirection(!useCustomMiningDirection)}
-                title={useCustomMiningDirection ? '使用设置中的挖掘方向（已开）' : '使用设置中的挖掘方向（点击开启）'}
-                className={`ml-1 pl-1 border-l border-slate-200 flex items-center gap-1 rounded-full px-2.5 py-[3px] text-[11px] font-semibold transition-all duration-200 ${
-                  useCustomMiningDirection
-                    ? 'bg-purple-50 text-purple-600 ring-1 ring-purple-200 shadow-sm'
-                    : 'text-slate-500 hover:text-slate-700 hover:bg-slate-100'
-                }`}
-              >
-                <Compass className="h-3 w-3" />
-                <span>方向</span>
-              </button>
-            </div>
-
-            {/* Divider */}
-            <div className="mx-4 border-t border-slate-100" />
-
-            {/* Textarea + send row */}
-            <div className="flex items-end gap-2.5 px-4 py-3">
-              <textarea
-                ref={textareaRef}
-                value={input}
-                onChange={(e) => setInput(e.target.value)}
-                onKeyDown={handleKeyDown}
-                placeholder={
-                  isRunning
-                    ? '实验运行中...可切换页面，任务不会中断'
-                    : selectedNotReady
-                      ? '该市场数据未就绪，请先在管理后台同步数据'
-                      : useCustomMiningDirection
-                        ? '已开启自选挖掘方向，将使用「设置 → 挖掘方向」中的选项'
-                        : miningMarket === 'crypto'
-                          ? '描述加密货币因子需求，如：短期动量反转、量价背离...'
-                          : '描述因子挖掘需求，按 Enter 发送，Shift+Enter 换行'
-                }
-                disabled={isRunning}
-                className="flex-1 bg-transparent text-sm placeholder:text-slate-400 focus:outline-none resize-none leading-relaxed"
-                rows={2}
-                style={{ minHeight: '44px', maxHeight: '100px' }}
-              />
-
-              {/* Send / Stop button */}
-              {isRunning && onStop ? (
-                <button
-                  onClick={onStop}
-                  className="flex-shrink-0 p-2 rounded-xl bg-red-500 text-white hover:bg-red-600 transition-all duration-200 hover:scale-105 active:scale-95 shadow-lg shadow-red-500/25"
-                  title="中断实验"
-                >
-                  <Square className="h-4 w-4" />
-                </button>
-              ) : (
-                <button
-                  onClick={handleSubmit}
-                  disabled={isRunning || !!selectedNotReady}
-                  className="flex-shrink-0 p-2 rounded-xl bg-gradient-to-br from-blue-500 to-blue-600 text-white hover:from-blue-600 hover:to-blue-700 disabled:from-slate-300 disabled:to-slate-400 disabled:cursor-not-allowed transition-all duration-200 hover:scale-105 active:scale-95 shadow-lg shadow-blue-500/25 disabled:shadow-none"
-                  title={selectedNotReady ? '市场数据未就绪' : '发送 (Enter)'}
-                >
-                  <Send className="h-4 w-4" />
-                </button>
-              )}
-            </div>
-          </div>
-        </div>
-      </div>
+      {content}
     </div>
   );
 };

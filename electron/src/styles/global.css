@@ -94,13 +94,13 @@ body,
 
 html,
 #root {
-  background: transparent !important; /* 保持外层透明，由 .app-main 承载实际浅色基底（底部 Dock 透出浏览器底色） */
+  background: transparent !important; /* 保持外层 HTML 透明以支持 Electron 自定义窗口圆角 */
 }
 
 body {
   color: var(--slate-900);
   overflow: hidden;
-  background: transparent !important; /* 背景由 .app-main 承载，让底部 Dock 区域透出浏览器底色 */
+  background: transparent !important; /* 背景由 .app-root 统一承载 */
 }
 
 /* Windows 10 圆角需要 body 透明 */
@@ -108,32 +108,34 @@ html.platform-win32.os-win10 body {
   background: transparent !important;
 }
 
-/* 应用程序根容器 */
+/* 应用程序根容器 - 统一承载窗口背景色 */
 .app-root {
   width: 100%;
   height: 100%;
   position: relative;
-  display: flex;
-  flex-direction: column;
+  overflow: hidden;
+  background: var(--bg-main);
   /* 必须在此重新声明：自定义属性在声明所在元素上完成替换，
      若仅写在 :root 则会固化为 100vh，has-dock 的覆盖将无效 */
+  --dock-height: 0px;
   --app-h: calc(100vh - var(--dock-height));
 }
 
-/* 有底部 Dock 时：Dock 在文档流底部，不遮挡内容 */
+/* 有底部 Dock 时：定义 Dock 高度 */
 .app-root.has-dock {
-  --dock-height: 60px;
+  --dock-height: 64px;
 }
 
-/* 内容区：吃掉除 Dock 以外的全部高度（TitleBar 为 absolute，不占流） */
+/* 内容区：全屏铺满整个视口，背景与页面容器浑然一体，Dock 悬浮于其上 */
 .app-main {
-  flex: 1 1 auto;
-  min-height: 0;
   width: 100%;
-  position: relative;
+  height: 100%;
+  position: absolute;
+  inset: 0;
   display: flex;
   flex-direction: column;
-  background: var(--bg-main); /* 背景由内容区承载，让底部 Dock 区域透出浏览器底色 */
+  background: var(--bg-main);
+  overflow: hidden;
 }
 
 .app-main > * {
@@ -448,7 +450,7 @@ html.platform-win32.os-win10.qm-rounded .app-root {
   height: 100%;
   border-radius: 16px;
   overflow: hidden;
-  background: transparent; /* 背景已迁移到 .app-main，让底部 Dock 区域透出浏览器底色 */
+  background: var(--bg-main);
   box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.08);
 }
 
@@ -614,35 +616,56 @@ html.platform-win32.os-win10 .module-grid-container {
 .status-indicator { animation: pulse 2s infinite; }
 
 
-/* 底部 Dock 导航栏 - 完全透明，图标分散浮于页面背景，无长条 */
+/* 底部 Dock 导航栏 - macOS 风格悬浮毛玻璃胶囊 Dock */
 .bottom-dock {
-  flex: 0 0 auto;
+  position: absolute;
+  bottom: 0;
+  left: 0;
+  right: 0;
   height: var(--dock-height);
   width: 100%;
   display: flex;
   align-items: center;
   justify-content: center;
-  padding: 6px 0;
+  padding: 0 16px 8px;
   box-sizing: border-box;
   background: transparent;
   z-index: 1050;
+  pointer-events: none;
 }
 
-/* 图标容器 - 透明，不包裹长条 */
+/* macOS 风格悬浮毛玻璃胶囊容器 */
 .bottom-dock-inner {
+  pointer-events: auto;
   display: flex;
   align-items: center;
   justify-content: center;
-  gap: 4px;
-  height: 100%;
+  gap: 3px;
+  height: 52px;
   max-width: 100%;
   padding: 0 10px;
   overflow-x: auto;
   overflow-y: hidden;
   scrollbar-width: none;
-  background: transparent;
-  border: none;
-  box-shadow: none;
+  background: rgba(255, 255, 255, 0.78);
+  backdrop-filter: blur(24px) saturate(180%);
+  -webkit-backdrop-filter: blur(24px) saturate(180%);
+  border-radius: 20px;
+  border: 1px solid rgba(255, 255, 255, 0.85);
+  box-shadow: 
+    0 12px 32px -4px rgba(15, 23, 42, 0.12),
+    0 4px 12px -2px rgba(15, 23, 42, 0.06),
+    0 0 0 1px rgba(0, 0, 0, 0.03),
+    inset 0 1px 1px 0 rgba(255, 255, 255, 0.95);
+  transition: box-shadow 0.25s ease, transform 0.25s ease;
+}
+
+.bottom-dock-inner:hover {
+  box-shadow: 
+    0 16px 40px -4px rgba(15, 23, 42, 0.16),
+    0 6px 16px -2px rgba(15, 23, 42, 0.08),
+    0 0 0 1px rgba(0, 0, 0, 0.04),
+    inset 0 1px 1px 0 rgba(255, 255, 255, 0.95);
 }
 
 .bottom-dock-inner::-webkit-scrollbar {
@@ -651,7 +674,7 @@ html.platform-win32.os-win10 .module-grid-container {
 
 .dock-group {
   display: flex;
-  align-items: stretch;
+  align-items: center;
   gap: 2px;
 }
 
@@ -659,8 +682,8 @@ html.platform-win32.os-win10 .module-grid-container {
   width: 1px;
   align-self: center;
   height: 24px;
-  margin: 0 6px;
-  background: linear-gradient(180deg, rgba(148, 163, 184, 0.05), rgba(148, 163, 184, 0.34), rgba(148, 163, 184, 0.05));
+  margin: 0 5px;
+  background: linear-gradient(180deg, rgba(148, 163, 184, 0.08), rgba(148, 163, 184, 0.4), rgba(148, 163, 184, 0.08));
 }
 
 .dock-item {
@@ -669,44 +692,45 @@ html.platform-win32.os-win10 .module-grid-container {
   flex-direction: column;
   align-items: center;
   justify-content: center;
-  gap: 3px;
-  width: 54px;
+  gap: 2px;
+  width: 52px;
   height: 44px;
   padding: 0;
-  background: rgba(255, 255, 255, 0.4);
-  border: 1px solid rgba(226, 232, 240, 0.5);
+  background: transparent;
+  border: 1px solid transparent;
   border-radius: 12px;
   cursor: pointer;
   flex: 0 0 auto;
-  box-shadow: 0 1px 4px rgba(15, 23, 42, 0.04);
-  transition: background-color 0.18s ease, box-shadow 0.18s ease, transform 0.18s ease;
+  transition: all 0.22s cubic-bezier(0.34, 1.56, 0.64, 1);
 }
 
 .dock-item:hover {
-  background: rgba(255, 255, 255, 0.7);
+  background: rgba(255, 255, 255, 0.88);
   box-shadow: 0 4px 12px rgba(15, 23, 42, 0.08);
-  transform: translateY(-1px);
+  transform: translateY(-3px) scale(1.08);
+  border-color: rgba(255, 255, 255, 0.9);
 }
 
 .dock-item.active {
-  background: rgba(219, 234, 254, 0.7);
-  border-color: rgba(59, 130, 246, 0.35);
+  background: rgba(255, 255, 255, 0.96);
+  border-color: rgba(59, 130, 246, 0.25);
+  box-shadow: 0 2px 8px rgba(37, 99, 235, 0.12), inset 0 1px 1px rgba(255, 255, 255, 0.9);
 }
 
 .dock-icon {
   width: 18px;
   height: 18px;
   stroke-width: 2;
-  color: var(--nav-icon);
-  transition: color 0.18s ease;
+  color: #64748b;
+  transition: color 0.18s ease, transform 0.18s ease;
 }
 
 .dock-item:hover .dock-icon {
-  color: var(--nav-icon-hover);
+  color: #0f172a;
 }
 
 .dock-item.active .dock-icon {
-  color: var(--primary-blue);
+  color: #2563eb;
   stroke-width: 2.25;
 }
 
@@ -715,13 +739,29 @@ html.platform-win32.os-win10 .module-grid-container {
   font-weight: 600;
   letter-spacing: 0.01em;
   line-height: 1;
-  color: var(--nav-label);
+  color: #64748b;
   white-space: nowrap;
   transition: color 0.18s ease;
 }
 
+.dock-item:hover .dock-label {
+  color: #0f172a;
+}
+
 .dock-item.active .dock-label {
-  color: var(--primary-blue);
+  color: #2563eb;
+  font-weight: 700;
+}
+
+/* macOS 风格活跃状态指示小圆点 */
+.dock-active-dot {
+  position: absolute;
+  bottom: 2px;
+  width: 3.5px;
+  height: 3.5px;
+  border-radius: 50%;
+  background: #2563eb;
+  box-shadow: 0 0 4px rgba(37, 99, 235, 0.6);
 }
 
 .dock-item:focus-visible {
@@ -740,8 +780,8 @@ html.platform-win32.os-win10 .module-grid-container {
   }
 
   .dock-item {
-    min-width: 52px;
-    padding: 0 6px;
+    min-width: 48px;
+    width: 48px;
   }
 }
 
@@ -912,4 +952,43 @@ html.platform-win32.os-win10 .module-grid-container {
 .admin-menu-modern .ant-menu-item-divider {
   margin: 8px 16px;
   border-color: rgba(148, 163, 184, 0.2);
+}
+
+/* ==================== 后台管理页输入框统一高度(32px)与圆角(8px) ==================== */
+.admin-page input.ant-input,
+.admin-page .ant-input-affix-wrapper,
+.admin-page .ant-input-number,
+.admin-page .ant-picker {
+  height: 32px;
+  border-radius: 8px;
+}
+
+.admin-page .ant-input-affix-wrapper .ant-input {
+  height: 30px;
+}
+
+.admin-page .ant-input-number-input {
+  height: 30px;
+}
+
+.admin-page .ant-select .ant-select-selector {
+  height: 32px !important;
+  border-radius: 8px !important;
+}
+
+.admin-page .ant-select .ant-select-selector .ant-select-selection-item,
+.admin-page .ant-select .ant-select-selector .ant-select-selection-placeholder {
+  line-height: 30px !important;
+}
+
+.admin-page .ant-select .ant-select-selector .ant-select-selection-search-input {
+  height: 30px !important;
+}
+
+.admin-page .ant-picker-input > input {
+  height: 30px;
+}
+
+.admin-page textarea.ant-input {
+  border-radius: 8px;
 }

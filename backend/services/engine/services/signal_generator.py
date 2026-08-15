@@ -74,7 +74,22 @@ class GlobalSignalGenerator:
         from backend.services.engine.tasks.etl_worker import ETLWorker
         from backend.shared.database import SessionLocal
 
-        model_id = os.getenv("INFERENCE_DEFAULT_MODEL", "model_qlib")
+        model_id = os.getenv("INFERENCE_DEFAULT_MODEL", "")
+        if not model_id:
+            try:
+                from backend.shared.model_registry import model_registry_service
+                default_m = model_registry_service.resolve_effective_model_sync(
+                    tenant_id="default",
+                    user_id="default",
+                )
+                model_id = default_m.get("effective_model_id") or ""
+            except Exception:
+                model_id = ""
+
+        if not model_id:
+            logger.info("[SignalGen] 未配置生效模型，使用默认基线信号")
+            return self._generate_mock_scores()
+
         date_str = _date.today().isoformat()
         db = SessionLocal()
         try:

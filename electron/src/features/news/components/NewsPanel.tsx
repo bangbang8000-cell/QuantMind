@@ -689,8 +689,8 @@ export const NewsPanel: React.FC = () => {
 
   // —— render ——
   return (
-    <div className="news-panel" style={{ display: 'flex', flexDirection: 'column', width: '100%', height: '100%', minHeight: 0, background: '#ffffff', overflow: 'hidden', paddingBottom: 0, boxSizing: 'border-box' }}>
-      {/* ===== Toolbar (single row) ===== */}
+    <div className="news-panel">
+      {/* ===== Toolbar (single rounded glass capsule) ===== */}
       <div className="news-toolbar">
         <BellOutlined style={{ color: '#6366f1', fontSize: 18 }} />
         <Title level={5} style={{ margin: 0, fontSize: 15, whiteSpace: 'nowrap' }}>资讯监控</Title>
@@ -810,13 +810,11 @@ export const NewsPanel: React.FC = () => {
 
       {/* ===== Active filter chips ===== */}
       {activeFilterCount > 0 && (
-        <div style={{ padding: '6px 20px', borderBottom: '1px solid #f1f5f9', background: '#fafbff' }}>
+        <div className="news-active-chips">
           {renderChips()}
-          {activeFilterCount > 0 && (
-            <Button type="link" size="small" onClick={clearAllFilters} icon={<ClearOutlined />} style={{ padding: 0, marginLeft: 8, fontSize: 12 }}>
-              清除全部
-            </Button>
-          )}
+          <Button type="link" size="small" onClick={clearAllFilters} icon={<ClearOutlined />} style={{ padding: 0, marginLeft: 8, fontSize: 12 }}>
+            清除全部
+          </Button>
         </div>
       )}
 
@@ -857,16 +855,18 @@ export const NewsPanel: React.FC = () => {
             </div>
           </div>
           <div className="news-advanced-row">
+            <FilterSelect label="股票" value={f.selectedTickers} options={stats?.top_tickers ?? []} onChange={(v) => updateF({ selectedTickers: v })} showSearch />
             <FilterSelect label="行业" value={f.selectedIndustries} options={stats?.top_industries ?? []} onChange={(v) => updateF({ selectedIndustries: v })} showSearch />
-            <FilterSelect label="股票" value={f.selectedTickers} options={(stats?.top_tickers ?? []).map((t) => ({ name: `${t.name || ''} ${t.ticker}`, count: t.count }))} onChange={(v) => updateF({ selectedTickers: v })} showSearch />
-            <FilterSelect label="国家" value={f.selectedCountries} options={stats?.top_countries ?? []} onChange={(v) => updateF({ selectedCountries: v })} />
-            <FilterSelect label="地区" value={f.selectedRegions} options={stats?.top_regions ?? []} onChange={(v) => updateF({ selectedRegions: v })} />
+            <FilterSelect label="国家" value={f.selectedCountries} options={stats?.top_countries ?? []} onChange={(v) => updateF({ selectedCountries: v })} showSearch />
+            <FilterSelect label="地区" value={f.selectedRegions} options={stats?.top_regions ?? []} onChange={(v) => updateF({ selectedRegions: v })} showSearch />
+            <FilterSelect label="关键词" value={f.selectedKeyTerms} options={stats?.top_key_terms ?? []} onChange={(v) => updateF({ selectedKeyTerms: v })} showSearch />
+          </div>
+          <div className="news-advanced-row">
             <FilterSelect label="省份" value={f.selectedProvinces} options={stats?.top_provinces ?? []} onChange={(v) => updateF({ selectedProvinces: v })} showSearch />
             <FilterSelect label="城市" value={f.selectedCities} options={stats?.top_cities ?? []} onChange={(v) => updateF({ selectedCities: v })} showSearch />
-            <FilterSelect label="关键词" value={f.selectedKeyTerms} options={stats?.top_key_terms ?? []} onChange={(v) => updateF({ selectedKeyTerms: v })} showSearch />
             <FilterSelect label="领导人" value={f.selectedPoliticians} options={stats?.top_politicians ?? []} onChange={(v) => updateF({ selectedPoliticians: v })} showSearch />
+            <FilterSelect label="调研" value={f.selectedVisits} options={stats?.top_visits ?? []} onChange={(v) => updateF({ selectedVisits: v })} showSearch />
             <FilterSelect label="部门" value={f.selectedDepartments} options={stats?.top_departments ?? []} onChange={(v) => updateF({ selectedDepartments: v })} showSearch />
-            <FilterSelect label="调研" value={f.selectedVisits} options={stats?.top_visits ?? []} onChange={(v) => updateF({ selectedVisits: v })} />
             <FilterSelect label="日期" value={f.selectedDateEnts} options={stats?.top_dates ?? []} onChange={(v) => updateF({ selectedDateEnts: v })} showSearch />
             <RangePicker size="small" value={f.dateRange[0] ? [dayjs(f.dateRange[0]), dayjs(f.dateRange[1])] as any : null}
               onChange={(v) => updateF({ dateRange: v ? [v[0]!.toISOString(), v[1]!.toISOString()] : [null, null] })}
@@ -875,23 +875,8 @@ export const NewsPanel: React.FC = () => {
         </div>
       )}
 
-      {/* ===== Sentiment stats bar ===== */}
-      {stats?.sentiment_counts && (() => {
-        const total = (stats.sentiment_counts.bullish || 0) + (stats.sentiment_counts.bearish || 0) + (stats.sentiment_counts.neutral || 0);
-        if (total === 0) return null;
-        return (
-          <div style={{ padding: '4px 20px', borderBottom: '1px solid #f1f5f9', background: '#fff', fontSize: 12, display: 'flex', gap: 16, color: '#64748b' }}>
-            {activeFilterCount > 0 && <Text type="warning" style={{ fontSize: 12 }}>筛选结果</Text>}
-            <span>共 <b style={{ color: '#6366f1' }}>{total.toLocaleString()}</b> 篇</span>
-            <span style={{ color: COLOR_BULLISH }}>利好 {stats.sentiment_counts.bullish || 0}</span>
-            <span style={{ color: COLOR_BEARISH }}>利空 {stats.sentiment_counts.bearish || 0}</span>
-            <span style={{ color: COLOR_NEUTRAL }}>中性 {stats.sentiment_counts.neutral || 0}</span>
-          </div>
-        );
-      })()}
-
-      {/* ===== Main 3-panel body ===== */}
-      <div ref={containerRef} style={{ flex: 1, display: 'flex', overflow: 'hidden', minHeight: 0 }}>
+      {/* ===== Main 3-panel container card ===== */}
+      <div ref={containerRef} className="news-content-card">
         {/* Left: source tree */}
         <div className="news-left-panel" style={{ flex: `0 0 ${leftWidth}%` }}>
           {treeData.length <= 1 ? (
@@ -923,6 +908,20 @@ export const NewsPanel: React.FC = () => {
 
         {/* Center: article list */}
         <div className="news-center-panel" style={{ flex: `0 0 ${midWidth}%` }}>
+          {/* Sentiment stats bar */}
+          {stats?.sentiment_counts && (() => {
+            const total = (stats.sentiment_counts.bullish || 0) + (stats.sentiment_counts.bearish || 0) + (stats.sentiment_counts.neutral || 0);
+            if (total === 0) return null;
+            return (
+              <div style={{ padding: '6px 16px', borderBottom: '1px solid rgba(226, 232, 240, 0.8)', background: 'rgba(255, 255, 255, 0.85)', fontSize: 12, display: 'flex', gap: 14, color: '#64748b', alignItems: 'center' }}>
+                {activeFilterCount > 0 && <Tag color="processing" style={{ fontSize: 11, margin: 0 }}>已筛选</Tag>}
+                <span>共 <b style={{ color: '#6366f1' }}>{total.toLocaleString()}</b> 篇</span>
+                <span style={{ color: COLOR_BULLISH }}>利好 {stats.sentiment_counts.bullish || 0}</span>
+                <span style={{ color: COLOR_BEARISH }}>利空 {stats.sentiment_counts.bearish || 0}</span>
+                <span style={{ color: COLOR_NEUTRAL }}>中性 {stats.sentiment_counts.neutral || 0}</span>
+              </div>
+            );
+          })()}
           {loading && articles.length === 0 ? (
             <div style={{ padding: 80, textAlign: 'center' }}><Spin /></div>
           ) : articles.length === 0 ? (

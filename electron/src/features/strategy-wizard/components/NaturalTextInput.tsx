@@ -476,39 +476,39 @@ export const NaturalTextInput: React.FC<{ onNext: () => void }> = ({ onNext }) =
                         
                         <div className="mt-4 mb-6">
                           <div className="flex items-center gap-2 mb-3">
-                            <Text type="secondary" className="text-xs font-medium uppercase tracking-wider">快速模版</Text>
-                            <div className="h-px flex-1 bg-gray-100" />
-                            <Text type="secondary" className="text-[10px]">{visibleTemplates.length} 个</Text>
+                            <Text type="secondary" className="text-xs font-bold uppercase tracking-wider text-slate-400">快速模版</Text>
+                            <div className="h-px flex-1 bg-slate-100" />
+                            <span className="text-[11px] font-semibold text-slate-400 bg-slate-100 px-2 py-0.5 rounded-full">{visibleTemplates.length} 个</span>
                           </div>
                           {/* 分类筛选条 */}
-                          <div className="flex flex-wrap gap-1.5 mb-3">
+                          <div className="flex flex-wrap gap-1.5 mb-3.5">
                             {['all', ...Object.keys(templateGroups)].map((cat) => (
                               <button
                                 key={cat}
                                 onClick={() => setTemplateCategory(cat)}
-                                className={`px-2.5 py-1 rounded-md text-[11px] font-semibold transition-all ${
+                                className={`px-3 py-1 rounded-xl text-xs font-bold transition-all ${
                                   templateCategory === cat
-                                    ? 'bg-blue-600 text-white shadow-sm'
-                                    : 'bg-gray-50 text-gray-600 border border-gray-200 hover:bg-gray-100'
+                                    ? 'bg-blue-600 text-white shadow-xs'
+                                    : 'bg-slate-50 text-slate-600 border border-slate-200 hover:bg-slate-100 hover:text-slate-900'
                                 }`}
                               >
                                 {cat === 'all' ? '全部' : cat}
                               </button>
                             ))}
                           </div>
-                          {/* 模板按钮（最多 2 行，可滚动） */}
+                          {/* 模板按钮（提升高度至 220px，展示充足行数并可舒适滚动） */}
                           <div
-                            className="flex flex-wrap gap-2 overflow-y-auto pr-1"
-                            style={{ maxHeight: 104 }}
+                            className="flex flex-wrap gap-2 overflow-y-auto pr-1.5 custom-scrollbar"
+                            style={{ maxHeight: 220, minHeight: 90 }}
                           >
                             {visibleTemplates.map((t) => (
                               <button
                                 key={`${t.category}-${t.label}`}
                                 onClick={() => useTemplate(t.value)}
                                 title={t.value}
-                                className="px-3 py-1.5 rounded-lg text-sm font-medium transition-all duration-200
-                                  bg-blue-50 text-blue-600 border border-blue-100 hover:bg-blue-600 hover:text-white hover:border-blue-600
-                                  active:scale-95 shadow-sm"
+                                className="px-3.5 py-1.5 rounded-xl text-xs font-semibold transition-all duration-150
+                                  bg-blue-50/70 text-blue-600 border border-blue-100/80 hover:bg-blue-600 hover:text-white hover:border-blue-600
+                                  active:scale-95 shadow-2xs"
                               >
                                 {t.label}
                               </button>

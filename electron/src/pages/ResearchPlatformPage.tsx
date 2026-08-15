@@ -767,47 +767,40 @@ const ResearchMetricCard: React.FC<{
   accentColor: string;
 }> = ({ icon: Icon, label, value, subLabel, accentColor }) => (
   <motion.div
-    whileHover={{ y: -6, scale: 1.02, transition: { type: 'spring', stiffness: 400, damping: 10 } }}
-    className="research-stat-card group relative overflow-hidden rounded-[32px] border border-white p-7 shadow-xl shadow-slate-200/50 transition-all duration-500 hover:shadow-2xl hover:shadow-blue-500/10"
-    style={{ background: `linear-gradient(135deg, white 0%, ${accentColor}05 100%)` }}
+    whileHover={{ y: -4, transition: { type: 'spring', stiffness: 400, damping: 15 } }}
+    className="group relative overflow-hidden rounded-2xl border border-slate-200/80 bg-white p-5 shadow-xs transition-all duration-300 hover:shadow-md hover:border-slate-300"
   >
-    {/* 背景装饰光晕 */}
+    {/* 背景微光晕 */}
     <div
-      className="absolute -right-6 -top-6 h-32 w-32 rounded-full opacity-20 blur-3xl transition-all duration-700 group-hover:scale-150 group-hover:opacity-40"
+      className="pointer-events-none absolute -right-8 -top-8 h-28 w-28 rounded-full opacity-10 blur-2xl transition-all duration-500 group-hover:scale-125 group-hover:opacity-25"
       style={{ backgroundColor: accentColor }}
     />
 
-    <div className="relative z-10 flex items-start justify-between">
-      <div className="space-y-2">
-        <div className="flex items-center gap-2">
-          <div className="h-1.5 w-1.5 rounded-full" style={{ backgroundColor: accentColor }} />
-          <span className="text-[10px] font-black uppercase tracking-[0.2em] text-slate-400">{label}</span>
-        </div>
+    {/* 容器右上角统一图标胶囊 */}
+    <div
+      className="absolute top-4 right-4 flex h-10 w-10 items-center justify-center rounded-xl border transition-all duration-300 group-hover:scale-105 shadow-2xs"
+      style={{
+        backgroundColor: `${accentColor}12`,
+        borderColor: `${accentColor}25`,
+        color: accentColor,
+      }}
+    >
+      <Icon className="h-5 w-5" style={{ color: accentColor }} />
+    </div>
 
-        <div className="flex items-baseline gap-1">
-          <div className="origin-left text-5xl font-black tracking-tight text-slate-900 transition-all duration-500 group-hover:scale-110">
-            {value}
-          </div>
-          <div
-            className="h-2 w-2 rounded-full opacity-0 transition-opacity duration-500 group-hover:opacity-100"
-            style={{ backgroundColor: accentColor }}
-          />
-        </div>
-
-        <div className="flex w-fit items-center gap-1.5 rounded-full bg-slate-50/50 py-1 pr-3">
-          <div className="h-1 w-3 rounded-full" style={{ backgroundColor: accentColor }} />
-          <span className="whitespace-nowrap text-[11px] font-bold text-slate-500/90">{subLabel}</span>
-        </div>
+    {/* 指标文本内容 */}
+    <div className="relative z-10 flex flex-col pr-12">
+      <div className="flex items-center gap-1.5">
+        <span className="h-1.5 w-1.5 rounded-full" style={{ backgroundColor: accentColor }} />
+        <span className="text-xs font-bold uppercase tracking-wider text-slate-500">{label}</span>
       </div>
 
-      <div
-        className="flex h-14 w-14 items-center justify-center rounded-[22px] shadow-2xl transition-all duration-700 group-hover:rotate-12 group-hover:scale-110"
-        style={{
-          background: `linear-gradient(135deg, ${accentColor} 0%, ${accentColor}dd 100%)`,
-          boxShadow: `0 10px 20px -5px ${accentColor}40`,
-        }}
-      >
-        <Icon className="h-7 w-7 text-white" />
+      <div className="mt-2.5 mb-1 text-3xl font-extrabold tracking-tight text-slate-900 transition-colors group-hover:text-slate-800">
+        {value}
+      </div>
+
+      <div className="flex items-center gap-1.5 text-[11px] font-semibold text-slate-400">
+        <span className="truncate">{subLabel}</span>
       </div>
     </div>
   </motion.div>

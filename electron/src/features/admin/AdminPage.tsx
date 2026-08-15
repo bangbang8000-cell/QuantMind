@@ -88,7 +88,7 @@ const AdminPage: React.FC = () => {
     const currentKey = location.pathname.split('/').pop() || 'overview';
 
     return (
-        <div className="flex h-screen w-full bg-slate-50 overflow-hidden font-sans">
+        <div className="admin-page flex h-screen w-full bg-slate-50 overflow-hidden font-sans">
             {/* Sidebar */}
             <div className={`flex flex-col h-full bg-white border-r border-slate-200 transition-all duration-300 ${collapsed ? 'w-20' : 'w-64'}`}>
                 <div className="p-6 flex items-center gap-3">

@@ -70,8 +70,7 @@ ReactDOM.createRoot(document.getElementById('root') as HTMLElement).render(
   </React.StrictMode>,
 );
 
-// 首屏挂载后移除 body 上的加载期渐变，让 .app-main 承载内容区背景，
-// 底部 Dock 区域（位于 .app-main 之外）透出真正的浏览器/Electron 窗口底色
+// 首屏挂载后给 body 加上 .qm-loaded，由 .app-root 统一承接界面底色
 requestAnimationFrame(() => {
   document.body.classList.add('qm-loaded');
 });

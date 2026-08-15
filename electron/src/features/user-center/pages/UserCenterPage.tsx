@@ -13,6 +13,7 @@ import { SecuritySettings } from '../components/SecuritySettings';
 import CloudStrategyManagement from '../components/CloudStrategyManagement';
 import CloudNodeSettings from '../components/CloudNodeSettings';
 import OtherSettings from '../components/OtherSettings';
+import defaultLogo from '../../../assets/logo.png';
 
 const UserCenterPage: React.FC = () => {
   const navigate = useNavigate();
@@ -20,6 +21,7 @@ const UserCenterPage: React.FC = () => {
   const dispatch = useAppDispatch();
   const [activeTab, setActiveTab] = useState('profile');
   const [syncTimeout, setSyncTimeout] = useState(false);
+  const [avatarLoadError, setAvatarLoadError] = useState(false);
   const contentScrollRef = useRef<HTMLDivElement>(null);
 
   // 获取认证用户信息（已由ProtectedRoute保证认证）
@@ -257,12 +259,13 @@ const UserCenterPage: React.FC = () => {
               ) : (
                 <div className="flex items-center gap-10">
                   <div className="relative group">
-                    <div className="w-24 h-24 rounded-3xl bg-slate-100 border-4 border-white shadow-xl flex items-center justify-center overflow-hidden">
-                      {profile?.avatar ? (
-                        <img src={profile.avatar} alt="Avatar" className="w-full h-full object-cover" />
-                      ) : (
-                        <UserCircle className="w-12 h-12 text-slate-300" />
-                      )}
+                    <div className="w-24 h-24 rounded-3xl bg-white border-4 border-white shadow-xl flex items-center justify-center overflow-hidden">
+                      <img
+                        src={profile?.avatar && !profile.avatar.includes('default_avatar.png') && !avatarLoadError ? profile.avatar : defaultLogo}
+                        alt="Avatar"
+                        className="w-full h-full object-cover"
+                        onError={() => setAvatarLoadError(true)}
+                      />
                     </div>
                     <div className="absolute -bottom-1 -right-1 w-6 h-6 bg-emerald-500 border-2 border-white rounded-full shadow-sm" />
                   </div>

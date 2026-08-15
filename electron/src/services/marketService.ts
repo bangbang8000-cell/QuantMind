@@ -224,7 +224,11 @@ class MarketService {
     try {
       const base = SERVICE_URLS.API_GATEWAY;
       const url = `${base}/api/v1/market/overview?market=${market}`;
-      const resp = await fetch(url, { method: 'GET' });
+      const token = localStorage.getItem('access_token') || localStorage.getItem('auth_token');
+      const resp = await fetch(url, {
+        method: 'GET',
+        headers: token ? { Authorization: `Bearer ${token}` } : undefined,
+      });
       if (!resp.ok) {
         throw new Error(`HTTP ${resp.status}`);
       }
@@ -301,17 +305,14 @@ class MarketService {
         // 从日志可以看出：data[3]是当前价格，需要找到正确的涨跌额和涨跌幅字段
         const price = this.safeParseFloat(data[3]);
 
-        // 尝试从不同位置获取涨跌额和涨跌幅
-        // 通常腾讯财经API格式中，涨跌额在价格后面，涨跌幅再后面
-        let change = 0;
-        let changePercent = 0;
-
-        // 尝试计算涨跌额和涨跌幅（基于昨收价）
-        if (data.length > 4) {
-          const yesterdayClose = this.safeParseFloat(data[4]); // 昨收价通常在第4位
-          if (yesterdayClose > 0 && price > 0) {
-            change = price - yesterdayClose;
-            changePercent = (change / yesterdayClose) * 100;
+        // 腾讯财经指数格式: ~名称(1)~代码(2)~价格(3)~涨跌额(4)~涨跌幅%(5)~
+        const change = data.length > 4 ? this.safeParseFloat(data[4]) : 0;
+        let changePercent = data.length > 5 ? this.safeParseFloat(data[5]) : 0;
+        // 兜底：涨跌幅缺失时用涨跌额反推（price - preClose = change）
+        if (changePercent === 0 && change !== 0) {
+          const preClose = price - change;
+          if (preClose > 0) {
+            changePercent = (change / preClose) * 100;
           }
         }
 

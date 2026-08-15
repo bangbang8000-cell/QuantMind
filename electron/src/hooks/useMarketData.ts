@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { marketService, MarketOverviewResponse, type MarketId } from '../services/marketService';
 
@@ -26,7 +26,7 @@ export const useMarketData = (options: UseMarketDataOptions = {}): UseMarketData
     refreshInterval = 5000, // 5秒
     mockData = false,
     market = 'CN',
-    timeoutMs = 1000, // 默认 1 秒超时
+    timeoutMs = 8000, // 默认 8 秒超时（匹配腾讯财经 REQUEST_TIMEOUT）
   } = options;
 
   const [timedOut, setTimedOut] = useState(false);
@@ -34,40 +34,29 @@ export const useMarketData = (options: UseMarketDataOptions = {}): UseMarketData
   const { data, error, isLoading, isError, refetch } = useQuery<MarketOverviewResponse, Error>({
     queryKey: ['marketData', market, mockData],
     queryFn: async () => {
-      setTimedOut(false);
-      return await new Promise<MarketOverviewResponse>((resolve) => {
-        const timer = setTimeout(() => {
-          setTimedOut(true);
-          resolve({ indices: [], lastUpdate: '', count: 0, sourceUsed: 'timeout' });
-        }, timeoutMs);
-
-        const done = (result: MarketOverviewResponse) => {
-          clearTimeout(timer);
-          resolve(result);
-        };
-
-        if (mockData) {
-          done(marketService.generateMarketMockData(market));
-          return;
-        }
-
-        marketService
-          .getMarketOverview(market)
-          .then((response) => {
-            if (response.success && response.data) {
-              done(response.data);
-            } else {
-              done({ indices: [], lastUpdate: '', count: 0, sourceUsed: 'error' });
-            }
-          })
-          .catch(() => {
-            done({ indices: [], lastUpdate: '', count: 0, sourceUsed: 'error' });
-          });
-      });
+      if (mockData) {
+        return marketService.generateMarketMockData(market);
+      }
+      const response = await marketService.getMarketOverview(market);
+      if (response.success && response.data) {
+        return response.data;
+      }
+      throw new Error(response.error || '获取数据失败');
     },
     refetchInterval: autoRefresh ? refreshInterval : false,
     refetchOnWindowFocus: true,
   });
+
+  // 超时兜底：仅控制展示（首次加载超时显示 0 值占位），不丢弃进行中的请求。
+  // 数据到达后 isLoading 变 false、timedOut 复位，避免「数据一会有一会变 0」。
+  useEffect(() => {
+    if (!isLoading) {
+      setTimedOut(false);
+      return;
+    }
+    const timer = setTimeout(() => setTimedOut(true), timeoutMs);
+    return () => clearTimeout(timer);
+  }, [isLoading, timeoutMs]);
 
   return {
     data: data || null,

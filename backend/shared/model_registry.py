@@ -53,13 +53,13 @@ class ModelRegistryService:
             if raw_user_models_root.is_absolute()
             else Path("/app") / raw_user_models_root
         )
-        self.primary_model_id = os.getenv("PRIMARY_MODEL_ID", "model_qlib")
-        self.fallback_model_id = os.getenv("FALLBACK_MODEL_ID", "alpha158")
-        self.primary_model_dir = str(os.getenv("MODELS_PRODUCTION", "/app/models/production/model_qlib"))
+        self.primary_model_id = os.getenv("PRIMARY_MODEL_ID", "")
+        self.fallback_model_id = os.getenv("FALLBACK_MODEL_ID", "")
+        self.primary_model_dir = str(os.getenv("MODELS_PRODUCTION", "/app/models/production"))
         self.fallback_model_dir = str(
-            os.getenv("MODELS_FALLBACK_PRODUCTION", "/app/models/production/alpha158")
+            os.getenv("MODELS_FALLBACK_PRODUCTION", "")
         )
-        self.production_models_root = Path(self.primary_model_dir).parent
+        self.production_models_root = Path(self.primary_model_dir)
 
     async def ensure_tables(self) -> None:
         stmts = [
@@ -103,6 +103,10 @@ class ModelRegistryService:
             CREATE UNIQUE INDEX IF NOT EXISTS uq_qm_user_models_default_per_user
             ON qm_user_models (tenant_id, user_id)
             WHERE is_default = TRUE
+            """,
+            """
+            DELETE FROM qm_user_models
+            WHERE model_id IN ('model_qlib', 'alpha158', 'sys-model_qlib', 'sys-alpha158')
             """,
         ]
         async with get_session() as session:
@@ -463,9 +467,6 @@ class ModelRegistryService:
 
     async def list_models(self, *, tenant_id: str, user_id: str, include_archived: bool = False, market: str | None = None) -> list[dict[str, Any]]:
         tenant, user = self._normalize_owner(tenant_id=tenant_id, user_id=user_id)
-        await self._ensure_system_default_record(tenant_id=tenant, user_id=user)
-        # 同时确保 fallback 模型（如 alpha158）也被注册
-        await self._ensure_fallback_model_record(tenant_id=tenant, user_id=user)
         where_extra = "" if include_archived else "AND status <> 'archived'"
         params: dict[str, Any] = {"tenant_id": tenant, "user_id": user}
         if market:
@@ -491,7 +492,6 @@ class ModelRegistryService:
 
     async def get_model(self, *, tenant_id: str, user_id: str, model_id: str) -> dict[str, Any] | None:
         tenant, user = self._normalize_owner(tenant_id=tenant_id, user_id=user_id)
-        await self._ensure_system_default_record(tenant_id=tenant, user_id=user)
         async with get_session(read_only=True) as session:
             row = (
                 await session.execute(
@@ -511,7 +511,6 @@ class ModelRegistryService:
 
     async def get_default_model(self, *, tenant_id: str, user_id: str) -> dict[str, Any] | None:
         tenant, user = self._normalize_owner(tenant_id=tenant_id, user_id=user_id)
-        await self._ensure_system_default_record(tenant_id=tenant, user_id=user)
         async with get_session(read_only=True) as session:
             row = (
                 await session.execute(
@@ -936,119 +935,31 @@ class ModelRegistryService:
             )
 
         fallback_reason = "; ".join(reason_parts).strip()
-        if fallback_reason:
-            fallback_reason = f"{fallback_reason}; fallback to system model"
-        else:
-            fallback_reason = "no user model configured, fallback to system model"
+        if self.primary_model_id and Path(self.primary_model_dir).is_dir():
+            if fallback_reason:
+                fallback_reason = f"{fallback_reason}; fallback to system model"
+            else:
+                fallback_reason = "no user model configured, fallback to system model"
+
+            return ResolvedModel(
+                effective_model_id=self.primary_model_id,
+                model_source="system_fallback",
+                fallback_used=True,
+                fallback_reason=fallback_reason,
+                storage_path=self.primary_model_dir,
+                model_file="model.lgb",
+                status="active",
+            )
 
         return ResolvedModel(
-            effective_model_id=self.primary_model_id,
-            model_source="system_fallback",
-            fallback_used=True,
-            fallback_reason=fallback_reason,
-            storage_path=self.primary_model_dir,
-            model_file="model.lgb",
-            status="active",
+            effective_model_id=None,
+            model_source="none",
+            fallback_used=False,
+            fallback_reason=fallback_reason or "未配置可用模型",
+            storage_path="",
+            model_file="",
+            status="not_found",
         )
-
-    def _ensure_system_default_record_sync(self, *, tenant_id: str, user_id: str) -> None:
-        tenant, user = self._normalize_owner(tenant_id=tenant_id, user_id=user_id)
-        now = datetime.now(timezone.utc)
-        with get_db() as session:
-            exists = (
-                session.execute(
-                    text(
-                        """
-                        SELECT 1
-                        FROM qm_user_models
-                        WHERE tenant_id = :tenant_id AND user_id = :user_id AND model_id = :model_id
-                        LIMIT 1
-                        """
-                    ),
-                    {"tenant_id": tenant, "user_id": user, "model_id": self.primary_model_id},
-                ).first()
-            )
-            if exists:
-                return
-
-            current_default = (
-                session.execute(
-                    text(
-                        """
-                        SELECT 1
-                        FROM qm_user_models
-                        WHERE tenant_id = :tenant_id AND user_id = :user_id AND is_default = TRUE
-                        LIMIT 1
-                        """
-                    ),
-                    {"tenant_id": tenant, "user_id": user},
-                ).first()
-            )
-
-            system_row = (
-                session.execute(
-                    text(
-                        """
-                        SELECT metadata_json, metrics_json, storage_path, model_file
-                        FROM qm_user_models
-                        WHERE tenant_id = :tenant_id AND user_id = 'system' AND model_id = :model_id
-                        LIMIT 1
-                        """
-                    ),
-                    {"tenant_id": tenant, "model_id": self.primary_model_id},
-                ).first()
-            )
-
-            if system_row and system_row[0]:
-                rich_metadata = dict(system_row[0])
-                rich_metadata.update({"system_default": True, "readonly": True})
-                rich_metrics = dict(system_row[1]) if system_row[1] else {}
-                system_storage = system_row[2] or self.primary_model_dir
-                system_model_file = system_row[3] or "model.lgb"
-            else:
-                meta_file = Path(self.primary_model_dir) / "metadata.json"
-                if meta_file.is_file():
-                    try:
-                        file_meta = json.loads(meta_file.read_text(encoding="utf-8"))
-                        rich_metadata = {**file_meta, "system_default": True, "readonly": True}
-                        rich_metrics = file_meta.get("metrics", {})
-                    except Exception:
-                        rich_metadata = _SYSTEM_MODEL_METADATA.copy()
-                        rich_metrics = {}
-                else:
-                    rich_metadata = _SYSTEM_MODEL_METADATA.copy()
-                    rich_metrics = {}
-                system_storage = self.primary_model_dir
-                system_model_file = "model.lgb"
-
-            session.execute(
-                text(
-                    """
-                    INSERT INTO qm_user_models (
-                        tenant_id, user_id, model_id, source_run_id, status, storage_path, model_file,
-                        metadata_json, metrics_json, is_default, created_at, updated_at, activated_at
-                    ) VALUES (
-                        :tenant_id, :user_id, :model_id, NULL, 'active', :storage_path, :model_file,
-                        CAST(:metadata_json AS JSONB), CAST(:metrics_json AS JSONB), :is_default,
-                        :created_at, :updated_at, :activated_at
-                    )
-                    ON CONFLICT (tenant_id, user_id, model_id) DO NOTHING
-                    """
-                ),
-                {
-                    "tenant_id": tenant,
-                    "user_id": user,
-                    "model_id": self.primary_model_id,
-                    "storage_path": system_storage,
-                    "model_file": system_model_file,
-                    "metadata_json": json.dumps(rich_metadata, ensure_ascii=False),
-                    "metrics_json": json.dumps(rich_metrics, ensure_ascii=False),
-                    "is_default": bool(not current_default),
-                    "created_at": now,
-                    "updated_at": now,
-                    "activated_at": now if not current_default else None,
-                },
-            )
 
     def _resolve_system_model_record_sync(self, explicit_id: str) -> dict[str, Any] | None:
         raw = str(explicit_id or "").strip()
@@ -1110,7 +1021,6 @@ class ModelRegistryService:
 
     def _get_model_sync(self, *, tenant_id: str, user_id: str, model_id: str) -> dict[str, Any] | None:
         tenant, user = self._normalize_owner(tenant_id=tenant_id, user_id=user_id)
-        self._ensure_system_default_record_sync(tenant_id=tenant, user_id=user)
         with get_db() as session:
             row = (
                 session.execute(
@@ -1130,7 +1040,6 @@ class ModelRegistryService:
 
     def _get_default_model_sync(self, *, tenant_id: str, user_id: str) -> dict[str, Any] | None:
         tenant, user = self._normalize_owner(tenant_id=tenant_id, user_id=user_id)
-        self._ensure_system_default_record_sync(tenant_id=tenant, user_id=user)
         with get_db() as session:
             row = (
                 session.execute(
@@ -1182,7 +1091,6 @@ class ModelRegistryService:
         model_id: str | None = None,
     ) -> dict[str, Any]:
         tenant, user = self._normalize_owner(tenant_id=tenant_id, user_id=user_id)
-        self._ensure_system_default_record_sync(tenant_id=tenant, user_id=user)
 
         reason_parts: list[str] = []
 
@@ -1253,19 +1161,30 @@ class ModelRegistryService:
             ).to_dict()
 
         fallback_reason = "; ".join(reason_parts).strip()
-        if fallback_reason:
-            fallback_reason = f"{fallback_reason}; fallback to system model"
-        else:
-            fallback_reason = "no user model configured, fallback to system model"
+        if self.primary_model_id and Path(self.primary_model_dir).is_dir():
+            if fallback_reason:
+                fallback_reason = f"{fallback_reason}; fallback to system model"
+            else:
+                fallback_reason = "no user model configured, fallback to system model"
+
+            return ResolvedModel(
+                effective_model_id=self.primary_model_id,
+                model_source="system_fallback",
+                fallback_used=True,
+                fallback_reason=fallback_reason,
+                storage_path=self.primary_model_dir,
+                model_file="model.lgb",
+                status="active",
+            ).to_dict()
 
         return ResolvedModel(
-            effective_model_id=self.primary_model_id,
-            model_source="system_fallback",
-            fallback_used=True,
-            fallback_reason=fallback_reason,
-            storage_path=self.primary_model_dir,
-            model_file="model.lgb",
-            status="active",
+            effective_model_id=None,
+            model_source="none",
+            fallback_used=False,
+            fallback_reason=fallback_reason or "未配置可用模型",
+            storage_path="",
+            model_file="",
+            status="not_found",
         ).to_dict()
 
     @staticmethod

@@ -48,54 +48,7 @@ def _get_client() -> QuantDBClient:
     if not api_key:
         raise DataUnavailable("QUANTDB_API_KEY 未配置")
     client = QuantDBClient(api_key=api_key)
-    _patch_sdk_redirect(client)
     return client
-
-
-def _patch_sdk_redirect(client: QuantDBClient) -> None:
-    """Replace SDK _download_stream to resolve relative Location headers.
-
-    QuantDB CDN may return 302 with a relative Location like
-    '/api/v1/data/cdn-bridge?token=...' which requests.get cannot handle.
-    The stock SDK calls requests.get(location) directly, raising MissingSchema.
-    This replacement resolves relative Location against api_host before following.
-    """
-    import requests as _requests
-    from quantdb_sdk.errors import ServerError as _QDBServerError
-
-    api_host = client.api_host
-    timeout = client.timeout
-
-    def patched(params, headers=None):
-        resp = client._request(
-            "GET", "/api/v1/data/download", params=params, stream=True,
-            headers=headers, allow_redirects=False,
-        )
-        if resp.status_code not in (301, 302, 303, 307, 308):
-            return resp
-        location = resp.headers.get("Location", "")
-        etag = resp.headers.get("ETag", "")
-        resp.close()
-        if not location:
-            raise _QDBServerError("下载重定向缺少 Location 头")
-        # Resolve relative Location against api_host
-        if not location.startswith(("http://", "https://")):
-            base = api_host.rstrip("/")
-            location = f"{base}{location}" if location.startswith("/") else f"{base}/{location}"
-        cdn_resp = _requests.get(
-            location,
-            stream=True,
-            timeout=timeout,
-            headers={"User-Agent": "QuantDB-Python-SDK/0.2.6"},
-        )
-        if cdn_resp.status_code != 200:
-            cdn_resp.close()
-            raise _QDBServerError(f"CDN 直连下载失败：HTTP {cdn_resp.status_code}")
-        if etag and not cdn_resp.headers.get("ETag"):
-            cdn_resp.headers["ETag"] = etag
-        return cdn_resp
-
-    client._download_stream = patched
 
 
 def _to_qdb_symbol(symbol: str) -> str:

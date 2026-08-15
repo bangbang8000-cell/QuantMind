@@ -208,20 +208,26 @@ async def _query_market_data_readiness(
 def _check_inference_model_exists() -> tuple[bool, str]:
     """检查推理模型文件是否存在，不查询数据库。"""
     production_dir = Path(
-        os.getenv("MODELS_PRODUCTION", "/app/models/production/model_qlib")
+        os.getenv("MODELS_PRODUCTION", "/app/models/production")
     )
-    if not production_dir.exists() or not production_dir.is_dir():
-        return False, f"推理模型目录不存在: {production_dir}"
-    try:
-        model_files = [f for f in production_dir.iterdir() if f.is_file()]
-    except Exception as exc:
-        return False, f"推理模型目录读取失败: {exc}"
-    if not model_files:
-        return False, f"推理模型目录为空: {production_dir}"
-    return (
-        True,
-        f"推理模型已存在 (model_dir={production_dir}, files={len(model_files)})",
+    user_models_dir = Path(
+        os.getenv("USER_MODELS_ROOT", "/app/models/users")
     )
+    if production_dir.exists() and production_dir.is_dir():
+        try:
+            model_files = [f for f in production_dir.rglob("*.lgb") if f.is_file()] + [f for f in production_dir.rglob("*.bin") if f.is_file()]
+            if model_files:
+                return True, f"生产模型已存在 (files={len(model_files)})"
+        except Exception:
+            pass
+    if user_models_dir.exists() and user_models_dir.is_dir():
+        try:
+            user_model_files = [f for f in user_models_dir.rglob("*.lgb") if f.is_file()] + [f for f in user_models_dir.rglob("*.bin") if f.is_file()]
+            if user_model_files:
+                return True, f"用户模型已就绪 (files={len(user_model_files)})"
+        except Exception:
+            pass
+    return False, "未检测到可用的生产或用户模型权重文件"
 
 
     pass

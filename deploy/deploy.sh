@@ -45,7 +45,6 @@ NC='\033[0m'
 PROJECT_DIR="/opt/quantmind"
 DATA_DIR="${PROJECT_DIR}/data"
 REPO_URL="https://gitee.com/qusong0627/QuantMind.git"
-NODE_VERSION="20.19.0"
 PROGRESS_FILE="/tmp/quantmind_deploy_progress"
 DOCKER_DAEMON_FILE="/etc/docker/daemon.json"
 DOCKER_DAEMON_BACKUP="/tmp/quantmind_docker_daemon_backup.json"
@@ -64,12 +63,6 @@ DOCKER_MIRRORS+=(
     "https://hub.rat.dev"
 )
 
-# npm 镜像加速器列表（自动选择最快）
-NPM_MIRRORS=(
-    "https://registry.npmmirror.com"
-    "https://mirrors.cloud.tencent.com/npm"
-)
-
 # 镜像源配置（用户选择，pip 和 apt 统一）
 MIRROR_ALIYUN="aliyun"
 MIRROR_TENCENT="tencent"
@@ -77,7 +70,6 @@ MIRROR_CHOICE="${QUANTMIND_MIRROR:-}"
 
 # 解析参数
 BACKEND_ONLY=false
-FRONTEND_ONLY=false
 RESUME=false
 RESET=false
 FORCE_SYNC=false
@@ -86,13 +78,12 @@ SERVER_IP_OVERRIDE="${QUANTMIND_SERVER_IP:-}"
 for arg in "$@"; do
     case $arg in
         --backend-only) BACKEND_ONLY=true ;;
-        --frontend-only) FRONTEND_ONLY=true ;;
         --resume) RESUME=true ;;
         --reset) RESET=true ;;
         --force-sync) FORCE_SYNC=true ;;
         --*)
             echo "错误: 未知参数: $arg" >&2
-            echo "支持参数: --backend-only --frontend-only --resume --reset --force-sync [server_ip]" >&2
+            echo "支持参数: --backend-only --resume --reset --force-sync [server_ip]" >&2
             exit 1
             ;;
         *)
@@ -105,11 +96,6 @@ for arg in "$@"; do
             ;;
     esac
 done
-
-if $BACKEND_ONLY && $FRONTEND_ONLY; then
-    echo "错误: --backend-only 和 --frontend-only 不能同时使用" >&2
-    exit 1
-fi
 
 # 自动检测服务器IP
 detect_server_ip() {
@@ -232,30 +218,6 @@ select_docker_mirror() {
     echo ""
 }
 
-# 测试 npm 镜像加速器
-test_npm_mirror() {
-    local mirror=$1
-    if curl -s --connect-timeout 5 "${mirror}/" > /dev/null 2>&1; then
-        return 0
-    fi
-    return 1
-}
-
-# 选择最佳 npm 镜像
-select_npm_mirror() {
-    log_info "测试 npm 镜像加速器..." >&2
-    for mirror in "${NPM_MIRRORS[@]}"; do
-        log_info "测试: $mirror" >&2
-        if test_npm_mirror "$mirror"; then
-            log_info "选择镜像: $mirror" >&2
-            echo "$mirror"
-            return
-        fi
-    done
-    log_warn "未找到可用镜像加速器，使用默认源" >&2
-    echo "https://registry.npmjs.org"
-}
-
 backup_docker_daemon_config() {
     if [[ -f "$DOCKER_DAEMON_EXISTED_FLAG" ]]; then
         return
@@ -318,23 +280,6 @@ PY
 
     systemctl daemon-reload
     systemctl restart docker
-}
-
-ensure_frontend_prereqs() {
-    if [[ ! -d "$PROJECT_DIR/.git" ]]; then
-        log_warn "未检测到代码目录，先执行代码拉取"
-        step6_clone_code
-    fi
-
-    if ! command -v node &> /dev/null || [[ "$(node --version)" != "v${NODE_VERSION}" ]]; then
-        log_warn "Node.js 未安装或版本不匹配，先安装 Node.js"
-        step3_install_nodejs
-    fi
-
-    if ! command -v pm2 &> /dev/null; then
-        log_warn "PM2 未安装，先安装 PM2"
-        step4_install_pm2
-    fi
 }
 
 #===============================================================================
@@ -467,89 +412,6 @@ step2_install_docker() {
 
     log_done "Step 2"
     save_progress "2"
-}
-
-#===============================================================================
-# Step 3: 安装 Node.js
-#===============================================================================
-step3_install_nodejs() {
-    log_step "Step 3: 安装 Node.js"
-
-    if command -v node &> /dev/null && [[ "$(node --version)" == "v${NODE_VERSION}" ]]; then
-        log_warn "Node.js 已安装: $(node --version)"
-    else
-        log_info "安装 Node.js ${NODE_VERSION}..."
-
-        apt-get remove -y nodejs 2>/dev/null || true
-
-        NODE_URL="https://npmmirror.com/mirrors/node/v${NODE_VERSION}/node-v${NODE_VERSION}-linux-x64.tar.xz"
-        log_info "下载: $NODE_URL"
-        curl -fsSL $NODE_URL -o /tmp/node.tar.xz
-
-        mkdir -p /usr/local/nodejs
-        tar -xJf /tmp/node.tar.xz -C /usr/local/nodejs --strip-components=1
-
-        ln -sf /usr/local/nodejs/bin/node /usr/local/bin/node
-        ln -sf /usr/local/nodejs/bin/npm /usr/local/bin/npm
-        ln -sf /usr/local/nodejs/bin/npx /usr/local/bin/npx
-
-        # 选择最佳 npm 镜像
-        local npm_mirror=$(select_npm_mirror)
-        npm config set registry "$npm_mirror"
-
-        log_info "Node.js: $(node --version)"
-        log_info "npm: $(npm --version)"
-        log_info "npm 镜像: $(npm config get registry)"
-    fi
-
-    log_done "Step 3"
-    save_progress "3"
-}
-
-#===============================================================================
-# Step 4: 安装 PM2
-#===============================================================================
-step4_install_pm2() {
-    log_step "Step 4: 安装 PM2"
-
-    # 确保 npm registry 已配置（强制设置）
-    local npm_mirror=$(select_npm_mirror)
-    npm config set registry "$npm_mirror"
-    log_info "npm 镜像: $(npm config get registry)"
-
-    if command -v pm2 &> /dev/null; then
-        log_warn "PM2 已安装: $(pm2 --version)"
-    else
-        log_info "安装 PM2..."
-        npm install -g pm2
-
-        ln -sf /usr/local/nodejs/bin/pm2 /usr/local/bin/pm2
-        ln -sf /usr/local/nodejs/bin/pm2-runtime /usr/local/bin/pm2-runtime
-
-        log_info "PM2: $(pm2 --version)"
-    fi
-
-    log_done "Step 4"
-    save_progress "4"
-}
-
-#===============================================================================
-# Step 5: 安装 Nginx
-#===============================================================================
-step5_install_nginx() {
-    log_step "Step 5: 安装 Nginx"
-
-    if command -v nginx &> /dev/null; then
-        log_warn "Nginx 已安装"
-    else
-        log_info "安装 Nginx..."
-        apt-get install -y nginx
-        cp /etc/nginx/nginx.conf /etc/nginx/nginx.conf.bak
-        log_info "Nginx 安装完成"
-    fi
-
-    log_done "Step 5"
-    save_progress "5"
 }
 
 #===============================================================================
@@ -804,6 +666,16 @@ step9_start_database() {
         exit 1
     fi
 
+    # 预拉取可选外部镜像（失败仅警告，不中断部署）
+    log_info "预拉取可选外部镜像 (huntly / rsshub / qwenpaw)..."
+    for img in "lcomplete/huntly:latest" "diygod/rsshub:latest" "agentscope/qwenpaw:latest"; do
+        if docker pull "$img" 2>&1; then
+            log_info "可选镜像拉取成功: $img"
+        else
+            log_warn "可选镜像拉取失败（不影响核心服务）: $img"
+        fi
+    done
+
     # 启动数据库和 Redis
     log_info "启动数据库和 Redis..."
     docker compose up -d db redis
@@ -887,185 +759,22 @@ step11_start_backend() {
 
     cd "$PROJECT_DIR"
 
-    log_info "启动后端容器..."
-    docker compose up -d quantmind celery-worker
+    # 核心服务（必需，失败中断）
+    log_info "启动核心服务 (db / redis / quantmind / celery-worker / celery-beat)..."
+    docker compose up -d db redis quantmind celery-worker celery-beat
 
-    log_info "等待后端启动 (20秒)..."
+    log_info "等待核心服务启动 (20秒)..."
     sleep 20
+
+    # 可选服务（web / data-gateway / dashboard / huntly / rsshub / qwenpaw，失败仅警告）
+    log_info "启动可选服务 (web / data-gateway / dashboard / huntly / rsshub / qwenpaw)..."
+    docker compose up -d web data-gateway dashboard huntly rsshub qwenpaw 2>&1 \
+        || log_warn "部分可选服务启动失败（不影响核心服务，可稍后手动启动）"
 
     docker compose ps
 
     log_done "Step 11"
     save_progress "11"
-}
-
-#===============================================================================
-# Step 12: 安装前端依赖
-#===============================================================================
-step12_install_frontend() {
-    log_step "Step 12: 安装前端依赖"
-
-    cd "$PROJECT_DIR"
-
-    chown -R "${SUDO_USER:-root}:${SUDO_USER:-root}" .
-
-    # 选择最佳 npm 镜像
-    local npm_mirror=$(select_npm_mirror)
-
-    # 配置 npm 镜像加速（包括 Electron、Puppeteer 等）
-    log_info "配置 npm 镜像加速..."
-    local target_user="${SUDO_USER:-root}"
-    local target_home
-    target_home="$(getent passwd "$target_user" | cut -d: -f6)" || true
-    if [[ -z "$target_home" ]]; then
-        target_home="/root"
-    fi
-    NPMRC_FILE="${target_home}/.npmrc"
-
-    # 写入完整配置（覆盖旧配置避免重复）
-    cat > "$NPMRC_FILE" << EOF
-registry=${npm_mirror}
-# Electron 二进制镜像
-electron_mirror=https://npmmirror.com/mirrors/electron/
-electron_builder_binaries_mirror=https://npmmirror.com/mirrors/electron-builder-binaries/
-# Puppeteer Chromium 镜像
-puppeteer_download_host=https://npmmirror.com/mirrors
-# Sass 二进制镜像
-sass_binary_site=https://npmmirror.com/mirrors/node-sass/
-# Python 镜像（node-gyp 使用）
-python_mirror=https://npmmirror.com/mirrors/python/
-EOF
-
-    log_info "npm 镜像配置完成: $npm_mirror"
-    log_info "安装 npm 依赖 (3-5分钟)..."
-    sudo -u "$target_user" npm install --loglevel=verbose
-
-    log_done "Step 12"
-    save_progress "12"
-}
-
-#===============================================================================
-# Step 13: 构建前端
-#===============================================================================
-step13_build_frontend() {
-    log_step "Step 13: 构建前端"
-
-    cd "$PROJECT_DIR"
-
-    # 确保 build 目录存在（Electron 构建需要 icon.ico）
-    mkdir -p electron/build
-    if [[ ! -f electron/build/icon.ico ]]; then
-        cp electron/public/favicon.ico electron/build/icon.ico 2>/dev/null || true
-    fi
-
-    log_info "构建生产版本..."
-    sudo -u "${SUDO_USER:-root}" env VITE_API_BASE_URL="" npm run dashboard:build
-
-    ls -la electron/dist-react/ 2>/dev/null | head -5 || log_warn "前端构建目录不存在"
-
-    log_done "Step 13"
-    save_progress "13"
-}
-
-#===============================================================================
-# Step 14: 启动前端服务
-#===============================================================================
-step14_start_frontend() {
-    log_step "Step 14: 启动前端服务"
-
-    cd "$PROJECT_DIR"
-
-    local target_user="${SUDO_USER:-root}"
-    local target_home
-    target_home="$(getent passwd "$target_user" | cut -d: -f6)"
-
-    log_info "停止旧服务..."
-    sudo -u "$target_user" pm2 delete quantmind-web 2>/dev/null || true
-
-    log_info "启动新服务..."
-    sudo -u "$target_user" pm2 start npm --name "quantmind-web" -- run dashboard:preview
-
-    sudo -u "$target_user" pm2 save
-
-    # startup 需要 root 权限写 systemd unit，但 target 用户与 PM2 进程保持一致
-    pm2 startup systemd -u "$target_user" --hp "${target_home:-/root}" 2>/dev/null || true
-
-    sudo -u "$target_user" pm2 status
-
-    log_done "Step 14"
-    save_progress "14"
-}
-
-#===============================================================================
-# Step 15: 配置 Nginx
-#===============================================================================
-step15_config_nginx() {
-    log_step "Step 15: 配置 Nginx"
-
-    # 创建 uploads 目录
-    mkdir -p "$PROJECT_DIR/data/uploads"
-    chown -R "$(id -u "${SUDO_USER:-root}")":"$(id -g "${SUDO_USER:-root}")" "$PROJECT_DIR/data/uploads"
-
-    log_info "创建 Nginx 配置..."
-    cat > /etc/nginx/sites-available/quantmind << 'EOF'
-server {
-    listen 80;
-    server_name _;
-
-    client_max_body_size 100M;
-
-    # 静态文件 (uploads)
-    location /uploads/ {
-        alias /opt/quantmind/data/uploads/;
-        expires 30d;
-        add_header Cache-Control "public, immutable";
-    }
-
-    # 前端
-    location / {
-        proxy_pass http://127.0.0.1:3000;
-        proxy_http_version 1.1;
-        proxy_set_header Upgrade $http_upgrade;
-        proxy_set_header Connection 'upgrade';
-        proxy_set_header Host $host;
-        proxy_set_header X-Real-IP $remote_addr;
-        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
-        proxy_set_header X-Forwarded-Proto $scheme;
-        proxy_cache_bypass $http_upgrade;
-    }
-
-    # 后端 API
-    location /api/ {
-        proxy_pass http://127.0.0.1:8000/api/;
-        proxy_http_version 1.1;
-        proxy_set_header Host $host;
-        proxy_set_header X-Real-IP $remote_addr;
-        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
-        proxy_set_header X-Forwarded-Proto $scheme;
-        proxy_read_timeout 300s;
-        proxy_connect_timeout 75s;
-    }
-
-    # WebSocket（带末尾 /，自动去掉 /ws/ 前缀）
-    location /ws/ {
-        proxy_pass http://127.0.0.1:8003/;
-        proxy_http_version 1.1;
-        proxy_set_header Upgrade $http_upgrade;
-        proxy_set_header Connection "upgrade";
-        proxy_set_header Host $host;
-        proxy_set_header X-Real-IP $remote_addr;
-        proxy_read_timeout 86400;
-    }
-}
-EOF
-
-    ln -sf /etc/nginx/sites-available/quantmind /etc/nginx/sites-enabled/
-    rm -f /etc/nginx/sites-enabled/default
-
-    nginx -t && systemctl restart nginx && systemctl enable nginx
-
-    log_done "Step 15"
-    save_progress "15"
 }
 
 #===============================================================================
@@ -1079,14 +788,22 @@ step16_health_check() {
 
     echo ""
     log_info "端口监听:"
-    ss -tlnp | grep -E ':(8000|8001|8002|8003|5432|6379)' || true
+    ss -tlnp | grep -E ':(3000|5432|6379|8000|8001|8002|8003|8004|8090|8501|1200|8089)' || true
 
     echo ""
-    log_info "服务测试:"
+    log_info "核心服务测试:"
     curl -s http://localhost:8000/health > /dev/null && log_info "API 服务 (8000): ✅" || log_warn "API 服务 (8000): ❌"
     curl -s http://localhost:8001/health > /dev/null && log_info "引擎服务 (8001): ✅" || log_warn "引擎服务 (8001): ❌"
     curl -s http://localhost:8002/health > /dev/null && log_info "交易服务 (8002): ✅" || log_warn "交易服务 (8002): ❌"
     curl -s http://localhost:8003/health > /dev/null && log_info "推送服务 (8003): ✅" || log_warn "推送服务 (8003): ❌"
+
+    echo ""
+    log_info "可选服务测试（失败不影响核心）:"
+    curl -s http://localhost:8004/health > /dev/null && log_info "数据网关 (8004): ✅" || log_warn "数据网关 (8004): 未启动"
+    curl -s http://localhost:3000/health > /dev/null && log_info "Web 前端 (3000): ✅" || log_warn "Web 前端 (3000): 未启动"
+    curl -s http://localhost:8501/_stcore/health > /dev/null && log_info "数据看板 (8501): ✅" || log_warn "数据看板 (8501): 未启动"
+    curl -s http://localhost:8090/api/health > /dev/null && log_info "资讯聚合 (8090): ✅" || log_warn "资讯聚合 (8090): 未启动"
+    curl -s http://localhost:1200/healthz > /dev/null && log_info "RSSHub (1200): ✅" || log_warn "RSSHub (1200): 未启动"
 
     log_done "Step 16"
     save_progress "16"
@@ -1100,10 +817,17 @@ step17_firewall() {
 
     if command -v ufw &> /dev/null; then
         ufw allow 22/tcp comment 'SSH'
+        ufw allow 80/tcp comment 'QuantMind Web HTTP'
+        ufw allow 3000/tcp comment 'QuantMind Web 前端'
         ufw allow 8000/tcp comment 'QuantMind API'
         ufw allow 8001/tcp comment 'QuantMind Engine'
         ufw allow 8002/tcp comment 'QuantMind Trade'
         ufw allow 8003/tcp comment 'QuantMind Stream'
+        ufw allow 8004/tcp comment 'QuantMind Data Gateway'
+        ufw allow 8501/tcp comment 'QuantMind Dashboard'
+        ufw allow 8090/tcp comment 'Huntly 资讯'
+        ufw allow 1200/tcp comment 'RSSHub'
+        ufw allow 8089/tcp comment 'QwenPaw'
         ufw --force enable
         ufw status
     else
@@ -1128,6 +852,14 @@ show_info() {
     echo -e "   引擎服务:  ${BLUE}http://${SERVER_IP}:8001${NC}"
     echo -e "   交易服务:  ${BLUE}http://${SERVER_IP}:8002${NC}"
     echo -e "   推送服务:  ${BLUE}http://${SERVER_IP}:8003${NC}"
+    echo ""
+    echo -e "${YELLOW}🔧 可选服务${NC}"
+    echo -e "   数据网关:  ${BLUE}http://${SERVER_IP}:8004${NC}"
+    echo -e "   Web 前端:  ${BLUE}http://${SERVER_IP}:3000${NC}"
+    echo -e "   数据看板:  ${BLUE}http://${SERVER_IP}:8501${NC}"
+    echo -e "   资讯聚合:  ${BLUE}http://${SERVER_IP}:8090${NC}"
+    echo -e "   RSSHub:    ${BLUE}http://${SERVER_IP}:1200${NC}"
+    echo -e "   QwenPaw:   ${BLUE}http://${SERVER_IP}:8089${NC}"
     echo ""
     echo -e "${YELLOW}🖥️ 桌面客户端${NC}"
     echo -e "   QuantMind 采用桌面客户端 + 后端服务架构，请下载桌面客户端"
@@ -1299,11 +1031,7 @@ main() {
     fi
 
     # 根据部署模式执行步骤
-    if $FRONTEND_ONLY; then
-        log_warn "前端已集成到桌面客户端，不再支持独立 Web 部署"
-        log_info "请下载桌面客户端: https://oss.quantmindai.cn/desktop-download.html"
-        exit 0
-    elif $BACKEND_ONLY; then
+    if $BACKEND_ONLY; then
         log_info "仅部署后端..."
         [[ $CURRENT_STEP -lt 1 ]] && step1_update_system
         [[ $CURRENT_STEP -lt 2 ]] && step2_install_docker
