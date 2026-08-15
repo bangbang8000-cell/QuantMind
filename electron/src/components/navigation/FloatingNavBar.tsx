@@ -39,20 +39,20 @@ export const FloatingNavBar: React.FC<FloatingNavBarProps> = ({ current, onChang
   const marketLabel = getMarketConfig(currentMarket).label;
 
   const navItems: NavItemConfig[] = [
+    { id: 'agent', label: 'QuantBot', icon: Orbit },
     { id: 'dashboard', label: marketLabel, icon: LayoutDashboard },
     { id: 'market-analysis', label: '市场分析', icon: BarChart3 },
+    { id: 'rss-news', label: 'RSS信息流', icon: Rss },
+    { id: 'research', label: '投研平台', icon: Search },
+    { id: 'inference-center', label: '推理中心', icon: Cpu },
+    { id: 'alpha-research', label: 'Alpha研究', icon: TestTube2 },
+    { id: 'trading-agents', label: '投研分析', icon: Brain },
     { id: 'strategy', label: '智能策略', icon: LineChart },
     { id: 'ai-ide', label: 'AI-IDE', icon: SquareTerminal },
     { id: 'backtest', label: '回测中心', icon: FlaskConical },
-    { id: 'agent', label: 'QuantBot', icon: Orbit },
     { id: 'model-training', label: '模型训练', icon: Layers },
     { id: 'model-registry', label: '模型管理', icon: Boxes },
-    { id: 'inference-center', label: '推理中心', icon: Cpu },
-    { id: 'research', label: '投研平台', icon: Search },
     { id: 'trading', label: '模拟交易', icon: ArrowLeftRight },
-    { id: 'rss-news', label: 'RSS信息流', icon: Rss },
-    { id: 'alpha-research', label: 'Alpha研究', icon: TestTube2 },
-    { id: 'trading-agents', label: '投研分析', icon: Brain },
     { id: 'profile', label: '个人中心', icon: CircleUserRound }
   ];
 
@@ -61,9 +61,10 @@ export const FloatingNavBar: React.FC<FloatingNavBarProps> = ({ current, onChang
   }
 
   const groupedNavItems: NavItemConfig[][] = [
-    navItems.filter((item) => ['dashboard', 'market-analysis', 'strategy', 'ai-ide', 'backtest', 'agent'].includes(item.id)),
-    navItems.filter((item) => ['model-training', 'model-registry', 'inference-center', 'research', 'trading', 'rss-news', 'alpha-research', 'trading-agents'].includes(item.id)),
-    navItems.filter((item) => ['profile', 'admin'].includes(item.id))
+    navItems.filter((item) => ['agent', 'dashboard', 'market-analysis', 'rss-news'].includes(item.id)),
+    navItems.filter((item) => ['research', 'inference-center', 'alpha-research', 'trading-agents'].includes(item.id)),
+    navItems.filter((item) => ['strategy', 'ai-ide', 'backtest', 'model-training', 'model-registry'].includes(item.id)),
+    navItems.filter((item) => ['trading', 'profile', 'admin'].includes(item.id))
   ].filter((group) => group.length > 0);
 
   return (
