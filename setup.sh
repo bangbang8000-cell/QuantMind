@@ -72,7 +72,7 @@ fi
 # 3. 创建必要目录
 # -------------------------------------------
 info "创建数据目录..."
-mkdir -p data db models logs strategy_templates user_pools_local
+mkdir -p data data/huntly data/redis data/postgres db models logs strategy_templates user_pools_local config
 ok "目录就绪"
 
 # -------------------------------------------
@@ -81,20 +81,21 @@ ok "目录就绪"
 # 加载公共 torch 选择函数（CPU/GPU 检测 + 测速选源）
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=scripts/setup/torch_select.sh
-source "${SCRIPT_DIR}/scripts/setup/torch_select.sh"
-
-info "检测 torch 版本（CPU/GPU）..."
-select_torch_config
-info "构建 Docker 镜像（torch=${TORCH_DEVICE}，首次约 5-15 分钟）..."
-if [ -n "$TORCH_CPU_INDEX_URL" ]; then
-    ${COMPOSE_CMD} build --progress=plain \
-        --build-arg "TORCH_DEVICE=${TORCH_DEVICE}" \
-        --build-arg "TORCH_CPU_INDEX_URL=${TORCH_CPU_INDEX_URL}"
-else
-    ${COMPOSE_CMD} build --progress=plain \
-        --build-arg "TORCH_DEVICE=${TORCH_DEVICE}"
+if [ -f "${SCRIPT_DIR}/scripts/setup/torch_select.sh" ]; then
+    source "${SCRIPT_DIR}/scripts/setup/torch_select.sh"
+    info "检测 torch 版本（CPU/GPU）..."
+    select_torch_config
+    info "构建 Docker 镜像（torch=${TORCH_DEVICE}，首次约 5-15 分钟）..."
+    if [ -n "${TORCH_CPU_INDEX_URL:-}" ]; then
+        ${COMPOSE_CMD} build --progress=plain \
+            --build-arg "TORCH_DEVICE=${TORCH_DEVICE}" \
+            --build-arg "TORCH_CPU_INDEX_URL=${TORCH_CPU_INDEX_URL}"
+    else
+        ${COMPOSE_CMD} build --progress=plain \
+            --build-arg "TORCH_DEVICE=${TORCH_DEVICE}"
+    fi
+    ok "镜像构建完成"
 fi
-ok "镜像构建完成"
 
 # -------------------------------------------
 # 4.5 训练方式选择（本地 / AutoDL 远程 GPU）
@@ -104,7 +105,7 @@ warn "请选择模型训练方式："
 echo "  [1] 仅本地训练（默认，无需 AutoDL）"
 echo "  [2] 本地 + AutoDL 远程 GPU 训练（将特征快照推送到 GPU 节点训练，模型回传本机）"
 printf "  请选择 (1/2，默认 1): "
-read -r TRAIN_MODE_CHOICE
+read -r TRAIN_MODE_CHOICE || TRAIN_MODE_CHOICE="1"
 if [ "${TRAIN_MODE_CHOICE:-1}" = "2" ]; then
     ok "启用 AutoDL 远程 GPU 训练"
     # 多节点配置写入 config/training_nodes.yaml（每台 AutoDL 一条）
@@ -131,29 +132,29 @@ YAMLHEAD
         echo ""
         info "配置第 ${node_idx} 台 AutoDL 节点（${node_id}）"
         printf "  节点 IP/域名（留空结束）: "
-        read -r node_host
+        read -r node_host || node_host=""
         [ -z "$node_host" ] && break
         printf "  SSH 端口（默认 22）: "
-        read -r node_port; [ -z "$node_port" ] && node_port=22
+        read -r node_port || node_port=22; [ -z "$node_port" ] && node_port=22
         printf "  SSH 用户（默认 root）: "
-        read -r node_user; [ -z "$node_user" ] && node_user=root
+        read -r node_user || node_user=root; [ -z "$node_user" ] && node_user=root
         printf "  SSH 认证方式 (1=密码 2=私钥，默认 1): "
-        read -r node_auth
+        read -r node_auth || node_auth=1
         if [ "${node_auth:-1}" = "2" ]; then
             printf "  SSH 私钥路径: "
-            read -r node_key
+            read -r node_key || node_key=""
             node_pass=""
         else
             printf "  SSH 密码: "
-            read -r node_pass
+            read -r node_pass || node_pass=""
             node_key=""
         fi
         printf "  节点显示名（默认 AutoDL GPU ${node_idx}）: "
-        read -r node_name; [ -z "$node_name" ] && node_name="AutoDL GPU ${node_idx}"
+        read -r node_name || node_name=""; [ -z "$node_name" ] && node_name="AutoDL GPU ${node_idx}"
         printf "  远端工作目录（默认 /workspace）: "
-        read -r node_workdir; [ -z "$node_workdir" ] && node_workdir=/workspace
+        read -r node_workdir || node_workdir=""; [ -z "$node_workdir" ] && node_workdir=/workspace
         printf "  GPU 数量 all/0/1/2（默认 all）: "
-        read -r node_gpus; [ -z "$node_gpus" ] && node_gpus=all
+        read -r node_gpus || node_gpus=""; [ -z "$node_gpus" ] && node_gpus=all
 
         # 追加节点到 YAML
         cat >> "$NODES_YAML" << EOF
@@ -188,11 +189,13 @@ EOF
     # 询问是否构建 AutoDL 训练镜像
     warn "AutoDL 节点是 GPU。推荐在 AutoDL 上远程构建（利用远端网络，避免本地推送大镜像）。"
     printf "  是否现在构建 AutoDL 训练镜像 quantmind-train:latest？(y/N，默认 N): "
-    read -r BUILD_AUTODL
+    read -r BUILD_AUTODL || BUILD_AUTODL="n"
     if [ "${BUILD_AUTODL:-n}" = "y" ] || [ "${BUILD_AUTODL:-n}" = "Y" ]; then
         # shellcheck source=scripts/setup/build-autodl-remote.sh
-        source "${SCRIPT_DIR}/scripts/setup/build-autodl-remote.sh"
-        build_autodl_remote
+        if [ -f "${SCRIPT_DIR}/scripts/setup/build-autodl-remote.sh" ]; then
+            source "${SCRIPT_DIR}/scripts/setup/build-autodl-remote.sh"
+            build_autodl_remote
+        fi
     else
         info "跳过 AutoDL 镜像构建。后续需要时可运行: source scripts/setup/build-autodl-remote.sh && build_autodl_remote"
     fi
@@ -201,10 +204,14 @@ else
 fi
 
 # -------------------------------------------
-# 5. 启动服务
+# 5. 启动核心服务
 # -------------------------------------------
-info "启动所有服务..."
-${COMPOSE_CMD} up -d
+info "启动核心服务 (DB, Redis, API, Engine, Web)..."
+${COMPOSE_CMD} up -d db redis quantmind celery celery-beat web
+
+# 尝试启动扩展服务 (Huntly 资讯, RSSHub, QwenPaw 机器人)，不阻塞核心部署
+info "启动扩展服务 (资讯/机器人)..."
+${COMPOSE_CMD} up -d huntly rsshub qwenpaw 2>/dev/null || warn "部分扩展服务(Huntly/RSSHub)启动跳过，后续可通过: ${COMPOSE_CMD} up -d huntly rsshub 手动启动"
 
 # 等待核心服务就绪
 info "等待服务就绪..."
@@ -235,16 +242,25 @@ ${COMPOSE_CMD} exec -T quantmind bash /app/scripts/setup/init.sh --no-data-sync 
 # -------------------------------------------
 # 7. 显示结果
 # -------------------------------------------
+# 动态解析实际端口
+WEB_PORT=$(grep -E "^WEB_PORT=" .env 2>/dev/null | cut -d '=' -f2 | tr -d ' "\r\n' || echo "")
+WEB_PORT="${WEB_PORT:-3000}"
+HUNTLY_PORT=$(grep -E "^HUNTLY_PORT=" .env 2>/dev/null | cut -d '=' -f2 | tr -d ' "\r\n' || echo "")
+HUNTLY_PORT="${HUNTLY_PORT:-8090}"
+
 echo ""
 echo "========================================="
 echo -e "  ${GREEN}QuantMind 部署完成！${NC}"
 echo "========================================="
 echo ""
 echo "  访问地址:"
-echo "    Web 前端:  http://localhost:3000"
-echo "    API:       http://localhost:8000"
-echo "    Huntly:    http://localhost:8090"
-echo "    RSSHub:    http://localhost:1200"
+echo "    Web 前端:    http://localhost:${WEB_PORT}"
+echo "    API 网关:    http://localhost:8000"
+echo "    Engine 引擎: http://localhost:8001"
+echo "    Trade 交易:  http://localhost:8002"
+echo "    Stream 行情: http://localhost:8003"
+echo "    Huntly 资讯: http://localhost:${HUNTLY_PORT}"
+echo "    RSSHub:      http://localhost:1200"
 echo ""
 echo "  默认管理员:"
 echo "    用户名: admin"

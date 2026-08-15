@@ -953,3 +953,42 @@ html.platform-win32.os-win10 .module-grid-container {
   margin: 8px 16px;
   border-color: rgba(148, 163, 184, 0.2);
 }
+
+/* ==================== 后台管理页输入框统一高度(32px)与圆角(8px) ==================== */
+.admin-page input.ant-input,
+.admin-page .ant-input-affix-wrapper,
+.admin-page .ant-input-number,
+.admin-page .ant-picker {
+  height: 32px;
+  border-radius: 8px;
+}
+
+.admin-page .ant-input-affix-wrapper .ant-input {
+  height: 30px;
+}
+
+.admin-page .ant-input-number-input {
+  height: 30px;
+}
+
+.admin-page .ant-select .ant-select-selector {
+  height: 32px !important;
+  border-radius: 8px !important;
+}
+
+.admin-page .ant-select .ant-select-selector .ant-select-selection-item,
+.admin-page .ant-select .ant-select-selector .ant-select-selection-placeholder {
+  line-height: 30px !important;
+}
+
+.admin-page .ant-select .ant-select-selector .ant-select-selection-search-input {
+  height: 30px !important;
+}
+
+.admin-page .ant-picker-input > input {
+  height: 30px;
+}
+
+.admin-page textarea.ant-input {
+  border-radius: 8px;
+}
