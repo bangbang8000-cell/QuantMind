@@ -107,20 +107,23 @@ export const MARKET_INDICES: Record<MarketId, { symbol: string; name: string; ba
   ],
 };
 
-// 腾讯财经API字段映射（11个字段）
+// 腾讯财经API字段映射（完整标准）
 const TENCENT_FIELD_MAP = {
-  0: 'unknown1',     // 未知字段1
-  1: 'name',         // 股票名称
-  2: 'code',         // 股票代码
-  3: 'price',        // 当前价格
-  4: 'change',       // 涨跌额
-  5: 'changePercent', // 涨跌幅
-  6: 'volume',       // 成交量
-  7: 'amount',       // 成交额
-  8: 'bid',          // 买一价
-  9: 'ask',          // 卖一价
-  10: 'high',        // 最高价
-  11: 'low'          // 最低价
+  0: 'market',           // 市场代码 (1: SH, 51: SZ 等)
+  1: 'name',             // 股票/指数名称
+  2: 'code',             // 代码
+  3: 'price',            // 当前价格
+  4: 'preClose',         // 昨收价
+  5: 'open',             // 今开盘价
+  6: 'volume',           // 成交量（手）
+  30: 'timestamp',       // 时间 (YYYYMMDDHHmmss)
+  31: 'change',          // 涨跌额
+  32: 'changePercent',   // 涨跌幅(%)
+  33: 'high',            // 最高价
+  34: 'low',             // 最低价
+  35: 'rawPriceVolAmt',  // 价格/成交量/成交额(元)
+  36: 'volumeShares',    // 成交量（手）
+  37: 'amountWan',       // 成交额（万元）
 };
 
 // 错误处理配置
@@ -200,12 +203,18 @@ class MarketService {
 
       console.log(`成功获取${indices.length}个指数数据`);
 
+      const up = indices.filter(x => x.changePercent > 0).length;
+      const down = indices.filter(x => x.changePercent < 0).length;
+      const flat = indices.length - up - down;
+
       return {
         success: true,
         data: {
           indices,
-          lastUpdate: new Date().toISOString(),
-          count: indices.length
+          lastUpdate: indices[0]?.tradeDate || new Date().toISOString(),
+          count: indices.length,
+          stats: { up, down, flat, total: indices.length },
+          sourceUsed: 'tencent_realtime',
         },
         timestamp: new Date().toISOString()
       };
@@ -274,7 +283,7 @@ class MarketService {
     }
   }
 
-  // 解析腾讯财经API返回的数据（支持11字段完整解析）
+  // 解析腾讯财经API返回的数据（支持完整腾讯行情规范字段解析）
   private parseTencentData(text: string): MarketIndex[] {
     const indices: MarketIndex[] = [];
     const lines = text.split('\n').filter(line => line.trim());
@@ -283,16 +292,14 @@ class MarketService {
 
     lines.forEach(line => {
       try {
-        // 腾讯财经数据格式: v_sh000001="1~上证指数~000001~3456.78~12.34~0.36~123456~567890~1.23~4.56~3500.00~3400.00"
+        // 腾讯财经数据格式: v_sh000001="1~上证指数~000001~3927.18~3926.96~3930.02~499525613~0~0~...~20260814161401~0.22~0.01~3932.64~3903.70~3927.18/499525613/990371924238~499525613~99037192~1.03~..."
         const match = line.match(/v_([^=]+)="([^"]+)"/);
         if (!match) return;
 
         const symbol = match[1];
         const data = match[2].split('~');
 
-        console.log(`解析${symbol}数据，字段数量: ${data.length}`, data.slice(0, 12));
-
-        // 验证数据字段数量（至少需要6个基础字段）
+        // 验证数据字段数量（至少需要基础字段）
         if (data.length < 6) {
           console.warn(`${symbol}数据字段不足: ${data.length}，跳过`);
           return;
@@ -301,25 +308,21 @@ class MarketService {
         // 获取指数名称
         const name = SUPPORTED_INDICES[symbol as keyof typeof SUPPORTED_INDICES] || data[1] || symbol;
 
-        // 根据腾讯财经API实际数据格式解析字段
-        // 从日志可以看出：data[3]是当前价格，需要找到正确的涨跌额和涨跌幅字段
+        // 腾讯财经行情字段映射:
+        // data[3]: 当前价格
+        // data[4]: 昨收价
+        // data[5]: 今开盘价
+        // data[30]: 时间 (YYYYMMDDHHmmss)
+        // data[31]: 涨跌额
+        // data[32]: 涨跌幅(%)
+        // data[33]: 最高价
+        // data[34]: 最低价
+        // data[35]: 价格/成交量/成交额(元)
+        // data[36]: 成交量(手)
+        // data[37]: 成交额(万元)
         const price = this.safeParseFloat(data[3]);
-
-        // 腾讯财经指数格式: ~名称(1)~代码(2)~价格(3)~涨跌额(4)~涨跌幅%(5)~
-        const change = data.length > 4 ? this.safeParseFloat(data[4]) : 0;
-        let changePercent = data.length > 5 ? this.safeParseFloat(data[5]) : 0;
-        // 兜底：涨跌幅缺失时用涨跌额反推（price - preClose = change）
-        if (changePercent === 0 && change !== 0) {
-          const preClose = price - change;
-          if (preClose > 0) {
-            changePercent = (change / preClose) * 100;
-          }
-        }
-
-        const volume = this.safeParseFloat(data[6]);
-        const amount = this.safeParseFloat(data[7]);
-        const high = data.length > 10 ? this.safeParseFloat(data[10]) : undefined;
-        const low = data.length > 11 ? this.safeParseFloat(data[11]) : undefined;
+        const preClose = this.safeParseFloat(data[4]);
+        const open = this.safeParseFloat(data[5]);
 
         // 数据验证：价格必须大于0
         if (price <= 0) {
@@ -327,9 +330,43 @@ class MarketService {
           return;
         }
 
-        // 涨跌幅合理性检查（一般股指单日涨跌幅不会超过±10%）
-        if (Math.abs(changePercent) > 10) {
-          console.warn(`${symbol}涨跌幅可能异常: ${changePercent.toFixed(2)}%`);
+        let change = 0;
+        let changePercent = 0;
+
+        if (data.length > 32 && data[32] !== '' && data[32] !== undefined) {
+          change = this.safeParseFloat(data[31]);
+          changePercent = this.safeParseFloat(data[32]);
+        } else if (preClose > 0) {
+          change = price - preClose;
+          changePercent = (change / preClose) * 100;
+        }
+
+        const high = data.length > 33 ? this.safeParseFloat(data[33]) : undefined;
+        const low = data.length > 34 ? this.safeParseFloat(data[34]) : undefined;
+        const volume = data.length > 36 ? this.safeParseFloat(data[36]) : (data.length > 6 ? this.safeParseFloat(data[6]) : undefined);
+
+        // 成交额：优先从 data[35]（单位：元）获取，或从 data[37]（单位：万元）换算为元
+        let amount: number | undefined;
+        if (data.length > 35 && data[35].includes('/')) {
+          const parts = data[35].split('/');
+          if (parts.length >= 3) {
+            const rawAmt = this.safeParseFloat(parts[2]);
+            if (rawAmt > 0) amount = rawAmt;
+          }
+        }
+        if (!amount && data.length > 37) {
+          const amtWan = this.safeParseFloat(data[37]);
+          if (amtWan > 0) amount = amtWan * 10000;
+        }
+
+        let tradeDate = '';
+        let timestamp = new Date().toISOString();
+        if (data.length > 30 && data[30] && data[30].length >= 8) {
+          const rawTime = data[30];
+          tradeDate = `${rawTime.slice(0, 4)}-${rawTime.slice(4, 6)}-${rawTime.slice(6, 8)}`;
+          if (rawTime.length >= 14) {
+            timestamp = `${tradeDate}T${rawTime.slice(8, 10)}:${rawTime.slice(10, 12)}:${rawTime.slice(12, 14)}`;
+          }
         }
 
         // 构建指数数据对象
@@ -339,16 +376,22 @@ class MarketService {
           price: Math.round(price * 100) / 100, // 保留2位小数
           change: Math.round(change * 100) / 100,
           changePercent: Math.round(changePercent * 100) / 100,
-          volume: volume > 0 ? Math.round(volume) : undefined,
-          amount: amount > 0 ? Math.round(amount * 100) / 100 : undefined,
-          timestamp: new Date().toISOString()
+          volume: volume && volume > 0 ? Math.round(volume) : undefined,
+          amount: amount && amount > 0 ? Math.round(amount * 100) / 100 : undefined,
+          high: high && high > 0 ? Math.round(high * 100) / 100 : undefined,
+          low: low && low > 0 ? Math.round(low * 100) / 100 : undefined,
+          open: open && open > 0 ? Math.round(open * 100) / 100 : undefined,
+          preClose: preClose && preClose > 0 ? Math.round(preClose * 100) / 100 : undefined,
+          tradeDate: tradeDate || undefined,
+          timestamp,
         };
 
         console.log(`${symbol}解析成功:`, {
           name: indexData.name,
           price: indexData.price,
           change: indexData.change,
-          changePercent: indexData.changePercent
+          changePercent: indexData.changePercent,
+          amount: indexData.amount
         });
 
         indices.push(indexData);

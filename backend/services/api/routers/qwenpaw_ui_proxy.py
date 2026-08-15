@@ -114,6 +114,87 @@ _API_REWRITE_SCRIPT = r"""<script>
 </script>"""
 
 
+_UNREACHABLE_HTML = """<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>QwenPaw</title>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      background-color: #1a1a1a;
+      color: #94a3b8;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      min-height: 100vh;
+      padding: 24px;
+      text-align: center;
+    }
+    .container {
+      max-width: 440px;
+      padding: 32px 24px;
+      background: #222222;
+      border: 1px solid #333333;
+      border-radius: 16px;
+      box-shadow: 0 4px 24px rgba(0,0,0,0.4);
+    }
+    .icon {
+      width: 44px;
+      height: 44px;
+      margin: 0 auto 16px;
+      border-radius: 50%;
+      background: rgba(148, 163, 184, 0.1);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      color: #94a3b8;
+    }
+    .title {
+      font-size: 15px;
+      font-weight: 500;
+      color: #cbd5e1;
+      margin-bottom: 8px;
+    }
+    .desc {
+      font-size: 13px;
+      color: #64748b;
+      line-height: 1.6;
+      margin-bottom: 16px;
+    }
+    .code {
+      display: inline-block;
+      padding: 6px 14px;
+      background: #18181b;
+      border: 1px solid #27272a;
+      border-radius: 6px;
+      color: #34d399;
+      font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+      font-size: 12px;
+    }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <div class="icon">
+      <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg>
+    </div>
+    <div class="title">QwenPaw 未部署或未启动</div>
+    <div class="desc">请按文档部署并启动 QwenPaw 智能体服务</div>
+    <div class="code">docker-compose up -d qwenpaw</div>
+  </div>
+</body>
+</html>"""
+
+
+def _unreachable_response(accept: str = "") -> Response:
+    if "text/html" in (accept or ""):
+        return HTMLResponse(_UNREACHABLE_HTML, status_code=502)
+    return PlainTextResponse("QwenPaw 未部署或未启动，请按文档部署", status_code=502)
+
+
 def _guess_mime(path: str) -> str:
     from pathlib import PurePosixPath
 
@@ -137,7 +218,7 @@ async def _proxy_static(path: str, accept: str) -> Response:
         async with httpx.AsyncClient(timeout=15.0, follow_redirects=True) as client:
             resp = await client.get(url, headers={"Accept": accept})
     except httpx.HTTPError:
-        return PlainTextResponse("QwenPaw 服务不可达", status_code=502)
+        return _unreachable_response(accept)
 
     content_type = resp.headers.get("content-type", "")
     body = resp.content
@@ -250,7 +331,7 @@ async def _proxy_api(request: Request) -> Response:
                     headers={"content-type": resp.headers.get("content-type", "application/json")},
                 )
     except httpx.HTTPError:
-        return PlainTextResponse("QwenPaw 服务不可达", status_code=502)
+        return PlainTextResponse("QwenPaw 未部署或未启动，请按文档部署", status_code=502)
 
 
 @router.api_route(
