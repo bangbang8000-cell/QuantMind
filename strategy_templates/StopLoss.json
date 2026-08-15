@@ -14,15 +14,15 @@
     },
     {
       "name": "stop_loss",
-      "description": "止损触发阈值 (负数, 如 -0.08 = -8%)",
-      "default": -0.08,
+      "description": "止损触发阈值 (负数, 如 -0.10 = -10%)",
+      "default": -0.1,
       "min": -0.3,
       "max": -0.01
     },
     {
       "name": "take_profit",
-      "description": "止盈触发阈值 (正数, 如 0.15 = +15%)",
-      "default": 0.15,
+      "description": "止盈触发阈值 (正数, 如 0.20 = +20%)",
+      "default": 0.2,
       "min": 0.05,
       "max": 0.5
     }

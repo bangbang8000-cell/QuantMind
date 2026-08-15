@@ -8,7 +8,7 @@ STRATEGY_CONFIG = {
         "signal": "<PRED>",
         "topk": 30,
         "n_drop": 6,
-        "stop_loss": -0.08,
-        "take_profit": 0.15,
+        "stop_loss": -0.10,
+        "take_profit": 0.20,
     }
 }

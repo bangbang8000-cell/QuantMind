@@ -96,7 +96,8 @@ class VectorizedBacktestEngine:
 
             # 3. Daily returns
             # pct_change()[t] = P[t]/P[t-1] - 1 (T-1到T的日收益)
-            asset_returns = price_wide.pct_change()
+            # 价格已有 forward-fill，用 fill_method=None 避免隐式 pad 的弃用告警
+            asset_returns = price_wide.pct_change(fill_method=None)
 
             # 4. Target Weights (TopK equal weight)
             # Rank scores cross-sectionally (untradable stocks ranked last)
@@ -146,15 +147,23 @@ class VectorizedBacktestEngine:
 
             win_rate = (portfolio_daily_returns > 0).mean()
 
-            # Construct a dummy portfolio_dict compatible with Qlib RiskAnalyzer
-            # Qlib expects a tuple: (portfolio_dict, indicator_dict)
-            dummy_portfolio = pd.DataFrame({
+            # Construct a portfolio_dict compatible with Qlib RiskAnalyzer
+            # Qlib expects a report DataFrame with account/cost/return columns.
+            # RiskAnalyzer 会基于该 report 重算 annual_return/sharpe/max_drawdown，
+            # 因此无需在此重复计算（保留计算值仅为兼容调用方直接读取）。
+            report_df = pd.DataFrame({
                 "account": equity_curve.values,
                 "cost": turnover_cost.values * self.config.initial_capital,
-                "return": portfolio_daily_returns.values
+                "return": portfolio_daily_returns.values,
             }, index=equity_curve.index)
 
-            # The backtest layout needs to mimic PortAna output slightly
+            portfolio_dict = {
+                "report": report_df,
+                "final_value": float(equity_curve.iloc[-1]) if len(equity_curve) > 0 else float(self.config.initial_capital),
+                "account": float(equity_curve.iloc[-1]) if len(equity_curve) > 0 else float(self.config.initial_capital),
+                "position_value": float((weights.iloc[-1] * price_wide.iloc[-1]).sum()) if len(weights) > 0 else 0.0,
+            }
+
             return VectorizedBacktestResult(
                 success=True,
                 annual_return=float(annual_return),
@@ -162,8 +171,8 @@ class VectorizedBacktestEngine:
                 max_drawdown=float(max_drawdown),
                 total_return=float(total_return),
                 win_rate=float(win_rate),
-                portfolio_dict={"dummy": dummy_portfolio}, # Just something so RiskAnalyzer doesn't crash or we bypass it
-                indicator_dict={"dummy": pd.DataFrame()}
+                portfolio_dict=portfolio_dict,
+                indicator_dict={"report": report_df},
             )
 
         except Exception as e:

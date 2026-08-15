@@ -9,7 +9,7 @@ STRATEGY_CONFIG = {
         "signal": "<PRED>",
         "topk": 50,
         "vol_lookback": 20,
-        "max_weight": 0.10,
+        "max_weight": 0.08,
         "min_score": 0.0,
     }
 }

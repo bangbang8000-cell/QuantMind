@@ -446,7 +446,8 @@ class QlibBacktestServiceRuntimeMixin(QlibBacktestServiceQueryMixin):
                         strategy["kwargs"]["signal"] = normalized_curr_signal
                         curr_signal = normalized_curr_signal
                 if (
-                    curr_signal == "<PRED>"
+                    curr_signal is None
+                    or curr_signal == "<PRED>"
                     or (isinstance(curr_signal, str) and curr_signal.startswith("$"))
                 ) and signal_data is not None:
                     strategy["kwargs"]["signal"] = signal_data
@@ -579,11 +580,19 @@ class QlibBacktestServiceRuntimeMixin(QlibBacktestServiceQueryMixin):
             )
 
             use_vect = getattr(request, "use_vectorized", False)
+            if use_vect and not self._is_vectorized_safe(request, strategy):
+                use_vect = False
+                task_log.info(
+                    "vectorized_safety_gate",
+                    "策略含向量化引擎无法表达的逻辑，已退回 step 模式保证语义正确",
+                    strategy_type=request.strategy_type,
+                )
             task_log.info(
                 "engine_mode",
                 "回测引擎模式",
                 use_vectorized=use_vect,
                 mode="vectorized" if use_vect else "step",
+                safety_gate_applied=True,
             )
 
             if use_vect:
@@ -598,8 +607,26 @@ class QlibBacktestServiceRuntimeMixin(QlibBacktestServiceQueryMixin):
                         "Vectorized backtest requires pre-computed predictions (DataFrame), not raw feature strings."
                     )
 
+                # 将 SimpleSignal 配置/pred.pkl 物化为 DataFrame 供向量化引擎使用
+                pred_df = self._materialize_signal_dataframe(signal_data, request)
+                if pred_df.empty or "score" not in pred_df.columns:
+                    raise ValueError(
+                        "向量化极速回测信号为空或缺少 score 列，无法执行。"
+                    )
+                if signal_meta.get("source") == "pred_pkl":
+                    self._enforce_signal_quality(signal_meta, request=request)
+
+                # 只加载信号覆盖的股票池，避免对 universe=all 全市场做全量 D.features 加载
+                pred_instruments = sorted(
+                    set(map(str, pred_df.index.get_level_values("instrument")))
+                )
+                if pred_instruments:
+                    vectorized_universe = pred_instruments[: int(os.getenv("QLIB_SIGNAL_MAX_INSTRUMENTS", "2000"))]
+                else:
+                    vectorized_universe = D.instruments(request.universe)
+
                 price_df = D.features(
-                    D.instruments(request.universe),
+                    vectorized_universe,
                     ["$close"],
                     start_time=request.start_date,
                     end_time=request.end_date,
@@ -608,7 +635,7 @@ class QlibBacktestServiceRuntimeMixin(QlibBacktestServiceQueryMixin):
                 # Load $change for limit-up/limit-down detection
                 try:
                     change_df = D.features(
-                        D.instruments(request.universe),
+                        vectorized_universe,
                         ["$change"],
                         start_time=request.start_date,
                         end_time=request.end_date,
@@ -626,35 +653,32 @@ class QlibBacktestServiceRuntimeMixin(QlibBacktestServiceQueryMixin):
 
                 v_engine = VectorizedBacktestEngine(cfg)
                 v_res = await asyncio.to_thread(
-                    v_engine.run_backtest, signals=signal_data, prices=price_df, changes=change_df
+                    v_engine.run_backtest,
+                    signals=pred_df,
+                    prices=price_df,
+                    changes=change_df,
                 )
 
                 if not v_res.success:
                     raise RuntimeError(f"向量化极速回测执行失败: {v_res.error_message}")
 
                 execution_time = time.time() - start_time
+
+                # 向量化引擎产出的是组合日收益曲线，回填 benchmark 对比指标与交易统计，
+                # 补齐与 step 引擎一致的呈现（annual_return/sharpe/max_drawdown 已由向量化引擎计算）
+                result = await RiskAnalyzer.analyze(
+                    portfolio_dict=v_res.portfolio_dict or {"report": pd.DataFrame()},
+                    request=request,
+                    backtest_id=backtest_id,
+                    created_at=created_at,
+                    execution_time=execution_time,
+                    signal_data=pred_df,
+                    signal_meta=signal_meta,
+                )
                 task_log.info(
                     "vectorized_done",
                     "向量化极速回测完成",
                     execution_time=f"{execution_time:.2f}",
-                )
-
-                result = QlibBacktestResult(
-                    backtest_id=backtest_id,
-                    tenant_id=request.tenant_id,
-                    status="completed",
-                    created_at=created_at,
-                    completed_at=datetime.now(),
-                    config=self._build_config_payload(request, signal_meta=signal_meta),
-                    annual_return=v_res.annual_return,
-                    sharpe_ratio=v_res.sharpe_ratio,
-                    max_drawdown=v_res.max_drawdown,
-                    total_return=v_res.total_return,
-                    win_rate=v_res.win_rate,
-                    long_short_is_theoretical=request.strategy_params.short_topk > 0,
-                    signal_lag_days=request.signal_lag_days,
-                    deal_price=request.deal_price,
-                    execution_time=execution_time,
                 )
             else:
                 portfolio_dict, indicator_dict = await asyncio.to_thread(
@@ -930,6 +954,314 @@ class QlibBacktestServiceRuntimeMixin(QlibBacktestServiceQueryMixin):
             raise ValueError(
                 f"信号质量预检失败：score 空值比例过高（{nan_ratio:.2%} > {max_nan_ratio:.2%}）"
             )
+
+    def _read_pred_frame(self, pred_path: str) -> pd.DataFrame | None:
+        """读取 pred.pkl/pred.parquet 为规范化 MultiIndex (datetime, instrument) + score DataFrame。
+
+        供向量化极速回测直接使用（信号需为 DataFrame 而非 SimpleSignal 配置）。
+        """
+        try:
+            from backend.services.engine.qlib_app.utils.qlib_utils import np_patch
+
+            with np_patch():
+                if pred_path.endswith(".parquet"):
+                    raw = pd.read_parquet(pred_path, engine="pyarrow")
+                    score_col = "pred" if "pred" in raw.columns else raw.columns[-1]
+                    pred = (
+                        raw[["trade_date", "symbol", score_col]]
+                        .rename(
+                            columns={
+                                "trade_date": "datetime",
+                                "symbol": "instrument",
+                                score_col: "score",
+                            }
+                        )
+                        .assign(datetime=lambda d: pd.to_datetime(d["datetime"]))
+                        .set_index(["datetime", "instrument"])
+                        .sort_index()
+                    )
+                else:
+                    pred = pd.read_pickle(pred_path)
+            if isinstance(pred, pd.Series):
+                pred = pred.to_frame("score")
+            if not isinstance(pred, pd.DataFrame):
+                return None
+            if not (
+                hasattr(pred, "index")
+                and "datetime" in pred.index.names
+                and "instrument" in pred.index.names
+            ):
+                return None
+            if "score" not in pred.columns:
+                pred = pred.rename(columns={pred.columns[-1]: "score"})
+            return pred
+        except Exception as exc:
+            task_logger.warning(
+                "read_pred_frame_failed",
+                "读取 pred 为 DataFrame 失败",
+                path=pred_path,
+                error=str(exc),
+            )
+            return None
+
+    @staticmethod
+    def _to_qlib_prefix_code(code: str) -> str:
+        """将股票代码转为 qlib 前缀格式（sh600000 / sz000001 / bj920000）。"""
+        s = str(code or "").strip().lower()
+        if not s:
+            return s
+        # 已是 qlib 小写前缀格式
+        if len(s) == 8 and s[:2] in {"sh", "sz", "bj"}:
+            return s
+        # 后缀格式: 600036.SH → sh600036
+        if "." in s:
+            parts = s.split(".")
+            if len(parts) == 2 and len(parts[0]) == 6 and parts[0].isdigit():
+                return parts[1].lower() + parts[0]
+        # 前缀大写: SH600036 → sh600036
+        if len(s) == 8 and s[:2] in {"sh", "sz", "bj"}:
+            return s
+        # 纯6位数字: 600036 → sh600036
+        if s.isdigit() and len(s) == 6:
+            if s.startswith(("6", "9")):
+                return "sh" + s
+            if s.startswith(("0", "2", "3")):
+                return "sz" + s
+            if s.startswith(("4", "8")):
+                return "bj" + s
+        return s
+
+    @staticmethod
+    def _extract_strategy_config_from_code(content: str) -> dict[str, Any]:
+        """从策略代码中提取 STRATEGY_CONFIG / get_strategy_config() 的配置。"""
+        import ast
+
+        config: dict[str, Any] = {}
+        if not content:
+            return config
+        try:
+            tree = ast.parse(content)
+        except Exception:
+            return config
+        for node in tree.body:
+            # STRATEGY_CONFIG = {...}
+            if isinstance(node, (ast.Assign, ast.AnnAssign)):
+                targets = (
+                    node.targets
+                    if isinstance(node, ast.Assign)
+                    else [node.target]
+                )
+                for t in targets:
+                    if isinstance(t, ast.Name) and t.id == "STRATEGY_CONFIG":
+                        try:
+                            config = ast.literal_eval(node.value)
+                        except Exception:
+                            pass
+                        return config
+        return config
+
+    @staticmethod
+    def _vectorized_unsafe_strategy_class(class_name: str) -> bool:
+        """策略类是否包含向量化引擎无法表达的逻辑。
+
+        向量化引擎实现的是「每日 TopK 等权选股 + 涨跌停/停牌过滤 + 交易成本」。
+        以下策略类包含超出该语义的逻辑，必须走 step 模式保真：
+        - RedisWeightStrategy: 分数加权权重（非等权）
+        - RedisTopkStrategy 是安全子集；任何自定义/其他类名视为不安全
+        """
+        name = str(class_name or "").strip().lower()
+        if not name:
+            return True
+        if name in {"redistopkstrategy", "topkdropout", "standard_topk"}:
+            return False
+        return True
+
+    def _is_vectorized_safe(
+        self, request: QlibBacktestRequest, strategy: Any
+    ) -> bool:
+        """判断策略是否可由向量化极速引擎保真执行。
+
+        安全条件（全部满足）：
+          1. 信号是模型预测信号（<PRED> 或 pred 文件），非行情特征回退
+          2. 策略类为纯 TopK 型（RedisTopkStrategy / TopkDropout）
+          3. 无 pool_file 股票池覆盖（向量化引擎不加载池文件）
+          4. 无显式配置的调仓周期 / 止损止盈 / 分数加权等参数
+
+        注意：只以用户代码 STRATEGY_CONFIG 中的显式配置为准，
+        schema 默认值（如 stop_loss=-0.08）不作为判据，否则会误伤默认策略。
+        """
+        try:
+            # 1. 信号必须是 pred 类信号
+            signal = self._normalize_signal_config(request.strategy_params.signal)
+            if isinstance(signal, str) and not (
+                signal.strip().upper() == "<PRED>"
+                or signal.strip().lower().endswith((".pkl", ".parquet"))
+            ):
+                return False
+
+            # 2. 从策略代码 STRATEGY_CONFIG 判断策略类与 kwargs（用户显式配置）
+            content = str(getattr(request, "strategy_content", "") or "")
+            cfg = self._extract_strategy_config_from_code(content)
+            if cfg:
+                class_name = str(cfg.get("class") or "").strip()
+                if self._vectorized_unsafe_strategy_class(class_name):
+                    return False
+                kwargs = cfg.get("kwargs") or {}
+                if kwargs.get("pool_file"):
+                    return False
+                if kwargs.get("rebalance_days") not in (None, 1):
+                    return False
+                if kwargs.get("stop_loss"):
+                    return False
+                if kwargs.get("take_profit"):
+                    return False
+                if kwargs.get("max_weight") or kwargs.get("min_score"):
+                    return False  # 分数加权 → 非等权
+                # n_drop 控制每期调仓数量：只有 n_drop>=topk（每期全换）才与向量化
+                # 「每日全 TopK」语义一致；部分调仓/零换手约束向量化无法表达
+                topk = int(kwargs.get("topk") or 50)
+                n_drop = kwargs.get("n_drop")
+                if n_drop is not None and int(n_drop) < topk:
+                    return False
+            elif isinstance(strategy, dict):
+                # 无 STRATEGY_CONFIG：检查已解析策略对象
+                class_name = str(strategy.get("class") or "").strip()
+                if self._vectorized_unsafe_strategy_class(class_name):
+                    return False
+                kwargs = strategy.get("kwargs") or {}
+                if kwargs.get("pool_file") or kwargs.get("max_weight") or kwargs.get("min_score"):
+                    return False
+                if kwargs.get("rebalance_days") not in (None, 1):
+                    return False
+                if kwargs.get("stop_loss") or kwargs.get("take_profit"):
+                    return False
+                topk = int(kwargs.get("topk") or 50)
+                n_drop = kwargs.get("n_drop")
+                if n_drop is not None and int(n_drop) < topk:
+                    return False
+            else:
+                # 既无 STRATEGY_CONFIG 也非策略 dict：保守退回 step
+                return False
+
+            return True
+        except Exception as exc:
+            task_logger.warning(
+                "vectorized_safety_check_failed",
+                "向量化安全检测异常，保守退回 step 模式",
+                error=str(exc),
+            )
+            return False
+
+    def _align_pred_instruments(
+        self, pred: pd.DataFrame, request: QlibBacktestRequest
+    ) -> pd.DataFrame:
+        """将 pred 信号的 instrument 对齐到 qlib 缓存代码格式。
+
+        pred.pkl 常为后缀/前缀大写格式（000001.SH / SH600036），
+        而 qlib 缓存为小写前缀格式（sh600000）。简单映射后按 universe
+        校验，无法匹配的 instrument 剔除，避免向量化 price 对齐为空。
+        """
+        if pred.empty or "instrument" not in pred.index.names:
+            return pred
+        inst_values = pred.index.get_level_values("instrument")
+        pred_codes = set(map(str, inst_values))
+        # 快速检查：若已有一定重叠（按 qlib 小写前缀归一化后），无需转换
+        raw_prefix = {self._to_qlib_prefix_code(c) for c in pred_codes}
+        try:
+            qlib_instruments = D.list_instruments(
+                D.instruments(str(request.universe) or "all"), as_list=True
+            )
+        except Exception:
+            qlib_instruments = []
+        qlib_codes = set(qlib_instruments)
+        if not qlib_codes:
+            return pred
+        overlap = len(raw_prefix & qlib_codes)
+        if overlap == 0:
+            task_logger.warning(
+                "align_pred_instruments_no_overlap",
+                "pred 与 qlib instrument 无重叠，信号将为空",
+                pred_sample=list(pred_codes)[:3],
+                qlib_sample=list(qlib_codes)[:3],
+            )
+            return pred.iloc[0:0]
+        # 归一化为 qlib 小写前缀，剔除无法匹配的
+        new_inst = pd.Series(
+            inst_values.map(self._to_qlib_prefix_code).values,
+            index=pred.index,
+        )
+        valid = new_inst.isin(qlib_codes)
+        task_logger.info(
+            "align_pred_instruments",
+            "对齐 pred instrument 到 qlib 格式",
+            before=len(inst_values),
+            kept=int(valid.sum()),
+            dropped=int((~valid).sum()),
+        )
+        result = pred.loc[valid].copy()
+        # 用映射后的 instrument 重建 MultiIndex（保持与 datetime 的行级对齐）
+        result.index = pd.MultiIndex.from_arrays(
+            [
+                result.index.get_level_values("datetime"),
+                new_inst[valid].values,
+            ],
+            names=["datetime", "instrument"],
+        )
+        # pred 可能同时含两种代码格式（如 BJ920000 与 920000.BJ）映射到同一
+        # qlib 代码，产生重复 (datetime, instrument)。去重（保留优先级最高的格式：
+        # 原生小写前缀 > 大写前缀 > 后缀），否则向量化引擎 unstack 会因重复索引报错。
+        if result.index.duplicated().any():
+            task_logger.warning(
+                "align_pred_instruments_duplicates",
+                "pred 信号存在重复 (datetime, instrument)，已按格式优先级去重",
+                duplicated=int(result.index.duplicated().sum()),
+            )
+            # 格式优先级：小写前缀=0（qlib 原生）> 大写前缀=1 > 后缀=2
+            inst_str = result.index.get_level_values("instrument").astype(str)
+
+            def _fmt_priority(code: str) -> int:
+                c = code.lower()
+                if len(c) == 8 and c[:2] in {"sh", "sz", "bj"}:
+                    return 0
+                if len(c) == 8 and c[:2] in {"SH", "SZ", "BJ"}:
+                    return 1
+                if "." in c:
+                    return 2
+                return 3
+
+            prio = inst_str.map(_fmt_priority)
+            result = result.assign(_prio=prio.values).sort_index()
+            result = result[
+                ~result.index.duplicated(keep="first")
+            ].drop(columns="_prio")
+        return result.sort_index()
+
+    def _materialize_signal_dataframe(
+        self, signal_data: Any, request: QlibBacktestRequest
+    ) -> pd.DataFrame:
+        """将信号物化为 DataFrame 供向量化极速回测使用。
+
+        SimpleSignal 配置按 kwargs.pred_path 读取；已是 DataFrame/Series 则直接使用。
+        读取 pred_path 时会应用 signal_lag_days 滞后（与 SimpleSignal 内部行为一致），
+        避免向量化路径出现信号超前一天的前视偏差。
+        """
+        lag_days = int(getattr(request, "signal_lag_days", 1) or 0)
+        if isinstance(signal_data, pd.Series):
+            return signal_data.to_frame("score")
+        if isinstance(signal_data, pd.DataFrame):
+            return signal_data
+        if isinstance(signal_data, dict):
+            pred_path = (signal_data.get("kwargs") or {}).get("pred_path")
+            if pred_path and os.path.exists(pred_path):
+                pred = self._read_pred_frame(pred_path)
+                if pred is not None:
+                    pred = self._align_pred_instruments(pred, request)
+                    if lag_days > 0:
+                        pred = self._lag_signal_frame(pred, lag_days)
+                    return pred
+        raise ValueError(
+            "向量化极速回测需要 DataFrame 信号（pred.pkl 或特征表），当前信号无法物化。"
+        )
 
     def _load_pred_pkl(
         self, pred_path: str, request: QlibBacktestRequest
@@ -1302,6 +1634,28 @@ class QlibBacktestServiceRuntimeMixin(QlibBacktestServiceQueryMixin):
             if candidate.exists():
                 meta["resolved_pred_path"] = str(candidate)
                 return str(candidate), meta
+
+        # 融合模型（model_file=ensemble_config.json）无 pred.pkl 时，
+        # 自动用子模型 pred 融合生成，避免 AI-IDE 回测因缺信号失败。
+        model_file = str(meta.get("model_file") or "").strip()
+        if "ensemble_config" in model_file:
+            try:
+                from backend.services.engine.services.prediction_artifact import (
+                    generate_ensemble_pred,
+                )
+
+                generated = generate_ensemble_pred(model_dir=storage)
+                meta["resolved_pred_path"] = str(generated)
+                meta["ensemble_pred_generated"] = True
+                return str(generated), meta
+            except Exception as gen_err:
+                task_logger.warning(
+                    "ensemble_pred_generation_failed",
+                    "融合模型 pred 自动生成失败",
+                    model_dir=str(storage),
+                    error=str(gen_err),
+                )
+                meta["ensemble_pred_generation_error"] = str(gen_err)
 
         meta["resolved_pred_path"] = str(candidate_paths[0]) if candidate_paths else ""
         meta["fallback_reason"] = "pred_pkl_not_found_in_model_storage"
