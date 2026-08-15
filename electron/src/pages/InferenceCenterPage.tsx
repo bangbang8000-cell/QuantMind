@@ -1,11 +1,12 @@
 import React, { useState, useEffect, useCallback, useMemo } from 'react';
-import { motion, AnimatePresence } from 'framer-motion';
+import { motion } from 'framer-motion';
 import {
   Cpu, Search, Play, Calendar, Sparkles, TrendingUp, TrendingDown,
   Shield, CheckCircle2, RefreshCw, BarChart2, Zap, Star, Activity,
-  Info, Compass, Layers, ArrowUpRight, Check, Database, Sliders, Box
+  Info, Compass, Layers, ArrowUpRight, Check, Database, Sliders,
+  Clock, ArrowRight
 } from 'lucide-react';
-import { Button, Input, Select, DatePicker, message, Spin, Tooltip, Tag, Badge } from 'antd';
+import { Button, Input, Select, DatePicker, message, Spin, Tooltip, Tag } from 'antd';
 import dayjs from 'dayjs';
 import {
   inferenceCenterService,
@@ -23,7 +24,7 @@ import { useAppSelector } from '../store';
 import { selectCurrentMarket } from '../store/slices/uiSlice';
 import { getMarketConfig } from '../config/marketConfig';
 
-// 热门预设标的
+// 常用标的快捷选项
 const POPULAR_STOCKS = [
   { symbol: 'SH600519', name: '贵州茅台', basePrice: 1685.0 },
   { symbol: 'SZ300750', name: '宁德时代', basePrice: 198.5 },
@@ -33,7 +34,7 @@ const POPULAR_STOCKS = [
   { symbol: 'SZ000001', name: '平安银行', basePrice: 11.2 },
 ];
 
-// 内置完整模型库 (带分类与量化指标)
+// 内置模型库
 const PRESET_MODELS: (AvailableModelOption & {
   category: 'tree' | 'dl' | 'ensemble';
   tag: string;
@@ -47,7 +48,7 @@ const PRESET_MODELS: (AvailableModelOption & {
     modelType: 'nativetft',
     category: 'dl',
     tag: '分位数主力',
-    description: '集成 GRN 门控与自注意力，原生支持 10%-50%-90% 置信区间与多步长预测',
+    description: '原生支持 10%-50%-90% 置信区间与多步长预测',
     accuracy: 0.148,
     sharpe: 2.35,
     quantileSupport: true,
@@ -55,11 +56,11 @@ const PRESET_MODELS: (AvailableModelOption & {
   },
   {
     modelId: 'mdl_lightgbm_v2',
-    modelName: 'LightGBM Alpha-158 增强模型',
+    modelName: 'LightGBM Alpha-158 增强',
     modelType: 'lightgbm',
     category: 'tree',
     tag: '高频稳健',
-    description: '基于 158 维多因子截面特征的高速 GBDT 决策树模型，泛化能力极强',
+    description: '基于 158 维因子的 GBDT 树模型，推理极速',
     accuracy: 0.132,
     sharpe: 2.18,
     quantileSupport: false,
@@ -71,7 +72,7 @@ const PRESET_MODELS: (AvailableModelOption & {
     modelType: 'stacking',
     category: 'ensemble',
     tag: '顶级共识',
-    description: '融合 LightGBM + XGBoost + CatBoost + TFT 输出，由 Ridge 元学习器二次调优',
+    description: '融合 LightGBM + CatBoost + TFT 输出',
     accuracy: 0.162,
     sharpe: 2.58,
     quantileSupport: true,
@@ -83,42 +84,18 @@ const PRESET_MODELS: (AvailableModelOption & {
     modelType: 'gru',
     category: 'dl',
     tag: '时序记忆',
-    description: '捕捉股票 30 日量价时序连续依赖，对趋势启动与变盘点具有高灵敏度',
+    description: '捕捉 30 日量价时序连续依赖与变盘点',
     accuracy: 0.118,
     sharpe: 1.95,
     quantileSupport: false,
     horizonDesc: 'T+3 ~ T+5 趋势预测',
-  },
-  {
-    modelId: 'mdl_transformer_v1',
-    modelName: 'Transformer 时序自注意力模型',
-    modelType: 'transformer',
-    category: 'dl',
-    tag: '长程特征',
-    description: '全注意力机制跨时序相关性提取，擅长捕捉跨周期的宏观与微观共振',
-    accuracy: 0.139,
-    sharpe: 2.22,
-    quantileSupport: true,
-    horizonDesc: 'T+5 ~ T+10 中长周期',
-  },
-  {
-    modelId: 'mdl_catboost_v1',
-    modelName: 'CatBoost 行业与风格中性模型',
-    modelType: 'catboost',
-    category: 'tree',
-    tag: '抗噪回归',
-    description: '针对分类特征与极端异常值进行有序目标编码与抗过拟合优化',
-    accuracy: 0.125,
-    sharpe: 2.05,
-    quantileSupport: false,
-    horizonDesc: 'T+1 ~ T+5 截面选股',
   },
 ];
 
 // 生成 Mock K线数据
 function generateMockKline(basePrice: number, days = 60): KlineItem[] {
   const items: KlineItem[] = [];
-  let price = basePrice * 0.85;
+  let price = basePrice * 0.86;
   const now = dayjs();
 
   for (let i = days; i >= 1; i--) {
@@ -225,22 +202,21 @@ function generateMockPrediction(
 export const InferenceCenterPage: React.FC = () => {
   const currentMarket = useAppSelector(selectCurrentMarket);
 
-  // 核心交互状态
+  // 参数配置状态
+  const [symbol, setSymbol] = useState('SH600519');
   const [selectedModelId, setSelectedModelId] = useState<string>('mdl_tft_v1');
   const [modelCategoryFilter, setModelCategoryFilter] = useState<'all' | 'dl' | 'tree' | 'ensemble'>('all');
-  const [symbol, setSymbol] = useState('SH600519');
   const [horizon, setHorizon] = useState<number>(5);
   const [inferenceDate, setInferenceDate] = useState<dayjs.Dayjs | null>(dayjs());
   const [loading, setLoading] = useState(false);
 
-  // 数据集状态
+  // 数据展示状态
   const [models, setModels] = useState(PRESET_MODELS);
   const [kline, setKline] = useState<KlineItem[]>(() => generateMockKline(1685.0));
   const [prediction, setPrediction] = useState<SingleStockPredictionResponse>(() =>
     generateMockPrediction('SH600519', 'mdl_tft_v1', 5, 1685.0)
   );
 
-  // 过滤模型列表
   const filteredModels = useMemo(() => {
     if (modelCategoryFilter === 'all') return models;
     return models.filter(m => m.category === modelCategoryFilter);
@@ -250,7 +226,7 @@ export const InferenceCenterPage: React.FC = () => {
     return models.find(m => m.modelId === selectedModelId) || models[0];
   }, [models, selectedModelId]);
 
-  // 执行个股推理预测
+  // 执行推理
   const handleRunInference = useCallback(async (targetSymbol?: string, targetModelId?: string, targetHorizon?: number) => {
     const sym = targetSymbol || symbol;
     const mId = targetModelId || selectedModelId;
@@ -265,14 +241,11 @@ export const InferenceCenterPage: React.FC = () => {
     const matchedStock = POPULAR_STOCKS.find(s => s.symbol === sym);
     const baseP = matchedStock ? matchedStock.basePrice : 100.0;
 
-    // 先用 Mock 极速更新保证交互即时性
-    const mockK = generateMockKline(baseP);
-    const mockP = generateMockPrediction(sym, mId, hor, baseP);
-    setKline(mockK);
-    setPrediction(mockP);
+    // 即时 Mock 响应
+    setKline(generateMockKline(baseP));
+    setPrediction(generateMockPrediction(sym, mId, hor, baseP));
 
     try {
-      // 尝试调用真实后端服务
       const klineData = await inferenceCenterService.getStockKline(sym, 60);
       if (klineData && klineData.length > 0) {
         setKline(klineData);
@@ -289,48 +262,42 @@ export const InferenceCenterPage: React.FC = () => {
 
       if (res && res.status === 'success') {
         setPrediction(res);
-        message.success(`已完成 ${res.stock_name} (${res.symbol}) 的 T+${hor} 真实模型推理`);
+        message.success(`已完成 ${res.stock_name} 的 T+${hor} 模型推理`);
       }
     } catch (e: any) {
-      console.warn('后端预测接口暂未就绪，已切换为高精度离线模拟推理:', e);
+      console.warn('后端预测接口暂未就绪，使用离线高精模拟:', e);
     } finally {
       setLoading(false);
     }
   }, [symbol, selectedModelId, horizon, inferenceDate, currentMarket]);
 
-  // 切换模型时自动重算
-  const handleSelectModel = (modelId: string) => {
-    setSelectedModelId(modelId);
-    handleRunInference(symbol, modelId, horizon);
-  };
-
   const getRatingBadge = (rating: string) => {
     switch (rating) {
       case 'STRONG_BUY':
         return (
-          <div className="flex items-center gap-2 text-emerald-700 bg-emerald-100/90 border border-emerald-200/80 px-3.5 py-1.5 rounded-xl font-black text-sm shadow-xs">
-            <span className="w-2.5 h-2.5 rounded-full bg-emerald-500 animate-pulse" />
+          <div className="flex items-center gap-1.5 text-emerald-700 bg-emerald-100/90 border border-emerald-200 px-3 py-1 rounded-xl font-black text-xs">
+            <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse" />
             强烈看多 (STRONG BUY)
           </div>
         );
       case 'BUY':
         return (
-          <div className="flex items-center gap-2 text-blue-700 bg-blue-100/90 border border-blue-200/80 px-3.5 py-1.5 rounded-xl font-black text-sm shadow-xs">
-            <span className="w-2.5 h-2.5 rounded-full bg-blue-500" />
+          <div className="flex items-center gap-1.5 text-blue-700 bg-blue-100/90 border border-blue-200 px-3 py-1 rounded-xl font-black text-xs">
+            <span className="w-2 h-2 rounded-full bg-blue-500" />
             偏多研判 (BUY)
           </div>
         );
       case 'HOLD':
         return (
-          <div className="flex items-center gap-2 text-slate-700 bg-slate-100 border border-slate-200 px-3.5 py-1.5 rounded-xl font-black text-sm">
-            <span className="w-2.5 h-2.5 rounded-full bg-slate-400" />
+          <div className="flex items-center gap-1.5 text-slate-700 bg-slate-100 border border-slate-200 px-3 py-1 rounded-xl font-black text-xs">
+            <span className="w-2 h-2 rounded-full bg-slate-400" />
             中性观望 (HOLD)
           </div>
         );
       default:
         return (
-          <div className="flex items-center gap-2 text-rose-700 bg-rose-100 border border-rose-200 px-3.5 py-1.5 rounded-xl font-black text-sm shadow-xs">
-            <span className="w-2.5 h-2.5 rounded-full bg-rose-500" />
+          <div className="flex items-center gap-1.5 text-rose-700 bg-rose-100 border border-rose-200 px-3 py-1 rounded-xl font-black text-xs">
+            <span className="w-2 h-2 rounded-full bg-rose-500" />
             看空警示 (SELL)
           </div>
         );
@@ -338,212 +305,210 @@ export const InferenceCenterPage: React.FC = () => {
   };
 
   return (
-    <div className="w-full h-full relative overflow-hidden flex gap-4 p-5 pt-2 pb-20 select-none">
-      {/* ================= 左侧：模型库与推理引擎栏 ================= */}
-      <div className="w-80 shrink-0 flex flex-col bg-white/75 backdrop-blur-xl rounded-3xl border border-white/80 shadow-xs p-4 overflow-hidden">
-        {/* 头部标题 */}
+    <div className="w-full h-full relative overflow-hidden flex gap-4 p-5 pt-3 pb-20 select-none">
+      {/* ================= 左侧：推理配置中心 (Unified Control Center) ================= */}
+      <div className="w-80 shrink-0 flex flex-col bg-white/80 backdrop-blur-xl rounded-3xl border border-white/90 shadow-xs p-4 overflow-hidden">
+        {/* 顶部标题 */}
         <div className="flex items-center justify-between pb-3 border-b border-slate-100 mb-3 px-1">
-          <div className="flex items-center gap-2.5">
-            <div className="w-8 h-8 rounded-xl bg-blue-50 border border-blue-100 flex items-center justify-center text-blue-600">
-              <Cpu className="w-4 h-4" />
+          <div className="flex items-center gap-2">
+            <div className="w-7 h-7 rounded-lg bg-blue-50 border border-blue-100 flex items-center justify-center text-blue-600">
+              <Sliders className="w-4 h-4" />
             </div>
             <div>
-              <h3 className="text-sm font-black text-slate-800 m-0 whitespace-nowrap">模型推理引擎</h3>
-              <p className="text-[10px] text-slate-400 m-0 whitespace-nowrap">选择推理架构与分位数模型</p>
+              <h3 className="text-sm font-black text-slate-800 m-0">推理参数配置</h3>
+              <p className="text-[10px] text-slate-400 m-0">标的 · 周期 · 模型选型</p>
             </div>
           </div>
-          <span className="text-[10px] font-bold text-blue-600 bg-blue-50 px-2 py-0.5 rounded-md border border-blue-100 whitespace-nowrap">
-            {models.length} 个模型
-          </span>
+          <span className="w-2 h-2 rounded-full bg-emerald-500" />
         </div>
 
-        {/* 模型类别过滤 Tab */}
-        <div className="grid grid-cols-4 gap-1 p-1 bg-slate-100/70 rounded-xl mb-3">
-          {[
-            { id: 'all', label: '全部' },
-            { id: 'dl', label: '深度时序' },
-            { id: 'tree', label: '树模型' },
-            { id: 'ensemble', label: '集成' },
-          ].map(tab => (
-            <button
-              key={tab.id}
-              type="button"
-              onClick={() => setModelCategoryFilter(tab.id as any)}
-              className={`text-[11px] font-bold py-1 rounded-lg transition-all whitespace-nowrap ${
-                modelCategoryFilter === tab.id
-                  ? 'bg-white text-blue-600 shadow-xs'
-                  : 'text-slate-500 hover:text-slate-800'
-              }`}
-            >
-              {tab.label}
-            </button>
-          ))}
+        {/* 控件区 */}
+        <div className="flex flex-col gap-3.5 mb-3">
+          {/* 1. 标的选择 */}
+          <div className="flex flex-col gap-1">
+            <span className="text-[11px] font-bold text-slate-500 flex items-center gap-1">
+              <Search className="w-3 h-3 text-blue-500" /> 目标个股
+            </span>
+            <div className="grid grid-cols-2 gap-1.5">
+              <Input
+                placeholder="如 SH600519"
+                value={symbol}
+                onChange={e => setSymbol(e.target.value.toUpperCase())}
+                style={{ height: 32, borderRadius: 8, fontWeight: 700 }}
+              />
+              <Select
+                value={symbol}
+                onChange={val => {
+                  setSymbol(val);
+                  handleRunInference(val);
+                }}
+                style={{ height: 32 }}
+                options={POPULAR_STOCKS.map(s => ({
+                  label: `${s.name}`,
+                  value: s.symbol,
+                }))}
+              />
+            </div>
+          </div>
+
+          {/* 2. 预测周期 */}
+          <div className="flex flex-col gap-1">
+            <span className="text-[11px] font-bold text-slate-500 flex items-center gap-1">
+              <Clock className="w-3 h-3 text-indigo-500" /> 预测周期 (Horizon)
+            </span>
+            <Select
+              value={horizon}
+              onChange={val => setHorizon(val)}
+              style={{ width: '100%', height: 32 }}
+              options={[
+                { label: 'T+1 次日预期', value: 1 },
+                { label: 'T+3 短线周期', value: 3 },
+                { label: 'T+5 一周趋势 (推荐)', value: 5 },
+                { label: 'T+10 双周展望', value: 10 },
+              ]}
+            />
+          </div>
+
+          {/* 3. 基准日期 */}
+          <div className="flex flex-col gap-1">
+            <span className="text-[11px] font-bold text-slate-500 flex items-center gap-1">
+              <Calendar className="w-3 h-3 text-amber-500" /> 基准日期 (支持历史盲测)
+            </span>
+            <DatePicker
+              value={inferenceDate}
+              onChange={d => setInferenceDate(d)}
+              style={{ width: '100%', height: 32, borderRadius: 8 }}
+              allowClear={false}
+            />
+          </div>
         </div>
 
-        {/* 模型卡片滚动列表 */}
-        <div className="flex-1 min-h-0 overflow-y-auto flex flex-col gap-2.5 pr-1">
-          {filteredModels.map(m => {
-            const isSelected = selectedModelId === m.modelId;
-            return (
-              <motion.div
-                key={m.modelId}
-                whileHover={{ scale: 1.01 }}
-                whileTap={{ scale: 0.99 }}
-                onClick={() => handleSelectModel(m.modelId)}
-                className={`p-3 rounded-2xl border transition-all cursor-pointer relative overflow-hidden ${
-                  isSelected
-                    ? 'bg-gradient-to-br from-blue-50/90 to-indigo-50/50 border-blue-300 shadow-sm ring-2 ring-blue-500/20'
-                    : 'bg-white/80 hover:bg-white border-slate-100 hover:border-slate-200 shadow-xs'
+        {/* 4. 模型架构选型 */}
+        <div className="flex flex-col flex-1 min-h-0 pt-2 border-t border-slate-100">
+          <div className="flex items-center justify-between mb-2">
+            <span className="text-[11px] font-bold text-slate-500 flex items-center gap-1">
+              <Cpu className="w-3 h-3 text-blue-500" /> 推理架构
+            </span>
+            <span className="text-[10px] text-blue-600 bg-blue-50 px-1.5 py-0.2 rounded font-mono">
+              {filteredModels.length} 个
+            </span>
+          </div>
+
+          {/* 分类过滤 Tab */}
+          <div className="grid grid-cols-4 gap-1 p-0.5 bg-slate-100/70 rounded-lg mb-2">
+            {[
+              { id: 'all', label: '全部' },
+              { id: 'dl', label: '时序' },
+              { id: 'tree', label: '树模' },
+              { id: 'ensemble', label: '集成' },
+            ].map(tab => (
+              <button
+                key={tab.id}
+                type="button"
+                onClick={() => setModelCategoryFilter(tab.id as any)}
+                className={`text-[10px] font-bold py-0.5 rounded transition-all ${
+                  modelCategoryFilter === tab.id
+                    ? 'bg-white text-blue-600 shadow-xs'
+                    : 'text-slate-500 hover:text-slate-800'
                 }`}
               >
-                {/* 选中高亮指示条 */}
-                {isSelected && (
-                  <div className="absolute top-0 left-0 bottom-0 w-1 bg-blue-600 rounded-r" />
-                )}
+                {tab.label}
+              </button>
+            ))}
+          </div>
 
-                <div className="flex items-center justify-between mb-1.5">
-                  <div className="flex items-center gap-2 min-w-0 pr-2">
+          {/* 模型列表 */}
+          <div className="flex-1 min-h-0 overflow-y-auto flex flex-col gap-1.5 pr-0.5">
+            {filteredModels.map(m => {
+              const isSelected = selectedModelId === m.modelId;
+              return (
+                <div
+                  key={m.modelId}
+                  onClick={() => setSelectedModelId(m.modelId)}
+                  className={`p-2.5 rounded-xl border transition-all cursor-pointer relative ${
+                    isSelected
+                      ? 'bg-gradient-to-r from-blue-50 to-indigo-50/50 border-blue-300 shadow-xs'
+                      : 'bg-white/90 hover:bg-white border-slate-100'
+                  }`}
+                >
+                  <div className="flex items-center justify-between mb-1">
                     <span className="text-xs font-black text-slate-800 truncate">{m.modelName}</span>
+                    <Tag color={m.quantileSupport ? 'green' : 'default'} className="text-[9px] px-1 py-0 m-0 border-0">
+                      {m.tag}
+                    </Tag>
                   </div>
-                  <Tag
-                    color={m.quantileSupport ? 'green' : 'default'}
-                    className="text-[9px] font-mono px-1.5 py-0 m-0 rounded border-0 whitespace-nowrap"
-                  >
-                    {m.tag}
-                  </Tag>
-                </div>
-
-                <p className="text-[11px] text-slate-400 line-clamp-2 mb-2 leading-relaxed">
-                  {m.description}
-                </p>
-
-                <div className="flex items-center justify-between pt-2 border-t border-slate-100/80 text-[10px]">
-                  <div className="flex items-center gap-3">
-                    <span className="text-slate-400 whitespace-nowrap">IC: <strong className="text-slate-700 font-mono">{m.accuracy}</strong></span>
-                    <span className="text-slate-400 whitespace-nowrap">Sharpe: <strong className="text-slate-700 font-mono">{m.sharpe}</strong></span>
+                  <div className="flex items-center justify-between text-[10px] text-slate-400">
+                    <span>IC: <strong className="text-slate-700 font-mono">{m.accuracy}</strong></span>
+                    {m.quantileSupport && (
+                      <span className="text-emerald-600 font-bold flex items-center gap-0.5">
+                        <Sparkles className="w-2.5 h-2.5" /> 10-50-90%
+                      </span>
+                    )}
                   </div>
-                  {m.quantileSupport && (
-                    <span className="text-emerald-600 font-bold flex items-center gap-0.5 whitespace-nowrap">
-                      <Sparkles className="w-2.5 h-2.5" /> 10-50-90%
-                    </span>
-                  )}
                 </div>
-              </motion.div>
-            );
-          })}
+              );
+            })}
+          </div>
         </div>
 
-        {/* 底部当前模型技术规格 */}
-        <div className="mt-3 pt-3 border-t border-slate-100 bg-slate-50/80 rounded-2xl p-3 text-[11px]">
-          <div className="flex items-center justify-between text-slate-500 mb-1">
-            <span className="whitespace-nowrap">当前架构:</span>
-            <span className="font-bold text-slate-800 uppercase font-mono">{currentSelectedModel.modelType}</span>
-          </div>
-          <div className="flex items-center justify-between text-slate-500">
-            <span className="whitespace-nowrap">推荐周期:</span>
-            <span className="font-bold text-blue-600">{currentSelectedModel.horizonDesc}</span>
-          </div>
+        {/* 底部「一键开始推理」大按钮 */}
+        <div className="pt-3 mt-2 border-t border-slate-100">
+          <Button
+            type="primary"
+            block
+            icon={loading ? <RefreshCw className="w-4 h-4 animate-spin" /> : <Play className="w-4 h-4 fill-current" />}
+            loading={loading}
+            onClick={() => handleRunInference()}
+            style={{
+              height: 38,
+              borderRadius: 12,
+              fontWeight: 800,
+              fontSize: 13,
+              background: 'linear-gradient(135deg, #2563eb, #3b82f6)',
+              boxShadow: '0 4px 14px rgba(37, 99, 235, 0.28)',
+            }}
+          >
+            开始预测推理
+          </Button>
         </div>
       </div>
 
-      {/* ================= 右侧：标的日期选择 + 预测核心看板 ================= */}
+      {/* ================= 右侧：量化研判看板与预测走势 ================= */}
       <div className="flex-1 min-w-0 flex flex-col gap-3.5 overflow-hidden">
-        {/* 上方：标的与日期选择器 Bar */}
-        <div className="bg-white/75 backdrop-blur-xl rounded-3xl px-6 py-3 border border-white/80 shadow-xs flex items-center justify-between gap-4 shrink-0">
-          {/* 左侧：标的检索与选择 */}
-          <div className="flex items-center gap-3">
-            <div className="w-8 h-8 rounded-xl bg-blue-50 border border-blue-100 flex items-center justify-center text-blue-600 shrink-0">
-              <Search className="w-4 h-4" />
+        {/* 顶部：当前标的综合指标概览 Bar */}
+        <div className="bg-white/80 backdrop-blur-xl rounded-3xl px-6 py-3 border border-white/90 shadow-xs flex items-center justify-between shrink-0">
+          <div className="flex items-center gap-4">
+            <div className="flex items-center gap-2">
+              <span className="text-base font-black text-slate-800">
+                {prediction.stock_name}
+              </span>
+              <span className="text-xs font-mono font-bold text-blue-600 bg-blue-50 px-2 py-0.5 rounded-lg border border-blue-100">
+                {prediction.symbol}
+              </span>
             </div>
-            <div className="flex flex-col">
-              <span className="text-[10px] font-bold text-slate-400 whitespace-nowrap">目标标的 (输入或快捷选择)</span>
-              <div className="flex items-center gap-2">
-                <Input
-                  placeholder="输入代码 (如 SH600519)"
-                  value={symbol}
-                  onChange={e => setSymbol(e.target.value.toUpperCase())}
-                  onPressEnter={() => handleRunInference()}
-                  style={{ width: 170, height: 34, borderRadius: 8, fontWeight: 700 }}
-                />
-                <Select
-                  value={symbol}
-                  onChange={val => {
-                    setSymbol(val);
-                    handleRunInference(val);
-                  }}
-                  style={{ width: 140, height: 34 }}
-                  options={POPULAR_STOCKS.map(s => ({
-                    label: `${s.name} (${s.symbol})`,
-                    value: s.symbol,
-                  }))}
-                />
-              </div>
+            <div className="h-4 w-[1px] bg-slate-200" />
+            <div className="flex items-center gap-4 text-xs">
+              <span className="text-slate-400">基准价格: <strong className="text-slate-700 font-mono">¥{prediction.current_price.toFixed(2)}</strong></span>
+              <span className="text-slate-400">预测周期: <strong className="text-blue-600 font-mono">T+{prediction.horizon}</strong></span>
+              <span className="text-slate-400">采用架构: <strong className="text-slate-700">{currentSelectedModel.modelName}</strong></span>
             </div>
           </div>
 
-          {/* 右侧：预测参数控制组 */}
-          <div className="flex items-center gap-4 shrink-0">
-            {/* 预测周期选择器 */}
-            <div className="flex flex-col">
-              <span className="text-[10px] font-bold text-slate-400 whitespace-nowrap">预测周期 (Horizon)</span>
-              <Select
-                value={horizon}
-                onChange={val => {
-                  setHorizon(val);
-                  handleRunInference(symbol, selectedModelId, val);
-                }}
-                style={{ width: 120, height: 34 }}
-                options={[
-                  { label: 'T+1 次日', value: 1 },
-                  { label: 'T+3 周期', value: 3 },
-                  { label: 'T+5 一周', value: 5 },
-                  { label: 'T+10 双周', value: 10 },
-                ]}
-              />
-            </div>
-
-            {/* 基准日期 */}
-            <div className="flex flex-col">
-              <span className="text-[10px] font-bold text-slate-400 whitespace-nowrap">基准日期 (支持历史盲测)</span>
-              <DatePicker
-                value={inferenceDate}
-                onChange={d => setInferenceDate(d)}
-                style={{ width: 135, height: 34, borderRadius: 8 }}
-                allowClear={false}
-              />
-            </div>
-
-            {/* 触发预测按钮 */}
-            <div className="flex flex-col justify-end">
-              <span className="text-[10px] invisible">action</span>
-              <Button
-                type="primary"
-                icon={loading ? <RefreshCw className="w-4 h-4 animate-spin" /> : <Play className="w-4 h-4 fill-current" />}
-                loading={loading}
-                onClick={() => handleRunInference()}
-                style={{
-                  height: 34,
-                  paddingLeft: 20,
-                  paddingRight: 20,
-                  borderRadius: 10,
-                  fontWeight: 800,
-                  fontSize: 13,
-                  background: 'linear-gradient(135deg, #2563eb, #3b82f6)',
-                  boxShadow: '0 4px 12px rgba(37, 99, 235, 0.25)',
-                }}
-              >
-                开始预测
-              </Button>
+          <div className="flex items-center gap-3">
+            {getRatingBadge(prediction.rating)}
+            <div className="flex items-center gap-1.5 bg-blue-50/80 border border-blue-100 px-3 py-1 rounded-xl">
+              <span className="text-[11px] text-slate-500 font-semibold">上涨概率:</span>
+              <span className="text-xs font-black font-mono text-blue-600">{(prediction.confidence * 100).toFixed(1)}%</span>
             </div>
           </div>
         </div>
 
-        {/* 下方：预测结果看板 */}
-        <div className="flex-1 min-h-0 flex flex-col gap-4 overflow-y-auto pr-1">
-          {/* 上半部：核心图表 (左) + 核心指标研判卡 (右) */}
-          <div className="grid grid-cols-1 lg:grid-cols-3 gap-4" style={{ height: '430px', minHeight: '430px' }}>
-            {/* 左侧 2/3：K线走势 + 未来 10%-50%-90% 走势扇形图 */}
-            <div className="lg:col-span-2 bg-white/75 backdrop-blur-xl rounded-3xl border border-white/80 shadow-xs flex flex-col overflow-hidden">
+        {/* 主内容区 */}
+        <div className="flex-1 min-h-0 flex flex-col gap-3.5 overflow-y-auto pr-0.5">
+          {/* 上半部：核心图表 + 分位数指标看板 */}
+          <div className="grid grid-cols-1 lg:grid-cols-3 gap-3.5" style={{ height: '420px', minHeight: '420px' }}>
+            {/* 左侧 2/3：走势扇形图 */}
+            <div className="lg:col-span-2 bg-white/80 backdrop-blur-xl rounded-3xl border border-white/90 shadow-xs flex flex-col overflow-hidden">
               <StockForecastChart
                 kline={kline}
                 forecast={prediction.forecast_curve}
@@ -553,59 +518,47 @@ export const InferenceCenterPage: React.FC = () => {
               />
             </div>
 
-            {/* 右侧 1/3：综合量化研判看板 */}
-            <div className="bg-white/75 backdrop-blur-xl rounded-3xl p-5 border border-white/80 shadow-xs flex flex-col justify-between">
+            {/* 右侧 1/3：分位数收益与置信指标 */}
+            <div className="bg-white/80 backdrop-blur-xl rounded-3xl p-5 border border-white/90 shadow-xs flex flex-col justify-between">
               <div>
                 <div className="flex items-center justify-between pb-2.5 border-b border-slate-100 mb-3">
-                  <span className="text-xs font-bold text-slate-400">AI 量化预测结论</span>
-                  <Tag color="blue" className="rounded-md font-mono text-[11px] m-0">T+{prediction.horizon} 预期</Tag>
+                  <span className="text-xs font-bold text-slate-500">分位数收益预测指标</span>
+                  <Tag color="cyan" className="rounded font-mono text-[10px] m-0">Pinball Quantiles</Tag>
                 </div>
 
-                <div className="mb-3">
-                  {getRatingBadge(prediction.rating)}
+                {/* 预期回报 */}
+                <div className="p-3.5 bg-slate-50/80 rounded-2xl border border-slate-100 mb-3 text-center">
+                  <span className="text-[11px] text-slate-400 font-semibold block mb-0.5">T+{prediction.horizon} 预期基准收益率 (P50)</span>
+                  <span className={`text-2xl font-black font-mono ${prediction.expected_return >= 0 ? 'text-emerald-600' : 'text-rose-600'}`}>
+                    {prediction.expected_return >= 0 ? `+${prediction.expected_return.toFixed(2)}%` : `${prediction.expected_return.toFixed(2)}%`}
+                  </span>
                 </div>
 
-                {/* 预期收益率与置信度 */}
-                <div className="grid grid-cols-2 gap-2.5 mb-3">
-                  <div className="p-3 bg-slate-50/80 rounded-2xl border border-slate-100">
-                    <span className="text-[10px] text-slate-400 font-semibold block">预期收益率 (P50)</span>
-                    <span className={`text-xl font-black font-mono ${prediction.expected_return >= 0 ? 'text-emerald-600' : 'text-rose-600'}`}>
-                      {prediction.expected_return >= 0 ? `+${prediction.expected_return.toFixed(2)}%` : `${prediction.expected_return.toFixed(2)}%`}
-                    </span>
-                  </div>
-                  <div className="p-3 bg-slate-50/80 rounded-2xl border border-slate-100">
-                    <span className="text-[10px] text-slate-400 font-semibold block">上涨置信概率</span>
-                    <span className="text-xl font-black font-mono text-blue-600">
-                      {(prediction.confidence * 100).toFixed(1)}%
-                    </span>
-                  </div>
-                </div>
-
-                {/* 10%-50%-90% 分位数区间卡 */}
+                {/* 10-50-90% 区间卡 */}
                 <div className="p-3.5 bg-gradient-to-br from-blue-50/60 to-indigo-50/40 rounded-2xl border border-blue-100/60">
                   <div className="flex items-center justify-between mb-2">
-                    <span className="text-xs font-bold text-slate-700">10% - 50% - 90% 置信区间</span>
-                    <Tooltip title="基于分位数回归与 Pinball 损失函数生成的概率置信区间">
+                    <span className="text-xs font-bold text-slate-700">10% - 50% - 90% 扩散区间</span>
+                    <Tooltip title="基于分位数回归模型计算的收益概率置信边界">
                       <Info className="w-3.5 h-3.5 text-slate-400 cursor-pointer" />
                     </Tooltip>
                   </div>
                   <div className="flex items-center justify-between text-center pt-1">
                     <div>
-                      <span className="text-[10px] text-amber-600 font-bold block">10% 悲观下界</span>
+                      <span className="text-[10px] text-amber-600 font-bold block">10% 下界</span>
                       <span className="text-xs font-black font-mono text-amber-600">
                         {prediction.p10_return > 0 ? `+${prediction.p10_return}%` : `${prediction.p10_return}%`}
                       </span>
                     </div>
                     <div className="h-6 w-[1px] bg-slate-200" />
                     <div>
-                      <span className="text-[10px] text-blue-600 font-bold block">50% 基准中枢</span>
+                      <span className="text-[10px] text-blue-600 font-bold block">50% 中枢</span>
                       <span className="text-sm font-black font-mono text-blue-700">
                         {prediction.p50_return > 0 ? `+${prediction.p50_return}%` : `${prediction.p50_return}%`}
                       </span>
                     </div>
                     <div className="h-6 w-[1px] bg-slate-200" />
                     <div>
-                      <span className="text-[10px] text-emerald-600 font-bold block">90% 乐观上界</span>
+                      <span className="text-[10px] text-emerald-600 font-bold block">90% 上界</span>
                       <span className="text-xs font-black font-mono text-emerald-600">
                         +{prediction.p90_return}%
                       </span>
@@ -614,16 +567,15 @@ export const InferenceCenterPage: React.FC = () => {
                 </div>
               </div>
 
-              {/* 底部模型与价格说明 */}
-              <div className="pt-2.5 border-t border-slate-100 flex items-center justify-between text-[11px] text-slate-400">
-                <span className="truncate pr-2">当前架构: <strong className="text-slate-700 font-semibold">{currentSelectedModel.modelName}</strong></span>
-                <span className="shrink-0">基准价: ¥{prediction.current_price.toFixed(2)}</span>
+              <div className="pt-2.5 border-t border-slate-100 text-[11px] text-slate-400 flex items-center justify-between">
+                <span>模型准确率 (IC): <strong className="text-slate-700 font-mono">{currentSelectedModel.accuracy}</strong></span>
+                <span>夏普比率: <strong className="text-slate-700 font-mono">{currentSelectedModel.sharpe}</strong></span>
               </div>
             </div>
           </div>
 
           {/* 下半部：单股因子归因 (左) + 多模型共识 (右) */}
-          <div className="grid grid-cols-1 lg:grid-cols-2 gap-4" style={{ minHeight: '260px' }}>
+          <div className="grid grid-cols-1 lg:grid-cols-2 gap-3.5" style={{ minHeight: '250px' }}>
             <FeatureDriversPanel drivers={prediction.drivers} />
             <ModelConsensusPanel consensus={prediction.consensus} consensusScore={prediction.consensus_score} />
           </div>
