@@ -487,36 +487,36 @@ const RealTradingPage: React.FC = () => {
             {/* Bottom Section - Sidebar & Content */}
             <div className="flex-1 min-h-0 flex bg-white/85 backdrop-blur-xl rounded-2xl shadow-xs border border-white/90 overflow-hidden">
                 {/* Left Sidebar - Navigation */}
-                <div className="w-[220px] flex flex-col border-r border-slate-100 bg-slate-50/40">
-                    <div className="flex-1 overflow-y-auto py-3 px-2.5 space-y-1 custom-scrollbar">
-                        <div className="px-3 mb-2">
-                            <span className="text-[11px] font-bold text-slate-400 uppercase tracking-wider">功能导航</span>
+                <div className="w-[230px] flex flex-col border-r border-slate-100 bg-slate-50/50">
+                    <div className="flex-1 overflow-y-auto py-3.5 px-3 space-y-1.5 custom-scrollbar">
+                        <div className="px-3 mb-2.5">
+                            <span className="text-xs font-extrabold text-slate-400 uppercase tracking-wider">功能导航</span>
                         </div>
                         {tabs.map(tab => (
                             <button
                                 key={tab.id}
                                 onClick={() => setActiveTab(tab.id)}
-                                className={`w-full flex items-center gap-2.5 px-3.5 py-2.5 rounded-xl text-xs font-semibold transition-all duration-200
+                                className={`w-full flex items-center gap-3 px-4 py-3 rounded-xl text-[13.5px] font-bold transition-all duration-200
                                     ${activeTab === tab.id
-                                        ? 'bg-white text-blue-600 border border-blue-100 shadow-2xs'
-                                        : 'text-slate-600 hover:text-slate-900 hover:bg-slate-100/60'
+                                        ? 'bg-white text-blue-600 border border-blue-200/80 shadow-2xs'
+                                        : 'text-slate-600 hover:text-slate-900 hover:bg-slate-100/70 font-semibold'
                                     }
                                 `}
                             >
-                                <tab.icon size={16} className={activeTab === tab.id ? 'text-blue-500' : 'text-slate-400'} />
+                                <tab.icon size={18} className={activeTab === tab.id ? 'text-blue-500' : 'text-slate-400'} />
                                 {tab.label}
                             </button>
                         ))}
                     </div>
 
                     {/* Bottom Help Center + Trading Mode Disclaimer Popover */}
-                    <div className="p-3 border-t border-slate-100 shrink-0 bg-slate-50/70 space-y-2">
-                        <div className="flex items-center justify-between gap-1">
-                            <HelpCenterLink className="whitespace-nowrap flex-1" />
+                    <div className="p-3.5 border-t border-slate-100 shrink-0 bg-slate-50/80 space-y-2">
+                        <div className="flex items-center justify-between gap-1.5">
+                            <HelpCenterLink className="whitespace-nowrap flex-1 text-xs font-semibold" />
                             <Popover
                                 title={
-                                    <div className="font-semibold text-xs text-slate-800 flex items-center gap-1.5">
-                                        <AlertTriangle size={13} className={tradingMode === 'real' ? 'text-emerald-500' : 'text-amber-500'} />
+                                    <div className="font-bold text-xs text-slate-800 flex items-center gap-1.5">
+                                        <AlertTriangle size={14} className={tradingMode === 'real' ? 'text-emerald-500' : 'text-amber-500'} />
                                         {tradingMode === 'real' ? '实盘(通达信) 规则说明' : '模拟盘撮合规则与免责声明'}
                                     </div>
                                 }
@@ -531,8 +531,8 @@ const RealTradingPage: React.FC = () => {
                                 }
                                 placement="topRight"
                             >
-                                <span className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-lg text-[11px] font-semibold border cursor-pointer hover:shadow-2xs transition-all ${tradingMode === 'real' ? 'bg-emerald-50 text-emerald-700 border-emerald-200' : 'bg-amber-50 text-amber-700 border-amber-200'}`}>
-                                    <AlertTriangle size={11} className={tradingMode === 'real' ? 'text-emerald-600' : 'text-amber-600'} />
+                                <span className={`inline-flex items-center gap-1 px-2.5 py-1 rounded-lg text-xs font-bold border cursor-pointer hover:shadow-2xs transition-all ${tradingMode === 'real' ? 'bg-emerald-50 text-emerald-700 border-emerald-200' : 'bg-amber-50 text-amber-700 border-amber-200'}`}>
+                                    <AlertTriangle size={12} className={tradingMode === 'real' ? 'text-emerald-600' : 'text-amber-600'} />
                                     {tradingMode === 'real' ? '实盘规则' : '模拟规则'}
                                 </span>
                             </Popover>

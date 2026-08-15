@@ -1298,33 +1298,84 @@ function SessionCard({
                     </div>
                 )}
 
-                {/* Session info */}
-                <div className="grid grid-cols-4 gap-4 text-sm">
-                    <div>
-                        <span className="text-xs text-gray-400">区间</span>
-                        <p className="font-medium">{session.start_date} ~ {session.end_date}</p>
+                {/* Core Metrics 4-Grid Cards */}
+                <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
+                    {/* 1. Progress & Cursor */}
+                    <div className="bg-slate-50/80 rounded-xl p-3.5 border border-slate-200/70 flex flex-col justify-between">
+                        <div className="flex items-center justify-between text-xs text-slate-500 mb-1">
+                            <span className="font-semibold">推演进度</span>
+                            <span className="font-mono font-bold text-slate-700">{session.sessions_done} / {session.sessions_total} 天</span>
+                        </div>
+                        <div className="w-full h-1.5 bg-slate-200/80 rounded-full overflow-hidden my-1.5">
+                            <div
+                                className="h-full bg-blue-600 rounded-full transition-all duration-300"
+                                style={{ width: `${session.sessions_total ? (session.sessions_done / session.sessions_total) * 100 : 0}%` }}
+                            />
+                        </div>
+                        <div className="flex items-center justify-between text-[11px] text-slate-400 mt-1">
+                            <span>游标: <b className="font-mono text-slate-600">{session.cursor_date ?? '—'}</b></span>
+                            <span className="font-mono">{session.start_date} ~ {session.end_date}</span>
+                        </div>
                     </div>
-                    <div>
-                        <span className="text-xs text-gray-400">进度</span>
-                        <p className="font-medium">{session.sessions_done} / {session.sessions_total} 天</p>
+
+                    {/* 2. Total Assets */}
+                    <div className="bg-slate-50/80 rounded-xl p-3.5 border border-slate-200/70 flex flex-col justify-between">
+                        <div className="text-xs font-semibold text-slate-500 mb-0.5">当前总资产</div>
+                        <div className="text-xl font-black text-slate-900 font-mono tracking-tight my-0.5">
+                            ¥ {(lastResult?.snapshot?.total_asset ?? session.initial_cash ?? 1000000).toLocaleString('zh-CN', { maximumFractionDigits: 0 })}
+                        </div>
+                        <div className="text-[11px] text-slate-400">
+                            初始本金: ¥ {(session.initial_cash ?? 1000000).toLocaleString('zh-CN', { maximumFractionDigits: 0 })}
+                        </div>
                     </div>
-                    <div>
-                        <span className="text-xs text-gray-400">游标</span>
-                        <p className="font-medium">{session.cursor_date ?? '—'}</p>
-                    </div>
-                    <div>
-                        <span className="text-xs text-gray-400">累计盈亏</span>
-                        <p className={`font-medium ${pnl >= 0 ? 'text-green-600' : 'text-red-600'}`}>
+
+                    {/* 3. Cumulative PnL */}
+                    <div className={`rounded-xl p-3.5 border flex flex-col justify-between ${
+                        pnl >= 0 ? 'bg-red-50/50 border-red-100' : 'bg-emerald-50/50 border-emerald-100'
+                    }`}>
+                        <div className="flex items-center justify-between text-xs mb-0.5">
+                            <span className={`font-semibold ${pnl >= 0 ? 'text-red-700' : 'text-emerald-700'}`}>累计盈亏</span>
+                            <span className={`text-[10px] font-bold px-1.5 py-0.2 rounded ${
+                                pnl >= 0 ? 'bg-red-100/80 text-red-700' : 'bg-emerald-100/80 text-emerald-700'
+                            }`}>
+                                {pnl >= 0 ? '+' : ''}{((pnl / (session.initial_cash || 1000000)) * 100).toFixed(2)}%
+                            </span>
+                        </div>
+                        <div className={`text-xl font-black font-mono tracking-tight my-0.5 ${pnl >= 0 ? 'text-red-600' : 'text-emerald-600'}`}>
                             {pnl >= 0 ? '+' : ''}{pnl.toLocaleString('zh-CN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
-                        </p>
+                        </div>
+                        <div className="text-[11px] text-slate-400">
+                            日盈亏: <span className={`font-mono font-semibold ${(lastResult?.snapshot?.day_pnl ?? 0) >= 0 ? 'text-red-600' : 'text-emerald-600'}`}>
+                                {(lastResult?.snapshot?.day_pnl ?? 0) >= 0 ? '+' : ''}{(lastResult?.snapshot?.day_pnl ?? 0).toFixed(2)}
+                            </span>
+                        </div>
+                    </div>
+
+                    {/* 4. Cash & Market Value */}
+                    <div className="bg-slate-50/80 rounded-xl p-3.5 border border-slate-200/70 flex flex-col justify-between">
+                        <div className="text-xs font-semibold text-slate-500 mb-0.5">资产分布</div>
+                        <div className="space-y-1 my-0.5">
+                            <div className="flex items-center justify-between text-xs">
+                                <span className="text-slate-400">可用现金:</span>
+                                <span className="font-mono font-bold text-slate-700">
+                                    ¥ {(lastResult?.snapshot?.cash ?? session.initial_cash ?? 1000000).toLocaleString('zh-CN', { maximumFractionDigits: 0 })}
+                                </span>
+                            </div>
+                            <div className="flex items-center justify-between text-xs">
+                                <span className="text-slate-400">持仓市值:</span>
+                                <span className="font-mono font-bold text-slate-700">
+                                    ¥ {(lastResult?.snapshot?.market_value ?? 0).toLocaleString('zh-CN', { maximumFractionDigits: 0 })}
+                                </span>
+                            </div>
+                        </div>
                     </div>
                 </div>
 
                 {/* Error */}
                 {(session.error_message || stepError) && (
-                    <div className="flex items-start gap-2 px-3 py-2 rounded-lg bg-red-50 border border-red-100">
-                        <AlertTriangle size={14} className="text-red-500 shrink-0 mt-0.5" />
-                        <p className="text-xs text-red-700">{session.error_message || stepError}</p>
+                    <div className="flex items-start gap-2 px-3.5 py-2.5 rounded-xl bg-red-50 border border-red-100">
+                        <AlertTriangle size={15} className="text-red-500 shrink-0 mt-0.5" />
+                        <p className="text-xs font-medium text-red-700">{session.error_message || stepError}</p>
                     </div>
                 )}
 
@@ -1341,61 +1392,51 @@ function SessionCard({
 
                 {/* Last step result */}
                 {lastResult && (
-                    <div className="space-y-2">
-                        <div className="flex items-center justify-between">
-                            <h4 className="text-xs font-semibold text-gray-500 uppercase tracking-wider">
-                                {lastResult.trade_date} 成交
+                    <div className="space-y-2.5 pt-1">
+                        <div className="flex items-center justify-between bg-slate-50/80 px-3.5 py-2 rounded-xl border border-slate-200/60">
+                            <h4 className="text-xs font-bold text-slate-700 flex items-center gap-2">
+                                <span className="w-2 h-2 rounded-full bg-blue-500"></span>
+                                {lastResult.trade_date} 最近成交快照 ({lastResult.filled.length} 笔成交)
                             </h4>
                             <button
                                 onClick={() => setShowTrades(!showTrades)}
-                                className="text-xs text-gray-400 hover:text-gray-600"
+                                className="text-xs font-medium text-slate-500 hover:text-slate-800 flex items-center gap-1"
                             >
+                                <span>{showTrades ? '收起明细' : '展开明细'}</span>
                                 {showTrades ? <ChevronUp size={14} /> : <ChevronDown size={14} />}
                             </button>
                         </div>
 
                         {showTrades && (
-                            <div className="grid gap-1.5 max-h-40 overflow-y-auto">
+                            <div className="grid gap-1.5 max-h-48 overflow-y-auto pr-1">
                                 {lastResult.filled.map((f, i) => (
-                                    <div key={i} className="flex items-center justify-between px-3 py-1.5 rounded-lg bg-gray-50 text-xs">
-                                        <span className="font-mono">{f.symbol}</span>
-                                        <span className={f.side === 'BUY' ? 'text-red-600' : 'text-green-600'}>
-                                            {f.side === 'BUY' ? '买入' : '卖出'} {f.quantity}@{f.price.toFixed(2)}
+                                    <div key={i} className="flex items-center justify-between px-3.5 py-2 rounded-xl bg-slate-50/90 border border-slate-100 text-xs">
+                                        <div className="flex items-center gap-2">
+                                            <span className={`px-1.5 py-0.5 rounded text-[10px] font-bold ${
+                                                f.side === 'BUY' ? 'bg-red-50 text-red-600 border border-red-200' : 'bg-emerald-50 text-emerald-600 border border-emerald-200'
+                                            }`}>
+                                                {f.side === 'BUY' ? '买入' : '卖出'}
+                                            </span>
+                                            <span className="font-mono font-semibold text-slate-800">{f.symbol}</span>
+                                        </div>
+                                        <span className="font-mono font-medium text-slate-700">
+                                            {f.quantity} 股 @ {f.price.toFixed(2)} 元
                                         </span>
-                                        <span className="text-gray-400">费 {f.total_fee.toFixed(2)}</span>
+                                        <span className="text-slate-400 font-mono">手续费 ¥{f.total_fee.toFixed(2)}</span>
                                     </div>
                                 ))}
                                 {lastResult.rejected.length > 0 && lastResult.rejected.map((r, i) => (
-                                    <div key={`r-${i}`} className="flex items-center justify-between px-3 py-1.5 rounded-lg bg-red-50 text-xs text-red-600">
-                                        <span className="font-mono">{r.symbol}</span>
+                                    <div key={`r-${i}`} className="flex items-center justify-between px-3.5 py-2 rounded-xl bg-red-50/80 border border-red-100 text-xs text-red-600">
+                                        <div className="flex items-center gap-2">
+                                            <span className="px-1.5 py-0.5 rounded text-[10px] font-bold bg-red-100 text-red-700">已拒绝</span>
+                                            <span className="font-mono font-semibold">{r.symbol}</span>
+                                        </div>
                                         <span>{r.side === 'BUY' ? '买入' : '卖出'}</span>
-                                        <span>{r.reason}</span>
+                                        <span className="font-medium">{r.reason}</span>
                                     </div>
                                 ))}
                             </div>
                         )}
-
-                        {/* Snapshot */}
-                        <div className="grid grid-cols-4 gap-3 text-xs text-gray-600">
-                            <div>
-                                <span className="text-gray-400">现金</span>
-                                <p className="font-medium">{lastResult.snapshot.cash.toLocaleString('zh-CN', { maximumFractionDigits: 0 })}</p>
-                            </div>
-                            <div>
-                                <span className="text-gray-400">市值</span>
-                                <p className="font-medium">{lastResult.snapshot.market_value.toLocaleString('zh-CN', { maximumFractionDigits: 0 })}</p>
-                            </div>
-                            <div>
-                                <span className="text-gray-400">总资产</span>
-                                <p className="font-medium">{lastResult.snapshot.total_asset.toLocaleString('zh-CN', { maximumFractionDigits: 0 })}</p>
-                            </div>
-                            <div>
-                                <span className="text-gray-400">日盈亏</span>
-                                <p className={`font-medium ${lastResult.snapshot.day_pnl >= 0 ? 'text-green-600' : 'text-red-600'}`}>
-                                    {lastResult.snapshot.day_pnl >= 0 ? '+' : ''}{lastResult.snapshot.day_pnl.toLocaleString('zh-CN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
-                                </p>
-                            </div>
-                        </div>
                     </div>
                 )}
             </div>
@@ -1410,12 +1451,20 @@ function SessionCard({
 const ReplayPage: React.FC = () => {
     const [sessions, setSessions] = useState<ReplaySession[]>([]);
     const [loading, setLoading] = useState(true);
+    const [showCreate, setShowCreate] = useState(false);
+    const [selectedSessionId, setSelectedSessionId] = useState<string | null>(null);
     const [reportSessionId, setReportSessionId] = useState<string | null>(null);
 
     const loadSessions = useCallback(async () => {
         try {
             const list = await listSessions();
             setSessions(list);
+            // If no selected session and sessions exist, select the first
+            if (list.length > 0) {
+                setSelectedSessionId(prev => (prev && list.some(s => s.session_id === prev) ? prev : list[0].session_id));
+            } else {
+                setShowCreate(true);
+            }
         } catch {
             // ignore
         } finally {
@@ -1435,8 +1484,12 @@ const ReplayPage: React.FC = () => {
         );
     }
 
-    const handleCreate = (_session: ReplaySession) => {
+    const handleCreate = (newSession: ReplaySession) => {
+        setShowCreate(false);
         loadSessions();
+        if (newSession?.session_id) {
+            setSelectedSessionId(newSession.session_id);
+        }
     };
 
     const handleStep = async (
@@ -1457,46 +1510,141 @@ const ReplayPage: React.FC = () => {
             await deleteSession(sessionId);
             const remaining = sessions.filter(s => s.session_id !== sessionId);
             setSessions(remaining);
+            if (selectedSessionId === sessionId) {
+                setSelectedSessionId(remaining.length > 0 ? remaining[0].session_id : null);
+            }
         } catch {
             // ignore
         }
     };
 
+    const activeSession = sessions.find(s => s.session_id === selectedSessionId) ?? (sessions.length > 0 ? sessions[0] : null);
+
     return (
-        <div className="h-full overflow-y-auto p-4 space-y-4">
-            {/* Create form */}
-            <div className="bg-white rounded-2xl shadow-sm border border-gray-100 p-4">
-                <h3 className="text-sm font-semibold text-gray-700 mb-3 flex items-center gap-2">
-                    <Plus size={16} className="text-blue-500" />
-                    新建回放
-                </h3>
-                <CreateSessionForm onCreate={handleCreate} />
+        <div className="h-full flex flex-col overflow-hidden bg-slate-50/30">
+            {/* Top Workspace Header */}
+            <div className="shrink-0 px-5 py-3.5 border-b border-slate-100 bg-white/90 backdrop-blur-md flex items-center justify-between gap-4">
+                <div className="flex items-center gap-3">
+                    <div className="w-9 h-9 rounded-xl bg-blue-50 text-blue-600 flex items-center justify-center border border-blue-100 shadow-2xs">
+                        <Clock size={18} />
+                    </div>
+                    <div>
+                        <div className="flex items-center gap-2">
+                            <h2 className="text-base font-bold text-slate-800 tracking-tight">时光回放推演</h2>
+                            <span className="px-2 py-0.5 rounded-full bg-slate-100 text-slate-600 text-[11px] font-semibold">
+                                {sessions.length} 个推演任务
+                            </span>
+                        </div>
+                        <p className="text-xs text-slate-400">A 股历史行情逐日仿真推演与策略决策执行</p>
+                    </div>
+                </div>
+
+                {/* Right Action Bar */}
+                <div className="flex items-center gap-2.5">
+                    <button
+                        onClick={() => setShowCreate(!showCreate)}
+                        className={`inline-flex items-center gap-1.5 px-4 py-2 rounded-xl text-xs font-bold transition-all shadow-xs ${
+                            showCreate
+                                ? 'bg-slate-100 hover:bg-slate-200 text-slate-700'
+                                : 'bg-gradient-to-r from-blue-600 to-indigo-600 hover:from-blue-700 hover:to-indigo-700 text-white'
+                        }`}
+                    >
+                        <Plus size={15} />
+                        {showCreate ? '返回推演面板' : '新建回放任务'}
+                    </button>
+                </div>
             </div>
 
-            {/* Session list */}
-            <div className="space-y-3">
-                <h3 className="text-sm font-semibold text-gray-700 flex items-center gap-2">
-                    <Clock size={16} className="text-gray-400" />
-                    回放会话
-                </h3>
-
-                {loading ? (
-                    <div className="flex items-center justify-center py-12">
-                        <Loader2 size={24} className="animate-spin text-gray-300" />
+            {/* Main Content Body */}
+            <div className="flex-1 overflow-y-auto p-5 space-y-4 custom-scrollbar">
+                {/* 1. Create Wizard Mode */}
+                {showCreate ? (
+                    <div className="max-w-4xl mx-auto bg-white/95 rounded-2xl border border-slate-200/80 p-5 shadow-xs">
+                        <div className="flex items-center justify-between pb-3 mb-4 border-b border-slate-100">
+                            <div className="flex items-center gap-2">
+                                <Plus size={16} className="text-blue-600" />
+                                <h3 className="text-sm font-bold text-slate-800">新建回放推演任务</h3>
+                            </div>
+                            {sessions.length > 0 && (
+                                <button
+                                    onClick={() => setShowCreate(false)}
+                                    className="text-xs font-semibold text-slate-500 hover:text-slate-800"
+                                >
+                                    取消
+                                </button>
+                            )}
+                        </div>
+                        <CreateSessionForm onCreate={handleCreate} />
                     </div>
-                ) : sessions.length === 0 ? (
-                    <p className="text-sm text-gray-400 text-center py-8">暂无回放会话</p>
                 ) : (
-                    sessions.map(s => (
-                        <SessionCard
-                            key={s.session_id}
-                            session={s}
-                            onStep={handleStep}
-                            onDelete={handleDelete}
-                            onRefresh={loadSessions}
-                            onViewReport={setReportSessionId}
-                        />
-                    ))
+                    /* 2. Session Workspace Mode */
+                    <div className="space-y-4">
+                        {loading ? (
+                            <div className="flex flex-col items-center justify-center py-20 gap-3">
+                                <Loader2 size={28} className="animate-spin text-blue-500" />
+                                <p className="text-xs font-medium text-slate-400">正在加载回放会话列表…</p>
+                            </div>
+                        ) : sessions.length === 0 ? (
+                            <div className="max-w-md mx-auto my-12 p-8 text-center bg-white rounded-2xl border border-slate-100 shadow-xs space-y-3">
+                                <div className="w-12 h-12 mx-auto rounded-2xl bg-blue-50 text-blue-600 flex items-center justify-center">
+                                    <Clock size={24} />
+                                </div>
+                                <h4 className="text-sm font-bold text-slate-800">暂无回放会话</h4>
+                                <p className="text-xs text-slate-400 leading-relaxed">
+                                    创建你的第一个历史行情回放，以仿真方式逐日推演模型策略决策。
+                                </p>
+                                <button
+                                    onClick={() => setShowCreate(true)}
+                                    className="mt-2 inline-flex items-center gap-1.5 px-4 py-2 rounded-xl bg-blue-600 text-white text-xs font-bold hover:bg-blue-700 transition-all shadow-xs"
+                                >
+                                    <Plus size={14} />
+                                    立即新建回放
+                                </button>
+                            </div>
+                        ) : (
+                            <>
+                                {/* Multiple Sessions Switcher Bar */}
+                                {sessions.length > 1 && (
+                                    <div className="flex items-center gap-2 overflow-x-auto pb-1">
+                                        <span className="text-xs font-bold text-slate-400 shrink-0 mr-1">会话切换:</span>
+                                        {sessions.map(s => {
+                                            const isSelected = s.session_id === selectedSessionId;
+                                            return (
+                                                <button
+                                                    key={s.session_id}
+                                                    onClick={() => setSelectedSessionId(s.session_id)}
+                                                    className={`shrink-0 flex items-center gap-2 px-3.5 py-2 rounded-xl text-xs font-bold transition-all ${
+                                                        isSelected
+                                                            ? 'bg-blue-600 text-white shadow-xs'
+                                                            : 'bg-white text-slate-600 border border-slate-200/80 hover:bg-slate-50'
+                                                    }`}
+                                                >
+                                                    <span className="font-mono">{s.start_date} ~ {s.end_date}</span>
+                                                    <span className={`px-1.5 py-0.2 rounded text-[10px] ${
+                                                        isSelected ? 'bg-white/20 text-white' : 'bg-slate-100 text-slate-500'
+                                                    }`}>
+                                                        {s.sessions_done}/{s.sessions_total}天
+                                                    </span>
+                                                </button>
+                                            );
+                                        })}
+                                    </div>
+                                )}
+
+                                {/* Active Session Cockpit */}
+                                {activeSession && (
+                                    <SessionCard
+                                        key={activeSession.session_id}
+                                        session={activeSession}
+                                        onStep={handleStep}
+                                        onDelete={handleDelete}
+                                        onRefresh={loadSessions}
+                                        onViewReport={setReportSessionId}
+                                    />
+                                )}
+                            </>
+                        )}
+                    </div>
                 )}
             </div>
         </div>

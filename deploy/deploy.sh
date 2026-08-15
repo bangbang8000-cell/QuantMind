@@ -804,6 +804,16 @@ step9_start_database() {
         exit 1
     fi
 
+    # 预拉取可选外部镜像（失败仅警告，不中断部署）
+    log_info "预拉取可选外部镜像 (huntly / rsshub / qwenpaw)..."
+    for img in "lcomplete/huntly:latest" "diygod/rsshub:latest" "agentscope/qwenpaw:latest"; do
+        if docker pull "$img" 2>&1; then
+            log_info "可选镜像拉取成功: $img"
+        else
+            log_warn "可选镜像拉取失败（不影响核心服务）: $img"
+        fi
+    done
+
     # 启动数据库和 Redis
     log_info "启动数据库和 Redis..."
     docker compose up -d db redis
@@ -887,11 +897,17 @@ step11_start_backend() {
 
     cd "$PROJECT_DIR"
 
-    log_info "启动后端容器..."
-    docker compose up -d quantmind celery-worker
+    # 核心服务（必需，失败中断）
+    log_info "启动核心服务 (db / redis / quantmind / celery-worker / celery-beat)..."
+    docker compose up -d db redis quantmind celery-worker celery-beat
 
-    log_info "等待后端启动 (20秒)..."
+    log_info "等待核心服务启动 (20秒)..."
     sleep 20
+
+    # 可选服务（web / data-gateway / dashboard / huntly / rsshub / qwenpaw，失败仅警告）
+    log_info "启动可选服务 (web / data-gateway / dashboard / huntly / rsshub / qwenpaw)..."
+    docker compose up -d web data-gateway dashboard huntly rsshub qwenpaw 2>&1 \
+        || log_warn "部分可选服务启动失败（不影响核心服务，可稍后手动启动）"
 
     docker compose ps
 
@@ -1079,14 +1095,22 @@ step16_health_check() {
 
     echo ""
     log_info "端口监听:"
-    ss -tlnp | grep -E ':(8000|8001|8002|8003|5432|6379)' || true
+    ss -tlnp | grep -E ':(3000|5432|6379|8000|8001|8002|8003|8004|8090|8501|1200|8089)' || true
 
     echo ""
-    log_info "服务测试:"
+    log_info "核心服务测试:"
     curl -s http://localhost:8000/health > /dev/null && log_info "API 服务 (8000): ✅" || log_warn "API 服务 (8000): ❌"
     curl -s http://localhost:8001/health > /dev/null && log_info "引擎服务 (8001): ✅" || log_warn "引擎服务 (8001): ❌"
     curl -s http://localhost:8002/health > /dev/null && log_info "交易服务 (8002): ✅" || log_warn "交易服务 (8002): ❌"
     curl -s http://localhost:8003/health > /dev/null && log_info "推送服务 (8003): ✅" || log_warn "推送服务 (8003): ❌"
+
+    echo ""
+    log_info "可选服务测试（失败不影响核心）:"
+    curl -s http://localhost:8004/health > /dev/null && log_info "数据网关 (8004): ✅" || log_warn "数据网关 (8004): 未启动"
+    curl -s http://localhost:3000/health > /dev/null && log_info "Web 前端 (3000): ✅" || log_warn "Web 前端 (3000): 未启动"
+    curl -s http://localhost:8501/_stcore/health > /dev/null && log_info "数据看板 (8501): ✅" || log_warn "数据看板 (8501): 未启动"
+    curl -s http://localhost:8090/api/health > /dev/null && log_info "资讯聚合 (8090): ✅" || log_warn "资讯聚合 (8090): 未启动"
+    curl -s http://localhost:1200/healthz > /dev/null && log_info "RSSHub (1200): ✅" || log_warn "RSSHub (1200): 未启动"
 
     log_done "Step 16"
     save_progress "16"
@@ -1100,10 +1124,17 @@ step17_firewall() {
 
     if command -v ufw &> /dev/null; then
         ufw allow 22/tcp comment 'SSH'
+        ufw allow 80/tcp comment 'QuantMind Web HTTP'
+        ufw allow 3000/tcp comment 'QuantMind Web 前端'
         ufw allow 8000/tcp comment 'QuantMind API'
         ufw allow 8001/tcp comment 'QuantMind Engine'
         ufw allow 8002/tcp comment 'QuantMind Trade'
         ufw allow 8003/tcp comment 'QuantMind Stream'
+        ufw allow 8004/tcp comment 'QuantMind Data Gateway'
+        ufw allow 8501/tcp comment 'QuantMind Dashboard'
+        ufw allow 8090/tcp comment 'Huntly 资讯'
+        ufw allow 1200/tcp comment 'RSSHub'
+        ufw allow 8089/tcp comment 'QwenPaw'
         ufw --force enable
         ufw status
     else
@@ -1128,6 +1159,14 @@ show_info() {
     echo -e "   引擎服务:  ${BLUE}http://${SERVER_IP}:8001${NC}"
     echo -e "   交易服务:  ${BLUE}http://${SERVER_IP}:8002${NC}"
     echo -e "   推送服务:  ${BLUE}http://${SERVER_IP}:8003${NC}"
+    echo ""
+    echo -e "${YELLOW}🔧 可选服务${NC}"
+    echo -e "   数据网关:  ${BLUE}http://${SERVER_IP}:8004${NC}"
+    echo -e "   Web 前端:  ${BLUE}http://${SERVER_IP}:3000${NC}"
+    echo -e "   数据看板:  ${BLUE}http://${SERVER_IP}:8501${NC}"
+    echo -e "   资讯聚合:  ${BLUE}http://${SERVER_IP}:8090${NC}"
+    echo -e "   RSSHub:    ${BLUE}http://${SERVER_IP}:1200${NC}"
+    echo -e "   QwenPaw:   ${BLUE}http://${SERVER_IP}:8089${NC}"
     echo ""
     echo -e "${YELLOW}🖥️ 桌面客户端${NC}"
     echo -e "   QuantMind 采用桌面客户端 + 后端服务架构，请下载桌面客户端"
