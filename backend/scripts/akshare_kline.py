@@ -81,14 +81,19 @@ def _data_dir(market: str) -> Path:
 
 
 def _to_symbol(market: str, code: str) -> str:
-    """代码标准化。HK: 5位→4位+.HK；US: 原样大写。"""
+    """代码标准化。HK: 5位→4位+.HK（容忍输入带 .HK 后缀）；US: 原样大写。"""
     code = code.strip()
     if market == "HK":
-        code = code.zfill(5)
+        code = code.split(".")[0].zfill(5)
         if code.startswith("0") and len(code) == 5:
             code = code[1:]
         return f"{code}.HK"
     return code.upper()
+
+
+def _to_akshare_hk(symbol: str) -> str:
+    """0001.HK → 00001。akshare 港股接口需要 5 位代码。"""
+    return symbol.split(".")[0].zfill(5)
 
 
 def _existing_partitions(market: str) -> set[str]:
@@ -131,7 +136,7 @@ def _fetch_stock(market: str, symbol: str, min_date: str) -> pd.DataFrame | None
 
     try:
         if market == "HK":
-            df = ak.stock_hk_daily(symbol=symbol)
+            df = ak.stock_hk_daily(symbol=_to_akshare_hk(symbol))
         else:
             df = ak.stock_us_daily(symbol=symbol, adjust="")
         if df is None or df.empty:

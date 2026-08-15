@@ -31,7 +31,7 @@ export const MARKET_CONFIGS: Record<AppMarket, MarketConfig> = {
   CN: {
     label: 'A股',
     qlibRegion: 'cn',
-    qlibProviderUri: 'db/qlib_data',
+    qlibProviderUri: '/data/quantdb/.qlib_cache/cn_data',
     defaultUniverse: 'csi300',
     benchmark: 'SH000300',
     benchmarkName: '沪深300',
@@ -42,7 +42,7 @@ export const MARKET_CONFIGS: Record<AppMarket, MarketConfig> = {
   HK: {
     label: '港股',
     qlibRegion: 'cn',
-    qlibProviderUri: 'db/qlib_data/hk_data',
+    qlibProviderUri: '/data/quanthk/.qlib_cache/hk_data',
     defaultUniverse: 'all',
     benchmark: 'HSI',
     benchmarkName: '恒生指数',
@@ -53,7 +53,7 @@ export const MARKET_CONFIGS: Record<AppMarket, MarketConfig> = {
   US: {
     label: '美股',
     qlibRegion: 'us',
-    qlibProviderUri: 'db/qlib_data/us_data',
+    qlibProviderUri: '/data/quantus/.qlib_cache/us_data',
     defaultUniverse: 'all',
     benchmark: 'SPX',
     benchmarkName: '标普500',
@@ -64,7 +64,7 @@ export const MARKET_CONFIGS: Record<AppMarket, MarketConfig> = {
   CRYPTO: {
     label: '区块链',
     qlibRegion: 'cn',
-    qlibProviderUri: 'db/qlib_data/crypto_data',
+    qlibProviderUri: '/data/quantbc/.qlib_cache/bc_data',
     defaultUniverse: 'all',
     benchmark: 'BTC',
     benchmarkName: '比特币',
@@ -75,7 +75,7 @@ export const MARKET_CONFIGS: Record<AppMarket, MarketConfig> = {
   FUTURES: {
     label: '期货',
     qlibRegion: 'cn',
-    qlibProviderUri: 'db/qlib_data/futures_data',
+    qlibProviderUri: '/data/quantfutures/.qlib_cache/futures_data',
     defaultUniverse: 'all',
     benchmark: 'CL.FUT',
     benchmarkName: 'WTI原油',

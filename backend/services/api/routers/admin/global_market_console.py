@@ -268,14 +268,25 @@ def _pick_local_file(spec: DatasetSpec, root: Path, symbol: str | None) -> Path 
     return files[0]
 
 
-def _symbol_choices(spec: DatasetSpec, root: Path) -> dict[str, Any]:
+def _symbol_choices(spec: DatasetSpec, root: Path, market: str) -> dict[str, Any]:
     if spec.layout != "symbol":
         return {}
     d = root / spec.rel_dir
     if not d.is_dir():
         return {}
     stems = sorted(f.stem for f in d.glob("*.parquet") if f.is_file())
-    return {"symbol_total": len(stems), "symbol_choices": stems[:MAX_SYMBOL_CHOICES]}
+    names: dict[str, str] = {}
+    try:
+        from backend.scripts.market_cn_names import _read_security_master
+
+        names = {s: n for s, n in _read_security_master(market).items() if s in stems}
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("security_master 中文名读取失败: %s", exc)
+    return {
+        "symbol_total": len(stems),
+        "symbol_choices": stems[:MAX_SYMBOL_CHOICES],
+        "symbol_names": names,
+    }
 
 
 def make_market_router(*, market: str, env_var: str, default_dir: str, sync_entry: str) -> APIRouter:
@@ -366,7 +377,7 @@ def make_market_router(*, market: str, env_var: str, default_dir: str, sync_entr
                     "rows_total": 0,
                     "columns": [],
                     "data": [],
-                    **_symbol_choices(spec, root),
+                    **_symbol_choices(spec, root, market),
                     "timestamp": _now_iso(),
                 },
             }
@@ -388,7 +399,7 @@ def make_market_router(*, market: str, env_var: str, default_dir: str, sync_entr
                 "column_count": len(columns),
                 "columns": columns,
                 "data": records,
-                **_symbol_choices(spec, root),
+                **_symbol_choices(spec, root, market),
                 "timestamp": _now_iso(),
             },
         }

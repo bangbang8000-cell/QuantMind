@@ -510,6 +510,22 @@ def run(
             log.warning("[%s] 南向资金同步失败: %s", market, exc)
             result["sources"]["hsgt_south"] = {"status": "error", "error": str(exc)}
 
+    # 证券主表 + f10 中文名回填（HK: 新浪全市场 / US: 腾讯行情）。
+    # 放在 yahoo 段之前：即使雅虎未勾选，主表与中文名也保持新鲜。
+    try:
+        from backend.scripts.market_cn_names import (
+            backfill as cn_backfill,
+            build_security_master as cn_master,
+        )
+
+        master_r = cn_master(market)
+        backfill_r = cn_backfill(market, syms, rebuild_master=False)
+        result["cn_names"] = {"master": master_r, "backfill": backfill_r}
+        log.info("[%s] 证券主表=%s 中文名回填=%s", market, master_r, backfill_r)
+    except Exception as exc:  # noqa: BLE001
+        log.warning("[%s] 中文名回填失败: %s", market, exc)
+        result["cn_names"] = {"status": "error", "error": str(exc)}
+
     # yahoo 数据段（雅虎勾选才同步：估值/财务/分析师/持仓等）
     if not yahoo_enabled:
         log.info("[%s] 雅虎数据源未启用（数据源配置），跳过 yahoo 同步", market)
@@ -546,6 +562,16 @@ def run(
         log.info("[%s] %s 快照完成: %s", market, field, r)
         if i < len(snapshot_fields) - 1:
             time.sleep(5)
+
+    # yahoo f10 的 name 是英文长名，同步后再次回填中文名（防覆盖）
+    try:
+        from backend.scripts.market_cn_names import backfill as cn_backfill
+
+        r = cn_backfill(market, syms, rebuild_master=False)
+        result["cn_names"]["backfill_after_yahoo"] = r
+        log.info("[%s] 中文名回填（yahoo 后）: %s", market, r)
+    except Exception as exc:  # noqa: BLE001
+        log.warning("[%s] 中文名回填（yahoo 后）失败: %s", market, exc)
 
     return result
 

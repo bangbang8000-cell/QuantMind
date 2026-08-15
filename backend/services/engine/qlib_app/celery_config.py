@@ -142,6 +142,13 @@ if DAILY_SYNC_ENABLED:
         "kwargs": {"year": 0},
     }
 
+# 市场定时同步调度检查（每分钟，具体触发时间由前端每市场配置，存 Redis）
+if os.getenv("MARKET_SYNC_SCHEDULE_ENABLED", "true").lower() == "true":
+    beat_schedule["market-sync-dispatch"] = {
+        "task": "engine.tasks.dispatch_market_sync",
+        "schedule": crontab(minute="*", hour="*"),
+    }
+
 # Strategy Lab daily scan — runs after the data sync settles (Day 16)
 if os.getenv("STRATEGY_LAB_SCAN_ENABLED", "true").lower() == "true":
     beat_schedule["strategy-lab-daily-scan"] = {

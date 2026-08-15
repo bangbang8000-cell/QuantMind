@@ -137,6 +137,7 @@ export interface QuantDBPreview {
     data: Array<Record<string, unknown>>;
     symbol_total?: number;
     symbol_choices?: string[];
+    symbol_names?: Record<string, string>;
     timestamp: string;
 }
 
