@@ -140,13 +140,18 @@ pm2 status
 |-----|------|------|
 | 80 | Nginx | HTTP 入口 |
 | 443 | Nginx | HTTPS 入口 |
-| 3000 | Frontend | 前端服务 |
+| 3000 | Web Frontend | Web 前端（容器）|
 | 8000 | API | 后端 API |
 | 8001 | Engine | 回测引擎 |
 | 8002 | Trade | 交易服务 |
 | 8003 | Stream | 实时行情 |
+| 8004 | Data Gateway | 多数据源金融数据网关 |
 | 5432 | PostgreSQL | 数据库 |
 | 6379 | Redis | 缓存 |
+| 8501 | Dashboard | 数据看板 (Streamlit) |
+| 8090 | Huntly | 财经资讯聚合 |
+| 1200 | RSSHub | RSS 源生成 |
+| 8089 | QwenPaw | QuantBot 聊天机器人 |
 
 ## 故障排查
 
