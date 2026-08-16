@@ -19,6 +19,8 @@ try:
         cell_numeric_value,
         extract_cover_meta,
         build_footer_text,
+        display_width_em,
+        fit_col_widths,
     )
 except ImportError:
     render_inline_md = None
@@ -28,6 +30,8 @@ except ImportError:
     cell_numeric_value = None
     extract_cover_meta = None
     build_footer_text = None
+    display_width_em = None
+    fit_col_widths = None
 
 import pytest
 
@@ -214,3 +218,42 @@ def test_footer_text_contains_page_numbers():
     assert "第 3 页" in footer
     assert "共 12 页" in footer
     assert "不构成投资建议" in footer
+
+
+# ---------- 表格列宽自适应 ----------
+
+
+def test_display_width_cjk_wider_than_ascii():
+    # CJK 全宽 1.0em，ASCII 半宽 0.52em
+    assert display_width_em("中文") > display_width_em("ab")
+    assert display_width_em("中") == 1.0
+    assert display_width_em("a") == 0.52
+
+
+def test_display_width_strips_markdown_bold():
+    assert display_width_em("**观望**") == display_width_em("观望")
+
+
+def test_fit_col_widths_sums_to_available():
+    header = ["维度", "评级", "核心依据"]
+    data = [["市场环境", "偏空", "熊市信号，强行业 0 个"]]
+    widths = fit_col_widths(header, data, 174)
+    assert len(widths) == 3
+    # 未超宽时不做缩放，各列宽度为正
+    assert all(w > 0 for w in widths)
+
+
+def test_fit_col_widths_scales_when_overflow():
+    # 内容极宽（远超可用 174mm）→ 缩放后总和接近可用宽
+    header = ["维度", "核心依据（带数值）"]
+    data = [["市场环境", "熊市信号，强行业 0 个，建议仓位 0%，上证 3927 > MA20 3870"]]
+    widths = fit_col_widths(header, data, 174)
+    assert sum(widths) <= 174 + 0.01
+
+
+def test_fit_col_widths_caps_single_column():
+    # 单列超长文本被 40% 上限截断
+    header = ["a", "超长列"]
+    data = [["x", "这" * 500]]
+    widths = fit_col_widths(header, data, 174)
+    assert widths[1] <= 174 * 0.40 + 0.01
