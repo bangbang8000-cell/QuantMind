@@ -11,10 +11,13 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import math
 import re
+import threading
 import time
+from concurrent.futures import ThreadPoolExecutor
 from typing import Any
 
 from backend.shared.stock_utils import StockCodeUtil
@@ -24,6 +27,30 @@ logger = logging.getLogger(__name__)
 _CACHE_TTL_SECONDS = 60
 _CACHE_MAX_ENTRIES = 1024
 _CACHE: dict[str, tuple[float, dict[str, Any]]] = {}
+_CACHE_LOCK = threading.Lock()
+
+# 特征读取线程池：DuckDB 连接按线程持有（threading.local），并发过大会同时
+# 打开多套多 GB parquet 视图扫描，故刻意限制为 2 个常驻线程。
+_FEATURE_EXECUTOR: ThreadPoolExecutor | None = None
+_FEATURE_EXECUTOR_LOCK = threading.Lock()
+
+
+def _feature_executor() -> ThreadPoolExecutor:
+    global _FEATURE_EXECUTOR
+    if _FEATURE_EXECUTOR is None:
+        with _FEATURE_EXECUTOR_LOCK:
+            if _FEATURE_EXECUTOR is None:
+                _FEATURE_EXECUTOR = ThreadPoolExecutor(
+                    max_workers=2, thread_name_prefix="qm-features"
+                )
+    return _FEATURE_EXECUTOR
+
+
+async def _offload(coro_func, *args):
+    """在受限线程池中执行同步特征读取，避免阻塞 API 事件循环。"""
+    return await asyncio.get_running_loop().run_in_executor(
+        _feature_executor(), coro_func, *args
+    )
 
 # 批量接口单次上限，避免超大请求拖垮 DuckDB 扫描
 MAX_BATCH_SYMBOLS = 200
@@ -424,20 +451,23 @@ def _build_projected_payload(
 
 
 def _cache_get(symbol: str) -> dict[str, Any] | None:
-    cached = _CACHE.get(symbol)
-    if not cached:
-        return None
-    if (time.monotonic() - cached[0]) > _CACHE_TTL_SECONDS:
-        _CACHE.pop(symbol, None)
-        return None
-    return cached[1]
+    # 缓存现在被事件循环与特征线程池并发访问，读写均加锁
+    with _CACHE_LOCK:
+        cached = _CACHE.get(symbol)
+        if not cached:
+            return None
+        if (time.monotonic() - cached[0]) > _CACHE_TTL_SECONDS:
+            _CACHE.pop(symbol, None)
+            return None
+        return cached[1]
 
 
 def _cache_set(symbol: str, payload: dict[str, Any]) -> None:
-    _CACHE[symbol] = (time.monotonic(), payload)
-    if len(_CACHE) > _CACHE_MAX_ENTRIES:
-        oldest = min(_CACHE.items(), key=lambda kv: kv[1][0])[0]
-        _CACHE.pop(oldest, None)
+    with _CACHE_LOCK:
+        _CACHE[symbol] = (time.monotonic(), payload)
+        if len(_CACHE) > _CACHE_MAX_ENTRIES:
+            oldest = min(_CACHE.items(), key=lambda kv: kv[1][0])[0]
+            _CACHE.pop(oldest, None)
 
 
 def _query_sources(symbols: list[str], *, include_daily: bool = False) -> dict[str, dict[str, Any]] | None:
@@ -503,8 +533,12 @@ def _load_projected_features(
     return {s: _build_projected_payload(s, sources, wanted) for s in symbols}
 
 
-async def get_symbol_full_features(symbol: str) -> dict[str, Any]:
-    """单只股票的全量 QuantDB 特征。"""
+def get_symbol_full_features_sync(symbol: str) -> dict[str, Any]:
+    """单只股票全量特征的同步实现（唯一实现，异步端点经由线程池调用）。
+
+    特征读取链路含 DuckDB/pandas 同步 IO，在 API 单 worker 进程中直接执行
+    会阻塞事件循环导致健康检查超时，因此所有调用方都应走 _offload。
+    """
     normalized = normalize_symbols([symbol])
     if not normalized:
         return {"code": 400, "message": f"无效股票代码: {symbol}", "data": None}
@@ -517,10 +551,15 @@ async def get_symbol_full_features(symbol: str) -> dict[str, Any]:
     return {"code": 200, "data": payload}
 
 
-async def get_batch_full_features(
+async def get_symbol_full_features(symbol: str) -> dict[str, Any]:
+    """单只股票的全量 QuantDB 特征（线程池卸载版）。"""
+    return await _offload(get_symbol_full_features_sync, symbol)
+
+
+def get_batch_full_features_sync(
     symbols: list[str], fields: list[str] | None = None
 ) -> dict[str, Any]:
-    """批量股票的全量 QuantDB 特征（用于表格增强）。
+    """批量股票全量/投影特征的同步实现（唯一实现）。
 
     传入 fields（camelCase）时走投影模式：响应只含这些字段且平铺在 values 下，
     上限提高到 MAX_BATCH_SYMBOLS_PROJECTED，可一次覆盖整个候选池以支持全池筛选。
@@ -550,3 +589,10 @@ async def get_batch_full_features(
             "projected": bool(wanted),
         },
     }
+
+
+async def get_batch_full_features(
+    symbols: list[str], fields: list[str] | None = None
+) -> dict[str, Any]:
+    """批量股票的全量 QuantDB 特征（线程池卸载版，用于表格增强）。"""
+    return await _offload(get_batch_full_features_sync, symbols, fields)

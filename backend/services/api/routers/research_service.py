@@ -7,11 +7,14 @@ import logging
 import math
 import os
 import time
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 from typing import Any
 
 from sqlalchemy import text
 
+from backend.services.api.routers.research_features_service import (
+    get_symbol_full_features,
+)
 from backend.shared.database_manager_v2 import get_session
 from backend.shared.inference_stats import compute_score_distribution
 from backend.shared.redis_sentinel_client import get_redis_sentinel_client
@@ -1354,9 +1357,9 @@ async def predict_single_stock(
             if not target_date and row[2]:
                 latest_date = str(row[2])
 
-        # 获取可用模型列表
-        models_res = await get_available_models(tid, uid, market)
-        available_models = (models_res.get("data") or {}).get("models", [])
+    # 获取可用模型列表（在会话外调用，避免嵌套会话）
+    models_res = await get_available_models(tid, uid, market)
+    available_models = (models_res.get("data") or {}).get("models", [])
 
     # 2. 选定主预测模型
     selected_model = None
@@ -1373,13 +1376,29 @@ async def predict_single_stock(
     chosen_model_type = sel.get("modelType") or sel.get("model_type") or "lightgbm"
 
     # 3. 提取个股关键因子数据用于归因
-    features_data = await get_symbol_full_features_service(normalized_symbol)
-    quant_categories = features_data.get("categories", {})
+    # 特征链路含 DuckDB 同步 IO，get_symbol_full_features 内部已卸载到受限线程池
+    features_res = await get_symbol_full_features(normalized_symbol)
+    if features_res.get("code") != 200:
+        logger.warning(
+            "个股特征提取失败，驱动因子使用默认值: %s", features_res.get("message")
+        )
+        features_res = {"data": {}}
+    quant_categories = features_res.get("data") or {}
 
     # 计算特征驱动力（Top 贡献）
+    # 全量特征载荷按类别平铺在顶层（momentum/fundFlow/volatility/valuation/technical），
+    # 列名为 snake_case；缺失时回退默认值，不影响主预测结果。
     drivers = []
+
+    def _feature_value(category: str, key: str, default: float) -> float:
+        raw = (quant_categories.get(category) or {}).get(key)
+        try:
+            return float(raw) if raw is not None else default
+        except (TypeError, ValueError):
+            return default
+
     # 动量类特征
-    mom_val = float(quant_categories.get("momentum", {}).get("momRet5d", 0.02) or 0.02)
+    mom_val = _feature_value("momentum", "mom_ret_5d", 0.02)
     drivers.append({
         "name": "5日量价动量 (mom_5d)",
         "category": "动量因子",
@@ -1387,17 +1406,17 @@ async def predict_single_stock(
         "impact": round(mom_val * 1.5, 4),
         "direction": "positive" if mom_val >= 0 else "negative",
     })
-    # 资金类特征
-    fund_val = float(quant_categories.get("capitalFlow", {}).get("northNetFlow", 0.015) or 0.015)
+    # 资金类特征（flow_net_amount 已按百万元缩放）
+    fund_val = _feature_value("fundFlow", "flow_net_amount", 0.015)
     drivers.append({
         "name": "主力资金净流入",
         "category": "资金流向",
         "value": round(fund_val, 4),
-        "impact": round(0.018, 4),
-        "direction": "positive",
+        "impact": round(0.018 if fund_val >= 0 else -0.018, 4),
+        "direction": "positive" if fund_val >= 0 else "negative",
     })
     # 波动率特征
-    vol_val = float(quant_categories.get("volatility", {}).get("volStd20d", 0.025) or 0.025)
+    vol_val = _feature_value("volatility", "vol_std_20", 0.025)
     drivers.append({
         "name": "20日历史波动率",
         "category": "波动风险",
@@ -1405,8 +1424,8 @@ async def predict_single_stock(
         "impact": -round(vol_val * 0.4, 4),
         "direction": "negative",
     })
-    # 估值分位数
-    val_val = float(quant_categories.get("valuation", {}).get("peTtm", 24.5) or 24.5)
+    # 估值
+    val_val = _feature_value("valuation", "pe_ttm", 24.5)
     drivers.append({
         "name": "PE估值分位 (pe_ttm)",
         "category": "估值因子",
@@ -1415,9 +1434,9 @@ async def predict_single_stock(
         "direction": "positive",
     })
     # 微观技术指标
-    tech_val = float(quant_categories.get("technical", {}).get("rsi14", 56.2) or 56.2)
+    tech_val = _feature_value("technical", "rsi_6", 56.2)
     drivers.append({
-        "name": "相对强弱指标 (RSI-14)",
+        "name": "相对强弱指标 (RSI-6)",
         "category": "技术指标",
         "value": round(tech_val, 2),
         "impact": round(0.012, 4),
