@@ -21,6 +21,8 @@ try:
         build_footer_text,
         display_width_em,
         fit_col_widths,
+        _EM_TO_MM,
+        _CELL_PAD_MM,
     )
 except ImportError:
     render_inline_md = None
@@ -252,8 +254,28 @@ def test_fit_col_widths_scales_when_overflow():
 
 
 def test_fit_col_widths_caps_single_column():
-    # 单列超长文本被 40% 上限截断
+    # 单列超长文本：每列不低于最长不可断片段（CJK 逐字可断、ASCII 词不可断）
     header = ["a", "超长列"]
     data = [["x", "这" * 500]]
     widths = fit_col_widths(header, data, 174)
-    assert widths[1] <= 174 * 0.40 + 0.01
+    assert widths[1] <= 174 + 0.01
+    assert sum(widths) <= 174 + 0.01
+    # CJK 可断 → 下限很小；两列都为正
+    assert all(w > 0 for w in widths)
+
+
+def test_fit_col_widths_respects_unbreakable_minimum():
+    # ASCII 长词不可断：最小列宽 >= 该词宽度（压不下就接受总宽超限，不能断词竖排）
+    header = ["列"]
+    data = [["UNBREAKABLE_LONG_ASCII_WORD_123"]]
+    widths = fit_col_widths(header, data, 174)
+    seg_mm = len("UNBREAKABLE_LONG_ASCII_WORD_123") * 0.52 * _EM_TO_MM + _CELL_PAD_MM
+    assert widths[0] >= seg_mm - 0.01
+
+
+def test_fit_col_widths_fills_available_when_short():
+    # 内容总宽不足可用宽时按比例放大 → 总和 == 可用宽（表格撑满版面）
+    header = ["维度", "评级"]
+    data = [["市场环境", "偏空"]]
+    widths = fit_col_widths(header, data, 174)
+    assert abs(sum(widths) - 174) < 0.01

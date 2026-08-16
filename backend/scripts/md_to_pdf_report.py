@@ -222,25 +222,63 @@ def display_width_em(text: str) -> float:
 def fit_col_widths(
     header: list[str], data: list[list[str]], available_mm: float
 ) -> list[float]:
-    """按内容估算各列显示宽度，比例分配到可用宽度；超出按比例缩放，单列封顶 40%。
+    """按内容估算各列显示宽度，比例分配到可用宽度。
+
+    规则：
+    - 每列下限 = 该列最长「不可断词」的宽度（CJK 逐字可断、ASCII 词不可断），
+      低于下限文字会竖排
+    - 内容总宽 < 可用宽 → 按比例放大填满版面（表格不挤在左边）
+    - 内容总宽 > 可用宽 → 按比例压缩，但每列不低于下限（保证可读）
 
     available_mm = 页面宽 - 左右 margin（A4 210mm - 36mm = 174mm）。
     """
     ncol = len(header)
-    col_em = []
+    col_em: list[float] = []
+    col_min_em: list[float] = []
     for c in range(ncol):
-        w = display_width_em(header[c]) * 1.15  # 表头粗体略宽
+        # 内容宽：表头粗体 1.15 倍 + 各数据格
+        w = display_width_em(header[c]) * 1.15
         for r in data:
             if c < len(r):
                 w = max(w, display_width_em(r[c]))
         col_em.append(w)
+        # 下限：最长不可断片段（连续 ASCII/数字词）；CJK 逐字可断不计入
+        min_w = max(
+            [display_width_em(seg) for cell in [header[c]] + [r[c] for r in data if c < len(r)]
+             for seg in _unbreakable_segments(cell)]
+            or [0.0]
+        )
+        col_min_em.append(min_w)
     raw = [em * _EM_TO_MM + _CELL_PAD_MM for em in col_em]
+    mins = [em * _EM_TO_MM + _CELL_PAD_MM for em in col_min_em]
     total = sum(raw)
     if total <= available_mm:
-        return raw
-    scale = available_mm / total
-    widths = [min(w * scale, available_mm * _MAX_COL_RATIO) for w in raw]
+        # 未超宽：按比例放大填满版面
+        if total > 0:
+            scale = available_mm / total
+            return [w * scale for w in raw]
+        return [available_mm / ncol] * ncol
+    # 超宽：按剩余可压空间比例压缩，但不低于各自下限
+    widths = list(raw)
+    surplus = sum(widths) - available_mm
+    while surplus > 0.01:
+        squeezable = [i for i in range(ncol) if widths[i] > mins[i] + 0.01]
+        if not squeezable:
+            break
+        room = sum(widths[i] - mins[i] for i in squeezable)
+        cut = min(surplus, room)
+        for i in squeezable:
+            widths[i] -= (widths[i] - mins[i]) * (cut / room)
+        surplus = sum(widths) - available_mm
     return widths
+
+
+def _unbreakable_segments(text: str) -> list[str]:
+    """切出单元格里不可断的连续 ASCII/数字片段（CJK 逐字可断不返回）。
+
+    例：「+24.9% 后回落」→ ['+24.9%']；「SELL 4 条」→ ['SELL', '4']。
+    """
+    return re.findall(r"[^⺀-鿿\s]{2,}", text.replace("**", ""))
 
 
 # ---------- 封面元信息 ----------
@@ -413,8 +451,13 @@ def build_flat_story(content: str, styles: dict) -> list:
                         semantic_cells[(r_idx, c_idx)] = kind
 
             # 列宽按内容自适应（可用宽 = A4 210mm - 左右 margin 36mm）
-            col_widths = fit_col_widths(header, data, 210 - 36)
-            t = Table([header_ps] + rows, repeatRows=1, colWidths=col_widths)
+            # fit_col_widths 返回 mm，但 Table colWidths 单位是 points → ×2.8346
+            col_widths_mm = fit_col_widths(header, data, 210 - 36)
+            t = Table(
+                [header_ps] + rows,
+                repeatRows=1,
+                colWidths=[w * _PT_PER_MM for w in col_widths_mm],
+            )
             cmds = [
                 ("BACKGROUND", (0, 0), (-1, 0), C_PRIMARY),
                 ("LINEBELOW", (0, 0), (-1, 0), 1.2, C_ACCENT),

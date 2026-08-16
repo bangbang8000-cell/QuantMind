@@ -29,7 +29,7 @@ warnings.filterwarnings("ignore")
 
 FONT_DIR = Path(__file__).resolve().parents[1] / "docker" / "training" / "fonts"
 
-# GB2312 一级(0xB0A1-0xD7F9) + 二级(0xD8A1-0xF7FE) + 常用符号 + ASCII
+# GB2312 一级(0xB0A1-0xD7F9) + 二级(0xD8A1-0xF7FE) + 常用符号/箭头/数学运算符 + ASCII
 def _gb2312_charset() -> str:
     chars = set()
     for hi in list(range(0xB0, 0xD8)) + list(range(0xD8, 0xF8)):
@@ -45,6 +45,13 @@ def _gb2312_charset() -> str:
     extra = (
         "＋－×÷＝≈±％‰°℃　、。《》（）【】「」『』—…·“”‘’"
         "：；？！，．／｜＆％①②③④⑤⑥⑦⑧⑨⑩"
+        "▲▼△▽■□◆◇★☆※"
+        # 箭头（U+2190-21FF）：报告里 →/←/↑/↓/↔ 常用
+        + "".join(chr(c) for c in range(0x2190, 0x2200))
+        # 数学运算符（U+2200-22FF）：≠ ≤ ≥ ∈ ∑ √ 等
+        + "".join(chr(c) for c in range(0x2200, 0x2300))
+        # 制表符/区块（U+2500-259F）：│ ─ ┌ 等
+        + "".join(chr(c) for c in range(0x2500, 0x25A0))
         + "".join(chr(c) for c in range(0x20, 0x7F))
     )
     chars.update(extra)
