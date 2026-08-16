@@ -111,6 +111,8 @@ const ReportManagerPage: React.FC = () => {
   const [selected, setSelected] = useState<string | null>(null); // 当前预览的文件
   const [selectedForDelete, setSelectedForDelete] = useState<Set<string>>(new Set<string>());
   const [expandedFolders, setExpandedFolders] = useState<Set<string>>(new Set<string>());
+  /** 展开的股票名子文件夹（键 = "市场/股票名"） */
+  const [expandedSubfolders, setExpandedSubfolders] = useState<Set<string>>(new Set<string>());
   const [newFolderName, setNewFolderName] = useState('');
   const [showNewFolder, setShowNewFolder] = useState(false);
   const [error, setError] = useState('');
@@ -156,6 +158,15 @@ const ReportManagerPage: React.FC = () => {
       const next = new Set(prev);
       if (next.has(folder)) next.delete(folder);
       else next.add(folder);
+      return next;
+    });
+  };
+
+  const toggleSubfolder = (path: string) => {
+    (setExpandedSubfolders as any)((prev: Set<string>) => {
+      const next = new Set(prev);
+      if (next.has(path)) next.delete(path);
+      else next.add(path);
       return next;
     });
   };
@@ -364,6 +375,8 @@ const ReportManagerPage: React.FC = () => {
             border: '1px solid rgba(199,210,254,0.6)',
             backdropFilter: 'blur(8px)',
             overflow: 'hidden',
+            minHeight: '88vh',
+            maxHeight: '88vh',
           }}>
             {/* 左栏标题 + 工具栏 */}
             <div style={{ padding: '14px 16px', borderBottom: '1px solid #e0e7ff' }}>
@@ -591,24 +604,38 @@ const ReportManagerPage: React.FC = () => {
                         {expandedFolders.has(folder.name) && (
                           <div style={{ marginTop: 2 }}>
                             {folder.files.map((f) => renderFileItem(f, 12))}
-                            {subfolders.map((sub) => (
+                            {subfolders.map((sub) => {
+                              const subPath = `${folder.name}/${sub.name}`;
+                              const isSubOpen = expandedSubfolders.has(subPath);
+                              return (
                               <div key={sub.name} style={{ marginTop: 4 }}>
                                 <div
+                                  onClick={() => toggleSubfolder(subPath)}
                                   style={{
                                     display: 'flex',
                                     alignItems: 'center',
                                     gap: 6,
                                     padding: '5px 12px 5px 26px',
+                                    cursor: 'pointer',
+                                    borderRadius: 6,
                                     fontSize: 12,
                                     fontWeight: 500,
                                     color: '#475569',
                                   }}
                                 >
+                                  {isSubOpen ? (
+                                    <ChevronDown style={{ width: 13, height: 13, color: '#94a3b8', flexShrink: 0 }} />
+                                  ) : (
+                                    <ChevronRight style={{ width: 13, height: 13, color: '#94a3b8', flexShrink: 0 }} />
+                                  )}
                                   <Folder style={{ width: 13, height: 13, color: '#94a3b8', flexShrink: 0 }} />
                                   <span style={{ flex: 1 }}>{sub.name}</span>
                                   <span style={{ fontSize: 10, color: '#94a3b8' }}>{sub.files.length}</span>
                                   <button
-                                    onClick={() => handleDeleteFolder(`${folder.name}/${sub.name}`)}
+                                    onClick={(e) => {
+                                      e.stopPropagation();
+                                      handleDeleteFolder(subPath);
+                                    }}
                                     style={{
                                       border: 'none',
                                       background: 'transparent',
@@ -621,9 +648,10 @@ const ReportManagerPage: React.FC = () => {
                                     <Trash2 style={{ width: 11, height: 11 }} />
                                   </button>
                                 </div>
-                                {sub.files.map((f) => renderFileItem(f, 26))}
+                                {isSubOpen && sub.files.map((f) => renderFileItem(f, 26))}
                               </div>
-                            ))}
+                              );
+                            })}
                           </div>
                         )}
                       </div>
