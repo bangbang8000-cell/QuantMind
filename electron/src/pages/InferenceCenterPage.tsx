@@ -274,13 +274,15 @@ export const InferenceCenterPage: React.FC = () => {
   }, [models, selectedModelId]);
 
   // 提交并格式化代码
-  const handleCommitCode = useCallback((raw: string) => {
+  // 注意：不能用 useCallback([]) 包装——handleRunInference 依赖模型/周期/日期/市场
+  // 等状态，空依赖闭包会捕获首次渲染的旧版本，导致切换参数后输入代码仍用旧参数推理
+  const handleCommitCode = (raw: string) => {
     if (!raw.trim()) return;
     const normalized = normalizeStockCode(raw.trim());
     setSymbol(normalized);
     setInputCode(normalized);
     handleRunInference(normalized);
-  }, []);
+  };
 
   // 执行推理
   const handleRunInference = useCallback(async (targetSymbol?: string, targetModelId?: string, targetHorizon?: number) => {

@@ -1340,19 +1340,24 @@ async def predict_single_stock(
     latest_date = target_date or datetime.now().strftime("%Y-%m-%d")
 
     async with get_session(read_only=True) as session:
-        # 获取股票名称与行情
+        # 获取股票名称与行情。stock_daily_latest.stock_name 全表为空，
+        # 名称回退 stocks 表（suffix 格式存储，_norm_symbol_sql 统一归一后比较）
         res = await session.execute(
             text(
-                f"SELECT stock_name, close, trade_date, pct_change, turnover_rate "
-                f"FROM stock_daily_latest "
-                f"WHERE {_norm_symbol_sql('symbol')} = {_norm_symbol_sql(':s')} "
-                f"ORDER BY trade_date DESC LIMIT 1"
+                f"SELECT sdl.stock_name, sdl.close, sdl.trade_date, "
+                f"       sdl.pct_change, sdl.turnover_rate, "
+                f"       (SELECT st.name FROM stocks st "
+                f"        WHERE {_norm_symbol_sql('st.symbol')} = {_norm_symbol_sql('sdl.symbol')} "
+                f"        LIMIT 1) AS name_fallback "
+                f"FROM stock_daily_latest sdl "
+                f"WHERE {_norm_symbol_sql('sdl.symbol')} = {_norm_symbol_sql(':s')} "
+                f"ORDER BY sdl.trade_date DESC LIMIT 1"
             ),
             {"s": normalized_symbol},
         )
         row = res.first()
         if row:
-            stock_name = row[0] or stock_name
+            stock_name = (row[0] or row[5] or stock_name).strip() or stock_name
             latest_close = float(row[1] or 0.0)
             if not target_date and row[2]:
                 latest_date = str(row[2])
