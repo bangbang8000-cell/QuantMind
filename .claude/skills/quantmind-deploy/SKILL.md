@@ -319,9 +319,40 @@ cd /root/QuantMind && setsid nohup bash qm-start.sh > data/logs/backend.log 2>&1
 #    docker-nginx 专属，原生 nginx 直接写 Connection "upgrade"
 
 # 10. 开机自启（无 systemd）：写 /etc/autodl.sh（AutoDL 官方开机钩子，PID1 boot.sh 会调用它）
-#    内容：service cron start + 调用 /root/qm-autostart.sh（pg_ctlcluster + redis --daemonize + nginx + setsid 后端）
+#    内容：service cron start + 调用 /root/qm-autostart.sh（pg_ctlcluster + redis --daemonize + nginx + setsid 后端 + qwenpaw + huntly）
 #    cron 看门狗兜底：apt install cron && service cron start && crontab -e 加 "* * * * * bash /root/qm-watchdog.sh"
 #    ⚠️ .bashrc 自启无效——PID1 是 boot.sh，不经过交互式登录；实例重启后 cron 不自起，必须写进 autodl.sh
+
+### QwenPaw 原生部署（无 Docker）
+```bash
+# 源码来源：本地 docker 容器 agentscope/qwenpaw:latest 里 /app 目录（含构建好的 console/dist）
+# 打包：docker exec qwenpaw tar czf /tmp/qwenpaw-src.tgz src pyproject.toml setup.py  （~15MB，console 已在 src/qwenpaw/console/）
+# 云端：
+conda create -n qwenpaw python=3.11 pip -y          # 注意：conda 可能因网络重试失败但实际创建成功，用 ls envs/qwenpaw/bin 确认
+/root/miniconda3/envs/qwenpaw/bin/pip install -e /root/QwenPaw -i https://mirrors.aliyun.com/pypi/simple/
+/root/miniconda3/envs/qwenpaw/bin/pip install asyncpg redis psycopg2-binary -i https://mirrors.aliyun.com/pypi/simple/
+# 环境变量对齐 docker-compose qwenpaw 段：PYTHONPATH=/app + /app 下符号链接到 QuantMind（backend/config/scripts/working/models/logs/db）
+#   已补 /etc/hosts: db→127.0.0.1、redis→127.0.0.1、qwenpaw→127.0.0.1、copaw→127.0.0.1
+qwenpaw init --defaults --accept-security            # 生成 /app/working/config.json
+qwenpaw app --host 0.0.0.0 --port 8088               # 启动（用 /root/qwenpaw-start.sh 带启动锁）
+# 后端连 QwenPaw：.env.sh 加 QWENPAW_BASE_URL=http://127.0.0.1:8088 + COPAW_BASE_URL，重启后端
+# 前端访问：/api/v1/qwenpaw-ui/ 代理（无需 8088 直接暴露）
+```
+
+### Huntly 原生部署（无 Docker）
+```bash
+# 源码来源：本地 docker cp quantmind-huntly:/app/server.jar（~121MB，scp 约 20 分钟）
+apt-get install -y default-jre-headless               # JRE 11 即可
+java -Xms128m -Xmx1024m -Duser.timezone=GMT+08 -jar server.jar \
+  --spring.profiles.active=default --server.port=8090 \
+  --huntly.dataDir=/root/huntly/data/ --huntly.luceneDir=/root/huntly/data/lucene
+# ⚠️ 首次启动自动建用户 changeme（HUNTLY_DEFAULT_USERNAME/PASSWORD 只在首次生效，之后改环境变量无效）
+#    要改账号：sqlite3 db.sqlite "UPDATE users SET username='admin', password='<bcrypt>' WHERE username='changeme'"
+#    密码是 bcrypt(10)，用 python bcrypt.hashpw(b"admin123", bcrypt.gensalt(10))
+# 后端连 Huntly：.env.sh 里 HUNTLY_USERNAME/HUNTLY_PASSWORD 改对后重启后端，news/health 应返回 up
+# ⚠️ 8090 不在 AutoDL 公网映射（只有 6006/6008 映射），前端「后台」链接打不开：
+#    nginx 单独 server 块 listen 6008 反代 127.0.0.1:8090（6008 映射到公网 443，前端 6006 映射 8443）
+```
 ```
 
 ### AutoDL 原生部署踩坑清单
