@@ -116,15 +116,17 @@ def _score_liquidity(row: dict[str, Any]) -> DimensionScore:
     reasons: list[str] = []
     score = 0.0
 
+    # 注意：stock_daily_latest.amount 单位是「万元」，_FETCH_SQL 已乘 1e4 归一到「元」，
+    # 因此这里的 amt 是元，阈值/显示直接按元处理（见 docs/risk_scorecard_design_v2.md）
     amt = row.get("amount_20d_avg")
     if amt is None:
         reasons.append("缺少 20 日成交额数据")
     elif amt < 1e7:
-        score += 100; reasons.append(f"日均成交额 {amt/1e4:.0f} 万 < 1000 万（极度危险）")
+        score += 100; reasons.append(f"日均成交额 {amt/1e8:.2f} 亿 < 1000 万（极度危险）")
     elif amt < 3e7:
-        score += 70; reasons.append(f"日均成交额 {amt/1e4:.0f} 万 < 3000 万（高风险）")
+        score += 70; reasons.append(f"日均成交额 {amt/1e8:.2f} 亿 < 3000 万（高风险）")
     elif amt < 5e7:
-        score += 40; reasons.append(f"日均成交额 {amt/1e4:.0f} 万 < 5000 万（中等）")
+        score += 40; reasons.append(f"日均成交额 {amt/1e8:.2f} 亿 < 5000 万（中等）")
     elif amt < 1e8:
         score += 15
 
@@ -340,14 +342,15 @@ WITH target_day AS (
       AND (cast(:td as date) IS NULL OR trade_date <= cast(:td as date))
 ),
 amt_20d AS (
-    SELECT AVG(amount) AS amount_20d_avg
+    -- stock_daily_latest.amount 单位是万元，归一为元后与算分函数阈值（元）对齐
+    SELECT AVG(amount * 1e4) AS amount_20d_avg
     FROM stock_daily_latest s, target_day l
     WHERE s.symbol = :s
       AND s.trade_date BETWEEN l.d - INTERVAL '30 day' AND l.d
 ),
 amt_5d AS (
-    -- 5 日均成交额：用过去 5 个交易日（不含当日），所以 BETWEEN d-8 AND d-1
-    SELECT AVG(amount) AS amount_5d_avg
+    -- 同上：万元 → 元
+    SELECT AVG(amount * 1e4) AS amount_5d_avg
     FROM stock_daily_latest s, target_day l
     WHERE s.symbol = :s
       AND s.trade_date BETWEEN l.d - INTERVAL '8 day' AND l.d - INTERVAL '1 day'
@@ -363,7 +366,7 @@ SELECT s.trade_date, s.symbol, s.stock_name, s.industry,
        s.rsi_14, s.kdj_k, s.return_5d, s.return_20d,
        a20.amount_20d_avg, a5.amount_5d_avg,
        CASE WHEN a5.amount_5d_avg IS NOT NULL AND a5.amount_5d_avg > 0
-            THEN s.amount / a5.amount_5d_avg ELSE NULL END AS amount_ratio_5d
+            THEN s.amount * 1e4 / a5.amount_5d_avg ELSE NULL END AS amount_ratio_5d
 FROM stock_daily_latest s, target_day l, amt_20d a20, amt_5d a5
 WHERE s.symbol = :s
   AND s.trade_date = l.d

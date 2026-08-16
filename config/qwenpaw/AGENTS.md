@@ -20,6 +20,7 @@ read_when:
 | 回测、跑一下、策略对比、参数优化 | `backtest-center` |
 | 批量推理结果分析、今日榜单、信号分析 | `batch-inference-analysis` |
 | QuantDB 数据、数据key、字段查询、远程数据 | `quantdb-sdk` |
+| 字段单位、成交量股还是手、成交额万元、股息率口径 | `quantdb-fields` |
 | 部署、装不上、服务起不来、数据库初始化 | `quantmind-deploy` |
 | 训练模型、模型管理、后台数据更新、RSS | `quantmind-operations` |
 | 挖因子、因子演化、RD-Agent、alpha | `rd-agent-factor-mining` |

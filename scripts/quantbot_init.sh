@@ -3,7 +3,7 @@
 # quantbot-init.sh — QuantBot (QwenPaw) 初始化脚本
 # ============================================================================
 # 用途：QwenPaw 容器装好后，一键完成：
-#   1. 将本地 11 个 QuantMind 技能包安装到 QwenPaw 技能池
+#   1. 将本地 12 个 QuantMind 技能包安装到 QwenPaw 技能池
 #   2. 广播到目标工作区并启用
 #   3. 写入量化人格（SOUL.md / PROFILE.md / AGENTS.md）
 #
@@ -61,7 +61,7 @@ install_skills() {
   # 1.2 删除同名旧技能（池中同名技能会冲突；删除后上传最新版）
   local -a pool_names
   pool_names=(ai-ide-strategy-writing backtest-center batch-inference-analysis \
-              quantdb-sdk quantmind-deploy quantmind-operations \
+              quantdb-sdk quantdb-fields quantmind-deploy quantmind-operations \
               rd-agent-factor-mining simulation-trading smart-strategy-stock-picking \
               stock-market-analysis trading-agents)
   for name in "${pool_names[@]}"; do
@@ -89,7 +89,7 @@ skills = d if isinstance(d, list) else d.get("skills", [])
 qm = [s["name"] for s in skills if s.get("source") != "builtin"
       and s["name"] in {
         "ai-ide-strategy-writing","backtest-center","batch-inference-analysis",
-        "quantdb-sdk","quantmind-deploy","quantmind-operations",
+        "quantdb-sdk","quantdb-fields","quantmind-deploy","quantmind-operations",
         "rd-agent-factor-mining","simulation-trading","smart-strategy-stock-picking",
         "stock-market-analysis","trading-agents"}]
 print("\n".join(sorted(qm)))')"

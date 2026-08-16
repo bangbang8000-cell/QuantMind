@@ -190,6 +190,15 @@ Qlib 二进制缓存（data/quantdb/.qlib_cache/cn_data）
 ### l2_factors（216 高频微观因子）
 VPIN/价差/深度/订单/资金流/已实现波动/竞价/跳跃/冲击等，如 `micro_vpin_8/20/50, micro_pin, micro_order_flow_toxicity, micro_realized_spread, micro_kyle_lambda, micro_amihud_illiquidity, micro_depth_imbalance_1, flow_money_flow_index, vol_realized_rv/rrv/rskew, micro_jump_count_1pct, micro_trade_buy/sell_pressure`
 
+## 6.1 字段单位速查 → [[quantdb-fields]]
+
+> ⚠️ **用数据前必查单位**。各数据集单位不一（个股 volume=股、指数 volume=手、amount=万元、dividend_rate 是 % 百分数值不是小数），搞错差 1e4~1e6 倍。全部实测验证的单位表见 **[[quantdb-fields]]** 技能：
+> - 个股 kline：volume=**股**、amount=**万元**；指数 index_daily：volume=**手**、amount=**万元**
+> - technical_indicators close=**后复权**；valuation close=**不复权**
+> - vol_std：technical_indicators 是 **%**，l1 是**小数**（差 100 倍）
+> - dividend_rate=0.148 表示 **0.148%**，不是 14.8%
+> - PG `stock_daily_latest`：symbol 是**前缀** SH601138，amount 也是**万元**
+
 ## 7. 实战应用
 
 - **数据落盘校验**：`catalog` + `remote-meta` 看覆盖，`preview` 看字段

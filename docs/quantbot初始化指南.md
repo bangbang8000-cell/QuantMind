@@ -7,7 +7,7 @@ AI（QwenPaw）安装完成后，一键完成 **技能安装 + 人格设定**，
 ```bash
 cd /opt/quantmind  # 或项目根目录
 
-# 全量初始化：11 个量化技能包 + 量化人格（SOUL/PROFILE/AGENTS）
+# 全量初始化：12 个量化技能包 + 量化人格（SOUL/PROFILE/AGENTS）
 bash scripts/quantbot_init.sh
 
 # 只装技能
@@ -25,7 +25,7 @@ bash scripts/quantbot_init.sh --persona-only
 | `QWENPAW_AGENT_ID` | `default` | 目标工作区 ID |
 
 脚本做的事：
-1. 把 `.claude/skills/` 下 11 个 QuantMind 技能打成 zip 上传到 QwenPaw 技能池（同名旧技能先删除再传，幂等）
+1. 把 `.claude/skills/` 下 12 个 QuantMind 技能打成 zip 上传到 QwenPaw 技能池（同名旧技能先删除再传，幂等）
 2. 广播到目标工作区并启用
 3. 把 `config/qwenpaw/{SOUL,PROFILE,AGENTS}.md` 写入工作区（容器内直接写，宿主机走 docker cp）
 
@@ -37,7 +37,7 @@ docker restart qwenpaw
 
 ## 二、装了什么
 
-### 11 个量化技能
+### 12 个量化技能
 
 | 技能 | 触发场景 |
 |------|---------|
@@ -45,6 +45,7 @@ docker restart qwenpaw
 | `backtest-center` | 快速回测、专家模式、策略对比、参数优化 |
 | `batch-inference-analysis` | 批量推理结果分析、每日信号榜单、行业轮动 |
 | `quantdb-sdk` | QuantDB 数据查询、API Key、数据集/字段 |
+| `quantdb-fields` | QuantDB 字段单位速查手册（成交量股/手、成交额万元、% vs 小数等实测陷阱） |
 | `quantmind-deploy` | 部署运维、问题排查、数据库初始化 |
 | `quantmind-operations` | 模型训练/管理、后台数据更新、RSS |
 | `rd-agent-factor-mining` | RD-Agent 因子挖掘、演化进度 |
@@ -61,7 +62,7 @@ docker restart qwenpaw
 |------|------|
 | `config/qwenpaw/SOUL.md` | 核心人格：QuantBot = 量化投研助手；数据说话、风险先说、先结论后细节、中文交流 |
 | `config/qwenpaw/PROFILE.md` | 身份+用户资料模板（名字/称呼留空，AI 首聊时确认） |
-| `config/qwenpaw/AGENTS.md` | 工作区规则：11 技能路由表（触发词→技能）、平台 API 连接信息、挂载目录地图、工作流规则 |
+| `config/qwenpaw/AGENTS.md` | 工作区规则：12 技能路由表（触发词→技能）、平台 API 连接信息、挂载目录地图、工作流规则 |
 
 ## 三、需要挂载的目录（docker-compose 已配好）
 
@@ -117,7 +118,7 @@ docker restart qwenpaw
 ### 验证
 
 ```bash
-# 技能池（应含 11 个量化技能，source=local）
+# 技能池（应含 12 个量化技能，source=local）
 curl -s http://127.0.0.1:8089/api/skills/pool | python3 -c "
 import sys, json
 d = json.load(sys.stdin)
