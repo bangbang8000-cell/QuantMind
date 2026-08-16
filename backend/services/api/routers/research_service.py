@@ -781,9 +781,15 @@ async def get_available_models(tid: str, uid: str, market: str | None = None) ->
         params: dict[str, Any] = {"tid": tid, "uid": uid, "market": market_upper}
 
         # 优化：先查 qm_user_models（小表 38 行），再用 EXISTS 检查快照（大表 162K 行）
+        # market 过滤与模型管理页一致：metadata_json.market 与 context.market 都认，
+        # 老模型（两处皆无 market 字段）仅在 CN 市场显示
         sql = text("""
             SELECT um.model_id,
                    COALESCE(um.metadata_json->>'display_name', um.metadata_json->>'model_name') AS display_name,
+                   um.metadata_json->>'framework' AS framework,
+                   um.metadata_json->>'model_type' AS model_type,
+                   um.metadata_json->'metrics' AS metrics,
+                   um.metrics_json AS metrics_json,
                    EXISTS (
                        SELECT 1 FROM qm_model_inference_runs ir
                        WHERE ir.tenant_id = um.tenant_id AND ir.user_id = um.user_id
@@ -791,7 +797,11 @@ async def get_available_models(tid: str, uid: str, market: str | None = None) ->
                    ) AS has_inference
             FROM qm_user_models um
             WHERE um.tenant_id = :tid AND um.user_id = :uid AND um.status != 'archived'
-              AND COALESCE(um.metadata_json->'context'->>'market', 'CN') = :market
+              AND COALESCE(
+                    NULLIF(UPPER(BTRIM(um.metadata_json->>'market')), ''),
+                    NULLIF(UPPER(BTRIM(um.metadata_json->'context'->>'market')), ''),
+                    'CN'
+                  ) = :market
             ORDER BY has_inference DESC, um.updated_at DESC
         """)
         res = await session.execute(sql, params)
@@ -799,8 +809,52 @@ async def get_available_models(tid: str, uid: str, market: str | None = None) ->
         for r in res.mappings():
             mid = r["model_id"]
             name = r["display_name"] or _humanize_model_name(mid)
-            models.append({"modelId": mid, "name": name})
+            models.append(
+                {
+                    "modelId": mid,
+                    "name": name,
+                    "framework": r["framework"] or "",
+                    "modelType": r["model_type"] or "",
+                    "ic": _extract_ic(r["metrics"], r["metrics_json"]),
+                    "hasInference": bool(r["has_inference"]),
+                }
+            )
         return {"code": 200, "data": {"models": models}}
+
+
+def _extract_ic(metadata_metrics: Any, metrics_json: Any) -> float | None:
+    """从 metadata_json.metrics 或 metrics_json 提取 IC 指标。
+
+    实际存储（2026-08 实测）：
+    - metadata_json.metrics = {"test_ic": 0.107, "val_ic": 0.109, "test_rank_ic": ...}（平铺）
+    - 部分模型 metrics_json = {"test": {"ic": ...}, "val": {"ic": ...}}（分段嵌套）
+    优先 test_ic → val_ic → test.ic → val.ic。
+    """
+    import json
+
+    for source in (metadata_metrics, metrics_json):
+        # 防御字符串型 JSON（历史代码路径曾出现过）
+        if isinstance(source, str):
+            try:
+                parsed = json.loads(source)
+            except Exception:
+                continue
+            source = parsed if isinstance(parsed, dict) else {}
+        if not isinstance(source, dict):
+            continue
+        # 平铺式：metrics.test_ic / metrics.val_ic
+        for key in ("test_ic", "val_ic"):
+            v = source.get(key)
+            if isinstance(v, (int, float)):
+                return float(v)
+        # 分段式：metrics.test.ic / metrics.val.ic
+        for split in ("test", "val"):
+            seg = source.get(split)
+            if isinstance(seg, dict):
+                v = seg.get("ic")
+                if isinstance(v, (int, float)):
+                    return float(v)
+    return None
 
 
 async def get_inference_runs(tid: str, uid: str, model_id: str) -> dict[str, Any]:
@@ -1276,7 +1330,6 @@ async def predict_single_stock(
 ) -> dict[str, Any]:
     """单只股票未来走势与区间分位数预测服务。"""
     normalized_symbol = StockCodeUtil.to_prefix(symbol)
-    suffix_symbol = StockCodeUtil.to_suffix(symbol) if hasattr(StockCodeUtil, "to_suffix") else symbol
 
     # 1. 查询股票最新行情信息
     stock_name = normalized_symbol
@@ -1302,8 +1355,8 @@ async def predict_single_stock(
                 latest_date = str(row[2])
 
         # 获取可用模型列表
-        models_res = await get_available_models(tid, uid)
-        available_models = models_res.get("items", [])
+        models_res = await get_available_models(tid, uid, market)
+        available_models = (models_res.get("data") or {}).get("models", [])
 
     # 2. 选定主预测模型
     selected_model = None
@@ -1312,9 +1365,12 @@ async def predict_single_stock(
     if not selected_model and available_models:
         selected_model = available_models[0]
 
-    chosen_model_id = selected_model.get("modelId", "default_lgb") if selected_model else "default_lgb"
-    chosen_model_name = selected_model.get("modelName", "LightGBM Alpha-158 增强模型") if selected_model else "LightGBM Alpha-158 增强模型"
-    chosen_model_type = selected_model.get("modelType", "lightgbm") if selected_model else "lightgbm"
+    sel = selected_model or {}
+    chosen_model_id = sel.get("modelId") or "default_lgb"
+    chosen_model_name = (
+        sel.get("name") or sel.get("modelName") or "LightGBM Alpha-158 增强模型"
+    )
+    chosen_model_type = sel.get("modelType") or sel.get("model_type") or "lightgbm"
 
     # 3. 提取个股关键因子数据用于归因
     features_data = await get_symbol_full_features_service(normalized_symbol)

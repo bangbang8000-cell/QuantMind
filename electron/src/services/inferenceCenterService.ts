@@ -79,6 +79,7 @@ export interface AvailableModelOption {
   description?: string;
   accuracy?: number;
   isEnsemble?: boolean;
+  hasInference?: boolean;
 }
 
 class InferenceCenterService {
@@ -102,17 +103,26 @@ class InferenceCenterService {
     return client;
   }
 
-  async getAvailableModels(): Promise<AvailableModelOption[]> {
+  async getAvailableModels(market?: string): Promise<AvailableModelOption[]> {
     try {
-      const resp = await this.client.get<{ data: { items: any[] } } | { items: any[] }>('/research/models');
-      const items = (resp.data as any)?.data?.items || (resp.data as any)?.items || [];
+      const params: Record<string, string> = {};
+      if (market) params.market = market;
+      const resp = await this.client.get('/research/models', { params });
+      // 后端返回 {code:200, data:{models:[{modelId,name,framework,modelType,ic,hasInference}]}}
+      const body = (resp.data ?? {}) as any;
+      const items =
+        body?.data?.models ??
+        body?.data?.items ??
+        body?.models ??
+        body?.items ??
+        [];
       return items.map((m: any) => ({
         modelId: m.modelId || m.model_id,
-        modelName: m.modelName || m.model_name || m.name || m.modelId,
-        modelType: m.modelType || m.model_type || 'lightgbm',
+        modelName: m.name || m.modelName || m.model_name || m.modelId,
+        modelType: m.modelType || m.model_type || '',
         description: m.description,
-        accuracy: m.accuracy || m.ic,
-        isEnsemble: m.isEnsemble || m.is_ensemble,
+        accuracy: m.ic ?? m.accuracy ?? m.ic_value,
+        hasInference: m.hasInference ?? m.has_inference ?? false,
       }));
     } catch (e) {
       console.warn('获取可用模型列表失败，使用默认列表:', e);

@@ -34,14 +34,17 @@ const POPULAR_STOCKS = [
   { symbol: 'SZ000001', name: '平安银行', basePrice: 11.2 },
 ];
 
-// 内置模型库
-const PRESET_MODELS: (AvailableModelOption & {
+// 模型卡片类型：PRESET 内置与 API 真实模型共用
+type ModelCardOption = AvailableModelOption & {
   category: 'tree' | 'dl' | 'ensemble';
   tag: string;
   horizonDesc: string;
   sharpe: number;
   quantileSupport: boolean;
-})[] = [
+};
+
+// 内置模型库（仅在后端模型列表拉取失败时兜底展示）
+const PRESET_MODELS: ModelCardOption[] = [
   {
     modelId: 'mdl_tft_v1',
     modelName: 'NativeTFT 时序融合变换器',
@@ -212,11 +215,47 @@ export const InferenceCenterPage: React.FC = () => {
   const [loading, setLoading] = useState(false);
 
   // 数据展示状态
-  const [models, setModels] = useState(PRESET_MODELS);
+  const [models, setModels] = useState<ModelCardOption[]>(PRESET_MODELS);
   const [kline, setKline] = useState<KlineItem[]>(() => generateMockKline(1685.0));
   const [prediction, setPrediction] = useState<SingleStockPredictionResponse>(() =>
     generateMockPrediction('SH600519', 'mdl_tft_v1', 5, 1685.0)
   );
+
+  // 拉取真实模型列表（后端 /research/models），失败时保留内置模型兜底
+  useEffect(() => {
+    let cancelled = false;
+    inferenceCenterService
+      .getAvailableModels(currentMarket)
+      .then((list) => {
+        if (cancelled || !list?.length) return;
+        const liveModels: ModelCardOption[] = list.map((m) => {
+          const kind = String(m.modelType || '').toLowerCase();
+          const isDL =
+            kind.includes('ensemble') || kind.includes('stacking') ? false :
+            kind.includes('tft') || kind.includes('gru') || kind.includes('lstm') ||
+            kind.includes('transformer') || kind.includes('pytorch') || kind.includes('tensorflow') ||
+            kind.includes('dl');
+          return {
+            ...m,
+            category: kind.includes('ensemble') || kind.includes('stacking') ? 'ensemble' : isDL ? 'dl' : 'tree',
+            tag: m.hasInference ? '已推理' : '待推理',
+            horizonDesc: '',
+            sharpe: 0,
+            quantileSupport: false,
+          };
+        });
+        // 与内置模型去重：真实模型优先，仅保留后端没有的同名内置模型
+        const liveIds = new Set(liveModels.map((m) => m.modelId));
+        const builtin = PRESET_MODELS.filter((m) => !liveIds.has(m.modelId));
+        setModels([...liveModels, ...builtin]);
+      })
+      .catch(() => {
+        // 后端不可用时保留内置模型
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [currentMarket]);
 
   const filteredModels = useMemo(() => {
     if (modelCategoryFilter === 'all') return models;
@@ -225,6 +264,13 @@ export const InferenceCenterPage: React.FC = () => {
 
   const currentSelectedModel = useMemo(() => {
     return models.find(m => m.modelId === selectedModelId) || models[0];
+  }, [models, selectedModelId]);
+
+  // 市场切换后模型列表刷新：若当前选中的模型不在新列表里，自动切到第一个
+  useEffect(() => {
+    if (models.length && !models.some(m => m.modelId === selectedModelId)) {
+      setSelectedModelId(models[0].modelId);
+    }
   }, [models, selectedModelId]);
 
   // 提交并格式化代码
@@ -445,8 +491,7 @@ export const InferenceCenterPage: React.FC = () => {
                     </Tag>
                   </div>
                   <div className="flex items-center justify-between text-[10px] text-slate-400">
-                    <span>IC: <strong className="text-slate-700 font-mono">{m.accuracy}</strong></span>
-                    {m.quantileSupport && (
+                    <span>IC: <strong className="text-slate-700 font-mono">{m.accuracy != null && m.accuracy !== 0 ? m.accuracy : '—'}</strong></span>                    {m.quantileSupport && (
                       <span className="text-emerald-600 font-bold flex items-center gap-0.5">
                         <Sparkles className="w-2.5 h-2.5" /> 10-50-90%
                       </span>
@@ -575,8 +620,8 @@ export const InferenceCenterPage: React.FC = () => {
               </div>
 
               <div className="pt-2.5 border-t border-slate-100 text-[11px] text-slate-400 flex items-center justify-between">
-                <span>模型准确率 (IC): <strong className="text-slate-700 font-mono">{currentSelectedModel.accuracy}</strong></span>
-                <span>夏普比率: <strong className="text-slate-700 font-mono">{currentSelectedModel.sharpe}</strong></span>
+                <span>模型准确率 (IC): <strong className="text-slate-700 font-mono">{currentSelectedModel.accuracy != null && currentSelectedModel.accuracy !== 0 ? currentSelectedModel.accuracy : '—'}</strong></span>
+                <span>夏普比率: <strong className="text-slate-700 font-mono">{currentSelectedModel.sharpe || '—'}</strong></span>
               </div>
             </div>
           </div>
