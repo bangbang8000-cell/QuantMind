@@ -1,3 +1,8 @@
+---
+name: quantdb-fields
+description: "QuantDB 字段单位速查手册 — 全部数据集实测验证的单位、口径与陷阱（个股 volume=股/amount=万元、指数 volume=手、technical % vs l1 小数、dividend_rate 百分数、PG 前缀 symbol）。用 QuantDB 数据做分析/回测/报告、判断成交量/成交额/股息率/换手率单位、排查数据口径不一致时使用。触发词：字段单位、成交量单位、成交额单位、股还是手、万元、股息率、数据口径"
+---
+
 # quantdb-fields — QuantDB 字段单位速查手册
 
 > 用 QuantDB 数据做任何分析/回测/报告前**必读**。所有单位均为
