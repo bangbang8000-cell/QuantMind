@@ -54,6 +54,7 @@ description: "QuantDB 字段单位速查手册 — 全部数据集实测验证�
 | `net_profit_ttm / revenue_ttm / equity / annual_net_profit` | 元 | |
 | `pe_ttm / pe_static / pb / ps_ttm` | 倍 | |
 | `dividend_rate` | **%（百分数值）** | 0.148 = **0.148%**！公式 = 近一年每10股派息/10/close×100。601138: 0.98/10/66.19×100=0.1481 ✓；600519: 51.98/10/1341.99×100=0.3873 ✓。**把它当小数会差 100 倍** |
+| `dividend_rate` 口径切换 | **20260814 起** | 此前为小数口径（每10股派息/不复权close，如 0.98/65.60=0.01494）；20260814 起切换为百分数口径（×100）。同字段历史不连续，跨 20260814 分析需 ×10 归一 |
 
 ### technical_indicators（技术指标）
 | 字段 | 单位 | 陷阱 |
@@ -75,6 +76,12 @@ description: "QuantDB 字段单位速查手册 — 全部数据集实测验证�
 | `momentum_*` | %（百分数值） |
 
 ## 五、6_ml_datasets 因子
+
+### features_daily（技术+估值合并表）
+| 字段 | 单位 | 注意 |
+|---|---|---|
+| `dividend_rate` | **小数口径（无 ×100）** | 与 valuation 不同！公式 = 每10股派息/不复权close（0.98/66.19=0.0148），**从未切换口径**。valuation 20260814 起是它的 10 倍。特征快照 generate_feature_snapshots.py 已 ×10 归一到百分数口径 |
+| `total_mv / float_mv / pe / pb 等` | 与 valuation 完全一致 | 实测 601138 全部 ✓ |
 
 ### l1_factors（一级因子，decimal 为主）
 | 字段 | 单位 |
@@ -162,6 +169,7 @@ API 层 `_UNIT_SCALES` 把部分字段缩放后输出：
 3. **hsgt_north** 北向明细停更（2024-08，改季度披露所致）
 4. **instrument_detail** HqDate 滞后（20260720）
 5. **dt=20260729~20260802** 个股日线有同步缺口（非交易日+同步中断）
+5b. **valuation dt=20260813** 只有 101 行（同步缺口，dividend_rate 全 NaN），features_daily 同日 5543 行正常
 6. **technical_indicators.return_1d/return_20d** 全 NaN
 7. **stock_daily_latest** 的 turnover_rate/flow_net_amount/main_flow 常为 NULL
 

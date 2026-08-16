@@ -444,5 +444,5 @@
     "gtja_158"
   ],
   "source": "quantdb (daily_forward + features_daily + l1_factors + l2_factors)",
-  "generated_at": "2026-08-15T09:26:39.878763"
+  "generated_at": "2026-08-16T20:10:28.813887"
 }

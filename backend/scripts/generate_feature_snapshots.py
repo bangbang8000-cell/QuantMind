@@ -262,7 +262,12 @@ def _build_snapshot(year: int, dry_run: bool = False) -> dict | None:
         f.vol_to_ma5, f.vol_to_ma20,
         f.volume_ma_3, f.amount_ma_5, f.volume_trend_3d,
         f.pct_change, f.beta_20,
-        f.total_mv, f.float_mv, f.pe_ttm, f.pe_static, f.pb, f.ps_ttm, f.dividend_rate,
+        f.total_mv, f.float_mv, f.pe_ttm, f.pe_static, f.pb, f.ps_ttm,
+        -- features_daily.dividend_rate 全程为「每10股派息/不复权close」小数口径
+        -- （20260814 实测 601138: 0.98/66.19=0.014806），而 valuation 同日起切换为
+        -- 「每10股派息/10/close×100」百分数口径（0.148）。
+        -- 统一 ×10 归一为百分数口径，与 valuation 对齐
+        f.dividend_rate * 10 AS dividend_rate,
         f.total_capital, f.circulating_capital, f.net_profit_ttm, f.revenue_ttm, f.equity,
         f.annual_net_profit
     FROM read_parquet('{qdb}/1_kline_data/daily_backward/**/*.parquet', hive_partitioning=true) k
@@ -340,6 +345,13 @@ def _build_snapshot(year: int, dry_run: bool = False) -> dict | None:
 
         # 同日同股去重（两种格式可能重叠），保留后出现的 hive 版本
         df_l1 = df_l1.drop_duplicates(subset=["symbol", "trade_date"], keep="last")
+
+        # 单位归一：l1 的 vol_std_* 是小数（0.0339=3.39%），technical_indicators 的
+        # vol_std_5/20/60 是百分数（3.39=3.39%）。同族不同量纲会让树模型学到伪分界，
+        # 统一 ×100 对齐百分数口径（vol_atr_14 两边都是元，不动）
+        for col in df_l1.columns:
+            if col.startswith("vol_std_") and col in df_l1.columns:
+                df_l1[col] = pd.to_numeric(df_l1[col], errors="coerce") * 100.0
 
     if df_l1 is not None and not df_l1.empty:
         _log(f"  l1_factors 合并后: {len(df_l1):,} rows, {len(df_l1.columns)} cols")

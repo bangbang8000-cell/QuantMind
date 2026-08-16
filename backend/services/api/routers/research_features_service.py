@@ -197,6 +197,8 @@ _UNIT_SCALES: dict[str, float] = {
     "flowLargeNet": 1e-6,
     "flowMediumNet": 1e-6,
     "flowSmallNet": 1e-6,
+    # l2_factors.flow_super_net 单位是元，与其他 flow* 一致（同类别统一 → 百万元）
+    "flowSuperNet": 1e-6,
 }
 
 
