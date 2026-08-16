@@ -59,6 +59,14 @@ _PARQUET_TEMPLATE_MARKERS = (
     "QuantMind Parquet 数据源推理脚本\n=================================\n由训练流水线自动生成",
 )
 
+# 融合模型脚本特征（ensemble_src 模板头）。融合脚本也需要每次推理前
+# 从最新模板同步（DL 源模型委派、窗口截断等修复），但标记与 parquet 模板不同，
+# 必须单独识别，否则会被 parquet 模板误覆盖。
+_ENSEMBLE_SRC_MARKERS = (
+    "QuantMind 融合模型推理脚本 (inference_ensemble_src.py)",
+    "融合模型推理脚本 (inference_ensemble_src.py)",
+)
+
 # 默认超时 3600 秒（1 小时），可通过环境变量覆盖
 _SCRIPT_TIMEOUT_SEC = int(os.getenv("INFERENCE_SCRIPT_TIMEOUT_SEC", "3600"))
 _DEFAULT_FEATURE_DIM = int(os.getenv("INFERENCE_DEFAULT_FEATURE_DIM", "48"))
@@ -314,13 +322,40 @@ class InferenceScriptRunner:
             logger.warning("[InferenceScriptRunner] 自动写入推理脚本失败: %s", exc)
             return False
 
+    def _try_deploy_ensemble_src_template(self, script_path: Path) -> bool:
+        """融合模型 inference.py：从 ensemble_src 模板写入/同步。"""
+        template_path = (
+            Path(__file__).parent / "templates" / "inference_ensemble_src.py"
+        )
+        if not template_path.is_file():
+            logger.warning(
+                "[InferenceScriptRunner] 融合推理模板不存在: %s", template_path
+            )
+            return False
+        try:
+            script_path.parent.mkdir(parents=True, exist_ok=True)
+            script_path.write_text(
+                template_path.read_text(encoding="utf-8"), encoding="utf-8"
+            )
+            logger.info(
+                "[InferenceScriptRunner] 已同步融合推理脚本: %s", script_path
+            )
+            return True
+        except Exception as exc:
+            logger.warning("[InferenceScriptRunner] 同步融合推理脚本失败: %s", exc)
+            return False
+
     @staticmethod
     def _is_managed_parquet_template(script_path: Path) -> bool:
         if not script_path.is_file():
             return False
         try:
             text = script_path.read_text(encoding="utf-8", errors="ignore")
-            return any(marker in text for marker in _PARQUET_TEMPLATE_MARKERS)
+            if not any(marker in text for marker in _PARQUET_TEMPLATE_MARKERS):
+                return False
+            # 融合模板的 _sync_member_script 注释里也含 parquet marker 字符串，
+            # 必须用 ensemble marker 排除，否则融合脚本会被误覆写成 parquet 模板。
+            return not any(marker in text for marker in _ENSEMBLE_SRC_MARKERS)
         except Exception:
             return False
 
@@ -847,13 +882,27 @@ class InferenceScriptRunner:
                     prediction_trade_date=prediction_trade_date,
                 )
 
-        if data_source == "parquet" and not self._ensure_parquet_template_script(
-            script_path
-        ):
-            logger.warning(
-                "[InferenceScriptRunner] parquet 模型模板同步失败，继续使用现有脚本: %s",
-                script_path,
+        if data_source == "parquet":
+            # 模板选择以 metadata 为准（marker 嗅探会被覆写过的脚本骗过：
+            # 融合脚本一旦被 parquet 模板覆写，头标记就变成了 parquet，
+            # 永远无法自愈）。融合模型强制同步 ensemble_src 模板。
+            primary_meta = self._read_primary_metadata()
+            is_ensemble_model = bool(
+                primary_meta.get("is_ensemble")
+                or str(primary_meta.get("model_type") or "").lower() == "ensemble"
+                or str(primary_meta.get("framework") or "").lower() == "ensemble"
             )
+            if is_ensemble_model:
+                if not self._try_deploy_ensemble_src_template(script_path):
+                    logger.warning(
+                        "[InferenceScriptRunner] 融合模型模板同步失败，继续使用现有脚本: %s",
+                        script_path,
+                    )
+            elif not self._ensure_parquet_template_script(script_path):
+                logger.warning(
+                    "[InferenceScriptRunner] parquet 模型模板同步失败，继续使用现有脚本: %s",
+                    script_path,
+                )
 
         run_id = f"run_{date.replace('-', '')}_{uuid.uuid4().hex[:8]}"
         logger.info(

@@ -443,6 +443,9 @@ def load_window_data(trade_date: str, data_dir: Path, meta: dict, step_len: int)
 
     target_symbols = set(day_df["symbol"].astype(str))
     window = df[df["symbol"].astype(str).isin(target_symbols)].copy()
+    # 窗口必须截止到 trade_date（防止未来数据泄漏，且回填历史日期时
+    # tail() 会取到 parquet 末尾的未来窗口，导致各日推理分数完全相同）
+    window = window[window["trade_date"] <= trade_date]
     window = window.sort_values(["symbol", "trade_date"])
 
     # 每 symbol 保留最近 step_len 天（含当日）

@@ -12,23 +12,34 @@ QuantMind 后端通过 `COPAW_BASE_URL` 环境变量（默认 `http://copaw:8088
 docker pull agentscope/qwenpaw:latest
 ```
 
-### 2. 启动服务（首次配置）
+> **国内网络提示**：Docker Hub 拉取报 `CloudFront ... connection reset by peer`（IPv6 链路被重置）时，
+> 用镜像加速源拉取后打回官方标签：
+>
+> ```bash
+> docker pull docker.1ms.run/agentscope/qwenpaw:latest
+> docker tag  docker.1ms.run/agentscope/qwenpaw:latest agentscope/qwenpaw:latest
+> ```
 
-首次启动时，需要开放外部访问以便登录配置：
+### 2. 启动服务（独立部署，首次配置）
+
+在 QuantMind 环境外独立部署 QwenPaw 时，使用以下命令（首次启动需开放外部访问以便登录配置）：
 
 > **注意**：必须加入 `quantmind_quantmind-net` 网络并设置 `copaw` 别名，否则 QuantMind 后端无法连接。
 
 ```bash
-docker run -d \
-  --name qwenpaw \
+docker run -p 127.0.0.1:8088:8088 \
   --restart unless-stopped \
+  --name qwenpaw \
   --network quantmind_quantmind-net \
   --network-alias copaw \
-  -p 0.0.0.0:8088:8088 \
   -v qwenpaw-data:/app/working \
   -v qwenpaw-secrets:/app/working.secret \
+  -v qwenpaw-backups:/app/working.backups \
   agentscope/qwenpaw:latest
 ```
+
+> 首次配置时若需从外部访问 Web 界面，把 `127.0.0.1:8088:8088` 改为 `0.0.0.0:8088:8088`，
+> 配置完成后再改回本机监听（见「安全加固」）。
 
 ### 3. 配置模型
 
@@ -55,10 +66,40 @@ docker run -d \
   -p 127.0.0.1:8088:8088 \
   -v qwenpaw-data:/app/working \
   -v qwenpaw-secrets:/app/working.secret \
+  -v qwenpaw-backups:/app/working.backups \
   agentscope/qwenpaw:latest
 ```
 
-### 5. Nginx 反向代理（可选）
+### 5. 升级最新版本
+
+数据卷（`qwenpaw-data` 等）与容器解耦，升级只需重拉镜像并重建容器：
+
+```bash
+# 拉取最新镜像（失败时用镜像加速源，见上文「拉取镜像」）
+docker pull agentscope/qwenpaw:latest
+
+# 重建容器（数据卷保持不变）
+docker rm -f qwenpaw
+docker run -d \
+  --name qwenpaw \
+  --restart unless-stopped \
+  --network quantmind_quantmind-net \
+  --network-alias copaw \
+  -p 127.0.0.1:8088:8088 \
+  -v qwenpaw-data:/app/working \
+  -v qwenpaw-secrets:/app/working.secret \
+  -v qwenpaw-backups:/app/working.backups \
+  agentscope/qwenpaw:latest
+
+# 验证
+docker ps --filter name=qwenpaw
+curl -s -o /dev/null -w "%{http_code}\n" http://127.0.0.1:8088/
+```
+
+> 用 `docker compose up -d --force-recreate --no-deps qwenpaw` 的 Compose 部署，
+> 升级时同样先 `docker pull` 再执行该命令即可（数据卷与挂载均保留）。
+
+### 6. Nginx 反向代理（可选）
 
 在 QuantMind 的 Nginx 配置中添加：
 
@@ -136,7 +177,7 @@ docker rm -f qwenpaw
 
 # 完全清理（包括数据）
 docker rm -f qwenpaw
-docker volume rm qwenpaw-data qwenpaw-secrets
+docker volume rm qwenpaw-data qwenpaw-secrets qwenpaw-backups
 ```
 
 ## 数据持久化
@@ -145,6 +186,7 @@ docker volume rm qwenpaw-data qwenpaw-secrets
 |------|------|
 | `qwenpaw-data` | 工作目录数据 |
 | `qwenpaw-secrets` | 密钥和敏感配置 |
+| `qwenpaw-backups` | 备份数据（升级时保留，勿删） |
 
 ## 注意事项
 

@@ -12,6 +12,8 @@ QuantMind 融合模型推理脚本 (inference_ensemble_src.py)
   - CatBoost (.cbm)
   - sklearn (.pkl)
   - Stacking 融合 (is_ensemble + ensemble_method=stacking，加载基模型 + meta_model)
+  - PyTorch DL 时序/扁平模型 (.pth / .pt)：委派成员目录 inference.py 推理，
+    窗口按 trade_date 截断，与单模型推理口径一致（同步 parquet 模板）
 
 平台注入环境变量：
     MODEL_DIR      融合模型目录绝对路径（含 ensemble_config.json + metadata.json）
@@ -37,6 +39,7 @@ import json
 import logging
 import os
 import pickle
+import subprocess
 import sys
 from pathlib import Path
 
@@ -167,6 +170,10 @@ def _load_base_model(model_path: Path, model_type: str):
         cb = CatBoost()
         cb.load_model(str(model_path), format="cbm")
         return cb
+    if suffix in (".pth", ".pt"):
+        # PyTorch 模型：不在此进程内加载（架构重建复杂且易版本漂移），
+        # 返回标记 dict，由 main() 委派成员目录 inference.py 推理。
+        return {"__dl_member__": True, "path": str(model_path)}
     # .pkl → sklearn / pickle 模型
     with open(model_path, "rb") as f:
         return pickle.load(f)
@@ -191,7 +198,7 @@ def load_source_model(model_dir: Path) -> tuple[object, dict]:
     model_file = meta.get("model_file", "")
     model_path = model_dir / model_file if model_file else None
     if not model_path or not model_path.exists():
-        for ext in ("*.xgb", "*.lgb", "*.cbm", "*.pkl", "*.txt"):
+        for ext in ("*.xgb", "*.lgb", "*.cbm", "*.pkl", "*.txt", "*.pth", "*.pt"):
             candidates = list(model_dir.glob(ext))
             if candidates:
                 model_path = candidates[0]
@@ -201,6 +208,81 @@ def load_source_model(model_dir: Path) -> tuple[object, dict]:
 
     model_type = str(meta.get("model_type", "")).lower()
     return _load_base_model(model_path, model_type), meta
+
+
+def _sync_member_script(member_dir: Path) -> Path:
+    """同步成员推理脚本到最新 parquet 模板（仅平台托管脚本）。
+
+    runner 只在成员模型作为主模型推理时才同步它的 inference.py；
+    融合委派子进程前必须自己同步，否则成员用旧模板（如窗口截断缺失）。
+    """
+    script = member_dir / "inference.py"
+    tpl = Path("/app/backend/services/engine/inference/templates/inference_parquet.py")
+    if not script.exists() or not tpl.is_file():
+        return script
+    try:
+        text = script.read_text(encoding="utf-8", errors="ignore")
+    except OSError:
+        return script
+    marker = "QuantMind Parquet 数据源推理脚本 (inference.py 模板)"
+    if marker in text and marker not in tpl.read_text(encoding="utf-8", errors="ignore"):
+        # 注意：本文件自身的注释里也含 marker 字符串，runner 侧按
+        # marker 识别托管脚本时会误把融合脚本当 parquet 模板覆写。
+        # 这里只同步真正的 parquet 托管脚本（模板自身包含 marker），
+        # 避免把成员融合脚本（ensemble_src 模板）错误覆写成 parquet 模板。
+        try:
+            script.write_text(tpl.read_text(encoding="utf-8"), encoding="utf-8")
+            logger.info("已同步成员推理脚本到最新模板: %s", script)
+        except OSError as e:
+            logger.warning("成员脚本同步失败，沿用现有脚本: %s", e)
+    return script
+
+
+def _predict_dl_source_model(member_dir: Path, trade_date: str, data_dir: Path,
+                             out_root: Path) -> dict[str, float]:
+    """DL (.pth/.pt) 源模型：委派其成员目录 inference.py 推理。
+
+    成员脚本先同步到最新 parquet 模板（窗口按 trade_date 截断，
+    防止未来数据泄漏）。输出临时 JSON，下次运行覆盖。
+    """
+    script = _sync_member_script(member_dir)
+    if not script.exists():
+        raise FileNotFoundError(f"源模型推理脚本不存在: {script}")
+    out_root.mkdir(parents=True, exist_ok=True)
+    out_path = out_root / f"member_{member_dir.name}.json"
+    env = dict(os.environ)
+    # 必须强制覆盖：runner 启动融合脚本时 MODEL_DIR 指向融合模型目录，
+    # 成员脚本会把它当成自己的模型目录读错 metadata。
+    env["MODEL_DIR"] = str(member_dir)
+    env["TRADE_DATE"] = trade_date
+    proc = subprocess.run(
+        [sys.executable, str(script), "--date", trade_date,
+         "--model-dir", str(member_dir),
+         "--data-dir", str(data_dir), "--output", str(out_path)],
+        capture_output=True, text=True, timeout=1800, env=env,
+    )
+    if proc.returncode != 0:
+        tail = (proc.stderr or "").strip().splitlines()[-3:]
+        raise RuntimeError(f"exit={proc.returncode}: {' | '.join(tail)}")
+    with open(out_path, encoding="utf-8") as fh:
+        rows = json.load(fh)
+    scores: dict[str, float] = {}
+    for row in rows:
+        if not isinstance(row, dict):
+            continue
+        sym = str(row.get("symbol") or row.get("instrument") or "")
+        val = row.get("score") if row.get("score") is not None else row.get("fusion_score")
+        if not sym or val is None:
+            continue
+        try:
+            f = float(val)
+        except (TypeError, ValueError):
+            continue
+        if f == f:  # 过滤 NaN
+            scores[sym] = f
+    if not scores:
+        raise RuntimeError("成员推理输出为空")
+    return scores
 
 
 class _StackingEnsemble:
@@ -340,7 +422,7 @@ def predict_with_model(model, meta: dict, day_df: pd.DataFrame) -> dict[str, flo
         scores = -scores
 
     result = {}
-    for sym, s in zip(symbols, scores):
+    for sym, s in zip(symbols, scores, strict=True):
         f = float(s)
         if f == f:  # 过滤 NaN
             result[sym] = f
@@ -614,6 +696,7 @@ def main():
     all_scores: dict[str, dict[str, float]] = {}
     weights: dict[str, float] = {}
     model_horizons: dict[str, int] = {}
+    member_out_root = out_path.parent / "member_runs"
 
     for mc in model_configs:
         mid = str(mc.get("model_id") or mc.get("name") or "?")
@@ -629,6 +712,14 @@ def main():
 
         try:
             model, meta = load_source_model(m_dir)
+            if isinstance(model, dict) and model.get("__dl_member__"):
+                # DL 源模型：委派成员推理脚本（窗口截断 + 全流程兼容）
+                scores = _predict_dl_source_model(
+                    m_dir, trade_date, data_dir, member_out_root)
+                logger.info("源模型 %s (DL): %d 条信号, weight=%.3f", mid, len(scores), w)
+                all_scores[mid] = scores
+                weights[mid] = w
+                continue
             scores = predict_with_model(model, meta, day_df.copy())
             if scores:
                 all_scores[mid] = scores

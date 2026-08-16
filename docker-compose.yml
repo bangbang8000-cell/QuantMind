@@ -623,6 +623,9 @@ services:
 
   # 7. QwenPaw (QuantBot 聊天机器人)
   qwenpaw:
+    # 国内拉取 Docker Hub 时常因 CloudFront IPv6 链路被重置失败，可用镜像加速源：
+    #   docker pull docker.1ms.run/agentscope/qwenpaw:latest
+    #   docker tag  docker.1ms.run/agentscope/qwenpaw:latest agentscope/qwenpaw:latest
     image: agentscope/qwenpaw:latest
     container_name: qwenpaw
     ports:

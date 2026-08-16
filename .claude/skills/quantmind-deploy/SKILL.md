@@ -273,6 +273,91 @@ bash scripts/setup/build-autodl-remote.sh
 4. **看状态**：`training-runs/{run_id}` 轮询；节点实时状态 `training-nodes/{node_id}/status`
 5. **模型回传**：训练完模型 scp 回传注册到 `/models`
 
+## 8b. AutoDL 实例内原生部署（无 Docker 环境）
+
+> 实战记录（2026-08-16，RTX 5090 实例）。AutoDL 实例是容器（PID1=bash），**宿主机未开嵌套容器权限**，Docker 完全不可用。若需在实例内跑完整 QuantMind 平台（而非仅作训练节点），走原生部署。
+
+### 环境探测（部署前必做）
+```bash
+# Docker 可行性判定：缺 SYS_ADMIN 能力位 + unshare 被禁 = 装不了 Docker（rootless 也不行）
+grep CapEff /proc/self/status                      # a80425fb 缺 0x200000 (SYS_ADMIN)
+unshare --user --map-root-user true 2>&1           # Operation not permitted → 无 userns
+ps -p 1 -o comm=                                    # bash（非 systemd，开机自启只能挂 .bashrc）
+```
+
+### 原生部署步骤（全部装系统盘，保存镜像才完整）
+```bash
+# 1. 系统依赖（Ubuntu 22.04 源自带 PG14/Redis6，版本够用）
+apt-get install -y postgresql redis-server nginx git build-essential cmake swig libgomp1
+
+# 2. Python 3.10（对齐官方镜像；AutoDL 自带 miniconda 是 py3.12，必须另建环境）
+conda create -n qm python=3.10 pip
+source activate qm
+
+# 3. torch GPU 版（走阿里云 PyPI，实测 4MB/s；官方 pytorch.org 在 AutoDL 被 403）
+pip install torch==2.9.1 -i https://mirrors.aliyun.com/pypi/simple/
+
+# 4. 其余依赖（与 Dockerfile.oss 同清单，requirements/*.txt + quantdb-sdk + patch_qlib）
+pip install -r requirements.txt -r requirements/production.txt -r requirements/ai.txt
+pip install "quantdb-sdk>=0.3.1" && python docker/patch_qlib.py
+
+# 5. PG 初始化（实例内无 systemd，用 pg_ctlcluster 拉起）
+pg_ctlcluster 14 main start
+su - postgres -c "psql -c \"CREATE ROLE quantmind LOGIN PASSWORD 'quantmind2026';\""
+su - postgres -c "psql -c 'CREATE DATABASE quantmind OWNER quantmind;'"
+PGPASSWORD=quantmind2026 psql -h 127.0.0.1 -U quantmind -d quantmind -f backend/shared/db_init.sql
+
+# 6. Redis：redis-server --daemonize yes --port 6379
+
+# 7. 环境变量：导出对齐 docker-compose.yml 的 env（DB_HOST=127.0.0.1，STORAGE_ROOT=数据目录）
+
+# 8. 启动后端（setsid 彻底脱离 SSH 会话，否则 SSH 断开进程被杀）
+cd /root/QuantMind && setsid nohup bash qm-start.sh > data/logs/backend.log 2>&1 < /dev/null &
+
+# 9. 前端：本地 npm run build:react 构建 dist-react（~29M），scp 到 /usr/share/nginx/html/
+#    nginx 反代 /api/→127.0.0.1:8000、/ws/→127.0.0.1:8003；$connection_upgrade 变量是
+#    docker-nginx 专属，原生 nginx 直接写 Connection "upgrade"
+
+# 10. 开机自启（无 systemd）：写 /etc/autodl.sh（AutoDL 官方开机钩子，PID1 boot.sh 会调用它）
+#    内容：service cron start + 调用 /root/qm-autostart.sh（pg_ctlcluster + redis --daemonize + nginx + setsid 后端）
+#    cron 看门狗兜底：apt install cron && service cron start && crontab -e 加 "* * * * * bash /root/qm-watchdog.sh"
+#    ⚠️ .bashrc 自启无效——PID1 是 boot.sh，不经过交互式登录；实例重启后 cron 不自起，必须写进 autodl.sh
+```
+
+### AutoDL 原生部署踩坑清单
+| 坑 | 现象 | 解法 |
+|---|---|---|
+| **Docker 装不上** | unshare/mount 全被拒 | 放弃 docker，原生部署（本表） |
+| **/.dockerenv 触发容器重定向** | AutoDL 实例**本身就是容器**（存在 /.dockerenv），`config.py` 检测到后把 REDIS_HOST 强制改成 `quantmind-redis` → 原生部署无此 DNS，登录卡 ~24s DNS 超时 | 把代码里所有 quantmind-* 容器名全部写入 /etc/hosts → 127.0.0.1（`grep -rhoE 'quantmind-[a-z0-9_-]+' backend --include='*.py' | sort -u` 枚举，~22 个）；改完重启后端登录 0.3s |
+| **外网代码源全废** | GitHub 0-25KB/s、Gitee 613B/s、ghproxy 全超时、ACR 426B/s | 代码走**本地打包 scp**（瘦身后 ~16MB）；依赖走**阿里云 PyPI**（4MB/s 唯一快源） |
+| **SSH 直传限速** | ~100KB/s（30MB 传 5 分钟） | ①砍体积：exclude 掉 scenarios/fonts/torch_wheels/rd-agent/bridge-windows 等大目录 ②并行传多个小包 |
+| **tar exclude 误伤** | `--exclude='models'` 把 `backend/services/*/models` 全部剔除 → 四服务 ModuleNotFoundError 崩 5 次 | 排除用精确路径；传完必须 `find backend -type d -name models` 对比本地远端 |
+| **pkill 断 SSH** | pkill 模式匹配到 SSH 会话自身命令 → 连接断开（exit 255/144） | 用 `pkill -f 'main_oss[.]py'` 正则字符类防自匹配；启动用 `setsid nohup ... < /dev/null` |
+| **nohup 目录未建** | 日志目录不存在导致启动静默失败 | 启动脚本里先 mkdir -p 所有数据/日志目录 |
+| **conda py312 不兼容** | qlib 等依赖锁 py3.10 | 必须 `conda create -n qm python=3.10` |
+| **python 脚本生搬硬套** | 用 `python3` 而非 conda 环境 python | 所有启动/验证用 `/root/miniconda3/envs/qm/bin/python` |
+| **无 systemd** | systemctl 是摆设 | PG 用 pg_ctlcluster、Redis 用 --daemonize、自启挂 /etc/autodl.sh（非 .bashrc）；`apt install cron` 后还要 `service cron start` 并写进 /etc/autodl.sh（实例重启后 cron 不会自起，看门狗就废了） |
+| **看门狗 pgrep 失灵** | main_oss 的 uvicorn worker 经 multiprocessing.spawn 后 cmdline 被重写为 `spawn_main`（不含 main_oss 字样）且 PPID=1，`pgrep -f main_oss` 永远匹配不到 → 看门狗每分钟误判重复拉起 | 看门狗按**端口监听**判断（`ss -tln | grep ":8000 "`），不能用 pgrep -f |
+| **两代进程混居** | 杀进程时 pkill 模式没匹配到主进程（如 `pkill -f main_oss[.]py` 匹配不到、`envs/qm` 匹配不到主进程）→ 旧 worker 占着端口，新启动的主进程端口绑定失败，日志刷 "crashed too many times (5/5)" 死循环，health 却显示 healthy（响应的是没人管的旧孤儿 worker） | ①清场用 `ps -eo pid,cmd | grep -E "main_oss|envs/qm"` 枚举出 PID 逐个 kill -9（避免 pkill 自匹配）②qm-start.sh 加**启动锁**（/tmp/qm-start.lock + trap EXIT 释放）防重复启动 ③验证：`ps` 里 `backend/main_oss` 恰好 1 个进程 |
+| **nginx $connection_upgrade** | docker-nginx 专属变量，原生 nginx 配置报错/ws 不通 | websocket 反代直接写 `Connection "upgrade"` |
+| **AutoDL 端口映射** | 只有 6006/6008 映射到公网（https://<实例ID>.westd.seetacloud.com:8443/443），8000-8003 不映射 | nginx 额外 listen 6006（80 默认 server 的同一 server 块加 listen），对外访问走 8443 |
+| **修改需重启才生效** | 改 /etc/hosts、.env 后旧进程还在 | pkill（防自匹配）→ 重跑 qm-start.sh → 验证四端口 health + 登录 |
+
+### 部署后验证（AutoDL 原生）
+```bash
+for p in 8000 8001 8002 8003; do curl -s http://127.0.0.1:$p/health; done   # 四服务 healthy
+time curl -s -X POST http://127.0.0.1:8000/api/v1/auth/login -H 'Content-Type: application/json' \
+  -d '{"username":"admin","password":"admin123","tenant_id":"default"}'      # 返回 access_token 且 <1s
+#   若 >20s 必是 /.dockerenv 陷阱（见踩坑清单第 2 条）
+/root/miniconda3/envs/qm/bin/python -c "import torch; print(torch.cuda.get_device_name(0))"
+
+# 外网访问（AutoDL 控制台「自定义服务」把 6006 映射成公网 8443 后）：
+curl -skI https://<实例ID>.westd.seetacloud.com:8443/ | head -1               # 前端 200
+curl -sk -X POST https://<实例ID>.westd.seetacloud.com:8443/api/v1/auth/login \
+  -H 'Content-Type: application/json' \
+  -d '{"username":"admin","password":"admin123","tenant_id":"default"}'      # 公网登录链路 200
+```
+
 ## 9. 问题排查（诊断树，按顺序走）
 
 ### 9.1 先看这 3 条命令的输出（快速定位）
