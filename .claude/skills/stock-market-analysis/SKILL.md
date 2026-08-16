@@ -400,6 +400,30 @@ curl -s -H "$AUTH" "$BASE/api/v1/research/universe?run_id=run_20260805_xxx&limit
 5. **禁止编造**：拿不到的数据写缺失原因，绝不估一个数字
 6. **评级统一**：综合评级只允许 买入/增持/中性/减持/卖出 五档，且必须由多维证据推导，禁止只凭单一指标
 
+### 7.3 报告落盘（必做，做完才叫交付）
+
+报告生成后**必须**写入股票报告目录（前端「股票报告」页展示的就是这里）：
+
+```
+db/trading_agents_results/{市场名}/{股票名}/{股票名}{代码}_{日期}_投研分析报告.{md,pdf}
+例：db/trading_agents_results/A股市场/工业富联/工业富联601138_2026-08-16_投研分析报告.md
+```
+
+- 市场名：`A股市场`（**无空格**）/ 美股市场 / 港股市场 / 区块链市场 / 期货市场
+- 文件名三段下划线格式：`{股票名}{代码}_{YYYY-MM-DD}_投研分析报告`，前端按此解析股票名/代码/日期
+- **md → pdf 转换**（reportlab 只有容器里有）：
+  ```bash
+  docker cp /tmp/report.md quantmind:/tmp/report.md
+  docker exec quantmind bash -lc "cd /app && python3 backend/scripts/md_to_pdf_report.py /tmp/report.md /tmp/report.pdf"
+  docker cp quantmind:/tmp/report.pdf /tmp/report.pdf
+  ```
+- **落盘权限陷阱**：宿主机上 `db/trading_agents_results/` 的目录 owner 是容器内 root，宿主机直接 cp md 会 EACCES——**必须走 docker cp**（容器内路径 `/app/db/trading_agents_results/...`，宿主机的 `./db` 挂载到容器 `/app/db`）：
+  ```bash
+  docker cp /tmp/report.md quantmind:/app/db/trading_agents_results/A股市场/{股票名}/{股票名}{代码}_{日期}_投研分析报告.md
+  docker cp /tmp/report.pdf quantmind:/app/db/trading_agents_results/A股市场/{股票名}/{股票名}{代码}_{日期}_投研分析报告.pdf
+  ```
+- 交付确认：ls 目标目录确认 md+pdf 都存在；只发 /tmp 路径 = 未交付
+
 ## 8. 复杂度分级（智能体按需选择深度）
 
 | 级别 | 用时 | 内容 |
