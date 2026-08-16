@@ -1701,3 +1701,156 @@ async def admin_toggle_tag(tag_id: int):
         raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"toggle tag failed: {e}")
+
+
+# ---------------------------------------------------------------------------
+# Huntly 后台 UI 代理 — /api/v1/news/huntly-ui/*
+# ---------------------------------------------------------------------------
+# Huntly SPA 的静态资源和 API 全是根路径（/static/...、/api/...），
+# 经反向代理挂子路径时需要：1) HTML 资源路径重写  2) JS 拦截脚本把 /api 调用
+# 重写到本代理路径  3) 代理目标把 /api 前缀剥掉转发给 Huntly 后端。
+# 这样 8089/6008 都不需要暴露，公网/局域网/本地统一走 QuantMind 后端。
+from fastapi import Request
+from fastapi.responses import HTMLResponse, PlainTextResponse, Response
+
+HUNTLY_UI_STATIC_MIME = {
+    ".html": "text/html",
+    ".js": "application/javascript",
+    ".css": "text/css",
+    ".json": "application/json",
+    ".svg": "image/svg+xml",
+    ".png": "image/png",
+    ".jpg": "image/jpeg",
+    ".jpeg": "image/jpeg",
+    ".ico": "image/x-icon",
+    ".woff": "font/woff",
+    ".woff2": "font/woff2",
+    ".ttf": "font/ttf",
+    ".webmanifest": "application/manifest+json",
+    ".txt": "text/plain",
+}
+
+_HUNTLY_UI_REWRITE_SCRIPT = r"""<script>
+(function(){
+  var P='/api/v1/news/huntly-ui/api/';
+  function rw(u){
+    if(typeof u!=='string')return u;
+    if(u.charAt(0)==='/'&&u.indexOf('/api/')===0)return P+u.slice(5);
+    return u;
+  }
+  var of=window.fetch;
+  window.fetch=function(u,o){return of(rw(u),o);};
+  var ox=XMLHttpRequest.prototype.open;
+  XMLHttpRequest.prototype.open=function(m,u){return ox.call(this,m,rw(u));};
+  var _ws=window.WebSocket;
+  window.WebSocket=function(u,p){if(typeof u==='string'&&u.indexOf('/api/')===0)u=P+u.slice(5);return new _ws(u,p);};
+  window.WebSocket.prototype=_ws.prototype;
+})();
+</script>"""
+
+
+def _huntly_ui_unreachable(accept: str = "") -> Response:
+    if "text/html" in (accept or ""):
+        return HTMLResponse(
+            "<h2>Huntly 未启动</h2><p>请检查 HUNTLY_BASE_URL 配置（默认 http://quantmind-huntly）。</p>",
+            status_code=502,
+        )
+    return PlainTextResponse("Huntly 未部署或未启动", status_code=502)
+
+
+def _huntly_ui_mime(path: str) -> str:
+    from pathlib import PurePosixPath
+
+    return HUNTLY_UI_STATIC_MIME.get(PurePosixPath(path).suffix.lower(), "application/octet-stream")
+
+
+async def _huntly_ui_proxy_static(path: str, accept: str) -> Response:
+    """代理 Huntly SPA 静态资源，重写 HTML 里的根路径。"""
+    url = f"{HUNTLY_BASE_URL}/{path.lstrip('/')}"
+    try:
+        async with httpx.AsyncClient(timeout=30.0, follow_redirects=True) as client:
+            resp = await client.get(url, headers={"Accept": accept})
+    except httpx.HTTPError:
+        return _huntly_ui_unreachable(accept)
+
+    content_type = resp.headers.get("content-type", "")
+    body = resp.content
+
+    if "text/html" in content_type and body:
+        html = body.decode("utf-8", errors="replace")
+        html = html.replace('src="/static/', 'src="/api/v1/news/huntly-ui/static/')
+        html = html.replace('href="/static/', 'href="/api/v1/news/huntly-ui/static/')
+        html = html.replace('href="/favicon.ico"', 'href="/api/v1/news/huntly-ui/favicon.ico"')
+        html = html.replace('href="/apple-touch-icon.png"', 'href="/api/v1/news/huntly-ui/apple-touch-icon.png"')
+        html = html.replace('href="/site.webmanifest"', 'href="/api/v1/news/huntly-ui/site.webmanifest"')
+        html = html.replace("<head>", "<head>" + _HUNTLY_UI_REWRITE_SCRIPT, 1)
+        return HTMLResponse(content=html, status_code=resp.status_code)
+
+    resp_headers = {}
+    if "content-type" not in resp.headers:
+        resp_headers["content-type"] = _huntly_ui_mime(path)
+    else:
+        resp_headers["content-type"] = content_type
+
+    if any(
+        path.endswith(ext)
+        for ext in (".js", ".mjs", ".css", ".woff2", ".woff", ".ttf", ".svg", ".png", ".webp", ".ico")
+    ):
+        resp_headers["cache-control"] = "public, max-age=3600"
+
+    return Response(content=body, status_code=resp.status_code, headers=resp_headers)
+
+
+async def _huntly_ui_proxy_api(request: Request) -> Response:
+    """代理 /api/v1/news/huntly-ui/api/* → Huntly /api/*（带 JWT 会话）。"""
+    sub = request.url.path
+    prefix = "/api/v1/news/huntly-ui/api/"
+    idx = sub.find(prefix)
+    target = "/api/" + sub[idx + len(prefix):] if idx >= 0 else sub
+    if request.url.query:
+        target += "?" + request.url.query
+
+    headers = {k: v for k, v in request.headers.items() if k.lower() not in ("host", "content-length", "connection")}
+    # 后端全局 JWT 会话兜底（覆盖转发任何客户端 token，保证 UI 请求总有有效鉴权）
+    try:
+        token = await _ensure_session()
+    except HTTPException:
+        # 会话没建立也不阻塞 UI 加载——带原样转发，Huntly 自会 401
+        token = ""
+    if token:
+        headers["Authorization"] = f"Bearer {token}"
+        headers["Cookie"] = f"auth_token={token}"
+
+    body = await request.body() if request.method in ("POST", "PUT", "PATCH", "DELETE") else None
+    async with httpx.AsyncClient(timeout=HUNTLY_TIMEOUT, follow_redirects=False) as c:
+        try:
+            r = await c.request(request.method, f"{HUNTLY_BASE_URL}{target}", headers=headers, content=body)
+        except httpx.HTTPError:
+            return _huntly_ui_unreachable(request.headers.get("accept", ""))
+
+    resp_headers = {"content-type": r.headers.get("content-type", "application/json")}
+    # 透传 Set-Cookie（Huntly 用 HttpOnly cookie 会话；子路径下浏览器
+    # 存的是 QuantMind origin 的 cookie，转发回 Huntly 时靠 Cookie 头携带）
+    if r.headers.get("set-cookie"):
+        resp_headers["set-cookie"] = r.headers.get("set-cookie")
+    return Response(content=r.content, status_code=r.status_code, headers=resp_headers)
+
+
+# ⚠️ API 路由必须先于静态路由声明：FastAPI 按声明顺序匹配，
+# /huntly-ui/api/{path:path} 若排在 /huntly-ui/{path:path}（静态）之后，
+# GET 会被静态路由吞掉（转发时不带鉴权会话），Huntly 返回 405/401。
+@router.api_route("/huntly-ui/api/{path:path}", methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS", "HEAD"])
+async def huntly_ui_api(path: str, request: Request):
+    return await _huntly_ui_proxy_api(request)
+
+
+@router.get("/huntly-ui/{path:path}")
+async def huntly_ui_static(path: str, request: Request):
+    accept = request.headers.get("accept", "*/*")
+    return await _huntly_ui_proxy_static(path, accept)
+
+
+@router.get("/huntly-ui")
+async def huntly_ui_index(request: Request):
+    accept = request.headers.get("accept", "*/*")
+    return await _huntly_ui_proxy_static("", accept)

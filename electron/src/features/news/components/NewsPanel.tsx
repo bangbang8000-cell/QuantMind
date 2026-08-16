@@ -12,6 +12,7 @@
 
 import React, { useEffect, useMemo, useRef, useState, useCallback } from 'react';
 import { useDebounce } from '../../../hooks/useDebounce';
+import { SERVICE_ENDPOINTS } from '../../../config/services';
 import {
   Badge,
   Button,
@@ -801,7 +802,7 @@ export const NewsPanel: React.FC = () => {
         </Tooltip>
         {health?.huntly_base_url && (
           <Tooltip title="Huntly 后台">
-            <a href={health.huntly_base_url.replace('http://quantmind-huntly', `http://${window.location.hostname}:8090`)} target="_blank" rel="noreferrer" style={{ fontSize: 12, color: '#6366f1', whiteSpace: 'nowrap' }}>
+            <a href={`${SERVICE_ENDPOINTS.USER_SERVICE}/news/huntly-ui/`} target="_blank" rel="noreferrer" style={{ fontSize: 12, color: '#6366f1', whiteSpace: 'nowrap' }}>
               <LinkOutlined /> 后台
             </a>
           </Tooltip>

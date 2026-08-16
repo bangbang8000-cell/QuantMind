@@ -351,7 +351,25 @@ java -Xms128m -Xmx1024m -Duser.timezone=GMT+08 -jar server.jar \
 #    密码是 bcrypt(10)，用 python bcrypt.hashpw(b"admin123", bcrypt.gensalt(10))
 # 后端连 Huntly：.env.sh 里 HUNTLY_USERNAME/HUNTLY_PASSWORD 改对后重启后端，news/health 应返回 up
 # ⚠️ 8090 不在 AutoDL 公网映射（只有 6006/6008 映射），前端「后台」链接打不开：
-#    nginx 单独 server 块 listen 6008 反代 127.0.0.1:8090（6008 映射到公网 443，前端 6006 映射 8443）
+#    方案 A（已落地）：后端 /api/v1/news/huntly-ui/ 做 SPA 子路径代理（见下方「Huntly UI 代理」）——
+#    HTML 路径重写 + JS 拦截脚本重写 fetch/XHR/WebSocket/EventSource 的 /api/ → 代理路径
+#    前端资讯页「后台」按钮指向 /api/v1/news/huntly-ui/（SERVICE_ENDPOINTS.USER_SERVICE 拼接），无需 8090 公网暴露
+#    方案 B（备用）：nginx 单独 server 块 listen 6008 反代 127.0.0.1:8090（6008 映射到公网 443，前端 6006 映射 8443）
+
+### Huntly UI 代理（SPA 子路径代理模式，news.py 已实现）
+```bash
+# 访问入口：https://<实例ID>.westd.seetacloud.com:8443/api/v1/news/huntly-ui/
+# 登录：admin / admin123（Huntly 自己的账号体系，与 QuantMind 后端账号无关）
+```
+SPA 子路径代理必须做对四件事，缺一即部分功能失灵（实战踩坑记录）：
+1. **HTML 路径重写**：`src="/static/` → `src="/api/v1/news/huntly-ui/static/`、favicon/manifest 同理
+2. **JS 拦截脚本注入 `<head>`**：重写 `fetch`/`XMLHttpRequest.open`/`WebSocket` 的 `/api/` 前缀 → 代理路径
+   （EventSource 构造也传 `/api/...` 字符串，走 fetch 重写不够，Huntly 用的是 `new EventSource("/api/...")`，需要把 EventSource 也包一层或确认其 URL 已被拦截；当前实现已覆盖）
+3. **API 路由声明顺序**：FastAPI 按声明顺序匹配，`@router.api_route("/huntly-ui/api/{path:path}")` 必须声明在
+   `@router.get("/huntly-ui/{path:path}")`（静态）**之前**，否则 GET 会被静态路由吞掉 → 不带鉴权转发 → 405/401
+4. **Set-Cookie 透传**：Huntly 是 HttpOnly cookie 会话（`auth_token=...; Path=/; HttpOnly`），前端 JS 里根本不存 token。
+   代理响应必须透传 `set-cookie` 头，浏览器才会把 cookie 存在 QuantMind origin 下；转发时后端 `_ensure_session()`
+   的全局 JWT 兜底（带 Authorization + Cookie 双头）保证登录前/后 API 都通
 ```
 ```
 
@@ -369,7 +387,9 @@ java -Xms128m -Xmx1024m -Duser.timezone=GMT+08 -jar server.jar \
 | **python 脚本生搬硬套** | 用 `python3` 而非 conda 环境 python | 所有启动/验证用 `/root/miniconda3/envs/qm/bin/python` |
 | **无 systemd** | systemctl 是摆设 | PG 用 pg_ctlcluster、Redis 用 --daemonize、自启挂 /etc/autodl.sh（非 .bashrc）；`apt install cron` 后还要 `service cron start` 并写进 /etc/autodl.sh（实例重启后 cron 不会自起，看门狗就废了） |
 | **看门狗 pgrep 失灵** | main_oss 的 uvicorn worker 经 multiprocessing.spawn 后 cmdline 被重写为 `spawn_main`（不含 main_oss 字样）且 PPID=1，`pgrep -f main_oss` 永远匹配不到 → 看门狗每分钟误判重复拉起 | 看门狗按**端口监听**判断（`ss -tln | grep ":8000 "`），不能用 pgrep -f |
-| **两代进程混居** | 杀进程时 pkill 模式没匹配到主进程（如 `pkill -f main_oss[.]py` 匹配不到、`envs/qm` 匹配不到主进程）→ 旧 worker 占着端口，新启动的主进程端口绑定失败，日志刷 "crashed too many times (5/5)" 死循环，health 却显示 healthy（响应的是没人管的旧孤儿 worker） | ①清场用 `ps -eo pid,cmd | grep -E "main_oss|envs/qm"` 枚举出 PID 逐个 kill -9（避免 pkill 自匹配）②qm-start.sh 加**启动锁**（/tmp/qm-start.lock + trap EXIT 释放）防重复启动 ③验证：`ps` 里 `backend/main_oss` 恰好 1 个进程 |
+| **两代进程混居** | 杀进程时 pkill 模式没匹配到主进程（如 `pkill -f main_oss[.]py` 匹配不到、`envs/qm` 匹配不到主进程）→ 旧 worker 占着端口，新启动的主进程端口绑定失败，日志刷 "crashed too many times (5/5)" 死循环，health 却显示 healthy（响应的是没人管的旧孤儿 worker） | ①清场用 `ps -eo pid,cmd | grep -E "main_oss|envs/qm"` 枚举出 PID 逐个 kill -9（避免 pkill 自匹配）——**必须把 spawn_main 孤儿也杀掉**（它们的 cmdline 不含 main_oss，`ps` 里只有 spawn_main/resource_tracker 字样）②qm-start.sh 加**启动锁**（/tmp/qm-start.lock + trap EXIT 释放）防重复启动 ③验证：`ps` 里 `backend/main_oss` 恰好 1 个进程且四端口由它监听 |
+| **Huntly UI 代理 401/405** | GET /huntly-ui/api/* 经代理全 401/500——FastAPI 路由声明顺序问题：静态 `/{path:path}` 先于 api_route 声明，GET 被静态路由吞掉不带鉴权转发 | api_route 必须声明在静态路由之前（见「Huntly UI 代理」）；Set-Cookie 必须透传（Huntly 是 HttpOnly cookie 会话） |
+| **qm-start.sh 路径写错** | cd /root/QuantMind 后 `bash qm-start.sh` 报 No such file——脚本在 /root/ 不在仓库里 | 用绝对路径 `bash /root/qm-start.sh` |
 | **nginx $connection_upgrade** | docker-nginx 专属变量，原生 nginx 配置报错/ws 不通 | websocket 反代直接写 `Connection "upgrade"` |
 | **AutoDL 端口映射** | 只有 6006/6008 映射到公网（https://<实例ID>.westd.seetacloud.com:8443/443），8000-8003 不映射 | nginx 额外 listen 6006（80 默认 server 的同一 server 块加 listen），对外访问走 8443 |
 | **修改需重启才生效** | 改 /etc/hosts、.env 后旧进程还在 | pkill（防自匹配）→ 重跑 qm-start.sh → 验证四端口 health + 登录 |

@@ -159,10 +159,9 @@ def _normalise_fetch(
     )
     # 按持股数量降序取 top50
     df = df.sort_values("holding_quantity", ascending=False).head(50).copy()
-    # 代码统一为后缀格式（00700 → 0700.HK；创业板 8 开头保留 5 位+.HK）
-    from backend.shared.stock_utils import StockCodeUtil
-
-    df["stock_code"] = StockCodeUtil.to_hk_suffix(stock_code)
+    # 代码保持 5 位（00700）——与分区历史标准一致，docstring 明示不加 .HK 后缀。
+    # 此前误用 to_hk_suffix 导致增量过滤/去重失效，每次全量重抓。
+    df["stock_code"] = str(stock_code).strip().split(".")[0].zfill(5)
     df["stock_name"] = stock_name
     df["query_date"] = query_date
     return df[OUT_COLS]
@@ -232,9 +231,9 @@ async def sync_partition(
 
     existing_stocks = _existing_stocks(date_str) if date_str in existing else set()
 
-    # 残缺分区检测：分区存在但股票数远少于全市场（如中断后只剩 1 只），
-    # 视为残缺需补抓，否则增量逻辑会永远跳过残缺分区。
-    incomplete = len(existing_stocks) < max(50, int(len(stock_df) * 0.5))
+    # 残缺分区检测：健康分区覆盖率 98.3-98.5%（约 40 只股票无 CCASS 披露），
+    # 阈值取 95%；50% 阈值会漏过 92% 残缺分区（08-07 曾因此永远跳过尾部补抓）。
+    incomplete = len(existing_stocks) < max(50, int(len(stock_df) * 0.95))
     if date_str in existing and skip_existing_stocks and not incomplete and not symbol:
         return {"date": date_str, "status": "exists", "stocks": len(existing_stocks)}
 
