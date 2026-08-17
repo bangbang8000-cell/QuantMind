@@ -23,6 +23,7 @@ description: "股票市场深度数据分析与导出 — 全市场信号扫描�
 > | min1/min5 停更 20260724、hsgt_north 停更 202408 | 别当实时数据用 |
 > | 财务 parquet 单位=**元** | instrument_detail `J_*`=万元、`Zsz/Ltsz`=亿元 |
 > | 股息：dividend_factors `interest`=**每10股派息** | 算每股股息要 /10 |
+> | **risk/features 接口的 MA/ATR 是复权口径陷阱（高危）**：ma*/ma_gap*/vol_atr_14 曾取自 features_daily（**后复权**），与 OHLCV（前复权）混用 → 比音勒芬 002832 曾被误判「跌破均线」（ma5=147 vs 实际价 26.08）| **20260817 起已修复**：stock_daily_latest 的 MA/gap/ATR 改为基于前复权 close 重算（ma_gap_N=(close/maN−1)×100，ATR=Wilder）。引用接口 MA 前必须用 `/research/kline` 实际数据自算核对（pandas rolling），**接口值 ≠ K线算出的值 → 立即按 K 线为准并标注口径** |
 
 ## 认证
 
@@ -461,5 +462,6 @@ db/trading_agents_results/{市场名}/{股票名}/{股票名}{代码}_{日期}_�
 | 财务/融资融券数据拿不到 | 这些不在 API 里，必须 docker exec 直读 parquet（见 3.2/3.5） |
 | l2 资金流字段全 NaN | l2 分区停更 20260227（厂商侧），明确标注数据缺失，勿编造 |
 | 股息率两个值对不上 | valuation.dividend_rate 20260814 起切换百分数口径，跨日对比先 ×10 归一 |
+| risk 接口 MA 与实际价差一个量级（如 ma5=147 vs 价 26） | 复权口径陷阱：接口曾混入后复权 features_daily 的 MA。**必须先拉 `/research/kline` 用 pandas rolling 自算核对**，以 K 线为准；20260817 起接口已改为前复权重算，但历史报告/旧缓存仍可能踩坑 |
 | 市值/成交额数字离谱 | 单位错：API 市值=亿元、flow=百万元；parquet 市值=元；成交额永远是万元 |
 | 导出乱码 | CSV 用 `utf-8-sig` 编码（已内置 BOM） |

@@ -526,22 +526,31 @@ _KLINE_COLS = ("open", "high", "low", "close", "volume", "amount")
 
 # features_daily = technical_indicators + valuation 合并表，覆盖 2016~今全序列。
 # 不用 qdb_technical_indicators：它只有 595 天（2018-06~2026-07 整段缺失）。
+#
+# ⚠️ 复权口径（2026-08-17 修）：features_daily 的 close/ma5~ma60/vol_atr_14 是
+# **后复权**（对应 qdb_daily_backward 口径，如 002832 的 146.90），而 OHLCV 取
+# 自 qdb_daily_forward（前复权 26.08）→ 同一行两个价格体系，risk 评分卡和报告
+# 误判「跌破均线」「极端波动」。价格类指标（ma5/10/20/60、ma_gap_*、vol_atr_14）
+# 改为基于 forward close 用窗口函数重算，与 OHLCV 同口径；features_daily 只保留
+# 非价格类字段（估值/波动率%等）。
 _FEATURE_COLS = {
     "pe_ttm": "pe_ttm",
     "pb": "pb",
     "total_mv": "total_mv",
     "float_mv": "float_mv",
-    "ma5": "ma5", "ma10": "ma10", "ma20": "ma20", "ma60": "ma60",
-    "ma_gap_5": "ma_gap_5", "ma_gap_10": "ma_gap_10", "ma_gap_20": "ma_gap_20",
     "return_1d": "return_1d", "return_3d": "return_3d", "return_5d": "return_5d",
     "return_10d": "return_10d", "return_20d": "return_20d", "return_60d": "return_60d",
     "vol_std_5": "vol_std_5", "vol_std_20": "vol_std_20", "vol_std_60": "vol_std_60",
-    "vol_atr_14": "vol_atr_14", "rsi_14": "rsi_14", "rsi_6": "rsi_6",
+    "rsi_14": "rsi_14", "rsi_6": "rsi_6",
     "macd_hist": "macd_hist", "kdj_k": "kdj_k", "beta_20": "beta_20",
     "volume_ma_3": "volume_ma_5", "amount_ma_5": "amount_ma_5",
     "pct_change": "pct_change",
     "vol_to_ma5": "volume_ratio_5", "vol_to_ma20": "volume_ratio_20",
 }
+# 价格类指标：基于 qdb_daily_forward close 用 DuckDB 窗口函数重算
+# （源表是后复权口径，与 OHLCV 混用导致风险评分/报告误判）
+_PRICE_DERIVED_COLS = ("ma5", "ma10", "ma20", "ma60", "ma_gap_5", "ma_gap_10",
+                       "ma_gap_20", "vol_atr_14")
 # PG volume_trend_3d 是 boolean（量能是否上升），QuantDB 同名列是数值趋势，语义不同，不映射
 
 
@@ -557,6 +566,44 @@ def _trade_dates(hub, start: date, end: date) -> list[date]:
         if start <= d <= end:
             out.append(d)
     return out
+
+
+def _add_price_derived_cols(df: pd.DataFrame) -> pd.DataFrame:
+    """基于前复权 forward OHLCV 重算价格派生指标（与 OHLCV 同口径）。
+
+    - ma5/10/20/60：close.rolling(n).mean()
+    - ma_gap_N：(close/maN − 1) × 100（百分数口径，与 features_daily 一致）
+    - vol_atr_14：TR = max(high−low, |high−prev_close|, |low−prev_close|)，
+      Wilder 平滑（ewm alpha=1/14，与 features_daily 的 6.4185 实测一致）
+
+    调用方需先拉取回看窗口数据（本函数只负责计算），再按区间裁剪。
+    """
+    if df.empty:
+        return df
+    df = df.sort_values("trade_date")
+    derived = pd.DataFrame(index=df.index)
+    for sym, grp in df.groupby("symbol", sort=False):
+        close = grp["close"].astype(float)
+        prev_close = close.shift(1)
+        tr = pd.concat(
+            [
+                grp["high"].astype(float) - grp["low"].astype(float),
+                (grp["high"].astype(float) - prev_close).abs(),
+                (grp["low"].astype(float) - prev_close).abs(),
+            ],
+            axis=1,
+        ).max(axis=1)
+        # Wilder 平滑：ATR_t = (ATR_{t-1} × 13 + TR_t) / 14
+        atr = tr.ewm(alpha=1 / 14, adjust=False).mean()
+        for n, col in ((5, "ma5"), (10, "ma10"), (20, "ma20"), (60, "ma60")):
+            derived.loc[grp.index, col] = close.rolling(n).mean()
+        for n in (5, 10, 20):
+            ma = close.rolling(n).mean()
+            derived.loc[grp.index, f"ma_gap_{n}"] = (close / ma - 1) * 100
+        derived.loc[grp.index, "vol_atr_14"] = atr
+    for c in _PRICE_DERIVED_COLS:
+        df[c] = derived[c]
+    return df
 
 
 def fill_pg_from_parquet(
@@ -590,6 +637,7 @@ def fill_pg_from_parquet(
         ["trade_date", "symbol", "adj_factor"]
         + list(_KLINE_COLS)
         + [_FEATURE_COLS[c] for c in feat_cols]
+        + list(_PRICE_DERIVED_COLS)
     )
     non_pk = [c for c in pg_cols if c not in ("trade_date", "symbol")]
     update_set = ", ".join(f"{c}=EXCLUDED.{c}" for c in non_pk)
@@ -627,11 +675,14 @@ def fill_pg_from_parquet(
             " LEFT JOIN qdb_features_daily f ON f.symbol = k.symbol AND f.dt = k.dt"
             if has_feat else ""
         )
+        # 回看 160 自然日（≈110 交易日），覆盖 ma60 窗口与 ATR Wilder 预热，
+        # 产出时再裁到本批 [lo, hi]
+        lookback = (lo - timedelta(days=160)).strftime("%Y%m%d")
         sql = (
             f"SELECT k.dt, k.symbol, k.open, k.high, k.low, k.close, "
             f"k.volume, k.amount{feat_sel} "
             f"FROM qdb_daily_forward k{feat_join} "
-            f"WHERE k.dt >= {lo:%Y%m%d} AND k.dt <= {hi:%Y%m%d}{sym_filter}"
+            f"WHERE k.dt >= {lookback} AND k.dt <= {hi:%Y%m%d}{sym_filter}"
         )
 
         try:
@@ -655,8 +706,18 @@ def fill_pg_from_parquet(
             df["dt"].astype("int64").astype(str), format="%Y%m%d"
         ).dt.date
         df = df.drop(columns=["dt"])
+
+        # 价格派生指标：基于 forward close（前复权，与 OHLCV 同口径）重算，
+        # 与 features_daily 的后复权 ma*/ma_gap*/vol_atr_14 口径对齐问题见
+        # 模块顶部注释（2026-08-17 修复）
+        df = _add_price_derived_cols(df)
+
         df = df.replace([float("inf"), float("-inf")], None)
         df = df.astype(object).where(pd.notna(df), None)
+        # 裁掉回看窗口，只写本批区间
+        df = df[df["trade_date"] >= lo]
+        if df.empty:
+            continue
 
         records = [tuple(r) for r in df[pg_cols].itertuples(index=False, name=None)]
         try:

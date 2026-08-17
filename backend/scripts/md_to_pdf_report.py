@@ -118,10 +118,13 @@ def render_inline_md(text: str) -> str:
     """转义 HTML 特殊字符并应用行内 Markdown 标记（**粗体** / *斜体*）。
 
     - 全角空格（U+3000）替换为普通空格（reportlab 段落排版会丢失全角空格）
+    - emoji 变体选择符（U+FE0F，跟随 emoji 出现）剔除——不在字体子集内，
+      reportlab 会渲染成 notdef 方框
     - 先转义再注入 <b>/<i> 标签（比转义后 replace 还原更安全）
     - 所有分支统一走这里：正文/列表/表格/引用/标题内的 ** 都会被转换
     """
     text = text.replace("　", "  ")
+    text = text.replace("️", "")  # emoji 变体选择符：不在子集，渲染成方框
     text = text.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
     text = re.sub(r"\*\*(.+?)\*\*", r"<b>\1</b>", text)
     text = re.sub(r"\*(.+?)\*", r"<i>\1</i>", text)
