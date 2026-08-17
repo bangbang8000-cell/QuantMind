@@ -184,7 +184,9 @@ db/db.zip
 /results/
 /results_v*/
 /log/
-/electron/src/data/
+# 注意：electron/src/data/ 是前端 TypeScript 源码目录（策略模板库），
+# 2026-05 曾被误当"数据目录"加入 ignore，导致任何新克隆的前端构建失败。
+# 已放行并入库，勿再次忽略。
 /.cache/
 /.venv*/
 /Untitled*.ipynb
