@@ -230,6 +230,7 @@ class RemoteSSHOrchestrator(TrainingOrchestrator):
         try:
             await _set_parent("provisioning", 5, f"[MH] 多周期远程训练启动，共 {len(child_run_ids)} 个周期\n")
             completed_model_ids: list[str] = []
+            completed_run_ids: set[str] = set()
             horizon_labels: list[str] = []
             n_total = len(child_run_ids)
 
@@ -263,12 +264,14 @@ class RemoteSSHOrchestrator(TrainingOrchestrator):
                             completed_model_ids.append(
                                 model_registry_service.build_model_id_from_run(child_run_id)
                             )
+                            completed_run_ids.add(child_run_id)
                             break
                         if st == "failed":
                             raise RuntimeError(
                                 f"child T+{horizon} training failed: {(r.result or {}).get('error') or (r.logs or '')[-300:]}"
                             )
-                if child_run_id not in completed_model_ids:
+                # 用 run_id 判断完成（completed_model_ids 存的是模型 ID，见 local 版同款修复）
+                if child_run_id not in completed_run_ids:
                     raise RuntimeError(f"child T+{horizon} timed out waiting for completion")
                 await _set_parent("running", 5 + int(((idx + 1) / n_total) * 90), f"[MH] T+{horizon} 模型训练完成（{idx + 1}/{n_total}）\n")
 

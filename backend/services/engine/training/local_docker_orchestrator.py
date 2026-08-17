@@ -1118,6 +1118,7 @@ class LocalDockerOrchestrator(TrainingOrchestrator):
             await _set_parent("provisioning", 5, f"[MH] 多周期训练启动，共 {len(child_run_ids)} 个周期\n")
 
             completed_model_ids: list[str] = []
+            completed_run_ids: set[str] = set()
             horizon_labels: list[str] = []
             n_total = len(child_run_ids)
 
@@ -1169,13 +1170,17 @@ class LocalDockerOrchestrator(TrainingOrchestrator):
                             completed_model_ids.append(
                                 model_registry_service.build_model_id_from_run(child_run_id)
                             )
+                            completed_run_ids.add(child_run_id)
                             break
                         if st == "failed":
                             raise RuntimeError(
                                 f"child T+{horizon} training failed: {(r.result or {}).get('error') or (r.logs or '')[-300:]}"
                             )
 
-                if child_run_id not in completed_model_ids:
+                # 注意用 run_id 判断完成：completed_model_ids 里存的是模型 ID
+                # （mdl_cn_...），此前拿 child_run_id 与之比较恒不相等，
+                # 导致首个 child 成功后必然误报 "timed out"
+                if child_run_id not in completed_run_ids:
                     raise RuntimeError(f"child T+{horizon} timed out waiting for completion")
 
                 await _set_parent(
