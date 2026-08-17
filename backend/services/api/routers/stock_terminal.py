@@ -225,6 +225,218 @@ def _flag(v: Any) -> bool:
 
 
 # ---------------------------------------------------------------------------
+# P2: 财务报表 + 通用时序（估值/筹码资金/两融/情绪/股东）
+# ---------------------------------------------------------------------------
+
+from datetime import date as _date, timedelta as _timedelta  # noqa: E402
+
+import re as _re
+
+_SYMBOL_RE = _re.compile(r"^\d{6}\.(SH|SZ|BJ)$")
+
+# 财务三表 + 每股指标 关键字段（单位: 元；输出统一转亿元）
+_INCOME_COLS = {
+    "revenue": "营业收入", "total_operating_cost": "营业成本",
+    "oper_profit": "营业利润", "net_profit_excl_min_int_inc": "归母净利润",
+    "research_expenses": "研发费用", "sale_expense": "销售费用",
+    "inc_tax": "所得税",
+}
+_BALANCE_COLS = {
+    "tot_assets": "总资产", "tot_liab": "总负债", "total_equity": "股东权益",
+    "cash_equivalents": "货币资金", "inventories": "存货",
+    "total_current_assets": "流动资产", "accounts_payable": "应付账款",
+    "shortterm_loan": "短期借款",
+}
+_CASHFLOW_COLS = {
+    "net_cash_flows_oper_act": "经营现金流净额",
+    "net_cash_flows_inv_act": "投资现金流净额",
+    "net_cash_flows_fnc_act": "筹资现金流净额",
+}
+_PERSHARE_COLS = {
+    "equity_roe": "ROE(%)", "gross_profit": "毛利率(%)", "net_profit": "净利率(%)",
+    "inc_revenue_rate": "营收增速(%)", "inc_net_profit_rate": "净利增速(%)",
+    "s_fa_eps_basic": "EPS(元)", "s_fa_bps": "每股净资产(元)",
+    "sales_cash_flow": "销售现金流比",
+}
+
+# /series 时序组: (DuckDB 视图, 输出列)
+_SERIES_GROUPS: dict[str, tuple[str, list[str]]] = {
+    "valuation": ("qdb_valuation", [
+        "pe_ttm", "pb", "ps_ttm", "dividend_rate", "total_mv", "float_mv",
+    ]),
+    "margin": ("qdb_margin_trading", [
+        "finance_balance", "finance_net", "finance_buy", "finance_repay",
+    ]),
+    "chip": ("qdb_l1_factors", [
+        "chip_profit_ratio_20", "chip_profit_ratio_60", "chip_concentration_20",
+        "chip_cost_90_width",
+    ]),
+    "flow": ("qdb_l2_factors", [
+        "flow_net_amount", "flow_super_net", "flow_large_net", "flow_net_ratio",
+    ]),
+    "sentiment": ("qdb_market_sentiment", [
+        "buy_pressure", "sell_pressure", "liquidity_score", "am_pm_trend",
+        "volume_concentration",
+    ]),
+    "technical": ("qdb_technical_indicators", [
+        "rsi_6", "rsi_14", "macd_dif", "macd_dea", "macd_hist",
+        "vol_std_20", "vol_atr_14", "beta_20",
+    ]),
+}
+
+
+def _read_symbol_parquet(ds: str, symbol: str) -> pd.DataFrame:
+    """读 3_financial_data 下单标的平铺 parquet（小文件，直接读）。"""
+    f = _quantdb_dir() / "3_financial_data" / ds / f"{symbol}.parquet"
+    if not f.exists():
+        return pd.DataFrame()
+    try:
+        return pd.read_parquet(f)
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("read %s/%s failed: %s", ds, symbol, exc)
+        return pd.DataFrame()
+
+
+def _fin_records(df: pd.DataFrame, cols: dict[str, str], limit: int, yi: bool) -> list[dict]:
+    """财务表 -> {period, items:{中文名: 亿元/原值}} 按报告期倒序。"""
+    if df.empty:
+        return []
+    df = df.sort_values("m_timetag", ascending=False).head(limit)
+    out: list[dict] = []
+    for _, r in df.iterrows():
+        items: dict[str, float | None] = {}
+        for col, label in cols.items():
+            v = _safe_f(r.get(col))
+            if v is not None and yi:
+                v = round(v / 1e8, 2)  # 元 -> 亿元
+            items[label] = v
+        out.append({"period": str(r.get("m_timetag") or "")[:8], "items": items})
+    return out
+
+
+@router.get("/dividends")
+async def stock_dividends(
+    symbol: str = Query(...),
+    current_user: dict = Depends(get_current_user),
+):
+    _ = current_user
+    sym = symbol.upper().strip()
+    if not _SYMBOL_RE.match(sym):
+        raise HTTPException(status_code=400, detail=f"非法代码 {sym}")
+    df = _read_symbol_parquet("dividend_factors", sym)
+    if df.empty:
+        return {"success": True, "data": {"items": []}}
+    df = df.sort_values("time", ascending=False).head(40)
+    items = [
+        {
+            "date": str(r.get("time"))[:10],
+            "interest": _safe_f(r.get("interest")),       # 每股派息(元)
+            "stock_bonus": _safe_f(r.get("stockBonus")),  # 送股比例
+            "stock_gift": _safe_f(r.get("stockGift")),    # 转增比例
+            "gugai": _safe_f(r.get("gugai")),             # 股改? / 除权
+            "dr": _safe_f(r.get("dr")),                   # 除权系数
+        }
+        for _, r in df.iterrows()
+    ]
+    return {"success": True, "data": {"items": items}}
+
+
+@router.get("/financials")
+async def stock_financials(
+    symbol: str = Query(..., description="600519.SH"),
+    limit: int = Query(8, ge=2, le=20),
+    current_user: dict = Depends(get_current_user),
+):
+    _ = current_user
+    sym = symbol.upper().strip()
+    if not _SYMBOL_RE.match(sym):
+        raise HTTPException(status_code=400, detail=f"非法代码 {sym}")
+
+    income = _read_symbol_parquet("income", sym)
+    balance = _read_symbol_parquet("balance", sym)
+    cashflow = _read_symbol_parquet("cashflow", sym)
+    pershare = _read_symbol_parquet("pershare_index", sym)
+
+    periods = (
+        sorted(
+            {str(v)[:8] for v in pershare.get("m_timetag", [])}
+            | {str(v)[:8] for v in income.get("m_timetag", [])},
+            reverse=True,
+        )[:limit]
+        if (not pershare.empty or not income.empty)
+        else []
+    )
+    return {
+        "success": True,
+        "data": {
+            "symbol": sym,
+            "periods": periods,
+            "income": _fin_records(income, _INCOME_COLS, limit, yi=True),
+            "balance": _fin_records(balance, _BALANCE_COLS, limit, yi=True),
+            "cashflow": _fin_records(cashflow, _CASHFLOW_COLS, limit, yi=True),
+            "per_share": _fin_records(pershare, _PERSHARE_COLS, limit, yi=False),
+        },
+    }
+
+
+@router.get("/series")
+async def stock_series(
+    symbol: str = Query(...),
+    group: str = Query(..., description="valuation/margin/chip/flow/sentiment/technical/holders"),
+    years: int = Query(3, ge=1, le=10),
+    current_user: dict = Depends(get_current_user),
+):
+    _ = current_user
+    sym = symbol.upper().strip()
+    if not _SYMBOL_RE.match(sym):
+        raise HTTPException(status_code=400, detail=f"非法代码 {sym}")
+
+    # 股东户数: 平铺小文件, endDate 为报告期
+    if group == "holders":
+        hn = _read_symbol_parquet("holder_num", sym)
+        if hn.empty:
+            return {"success": True, "data": {"dates": [], "columns": {}}}
+        hn = hn.sort_values("endDate")
+        return {
+            "success": True,
+            "data": {
+                "dates": [str(v)[:10] for v in hn["endDate"]],
+                "columns": {"holder_num": [_safe_f(v) for v in hn["shareholder"]]},
+            },
+        }
+
+    spec = _SERIES_GROUPS.get(group)
+    if spec is None:
+        raise HTTPException(status_code=400, detail=f"未知时序组 {group}")
+    view, cols = spec
+    # dt 为整数 YYYYMMDD
+    start_dt = (_date.today() - _timedelta(days=years * 366)).strftime("%Y%m%d")
+    col_list = ", ".join(cols)
+    sql = (
+        f"SELECT dt, {col_list} FROM {view} "
+        f"WHERE symbol = '{sym}' AND dt >= {start_dt} ORDER BY dt"
+    )
+
+    def _run() -> pd.DataFrame:
+        from backend.services.engine.data_platform.quantdb_hub import QuantDBDataHub
+
+        try:
+            return QuantDBDataHub.get_instance().query(sql)
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("series query %s %s failed: %s", group, sym, exc)
+            return pd.DataFrame()
+
+    import asyncio
+
+    df = await asyncio.to_thread(_run)
+    if df.empty:
+        return {"success": True, "data": {"dates": [], "columns": {}}}
+    dates = [str(v)[:10] for v in df["dt"]]
+    columns = {c: [_safe_f(v) for v in df[c]] for c in cols if c in df.columns}
+    return {"success": True, "data": {"dates": dates, "columns": columns}}
+
+
+# ---------------------------------------------------------------------------
 # API
 # ---------------------------------------------------------------------------
 

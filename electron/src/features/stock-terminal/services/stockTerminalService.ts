@@ -82,6 +82,48 @@ class StockTerminalService {
       return [];
     }
   }
+
+  async getFinancials(symbol: string, limit = 8): Promise<FinancialsResponse> {
+    try {
+      const resp = await this.client.get('/stock-terminal/financials', { params: { symbol, limit } });
+      return resp.data?.data ?? { symbol, periods: [], income: [], balance: [], cashflow: [], per_share: [] };
+    } catch {
+      return { symbol, periods: [], income: [], balance: [], cashflow: [], per_share: [] };
+    }
+  }
+
+  async getSeries(symbol: string, group: string, years = 3): Promise<SeriesResponse> {
+    try {
+      const resp = await this.client.get('/stock-terminal/series', { params: { symbol, group, years } });
+      return resp.data?.data ?? { dates: [], columns: {} };
+    } catch {
+      return { dates: [], columns: {} };
+    }
+  }
+
+  async getDividends(symbol: string): Promise<DividendItem[]> {
+    try {
+      const resp = await this.client.get('/stock-terminal/dividends', { params: { symbol } });
+      return resp.data?.data?.items ?? [];
+    } catch {
+      return [];
+    }
+  }
+}
+
+export interface FinRecord { period: string; items: Record<string, number | null>; }
+export interface FinancialsResponse {
+  symbol: string;
+  periods: string[];
+  income: FinRecord[];
+  balance: FinRecord[];
+  cashflow: FinRecord[];
+  per_share: FinRecord[];
+}
+export interface SeriesResponse { dates: string[]; columns: Record<string, (number | null)[]>; }
+export interface DividendItem {
+  date: string; interest: number | null; stock_bonus: number | null;
+  stock_gift: number | null; gugai: number | null; dr: number | null;
 }
 
 export const stockTerminalService = new StockTerminalService();

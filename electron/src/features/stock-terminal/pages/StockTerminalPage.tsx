@@ -14,6 +14,7 @@ import { StockSidebar, toPrefix } from '../components/StockSidebar';
 import { KlineChart, IndicatorConfig, IndexOverlay, OVERLAY_COLORS, SubplotType } from '../components/kline/KlineChart';
 import { KlineReplay } from '../components/kline/KlineReplay';
 import { OverviewTab } from '../components/OverviewTab';
+import { FinancialsTab, ValuationTab, ChipFlowTab, MarginTab, SentimentTab, HoldersTab } from '../components/tabs/P2Tabs';
 import { researchService } from '../../../services/researchService';
 
 const INDEX_OPTIONS = [
@@ -27,14 +28,14 @@ const SUBPLOT_META: Record<SubplotType, string> = { vol: 'VOL', macd: 'MACD', kd
 
 type InfoTab = 'overview' | 'financials' | 'valuation' | 'chipflow' | 'margin' | 'sentiment' | 'holders';
 
-const TAB_META: { id: InfoTab; label: string; soon?: boolean }[] = [
+const TAB_META: { id: InfoTab; label: string }[] = [
   { id: 'overview', label: '概况' },
-  { id: 'financials', label: '财务报表', soon: true },
-  { id: 'valuation', label: '估值', soon: true },
-  { id: 'chipflow', label: '筹码资金', soon: true },
-  { id: 'margin', label: '融资融券', soon: true },
-  { id: 'sentiment', label: '技术形态', soon: true },
-  { id: 'holders', label: '股东分红', soon: true },
+  { id: 'financials', label: '财务报表' },
+  { id: 'valuation', label: '估值' },
+  { id: 'chipflow', label: '筹码资金' },
+  { id: 'margin', label: '融资融券' },
+  { id: 'sentiment', label: '技术形态' },
+  { id: 'holders', label: '股东分红' },
 ];
 
 export default function StockTerminalPage() {
@@ -302,18 +303,14 @@ export default function StockTerminalPage() {
               {TAB_META.map(t => (
                 <button
                   key={t.id}
-                  disabled={t.soon}
                   onClick={() => setInfoTab(t.id)}
-                  className={`px-2.5 py-1 rounded-lg text-[11px] font-bold transition-colors flex items-center gap-1 ${
+                  className={`px-2.5 py-1 rounded-lg text-[11px] font-bold transition-colors ${
                     infoTab === t.id
                       ? 'bg-blue-50 text-blue-600'
-                      : t.soon
-                        ? 'text-slate-300 cursor-not-allowed'
-                        : 'text-slate-500 hover:text-slate-700 hover:bg-slate-50'
+                      : 'text-slate-500 hover:text-slate-700 hover:bg-slate-50'
                   }`}
                 >
                   {t.label}
-                  {t.soon && <span className="text-[9px] bg-slate-100 rounded px-0.5 text-slate-400">P2</span>}
                 </button>
               ))}
             </div>
@@ -326,6 +323,12 @@ export default function StockTerminalPage() {
           </div>
           <div className="flex-1 min-h-0 overflow-y-auto p-3">
             {infoTab === 'overview' && <OverviewTab profile={profile} />}
+            {infoTab === 'financials' && selected && <FinancialsTab symbol={selected.symbol} />}
+            {infoTab === 'valuation' && selected && <ValuationTab symbol={selected.symbol} />}
+            {infoTab === 'chipflow' && selected && <ChipFlowTab symbol={selected.symbol} />}
+            {infoTab === 'margin' && selected && <MarginTab symbol={selected.symbol} />}
+            {infoTab === 'sentiment' && selected && <SentimentTab symbol={selected.symbol} />}
+            {infoTab === 'holders' && selected && <HoldersTab symbol={selected.symbol} />}
           </div>
         </motion.div>
       </div>
