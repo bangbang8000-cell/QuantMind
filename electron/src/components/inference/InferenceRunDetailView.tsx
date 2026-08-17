@@ -10,7 +10,9 @@ import {
 import type { InferenceRankingResult, InferenceRankingItem } from '../../services/modelTrainingService';
 import { ScoreDistributionPanel } from './ScoreDistributionPanel';
 import { StrategyDashboard } from './StrategyDashboard';
-import { StockScoreChart } from './StockScoreChart';
+import { KlineWorkspace } from '../../features/stock-terminal/components/kline/KlineWorkspace';
+import { StockListItem } from '../../features/stock-terminal/types';
+import { suffixOf } from '../../features/stock-terminal/components/kline/KlineWorkspace';
 import { splitInferenceLogs, exportRankingCsv } from './inferenceDetailUtils';
 
 const { Text } = Typography;
@@ -862,24 +864,13 @@ export const InferenceRunDetailView: React.FC<Props> = ({ runId, result, loading
                     : '不在当前筛选'}
                 </div>
               </div>
-              <StockScoreChart
-                symbol={stockModal.symbol}
-                name={stockModal.name}
-                market="A"
-                days={3650}
-                height={380}
-                stockInfo={{
-                  rank: stockModal.rank,
-                  score: stockModal.score,
-                  board: stockModal.board,
-                  industry: stockModal.industry,
-                  market_cap_tier: stockModal.market_cap_tier,
-                  market_cap_yi: stockModal.market_cap_yi,
-                  negative_tag: stockModal.negative_tag,
-                }}
-                wideScale={!!(result?.summary?.is_wide_scale || result?.summary?.market_signal?.score_scale === 'wide')}
-                modelId={result?.summary?.model_id || result?.summary?.effective_model_id}
-              />
+              {/* 整合 K 线：个股终端全部功能 + 多模型推理分数叠加 */}
+              <div className="rounded-2xl border border-slate-100 overflow-hidden" style={{ height: 480 }}>
+                <KlineWorkspace
+                  stock={{ symbol: suffixOf(stockModal.symbol), name: stockModal.name } as StockListItem}
+                  height={470}
+                />
+              </div>
             </div>
           );
         })()}

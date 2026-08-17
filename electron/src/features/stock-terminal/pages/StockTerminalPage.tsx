@@ -153,12 +153,12 @@ export default function StockTerminalPage() {
         </motion.div>
       </div>
 
-      {/* 整合 K 线弹窗 */}
+      {/* 整合 K 线弹窗：左侧 K 线主体，右侧竖排智能标签 */}
       <Modal
         open={klineOpen}
         onCancel={() => setKlineOpen(false)}
         footer={null}
-        width={1080}
+        width={1180}
         destroyOnClose
         title={
           <span className="text-sm font-black text-slate-800 flex items-center gap-2">
@@ -166,13 +166,17 @@ export default function StockTerminalPage() {
             {selected?.name} · {selected?.symbol} 完整 K 线
           </span>
         }
-        styles={{ body: { height: 560, padding: 0 } }}
+        styles={{ body: { height: 600, padding: 0 } }}
       >
         {selected && klineOpen && (
-          <div className="h-full">
-            <TagStrip symbol={selected.symbol} onSelectStock={setSelected} />
-            <div className="h-[calc(100%-36px)]">
-              <KlineWorkspace stock={selected} profile={profile} height={520} />
+          <div className="h-full flex">
+            {/* 左：K 线主体 */}
+            <div className="flex-1 min-w-0">
+              <KlineWorkspace stock={selected} profile={profile} height={570} />
+            </div>
+            {/* 右：竖排智能标签（原顶部标签移到这里） */}
+            <div className="w-60 shrink-0 border-l border-slate-100 overflow-y-auto">
+              <TagStrip symbol={selected.symbol} onSelectStock={setSelected} vertical />
             </div>
           </div>
         )}

@@ -14,6 +14,14 @@ import { KlineReplay } from './KlineReplay';
 import { ChartBacktestPanel, ChartBacktestData } from '../ChartBacktestPanel';
 import { toPrefix } from '../StockSidebar';
 
+/** 纯数字代码推导市场后缀：SH/SZ/BJ */
+export function suffixOf(code: string): string {
+  const c = code.replace(/\D/g, '').slice(-6);
+  if (c.startsWith('6') || c.startsWith('9')) return `${c}.SH`;
+  if (c.startsWith('4') || c.startsWith('8')) return `${c}.BJ`;
+  return `${c}.SZ`;
+}
+
 const INDEX_OPTIONS = [
   { label: '上证指数', value: '000001.SH' },
   { label: '深证成指', value: '399001.SZ' },

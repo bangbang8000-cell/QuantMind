@@ -13,6 +13,8 @@ interface MatchedPreset { id: string; name: string; matched: number; total: numb
 interface Props {
   symbol: string | null;
   onSelectStock?: (item: StockListItem) => void;
+  /** 竖排模式：右侧栏用 */
+  vertical?: boolean;
 }
 
 const CATEGORY_COLORS: Record<string, string> = {
@@ -30,7 +32,7 @@ const CATEGORY_COLORS: Record<string, string> = {
 };
 const FALLBACK = 'bg-slate-50 text-slate-600 border-slate-100';
 
-export function TagStrip({ symbol, onSelectStock }: Props) {
+export function TagStrip({ symbol, onSelectStock, vertical = false }: Props) {
   const [tags, setTags] = useState<MatchedTag[]>([]);
   const [presets, setPresets] = useState<MatchedPreset[]>([]);
   const [openTag, setOpenTag] = useState<{ id: string; name: string } | null>(null);
@@ -60,7 +62,72 @@ export function TagStrip({ symbol, onSelectStock }: Props) {
     }
   };
 
-  return (
+  return vertical ? (
+    <div className="flex flex-col gap-1.5 p-3 h-full">
+      <div className="flex items-center gap-1.5 pb-2 border-b border-slate-100 shrink-0">
+        <Sparkles className="w-3 h-3 text-violet-400" />
+        <span className="text-[11px] font-black text-slate-700">智能标签</span>
+      </div>
+      <div className="flex flex-col gap-1.5 overflow-y-auto">
+        {tags.map(t => (
+          <button
+            key={t.id}
+            onClick={() => openSimilar(t.id, t.name)}
+            title={t.desc + (t.value != null ? `（值=${t.value?.toFixed(2)}）` : '')}
+            className={`flex items-center justify-between gap-1 px-2 py-1.5 rounded-lg border text-[10px] font-bold text-left transition-colors hover:scale-[1.02] ${CATEGORY_COLORS[t.category] ?? FALLBACK}`}
+          >
+            <span className="flex items-center gap-1 min-w-0">
+              <TagIcon className="w-2.5 h-2.5 shrink-0" />
+              <span className="truncate">{t.name}</span>
+            </span>
+            <ChevronRight className="w-2.5 h-2.5 opacity-50 shrink-0" />
+          </button>
+        ))}
+        {!tags.length && <span className="text-[10px] text-slate-400">选择股票后自动匹配智能标签</span>}
+      </div>
+      {presets.length > 0 && (
+        <div className="flex flex-col gap-1 pt-2 border-t border-slate-100 shrink-0">
+          <span className="text-[10px] text-slate-400 font-bold">命中组合</span>
+          {presets.map(p => (
+            <span key={p.id} className="px-1.5 py-0.5 rounded-md bg-blue-50 text-blue-600 border border-blue-100 text-[10px] font-bold">
+              {p.name}
+            </span>
+          ))}
+        </div>
+      )}
+
+      <Modal
+        open={!!openTag}
+        onCancel={() => setOpenTag(null)}
+        footer={null}
+        title={<span className="text-sm font-black text-slate-800">「{openTag?.name}」同类股票</span>}
+        width={560}
+      >
+        <Spin spinning={similarLoading}>
+          <Table
+            size="small"
+            rowKey="symbol"
+            pagination={false}
+            dataSource={similar}
+            scroll={{ y: 360 }}
+            columns={[
+              { title: '名称', dataIndex: 'name', width: 110, render: (v, r) => (
+                <button
+                  className="text-blue-600 font-bold hover:underline"
+                  onClick={() => { onSelectStock?.({ symbol: r.symbol, name: r.name } as StockListItem); setOpenTag(null); }}
+                >{v}</button>
+              )},
+              { title: '代码', dataIndex: 'symbol', width: 100, render: v => <span className="font-mono text-slate-500">{v}</span> },
+              { title: '行业', dataIndex: 'industry', width: 90, render: v => v || '--' },
+              { title: '价格', dataIndex: 'close', width: 70, align: 'right', render: v => v?.toFixed?.(2) ?? '--' },
+              { title: '分数', dataIndex: 'fusion', width: 70, align: 'right', render: (v) => v == null ? '--' : <span className="text-blue-600 font-bold font-mono">{(Number(v) * 100).toFixed(2)}</span> },
+              { title: '标签值', dataIndex: 'metric', align: 'right', render: (v) => v == null ? '--' : Number(v).toFixed(2) },
+            ]}
+          />
+        </Spin>
+      </Modal>
+    </div>
+  ) : (
     <div className="px-4 py-2 flex items-center gap-2 border-b border-slate-100 min-h-[36px]">
       <Sparkles className="w-3 h-3 text-violet-400 shrink-0" />
       <div className="flex flex-wrap gap-1 items-center flex-1 min-w-0">
@@ -88,7 +155,6 @@ export function TagStrip({ symbol, onSelectStock }: Props) {
           ))}
         </div>
       )}
-
       <Modal
         open={!!openTag}
         onCancel={() => setOpenTag(null)}
