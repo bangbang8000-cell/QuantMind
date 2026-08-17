@@ -44,6 +44,7 @@ const AIIDEPage = lazy(() => import('./pages/AIIDEPage'));
 const ModelTrainingPage = lazy(() => import('./pages/ModelTrainingPage'));
 const ModelRegistryPage = lazy(() => import('./pages/ModelRegistryPage'));
 const InferenceCenterPage = lazy(() => import('./pages/InferenceCenterPage'));
+const StockTerminalPage = lazy(() => import('./features/stock-terminal/pages/StockTerminalPage'));
 const ResearchPlatformPage = lazy(() => import('./pages/ResearchPlatformPage').then(m => ({ default: m.default || m.ResearchPlatformPage })));
 const RealTradingPage = lazy(() => import('./pages/trading/RealTradingPage'));
 const AdminPage = lazy(() => import('./features/admin/AdminPage'));
@@ -175,6 +176,7 @@ export default function App() {
       'model-training': '/model-training',
       'model-registry': '/model-registry',
       'inference-center': '/inference-center',
+      'stock-terminal': '/stock-terminal',
       'research': '/research',
       'trading': '/trading',
       'rss-news': '/rss-news',
@@ -217,6 +219,8 @@ export default function App() {
       dispatch(setCurrentTab('model-registry' as DashboardTab));
     } else if (location.pathname.startsWith('/inference-center')) {
       dispatch(setCurrentTab('inference-center' as DashboardTab));
+    } else if (location.pathname.startsWith('/stock-terminal')) {
+      dispatch(setCurrentTab('stock-terminal' as DashboardTab));
     } else if (location.pathname.startsWith('/research')) {
       dispatch(setCurrentTab('research' as DashboardTab));
     } else if (location.pathname.startsWith('/trading-agents')) {
@@ -610,6 +614,14 @@ export default function App() {
                     element={
                       <ProtectedRoute>
                         <InferenceCenterPage />
+                      </ProtectedRoute>
+                    }
+                  />
+                  <Route
+                    path="/stock-terminal"
+                    element={
+                      <ProtectedRoute>
+                        <StockTerminalPage />
                       </ProtectedRoute>
                     }
                   />

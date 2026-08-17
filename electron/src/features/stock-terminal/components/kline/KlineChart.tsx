@@ -1,0 +1,194 @@
+/** 个股终端 K 线图：主图（蜡烛+MA/BOLL+指数叠加）+ 副图（VOL/MACD/KDJ/RSI 可增删） */
+
+import { useMemo } from 'react';
+import ReactECharts from 'echarts-for-react';
+import { KlineBar } from '../../types';
+import { boll, kdj, macd, rsi, sma, volMa, Series } from '../../engine/indicators';
+
+export type SubplotType = 'vol' | 'macd' | 'kdj' | 'rsi';
+
+export interface IndicatorConfig {
+  ma: boolean;
+  boll: boolean;
+  subplots: SubplotType[];
+}
+
+export interface IndexOverlay {
+  code: string;
+  name: string;
+  closes: { date: string; close: number }[];
+  color: string;
+}
+
+const COLORS = {
+  up: '#e11d48',        // A股：涨红
+  down: '#059669',      // 跌绿
+  ma5: '#f59e0b',
+  ma10: '#3b82f6',
+  ma20: '#8b5cf6',
+  ma60: '#64748b',
+  boll: '#94a3b8',
+  volUp: '#fda4af',
+  volDown: '#6ee7b7',
+  dif: '#3b82f6',
+  dea: '#f59e0b',
+  histUp: '#e11d48',
+  histDown: '#059669',
+  k: '#3b82f6',
+  d: '#f59e0b',
+  j: '#8b5cf6',
+  rsi: '#6366f1',
+};
+
+const SUB_HEIGHT = 110; // 每个副图高度 px
+const MAIN_MIN = 300;
+
+interface Props {
+  bars: KlineBar[];
+  config: IndicatorConfig;
+  overlays: IndexOverlay[];
+  height?: number;
+}
+
+export function KlineChart({ bars, config, overlays, height = 460 }: Props) {
+  const option = useMemo(() => {
+    const dates = bars.map(b => b.date);
+    const closes = bars.map(b => b.close);
+    const volumes = bars.map(b => b.volume ?? 0);
+
+    const ma5 = config.ma ? sma(closes, 5) : null;
+    const ma10 = config.ma ? sma(closes, 10) : null;
+    const ma20 = config.ma ? sma(closes, 20) : null;
+    const ma60 = config.ma ? sma(closes, 60) : null;
+    const bb = config.boll ? boll(closes) : null;
+    const macdRes = config.subplots.includes('macd') ? macd(closes) : null;
+    const kdjRes = config.subplots.includes('kdj') ? kdj(bars) : null;
+    const rsiRes = config.subplots.includes('rsi') ? rsi(closes) : null;
+    const volMa5 = config.subplots.includes('vol') ? volMa(bars, 5) : null;
+    const volMa10 = config.subplots.includes('vol') ? volMa(bars, 10) : null;
+
+    // 指数叠加：以各自首日为基准归一化为百分比，按日期对齐到 K 线轴
+    const overlaySeries = overlays.map(ov => {
+      const byDate = new Map(ov.closes.map(c => [c.date, c.close]));
+      const base = ov.closes.length ? ov.closes[0].close : 1;
+      const aligned = bars.map(b => {
+        const c = byDate.get(b.date);
+        return c != null && base > 0 ? Number((((c - base) / base) * 100).toFixed(2)) : null;
+      });
+      return { name: ov.name, data: aligned, color: ov.color };
+    });
+
+    // 主图也叠加个股自身归一化曲线？不需要--蜡烛本身就是价格。指数归一化直接画在独立 y 轴。
+    const subCount = config.subplots.length;
+    const mainHeight = Math.max(MAIN_MIN, height - subCount * SUB_HEIGHT - 8);
+    const gridSpace = subCount * (SUB_HEIGHT + 36);
+
+    const grids: any[] = [
+      { left: 64, right: 16, top: 24, height: mainHeight },
+    ];
+    const xAxes: any[] = [];
+    const yAxes: any[] = [];
+    const series: any[] = [];
+
+    // 主图网格 + 轴
+    xAxes.push({ type: 'category', gridIndex: 0, data: dates, show: false, boundaryGap: true });
+    yAxes.push({ type: 'value', gridIndex: 0, scale: true, splitLine: { lineStyle: { color: '#f1f5f9' } }, axisLabel: { fontSize: 10, color: '#64748b' } });
+    if (overlaySeries.length) {
+      yAxes.push({ type: 'value', gridIndex: 0, scale: true, axisLabel: { show: false }, splitLine: { show: false }, min: -30, max: (v: any) => Math.max(30, Math.ceil(Math.abs(v.max) / 10) * 10) });
+    }
+
+    // 蜡烛
+    series.push({
+      name: 'K线', type: 'candlestick', xAxisIndex: 0, yAxisIndex: 0,
+      data: bars.map(b => [b.open, b.close, b.low, b.high]),
+      itemStyle: { color: COLORS.up, color0: COLORS.down, borderColor: COLORS.up, borderColor0: COLORS.down },
+    });
+
+    const line = (name: string, data: Series, color: string, yAxisIdx = 0) =>
+      series.push({
+        name, type: 'line', xAxisIndex: 0, yAxisIndex: yAxisIdx, data,
+        symbol: 'none', lineStyle: { width: 1, color }, itemStyle: { color }, emphasis: { disabled: true }, z: 3,
+      });
+
+    if (ma5) line('MA5', ma5, COLORS.ma5);
+    if (ma10) line('MA10', ma10, COLORS.ma10);
+    if (ma20) line('MA20', ma20, COLORS.ma20);
+    if (ma60) line('MA60', ma60, COLORS.ma60);
+    if (bb) {
+      line('BOLL中轨', bb.mid, COLORS.boll);
+      line('BOLL上轨', bb.upper, COLORS.boll);
+      line('BOLL下轨', bb.lower, COLORS.boll);
+    }
+    overlaySeries.forEach((ov, i) => line(ov.name, ov.data, ov.color, 1));
+
+    // 副图
+    config.subplots.forEach((sp, idx) => {
+      const gi = idx + 1;
+      grids.push({ left: 64, right: 16, top: 24 + mainHeight + 40 + idx * (SUB_HEIGHT + 36), height: SUB_HEIGHT });
+      const showLabel = idx === config.subplots.length - 1;
+      xAxes.push({ type: 'category', gridIndex: gi, data: dates, show: showLabel, axisLabel: { fontSize: 10, color: '#94a3b8' }, boundaryGap: true });
+      yAxes.push({ type: 'value', gridIndex: gi, scale: true, splitLine: { lineStyle: { color: '#f8fafc' } }, axisLabel: { fontSize: 10, color: '#64748b' } });
+
+      if (sp === 'vol') {
+        series.push({
+          name: '成交量', type: 'bar', xAxisIndex: gi, yAxisIndex: gi,
+          data: volumes.map((v, i) => ({
+            value: v,
+            itemStyle: { color: bars[i].close >= bars[i].open ? COLORS.volUp : COLORS.volDown },
+          })),
+        });
+        series.push({ name: 'VMA5', type: 'line', xAxisIndex: gi, yAxisIndex: gi, data: volMa5, symbol: 'none', lineStyle: { width: 1, color: COLORS.ma5 }, z: 3 });
+        series.push({ name: 'VMA10', type: 'line', xAxisIndex: gi, yAxisIndex: gi, data: volMa10, symbol: 'none', lineStyle: { width: 1, color: COLORS.ma10 }, z: 3 });
+      } else if (sp === 'macd' && macdRes) {
+        series.push({
+          name: 'MACD柱', type: 'bar', xAxisIndex: gi, yAxisIndex: gi,
+          data: macdRes.hist.map(v => ({
+            value: v,
+            itemStyle: { color: (v ?? 0) >= 0 ? COLORS.histUp : COLORS.histDown },
+          })),
+        });
+        series.push({ name: 'DIF', type: 'line', xAxisIndex: gi, yAxisIndex: gi, data: macdRes.dif, symbol: 'none', lineStyle: { width: 1, color: COLORS.dif }, z: 3 });
+        series.push({ name: 'DEA', type: 'line', xAxisIndex: gi, yAxisIndex: gi, data: macdRes.dea, symbol: 'none', lineStyle: { width: 1, color: COLORS.dea }, z: 3 });
+      } else if (sp === 'kdj' && kdjRes) {
+        series.push({ name: 'K', type: 'line', xAxisIndex: gi, yAxisIndex: gi, data: kdjRes.k, symbol: 'none', lineStyle: { width: 1, color: COLORS.k }, z: 3 });
+        series.push({ name: 'D', type: 'line', xAxisIndex: gi, yAxisIndex: gi, data: kdjRes.d, symbol: 'none', lineStyle: { width: 1, color: COLORS.d }, z: 3 });
+        series.push({ name: 'J', type: 'line', xAxisIndex: gi, yAxisIndex: gi, data: kdjRes.j, symbol: 'none', lineStyle: { width: 1, color: COLORS.j }, z: 3 });
+      } else if (sp === 'rsi' && rsiRes) {
+        series.push({ name: 'RSI14', type: 'line', xAxisIndex: gi, yAxisIndex: gi, data: rsiRes, symbol: 'none', lineStyle: { width: 1.2, color: COLORS.rsi }, z: 3 });
+      }
+    });
+
+    return {
+      animation: false,
+      backgroundColor: 'transparent',
+      tooltip: {
+        trigger: 'axis',
+        axisPointer: { type: 'cross', label: { fontSize: 10 } },
+        backgroundColor: 'rgba(255,255,255,0.96)',
+        borderColor: '#e2e8f0',
+        textStyle: { color: '#334155', fontSize: 11 },
+      },
+      axisPointer: { link: [{ xAxisIndex: 'all' }] },
+      grid: grids,
+      xAxis: xAxes,
+      yAxis: yAxes,
+      dataZoom: [
+        { type: 'inside', xAxisIndex: xAxes.map((_, i) => i), start: 55, end: 100 },
+        { type: 'slider', xAxisIndex: xAxes.map((_, i) => i), bottom: 2, height: 16, borderColor: '#e2e8f0', fillerColor: 'rgba(59,130,246,0.08)' },
+      ],
+      series,
+    };
+  }, [bars, config, overlays, height]);
+
+  return (
+    <ReactECharts
+      option={option}
+      notMerge
+      lazyUpdate
+      style={{ width: '100%', height }}
+      opts={{ renderer: 'canvas' }}
+    />
+  );
+}
+
+export const OVERLAY_COLORS = ['#0ea5e9', '#f97316', '#a855f7', '#14b8a6'];

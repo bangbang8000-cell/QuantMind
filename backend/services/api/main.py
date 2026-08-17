@@ -32,6 +32,7 @@ from backend.services.api.routers.news import router as news_router
 from backend.services.api.routers.research import router as research_router
 from backend.services.api.routers.risk_scoring import router as risk_scoring_router
 from backend.services.api.routers.stocks_search import router as stocks_search_router
+from backend.services.api.routers.stock_terminal import router as stock_terminal_router
 from backend.services.api.routers.trade_proxy import router as trade_proxy_router
 from backend.services.api.routers.public_sync import router as public_sync_router
 from backend.services.api.routers.ws_proxy import router as ws_proxy_router
@@ -127,6 +128,7 @@ app.include_router(
 app.include_router(research_router)
 app.include_router(risk_scoring_router)
 app.include_router(stocks_search_router)
+app.include_router(stock_terminal_router)
 app.include_router(trading_calendar.router)
 app.include_router(api_keys_router, prefix="/api/v1")
 app.include_router(asset_router, prefix="/api/v1/asset", tags=["Asset"])

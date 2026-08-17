@@ -17,6 +17,7 @@ import {
   Brain,
   BarChart3,
   Cpu,
+  CandlestickChart,
 } from 'lucide-react';
 import { useSelector } from 'react-redux';
 import { selectCurrentMarket } from '../../store/slices/uiSlice';
@@ -46,6 +47,7 @@ export const FloatingNavBar: React.FC<FloatingNavBarProps> = ({ current, onChang
     { id: 'rss-news', label: 'RSS信息流', icon: Rss },
     // 2. 回测与交易区域
     { id: 'strategy', label: '智能策略', icon: LineChart },
+    { id: 'stock-terminal', label: '个股终端', icon: CandlestickChart },
     { id: 'ai-ide', label: 'AI-IDE', icon: SquareTerminal },
     { id: 'backtest', label: '回测中心', icon: FlaskConical },
     { id: 'trading', label: '模拟交易', icon: ArrowLeftRight },
