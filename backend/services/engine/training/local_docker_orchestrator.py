@@ -1026,7 +1026,24 @@ class LocalDockerOrchestrator(TrainingOrchestrator):
             except Exception as e:
                 logger.warning("[%s] poll error: %s", run_id, e)
 
-        # 超出时长预算
+        # 超出时长预算：先强制杀容器再标记失败。
+        # 此前只写 DB 不杀容器——训练容器会变成「僵尸」继续吃满 CPU/内存，
+        # 直到宿主 OOM 或被别的机制拖垮（实测残留 3h+/19GB 的 GRU 容器）。
+        try:
+            c = self.docker.containers.get(container_id)
+            c.reload()
+            if c.attrs["State"].get("Status") in ("running", "created", "paused"):
+                logger.warning(
+                    "[%s] deadline exceeded, killing container %s",
+                    run_id, container_id[:12],
+                )
+                await asyncio.to_thread(c.kill)
+                await asyncio.to_thread(c.remove, {"force": True, "v": True})
+        except docker.errors.NotFound:
+            pass
+        except Exception as kill_err:
+            logger.warning("[%s] kill container after timeout failed: %s", run_id, kill_err)
+
         async with get_session() as db:
             r = await db.get(TrainingJobRecord, run_id)
             if r and r.status not in ("completed", "failed"):
