@@ -6,7 +6,7 @@ import {
   Copy, Sparkles, RefreshCcw, Target
 } from 'lucide-react';
 import {
-  Button, Space, Tag, Typography, message, Card
+  Button, Space, Tag, Typography, message, Card, Select
 } from 'antd';
 import dayjs, { Dayjs } from 'dayjs';
 import { clsx } from 'clsx';
@@ -171,6 +171,9 @@ export const ModelTrainingPage: React.FC = () => {
   const [trainingNodes, setTrainingNodes] = useState<any[]>([]);
   const [selectedNode, setSelectedNode] = useState<string>('local');
   const [nodesLoading, setNodesLoading] = useState(false);
+  // 训练时长预算（分钟）。后端编排器默认 120 分钟；DL 模型（GRU/LSTM 等）
+  // 在 CPU 上每 epoch ~10 分钟，200 epochs 需要十几个小时，必须允许用户调高。
+  const [maxTimeMinutes, setMaxTimeMinutes] = useState<number>(720);
 
   const timersRef = useRef<number[]>([]);
   const pollTimerRef = useRef<number | null>(null);
@@ -349,7 +352,7 @@ export const ModelTrainingPage: React.FC = () => {
     pushLog(`正在提交训练请求：${displayName}`);
 
     try {
-      const payload = buildBackendTrainingPayload(requestPreview, timePeriods, { nodeId: selectedNode });
+      const payload = buildBackendTrainingPayload(requestPreview, timePeriods, { nodeId: selectedNode, maxTimeMinutes });
       const { runId } = await modelTrainingService.runTraining(payload);
       pushLog(`提交成功，Run ID: ${runId}`);
 
@@ -512,6 +515,25 @@ export const ModelTrainingPage: React.FC = () => {
                       将推送特征快照到 AutoDL，远程 GPU 训练完成后模型自动回传本机。
                     </div>
                   )}
+               </div>
+               <div className="rounded-xl bg-slate-50 p-3 border border-slate-100">
+                  <div className="text-[10px] uppercase font-bold text-slate-400 mb-2">训练时长预算</div>
+                  <Select
+                    size="small"
+                    value={maxTimeMinutes}
+                    onChange={(v: number) => setMaxTimeMinutes(v)}
+                    style={{ width: '100%' }}
+                    options={[
+                      { value: 60, label: '1 小时（快速验证）' },
+                      { value: 120, label: '2 小时（默认）' },
+                      { value: 360, label: '6 小时' },
+                      { value: 720, label: '12 小时（DL 模型推荐）' },
+                      { value: 1440, label: '24 小时（上限）' },
+                    ]}
+                  />
+                  <div className="mt-1.5 text-[10px] text-slate-400 leading-relaxed">
+                    超过预算编排器会终止任务。GRU/LSTM 等 DL 模型在本地 CPU 训练较慢，请选择 12 小时或使用 GPU 节点。
+                  </div>
                </div>
                <div className="flex gap-2">
                  <Button size="small" block className="rounded-lg" onClick={() => message.success('草稿已保存')}>保存草稿</Button>

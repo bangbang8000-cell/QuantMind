@@ -845,7 +845,7 @@ export const buildTrainingRequest = (
 export const buildBackendTrainingPayload = (
   request: TrainingRequestPayload,
   timePeriods: TimePeriodMap,
-  options?: { nodeId?: string },
+  options?: { nodeId?: string; maxTimeMinutes?: number },
 ): any => {
   const features = Array.from(new Set(request.selectedFeatures));
   const trainStart = dayjs(request.timePeriods.train[0]).format('YYYY-MM-DD');
@@ -983,6 +983,12 @@ export const buildBackendTrainingPayload = (
   // 训练节点（local=本机 Docker，autodl-xxx=AutoDL 远程 GPU）
   if (options?.nodeId) {
     payload.node_id = options.nodeId;
+  }
+
+  // 训练时长预算（分钟）：编排器默认 120 分钟，GRU/LSTM 等 DL 模型在 CPU 上
+  // 每 epoch ~10 分钟 × 200 epochs 远超默认值，必须由前端显式透传。
+  if (options?.maxTimeMinutes) {
+    payload.max_time_minutes = options.maxTimeMinutes;
   }
 
   return payload;
