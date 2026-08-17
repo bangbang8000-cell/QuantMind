@@ -59,6 +59,7 @@ const AdminPage: React.FC = () => {
             label: '训练服务',
             children: [
                 { key: 'autodl-nodes', label: 'AutoDL 节点' },
+                { key: 'training-datasets', label: '模型训练数据集' },
             ]
         },
         { 
