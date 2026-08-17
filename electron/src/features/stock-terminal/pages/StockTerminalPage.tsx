@@ -11,7 +11,7 @@ import { Button, Select, Tooltip, message } from 'antd';
 import { StockListItem, StockProfile, KlineBar } from '../types';
 import { stockTerminalService } from '../services/stockTerminalService';
 import { StockSidebar, toPrefix } from '../components/StockSidebar';
-import { KlineChart, IndicatorConfig, IndexOverlay, OVERLAY_COLORS, SubplotType } from '../components/kline/KlineChart';
+import { KlineChart, IndicatorConfig, IndexOverlay, SignalPoint, OVERLAY_COLORS, SubplotType } from '../components/kline/KlineChart';
 import { KlineReplay } from '../components/kline/KlineReplay';
 import { OverviewTab } from '../components/OverviewTab';
 import { TagStrip } from '../components/TagStrip';
@@ -79,6 +79,10 @@ export default function StockTerminalPage() {
   const [overlayCodes, setOverlayCodes] = useState<string[]>([]);
   const [overlayCache, setOverlayCache] = useState<Record<string, { date: string; close: number }[]>>({});
 
+  // 推理信号叠加
+  const [signals, setSignals] = useState<SignalPoint[]>([]);
+  const [signalOn, setSignalOn] = useState(true);
+
   // 回放
   const [replayActive, setReplayActive] = useState(false);
   const [replayCursor, setReplayCursor] = useState(1);
@@ -126,6 +130,11 @@ export default function StockTerminalPage() {
     };
     load();
     stockTerminalService.getProfile(sym).then(p => { if (!cancelled) setProfile(p); });
+    stockTerminalService.getSignalOverlay(sym).then(sigMap => {
+      if (cancelled) return;
+      const all = Object.values(sigMap).flat().sort((a, b) => a.date.localeCompare(b.date));
+      setSignals(all);
+    });
     return () => { cancelled = true; };
   }, [selected, period]);
 
@@ -301,6 +310,17 @@ export default function StockTerminalPage() {
                 popupMatchSelectWidth={false}
               />
 
+              <button
+                onClick={() => setSignalOn(!signalOn)}
+                disabled={!signals.length}
+                className={`flex items-center gap-1 text-[10px] font-bold px-2 py-1 rounded-lg transition-colors ${
+                  signalOn && signals.length ? 'bg-rose-50 text-rose-600 border border-rose-100' : 'text-slate-400 hover:text-slate-600 border border-transparent'
+                }`}
+                title={signals.length ? '模型推理分数信号' : '无推理信号'}
+              >
+                <TrendingUp className="w-3 h-3" /> 信号
+                {signals.length > 0 && <span className="text-[9px] bg-rose-100 rounded px-0.5">{signals.length}</span>}
+              </button>
               <KlineReplay
                 active={replayActive}
                 onToggle={() => { setReplayActive(!replayActive); setReplayCursor(0.5); setReplayPlaying(false); }}
@@ -344,7 +364,7 @@ export default function StockTerminalPage() {
                 <TrendingUp className="w-4 h-4 animate-pulse text-blue-400" /> 加载 K 线数据…
               </div>
             ) : bars.length ? (
-              <KlineChart bars={visibleBars} config={config} overlays={overlays} height={452} />
+              <KlineChart bars={visibleBars} config={config} overlays={overlays} height={452} signals={signalOn ? signals : []} />
             ) : (
               <div className="h-full flex flex-col items-center justify-center gap-2 text-slate-400">
                 <BarChart3 className="w-8 h-8 opacity-40" />

@@ -24,6 +24,7 @@ import pandas as pd
 from fastapi import APIRouter, Depends, HTTPException, Query
 
 from backend.services.api.user_app.middleware.auth import get_current_user
+from backend.shared.database_manager_v2 import get_session
 from backend.shared.logging_config import get_logger
 
 logger = get_logger(__name__)
@@ -400,6 +401,54 @@ async def list_presets(current_user: dict = Depends(get_current_user)):
         {"id": p["id"], "name": p["name"], "logic": p["logic"], "tags": p["tags"]}
         for p in __import__("backend.services.engine.data_platform.tag_rules", fromlist=["PRESETS"]).PRESETS
     ]}}
+
+
+@router.get("/signal-overlay")
+async def stock_signal_overlay(
+    symbol: str = Query(...),
+    days: int = Query(250, ge=30, le=1000),
+    current_user: dict = Depends(get_current_user),
+):
+    """推理分数叠加：engine_signal_scores 按 model_version 分组返回。
+
+    同表同口径与推理中心一致。返回 {dates, series:{model_version: [{fusion, side}]}}
+    """
+    _ = current_user
+    sym = symbol.upper().strip()
+    if not _SYMBOL_RE.match(sym):
+        raise HTTPException(status_code=400, detail=f"非法代码 {sym}")
+    prefix = f"{sym.split('.')[1]}{sym.split('.')[0]}"  # 600519.SH -> SH600519
+
+    from datetime import timedelta as _td
+
+    async with get_session() as session:
+        from sqlalchemy import text as _text
+
+        start = _date.today() - _timedelta(days=days * 2)
+        rows = (
+            await session.execute(
+                _text(
+                    "SELECT trade_date, fusion_score, signal_side, model_version "
+                    "FROM engine_signal_scores "
+                    "WHERE tenant_id = :tid AND symbol = :s AND trade_date >= :start "
+                    "ORDER BY trade_date"
+                ),
+                {"tid": "default", "s": prefix, "start": start},
+            )
+        ).fetchall()
+
+    grouped: dict[str, list[dict]] = {}
+    for r in rows:
+        mv = str(r[3] or "default")
+        grouped.setdefault(mv, []).append({
+            "date": str(r[0])[:10],
+            "fusion": float(r[1]) if r[1] is not None else None,
+            "side": str(r[2] or "HOLD"),
+        })
+    # 只保留最近 days 个交易日
+    for mv in grouped:
+        grouped[mv] = grouped[mv][-days:]
+    return {"success": True, "data": {"series": grouped}}
 
 
 @router.get("/minute")

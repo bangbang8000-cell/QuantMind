@@ -20,6 +20,12 @@ export interface IndexOverlay {
   color: string;
 }
 
+export interface SignalPoint {
+  date: string;
+  fusion: number | null;
+  side: string;
+}
+
 const COLORS = {
   up: '#e11d48',        // A股：涨红
   down: '#059669',      // 跌绿
@@ -48,9 +54,10 @@ interface Props {
   config: IndicatorConfig;
   overlays: IndexOverlay[];
   height?: number;
+  signals?: SignalPoint[];
 }
 
-export function KlineChart({ bars, config, overlays, height = 460 }: Props) {
+export function KlineChart({ bars, config, overlays, height = 460, signals = [] }: Props) {
   const option = useMemo(() => {
     const dates = bars.map(b => b.date);
     const closes = bars.map(b => b.close);
@@ -121,6 +128,34 @@ export function KlineChart({ bars, config, overlays, height = 460 }: Props) {
     }
     overlaySeries.forEach((ov, i) => line(ov.name, ov.data, ov.color, 1));
 
+    // 推理分数信号标记（BUY▲ / SELL▼）
+    if (signals.length) {
+      const buyData: any[] = [];
+      const sellData: any[] = [];
+      const idxByDate = new Map(dates.map((d, i) => [d, i]));
+      for (const sig of signals) {
+        const i = idxByDate.get(sig.date);
+        if (i == null) continue;
+        const bar = bars[i];
+        const v = sig.side === 'BUY' ? bar.low * 0.99 : bar.high * 1.01;
+        const pt = { value: [i, Number(v.toFixed(2))], sig };
+        if (sig.side === 'BUY') buyData.push(pt);
+        else if (sig.side === 'SELL') sellData.push(pt);
+      }
+      const mk = (data: any[], symbol: string, color: string, offset: number) => ({
+        name: '信号', type: 'scatter', xAxisIndex: 0, yAxisIndex: 0,
+        data, symbol, symbolSize: 12, symbolOffset: [0, offset],
+        itemStyle: { color, borderColor: '#fff', borderWidth: 1 },
+        label: { show: true, formatter: (p: any) => p.data.sig.side, fontSize: 8, color, fontWeight: 'bold', position: 'top' },
+        z: 10, tooltip: { formatter: (p: any) => {
+          const s = p.data.sig;
+          return `${s.date}<br/>模型: ${s.side}<br/>fusion: ${s.fusion == null ? '--' : Number(s.fusion).toFixed(4)}`;
+        } },
+      });
+      if (buyData.length) series.push(mk(buyData, 'triangle', COLORS.up, -8));
+      if (sellData.length) series.push(mk(sellData, 'triangle', COLORS.down, 8));
+    }
+
     // 副图
     config.subplots.forEach((sp, idx) => {
       const gi = idx + 1;
@@ -178,7 +213,7 @@ export function KlineChart({ bars, config, overlays, height = 460 }: Props) {
       ],
       series,
     };
-  }, [bars, config, overlays, height]);
+  }, [bars, config, overlays, height, signals]);
 
   return (
     <ReactECharts

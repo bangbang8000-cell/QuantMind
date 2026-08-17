@@ -120,6 +120,15 @@ class StockTerminalService {
     }
   }
 
+  async getSignalOverlay(symbol: string, days = 250): Promise<Record<string, { date: string; fusion: number | null; side: string }[]>> {
+    try {
+      const resp = await this.client.get('/stock-terminal/signal-overlay', { params: { symbol, days } });
+      return resp.data?.data?.series ?? {};
+    } catch {
+      return {};
+    }
+  }
+
   async getTags(symbol: string): Promise<{ tags: any[]; presets: any[] }> {
     try {
       const resp = await this.client.get('/stock-terminal/tags', { params: { symbol }, timeout: 30000 });
