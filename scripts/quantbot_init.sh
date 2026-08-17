@@ -3,7 +3,7 @@
 # quantbot-init.sh — QuantBot (QwenPaw) 初始化脚本
 # ============================================================================
 # 用途：QwenPaw 容器装好后，一键完成：
-#   1. 将本地 12 个 QuantMind 技能包安装到 QwenPaw 技能池
+#   1. 将本地 13 个 QuantMind 技能包安装到 QwenPaw 技能池
 #   2. 广播到目标工作区并启用
 #   3. 写入量化人格（SOUL.md / PROFILE.md / AGENTS.md）
 #

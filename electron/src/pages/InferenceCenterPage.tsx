@@ -4,7 +4,7 @@ import {
   Cpu, Search, Play, Calendar, Sparkles, TrendingUp, TrendingDown,
   Shield, CheckCircle2, RefreshCw, BarChart2, Zap, Star, Activity,
   Info, Compass, Layers, ArrowUpRight, Check, Database, Sliders,
-  Clock, ArrowRight
+  Clock, ArrowRight, AlertCircle, FlaskConical
 } from 'lucide-react';
 import { Button, Input, Select, DatePicker, message, Spin, Tooltip, Tag } from 'antd';
 import dayjs from 'dayjs';
@@ -198,6 +198,7 @@ function generateMockPrediction(
     drivers,
     consensus,
     consensus_score: 87.5,
+    data_source: 'mock',
     error: null,
   };
 }
@@ -324,6 +325,7 @@ export const InferenceCenterPage: React.FC = () => {
       }
     } catch (e: any) {
       console.warn('后端预测接口暂未就绪，使用离线高精模拟:', e);
+      message.warning(`未获取到真实推理数据，当前展示为离线模拟（${e?.message || '接口异常'}）`);
     } finally {
       setLoading(false);
     }
@@ -544,7 +546,21 @@ export const InferenceCenterPage: React.FC = () => {
             <div className="flex items-center gap-4 text-xs">
               <span className="text-slate-400">基准价格: <strong className="text-slate-700 font-mono">¥{prediction.current_price.toFixed(2)}</strong></span>
               <span className="text-slate-400">预测周期: <strong className="text-blue-600 font-mono">T+{prediction.horizon}</strong></span>
-              <span className="text-slate-400">采用架构: <strong className="text-slate-700">{currentSelectedModel.modelName}</strong></span>
+              <span className="text-slate-400">采用架构: <strong className="text-slate-700">{prediction.model_name || currentSelectedModel.modelName}</strong></span>
+              <span className="text-slate-400">推理基准日: <strong className="text-slate-700 font-mono">{prediction.as_of_date || '—'}</strong></span>
+              {prediction.data_source === 'mock' ? (
+                <span className="inline-flex items-center gap-1 text-[10px] font-bold text-slate-500 bg-slate-50 px-1.5 py-0.5 rounded-md border border-slate-200">
+                  <FlaskConical className="w-2.5 h-2.5" /> 离线模拟
+                </span>
+              ) : prediction.data_source === 'fallback' ? (
+                <span className="inline-flex items-center gap-1 text-[10px] font-bold text-amber-700 bg-amber-50 px-1.5 py-0.5 rounded-md border border-amber-100">
+                  <AlertCircle className="w-2.5 h-2.5" /> 无持久化分数·中性回退
+                </span>
+              ) : (
+                <span className="inline-flex items-center gap-1 text-[10px] font-bold text-emerald-700 bg-emerald-50 px-1.5 py-0.5 rounded-md border border-emerald-100">
+                  <Database className="w-2.5 h-2.5" /> 真实推理分数
+                </span>
+              )}
             </div>
           </div>
 
@@ -614,7 +630,7 @@ export const InferenceCenterPage: React.FC = () => {
                     <div>
                       <span className="text-[10px] text-emerald-600 font-bold block">90% 上界</span>
                       <span className="text-xs font-black font-mono text-emerald-600">
-                        +{prediction.p90_return}%
+                        {prediction.p90_return > 0 ? `+${prediction.p90_return}%` : `${prediction.p90_return}%`}
                       </span>
                     </div>
                   </div>

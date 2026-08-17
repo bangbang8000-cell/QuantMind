@@ -52,6 +52,8 @@ export interface SingleStockPredictionResponse {
   drivers: FeatureDriverItem[];
   consensus: ModelConsensusItem[];
   consensus_score: number;
+  /** 'persisted'=真实持久化模型分数 | 'fallback'=无分数中性空态 | 'mock'=离线模拟 */
+  data_source?: 'persisted' | 'fallback' | 'mock';
   error?: string | null;
 }
 

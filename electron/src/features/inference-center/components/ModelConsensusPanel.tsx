@@ -1,6 +1,6 @@
 import React from 'react';
 import { ModelConsensusItem } from '../../../services/inferenceCenterService';
-import { Layers, ShieldCheck, CheckCircle2, TrendingUp } from 'lucide-react';
+import { Layers, ShieldCheck, CheckCircle2, TrendingUp, Inbox } from 'lucide-react';
 
 interface ModelConsensusPanelProps {
   consensus: ModelConsensusItem[];
@@ -45,27 +45,41 @@ export const ModelConsensusPanel: React.FC<ModelConsensusPanelProps> = ({
       </div>
 
       <div className="grid grid-cols-2 gap-3 flex-1 min-h-0 overflow-y-auto">
-        {consensus.map((item, idx) => (
-          <div
-            key={item.model_id || idx}
-            className="flex flex-col justify-between p-3 rounded-xl bg-white border border-slate-100 shadow-xs hover:shadow-sm transition-all"
-          >
-            <div className="flex items-center justify-between mb-2">
-              <div className="flex items-center gap-1.5 min-w-0 pr-2">
-                <div className="w-2 h-2 rounded-full bg-blue-500" />
-                <span className="text-xs font-bold text-slate-800 truncate">{item.model_name}</span>
-              </div>
-              {getRatingBadge(item.rating)}
+        {consensus.length === 0 ? (
+          <div className="col-span-2 flex flex-col items-center justify-center gap-2 py-8 text-center">
+            <div className="w-10 h-10 rounded-xl bg-slate-50 border border-slate-100 flex items-center justify-center text-slate-300">
+              <Inbox className="w-5 h-5" />
             </div>
-
-            <div className="flex items-center justify-between pt-2 border-t border-slate-50">
-              <span className="text-[11px] text-slate-400 font-medium">预期 T+{item.horizon} 回报</span>
-              <span className={`text-xs font-black font-mono ${item.expected_return >= 0 ? 'text-emerald-600' : 'text-rose-600'}`}>
-                {item.expected_return >= 0 ? `+${item.expected_return.toFixed(2)}%` : `${item.expected_return.toFixed(2)}%`}
-              </span>
-            </div>
+            <p className="text-xs font-semibold text-slate-500 m-0">暂无多模型共识数据</p>
+            <p className="text-[11px] text-slate-400 m-0 leading-relaxed max-w-[240px]">
+              该标的在所选基准日未匹配到多个模型的持久化推理分数。
+              <br />
+              可切换模型或基准日重试，或改用其他标的。
+            </p>
           </div>
-        ))}
+        ) : (
+          consensus.map((item, idx) => (
+            <div
+              key={item.model_id || idx}
+              className="flex flex-col justify-between p-3 rounded-xl bg-white border border-slate-100 shadow-xs hover:shadow-sm transition-all"
+            >
+              <div className="flex items-center justify-between mb-2">
+                <div className="flex items-center gap-1.5 min-w-0 pr-2">
+                  <div className="w-2 h-2 rounded-full bg-blue-500" />
+                  <span className="text-xs font-bold text-slate-800 truncate">{item.model_name}</span>
+                </div>
+                {getRatingBadge(item.rating)}
+              </div>
+
+              <div className="flex items-center justify-between pt-2 border-t border-slate-50">
+                <span className="text-[11px] text-slate-400 font-medium">预期 T+{item.horizon} 回报</span>
+                <span className={`text-xs font-black font-mono ${item.expected_return >= 0 ? 'text-emerald-600' : 'text-rose-600'}`}>
+                  {item.expected_return >= 0 ? `+${item.expected_return.toFixed(2)}%` : `${item.expected_return.toFixed(2)}%`}
+                </span>
+              </div>
+            </div>
+          ))
+        )}
       </div>
     </div>
   );

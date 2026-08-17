@@ -1330,26 +1330,33 @@ async def predict_single_stock(
     target_date: str | None = None,
     horizon: int = 5,
     market: str = "CN",
+    consensus_model_ids: list[str] | None = None,
 ) -> dict[str, Any]:
     """单只股票未来走势与区间分位数预测服务。"""
     normalized_symbol = StockCodeUtil.to_prefix(symbol)
 
-    # 1. 查询股票最新行情信息
+    # 1. 查询股票最新行情 + 真实波动率/均线（用于推导分位数锥与因子归因）
     stock_name = normalized_symbol
     latest_close = 0.0
     latest_date = target_date or datetime.now().strftime("%Y-%m-%d")
+    # 日波动率(小数)与均线乖离(百分数)兜底
+    daily_vol_pct = 0.025
+    ma_gap_5 = 0.0
+    ma_gap_20 = 0.0
+    main_flow = 0.0
 
+    sdl_table = _get_sdl_table(market)
     async with get_session(read_only=True) as session:
-        # 获取股票名称与行情。stock_daily_latest.stock_name 全表为空，
-        # 名称回退 stocks 表（suffix 格式存储，_norm_symbol_sql 统一归一后比较）
+        # stock_daily_latest.stock_name 全表为空，名称回退 stocks 表
         res = await session.execute(
             text(
                 f"SELECT sdl.stock_name, sdl.close, sdl.trade_date, "
-                f"       sdl.pct_change, sdl.turnover_rate, "
+                f"       sdl.vol_std_20, sdl.vol_atr_14, "
+                f"       sdl.ma_gap_5, sdl.ma_gap_20, sdl.main_flow, "
                 f"       (SELECT st.name FROM stocks st "
                 f"        WHERE {_norm_symbol_sql('st.symbol')} = {_norm_symbol_sql('sdl.symbol')} "
                 f"        LIMIT 1) AS name_fallback "
-                f"FROM stock_daily_latest sdl "
+                f"FROM {sdl_table} sdl "
                 f"WHERE {_norm_symbol_sql('sdl.symbol')} = {_norm_symbol_sql(':s')} "
                 f"ORDER BY sdl.trade_date DESC LIMIT 1"
             ),
@@ -1357,10 +1364,21 @@ async def predict_single_stock(
         )
         row = res.first()
         if row:
-            stock_name = (row[0] or row[5] or stock_name).strip() or stock_name
+            stock_name = (row[0] or row[8] or stock_name).strip() or stock_name
             latest_close = float(row[1] or 0.0)
             if not target_date and row[2]:
                 latest_date = str(row[2])
+            # vol_std_20 在 stock_daily_latest 为百分数口径(2.78=2.78%)；
+            # vol_atr_14 为绝对价格 ATR。优先 vol_std，回退 ATR/close
+            vol_std = float(row[3] or 0.0)
+            atr = float(row[4] or 0.0)
+            ma_gap_5 = float(row[5] or 0.0)
+            ma_gap_20 = float(row[6] or 0.0)
+            main_flow = float(row[7] or 0.0) or 0.0
+            if vol_std and vol_std > 0.3:
+                daily_vol_pct = vol_std / 100.0
+            elif latest_close > 0 and atr > 0:
+                daily_vol_pct = atr / latest_close
 
     # 获取可用模型列表（在会话外调用，避免嵌套会话）
     models_res = await get_available_models(tid, uid, market)
@@ -1380,7 +1398,60 @@ async def predict_single_stock(
     )
     chosen_model_type = sel.get("modelType") or sel.get("model_type") or "lightgbm"
 
-    # 3. 提取个股关键因子数据用于归因
+    # 3. 读真实推理分数：engine_signal_scores（混合A：默认读持久化真实分数）
+    # 历史盲测日期 = 取该股 <= target_date 最近有分数的交易日；缺省取最新有分数日。
+    # 同日多 run（不同模型）全部保留，构成真实多模型共识。
+    # 按 tenant 维度查询（不限定 user_id）：批量推理分数是租户级共享系统资产，
+    # 落在系统/批量账号(如 00000001)下；推理中心展示多模型共识需取回该标的当日全部真实分数。
+    # model_id 不下推 SQL 过滤——共识矩阵需当日全模型分数；仅用其在 Python 侧选定 headline 主预测。
+    score_params: dict[str, Any] = {"s": normalized_symbol, "tid": tid}
+    # asyncpg 的 date 列不接受字符串，必须传 date 对象
+    date_bound_str = target_date or latest_date
+    try:
+        score_params["d"] = date.fromisoformat(date_bound_str)
+    except (ValueError, TypeError):
+        score_params["d"] = date.today()
+
+    async with get_session(read_only=True) as session:
+        score_rows = (
+            await session.execute(
+                text(
+                    """
+                    SELECT e.fusion_score, e.signal_side, e.score_rank,
+                           e.expected_price, r.model_id AS run_model_id,
+                           e.run_id, e.trade_date
+                    FROM engine_signal_scores e
+                    LEFT JOIN qm_model_inference_runs r ON r.run_id = e.run_id
+                    WHERE e.tenant_id = :tid
+                      AND e.symbol = :s AND e.trade_date <= :d
+                    ORDER BY e.trade_date DESC, e.created_at DESC
+                    """
+                ),
+                score_params,
+            )
+        ).mappings().all()
+
+    resolved_date = latest_date
+    main_row = None
+    consensus_rows: list[Any] = []
+    if score_rows:
+        resolved_date = str(score_rows[0]["trade_date"])
+        day_rows = [r for r in score_rows if str(r["trade_date"]) == resolved_date]
+        # 主预测：选中模型当日分数，否则当日 fusion_score 最高
+        if model_id:
+            main_row = next((r for r in day_rows if r["run_model_id"] == model_id), None)
+        if main_row is None and day_rows:
+            main_row = max(day_rows, key=lambda r: float(r["fusion_score"] or 0.0))
+        # 共识：当日各模型去重（同模型多 run 取 fusion 最高）
+        seen: set[str] = set()
+        for r in sorted(day_rows, key=lambda x: float(x["fusion_score"] or 0.0), reverse=True):
+            mid = r["run_model_id"] or r["run_id"]
+            if mid in seen:
+                continue
+            seen.add(mid)
+            consensus_rows.append(r)
+
+    # 4. 真实特征 → 因子归因（impact 按真实特征量级，非固定值）
     # 特征链路含 DuckDB 同步 IO，get_symbol_full_features 内部已卸载到受限线程池
     features_res = await get_symbol_full_features(normalized_symbol)
     if features_res.get("code") != 200:
@@ -1390,11 +1461,6 @@ async def predict_single_stock(
         features_res = {"data": {}}
     quant_categories = features_res.get("data") or {}
 
-    # 计算特征驱动力（Top 贡献）
-    # 全量特征载荷按类别平铺在顶层（momentum/fundFlow/volatility/valuation/technical），
-    # 列名为 snake_case；缺失时回退默认值，不影响主预测结果。
-    drivers = []
-
     def _feature_value(category: str, key: str, default: float) -> float:
         raw = (quant_categories.get(category) or {}).get(key)
         try:
@@ -1402,140 +1468,143 @@ async def predict_single_stock(
         except (TypeError, ValueError):
             return default
 
-    # 动量类特征
     mom_val = _feature_value("momentum", "mom_ret_5d", 0.02)
-    drivers.append({
-        "name": "5日量价动量 (mom_5d)",
-        "category": "动量因子",
-        "value": round(mom_val, 4),
-        "impact": round(mom_val * 1.5, 4),
-        "direction": "positive" if mom_val >= 0 else "negative",
-    })
-    # 资金类特征（flow_net_amount 已按百万元缩放）
-    fund_val = _feature_value("fundFlow", "flow_net_amount", 0.015)
-    drivers.append({
-        "name": "主力资金净流入",
-        "category": "资金流向",
-        "value": round(fund_val, 4),
-        "impact": round(0.018 if fund_val >= 0 else -0.018, 4),
-        "direction": "positive" if fund_val >= 0 else "negative",
-    })
-    # 波动率特征
-    vol_val = _feature_value("volatility", "vol_std_20", 0.025)
-    drivers.append({
-        "name": "20日历史波动率",
-        "category": "波动风险",
-        "value": round(vol_val, 4),
-        "impact": -round(vol_val * 0.4, 4),
-        "direction": "negative",
-    })
-    # 估值
+    fund_val = _feature_value("fundFlow", "flow_net_amount", (main_flow / 1e6) if main_flow else 0.015)
+    vol_val = _feature_value("volatility", "vol_std_20", daily_vol_pct * 100.0)
     val_val = _feature_value("valuation", "pe_ttm", 24.5)
-    drivers.append({
-        "name": "PE估值分位 (pe_ttm)",
-        "category": "估值因子",
-        "value": round(val_val, 2),
-        "impact": round(0.009, 4),
-        "direction": "positive",
-    })
-    # 微观技术指标
-    tech_val = _feature_value("technical", "rsi_6", 56.2)
-    drivers.append({
-        "name": "相对强弱指标 (RSI-6)",
-        "category": "技术指标",
-        "value": round(tech_val, 2),
-        "impact": round(0.012, 4),
-        "direction": "positive",
-    })
 
-    # 4. 计算预测得分与置信区间
-    # 基础收益率与分位数预测
-    base_alpha = 0.0385  # +3.85% 基准中值预期
-    if chosen_model_type.lower() in ("tft", "nativetft"):
-        base_alpha = 0.0410
-    elif chosen_model_type.lower() in ("gru", "lstm", "alstm"):
-        base_alpha = 0.0320
+    def _clamp(v: float, lo: float, hi: float) -> float:
+        return max(lo, min(hi, v))
 
-    horizon_factor = (horizon / 5.0) ** 0.6
-    p50_ret = round(base_alpha * horizon_factor, 4)
-    p10_ret = round(p50_ret - 0.045 * horizon_factor, 4)
-    p90_ret = round(p50_ret + 0.052 * horizon_factor, 4)
+    drivers = [
+        {
+            "name": "5日量价动量 (mom_5d)",
+            "category": "动量因子",
+            "value": round(mom_val, 4),
+            "impact": round(_clamp(mom_val * 1.5, -0.03, 0.03), 4),
+            "direction": "positive" if mom_val >= 0 else "negative",
+        },
+        {
+            "name": "主力资金净流入",
+            "category": "资金流向",
+            "value": round(fund_val, 4),
+            "impact": round(_clamp(fund_val * 0.5, -0.03, 0.03), 4),
+            "direction": "positive" if fund_val >= 0 else "negative",
+        },
+        {
+            "name": "20日历史波动率",
+            "category": "波动风险",
+            "value": round(vol_val, 4),
+            "impact": round(-_clamp((vol_val / 100.0) * 0.6, 0.005, 0.03), 4),
+            "direction": "negative",
+        },
+        {
+            "name": "PE估值 (pe_ttm)",
+            "category": "估值因子",
+            "value": round(val_val, 2),
+            "impact": round(0.012 if val_val < 30 else -0.008, 4),
+            "direction": "positive" if val_val < 30 else "negative",
+        },
+        {
+            "name": "均线乖离 (ma_gap_20)",
+            "category": "技术指标",
+            "value": round(ma_gap_20, 2),
+            "impact": round(_clamp(ma_gap_20 * 0.004, -0.025, 0.025), 4),
+            "direction": "positive" if ma_gap_20 >= 0 else "negative",
+        },
+    ]
 
-    # 上涨置信度
-    confidence = round(min(0.95, max(0.55, 0.5 + p50_ret * 3.5)), 3)
-    if p50_ret >= 0.03:
-        rating = "STRONG_BUY"
-    elif p50_ret > 0.005:
-        rating = "BUY"
-    elif p50_ret > -0.01:
-        rating = "HOLD"
+    # 5. 预测得分与置信区间（基于真实 fusion_score）
+    # fusion_score ≈ 模型预期收益率(小数)；signal_side 仅 BUY/HOLD/SELL
+    if main_row is not None:
+        fusion_score = float(main_row["fusion_score"] or 0.0)
+        signal_side = str(main_row["signal_side"] or "HOLD")
+        resolved_date = str(main_row["trade_date"])
+        if signal_side == "BUY" and fusion_score >= 0.03:
+            rating = "STRONG_BUY"
+        else:
+            rating = {"BUY": "BUY", "HOLD": "HOLD", "SELL": "SELL"}.get(signal_side, "HOLD")
+        data_source = "persisted"
+        # headline 模型按实际产出分数的 run 对齐（与共识矩阵同名规则一致），
+        # 避免"选中预设→回退列表首个模型"造成的展示模型与分数来源不一致。
+        headline_mid = main_row["run_model_id"] or main_row["run_id"]
+        if headline_mid:
+            headline_meta = next(
+                (m for m in available_models if m.get("modelId") == headline_mid), {}
+            )
+            chosen_model_id = headline_mid
+            chosen_model_name = (
+                headline_meta.get("name") or _humanize_model_name(headline_mid)
+            )
+            chosen_model_type = (
+                headline_meta.get("modelType") or chosen_model_type or "lightgbm"
+            )
     else:
-        rating = "SELL"
+        # 该股该日/该模型无持久化分数：按需实时推理需完整 151 维特征管线（曾挂起），
+        # 暂回退中性空态，保留面板结构；后续按需推理作为独立增强项实现。
+        fusion_score = 0.0
+        rating = "HOLD"
+        data_source = "fallback"
 
-    # 生成未来预测步长曲线 (Fan Chart / Forecast Cone)
+    p50_ret = round(fusion_score, 4)
+    # 分位数锥：真实波动率推导（z=1.28 → 80% 区间 → 10/90 分位）
+    horizon_vol = daily_vol_pct * (horizon ** 0.5)
+    cone = max(0.015, 1.28 * horizon_vol)
+    p10_ret = round(p50_ret - cone, 4)
+    p90_ret = round(p50_ret + cone * 1.15, 4)
+    confidence = round(min(0.95, max(0.5, 0.5 + abs(p50_ret) * 3)), 3)
+
+    # 6. 预测曲线（基于真实分数 + 真实波动率，分步扩散）
     forecast_curve = []
-    base_date = datetime.strptime(latest_date, "%Y-%m-%d") if target_date else datetime.now()
+    try:
+        base_date = datetime.strptime(resolved_date, "%Y-%m-%d")
+    except (ValueError, TypeError):
+        base_date = datetime.now()
     curr_p = latest_close if latest_close > 0 else 100.0
-
     for step in range(1, horizon + 1):
         step_factor = (step / horizon) ** 0.75
-        step_p50_ret = p50_ret * step_factor
-        step_p10_ret = p10_ret * step_factor
-        step_p90_ret = p90_ret * step_factor
-
+        step_p50 = p50_ret * step_factor
+        step_vol = daily_vol_pct * (step ** 0.5)
+        step_cone = max(0.01, 1.28 * step_vol)
+        step_p10 = step_p50 - step_cone
+        step_p90 = step_p50 + step_cone * 1.15
         step_date = (base_date + timedelta(days=step * 1.4)).strftime("%Y-%m-%d")
         forecast_curve.append({
             "step": step,
             "date": step_date,
-            "p10": round(step_p10_ret * 100, 2),
-            "p50": round(step_p50_ret * 100, 2),
-            "p90": round(step_p90_ret * 100, 2),
-            "predicted_price": round(curr_p * (1 + step_p50_ret), 2),
-            "upper_price": round(curr_p * (1 + step_p90_ret), 2),
-            "lower_price": round(curr_p * (1 + step_p10_ret), 2),
+            "p10": round(step_p10 * 100, 2),
+            "p50": round(step_p50 * 100, 2),
+            "p90": round(step_p90 * 100, 2),
+            "predicted_price": round(curr_p * (1 + step_p50), 2),
+            "upper_price": round(curr_p * (1 + step_p90), 2),
+            "lower_price": round(curr_p * (1 + step_p10), 2),
         })
 
-    # 5. 多模型横向共识矩阵 (Consensus Matrix)
-    consensus = [
-        {
-            "model_id": "mdl_lightgbm_v2",
-            "model_name": "LightGBM Alpha-158",
-            "model_type": "lightgbm",
-            "score": round(p50_ret * 0.95, 4),
-            "expected_return": round(p50_ret * 0.95 * 100, 2),
-            "rating": "BUY" if p50_ret * 0.95 > 0 else "HOLD",
+    # 7. 多模型共识（真实当日各模型分数，非硬编码 fudge factor）
+    consensus = []
+    for r in consensus_rows:
+        fs = float(r["fusion_score"] or 0.0)
+        ss = str(r["signal_side"] or "HOLD")
+        mid = r["run_model_id"] or r["run_id"]
+        meta = next((m for m in available_models if m.get("modelId") == mid), {})
+        if mid:
+            model_name = meta.get("name") or _humanize_model_name(mid)
+        else:
+            model_name = "未命名模型"
+        consensus.append({
+            "model_id": mid,
+            "model_name": model_name,
+            "model_type": meta.get("modelType") or "",
+            "score": round(fs, 4),
+            "expected_return": round(fs * 100, 2),
+            "rating": "STRONG_BUY" if (ss == "BUY" and fs >= 0.03) else ss,
             "horizon": horizon,
-        },
-        {
-            "model_id": "mdl_tft_v1",
-            "model_name": "NativeTFT 时序融合",
-            "model_type": "nativetft",
-            "score": round(p50_ret * 1.08, 4),
-            "expected_return": round(p50_ret * 1.08 * 100, 2),
-            "rating": "STRONG_BUY" if p50_ret * 1.08 > 0.03 else "BUY",
-            "horizon": horizon,
-        },
-        {
-            "model_id": "mdl_gru_ts_v1",
-            "model_name": "Qlib GRU 时序神经网络",
-            "model_type": "gru",
-            "score": round(p50_ret * 0.88, 4),
-            "expected_return": round(p50_ret * 0.88 * 100, 2),
-            "rating": "BUY" if p50_ret * 0.88 > 0 else "HOLD",
-            "horizon": horizon,
-        },
-        {
-            "model_id": "mdl_stacking_ens",
-            "model_name": "Stacking 异构多模型集成",
-            "model_type": "stacking",
-            "score": round(p50_ret * 1.02, 4),
-            "expected_return": round(p50_ret * 1.02 * 100, 2),
-            "rating": "STRONG_BUY" if p50_ret * 1.02 > 0.03 else "BUY",
-            "horizon": horizon,
-        },
-    ]
-
-    consensus_score = round(sum(c["score"] for c in consensus) / len(consensus) * 100, 2)
+        })
+    if consensus:
+        bullish = sum(1 for c in consensus if c["rating"] in ("BUY", "STRONG_BUY"))
+        consensus_score = round(bullish / len(consensus) * 100, 1)
+    else:
+        consensus_score = 0.0
 
     payload_data = {
         "status": "success",
@@ -1544,10 +1613,10 @@ async def predict_single_stock(
         "model_id": chosen_model_id,
         "model_name": chosen_model_name,
         "model_type": chosen_model_type,
-        "as_of_date": latest_date,
+        "as_of_date": resolved_date,
         "current_price": curr_p,
         "horizon": horizon,
-        "predicted_score": round(p50_ret, 4),
+        "predicted_score": p50_ret,
         "expected_return": round(p50_ret * 100, 2),
         "confidence": confidence,
         "rating": rating,
@@ -1558,6 +1627,7 @@ async def predict_single_stock(
         "drivers": drivers,
         "consensus": consensus,
         "consensus_score": consensus_score,
+        "data_source": data_source,
         "error": None,
     }
     return {"code": 200, "data": payload_data}
