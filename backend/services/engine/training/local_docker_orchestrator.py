@@ -1146,13 +1146,24 @@ class LocalDockerOrchestrator(TrainingOrchestrator):
                 await self.launch_training_job(run_id=child_run_id, payload=child_payload)
 
                 # 等待 child 完成
-                child_deadline = time.time() + 7200
+                # 等待上限跟随 child 的时长预算（+10min 冗余）：
+                # 原硬编码 7200s 会在大预算 child（如 12h）超 2h 时被误判超时
+                try:
+                    child_budget_minutes = max(10, int(child_payload.get("max_time_minutes") or 120))
+                except Exception:
+                    child_budget_minutes = 120
+                child_deadline = time.time() + (child_budget_minutes + 10) * 60
                 while time.time() < child_deadline:
                     await asyncio.sleep(_POLL_INTERVAL)
                     async with get_session(read_only=True) as db:
                         r = await db.get(TrainingJobRecord, child_run_id)
                         if r is None:
-                            break
+                            # 回调正在并发更新该行时的瞬时读异常：按未完成继续轮询
+                            # （与 _poll_container 回调等待的容忍语义一致）。
+                            # 此前直接 break 会在 child 刚完成的提交瞬间把暂时
+                            # 读不到的记录误判为超时，导致 multi-horizon 首个
+                            # child 完成后必然失败（实测两天两例同款）
+                            continue
                         st = str(r.status or "")
                         if st == "completed":
                             completed_model_ids.append(
