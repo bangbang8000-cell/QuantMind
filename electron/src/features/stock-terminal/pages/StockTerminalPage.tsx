@@ -15,6 +15,7 @@ import { KlineChart, IndicatorConfig, IndexOverlay, SignalPoint, OVERLAY_COLORS,
 import { KlineReplay } from '../components/kline/KlineReplay';
 import { OverviewTab } from '../components/OverviewTab';
 import { TagStrip } from '../components/TagStrip';
+import { ChartBacktestPanel, ChartBacktestData } from '../components/ChartBacktestPanel';
 import { FinancialsTab, ValuationTab, ChipFlowTab, MarginTab, SentimentTab, HoldersTab } from '../components/tabs/P2Tabs';
 import { researchService } from '../../../services/researchService';
 
@@ -82,6 +83,8 @@ export default function StockTerminalPage() {
   // 推理信号叠加
   const [signals, setSignals] = useState<SignalPoint[]>([]);
   const [signalOn, setSignalOn] = useState(true);
+  // 策略回测叠加
+  const [btData, setBtData] = useState<ChartBacktestData | null>(null);
 
   // 回放
   const [replayActive, setReplayActive] = useState(false);
@@ -108,6 +111,7 @@ export default function StockTerminalPage() {
     setLoadingKline(true);
     setReplayActive(false);
     setReplayCursor(1);
+    setBtData(null);
     const sym = selected.symbol;
     const load = async () => {
       try {
@@ -321,6 +325,7 @@ export default function StockTerminalPage() {
                 <TrendingUp className="w-3 h-3" /> 信号
                 {signals.length > 0 && <span className="text-[9px] bg-rose-100 rounded px-0.5">{signals.length}</span>}
               </button>
+              <ChartBacktestPanel symbol={selected?.symbol ?? ''} onResult={setBtData} />
               <KlineReplay
                 active={replayActive}
                 onToggle={() => { setReplayActive(!replayActive); setReplayCursor(0.5); setReplayPlaying(false); }}
@@ -364,7 +369,7 @@ export default function StockTerminalPage() {
                 <TrendingUp className="w-4 h-4 animate-pulse text-blue-400" /> 加载 K 线数据…
               </div>
             ) : bars.length ? (
-              <KlineChart bars={visibleBars} config={config} overlays={overlays} height={452} signals={signalOn ? signals : []} />
+              <KlineChart bars={visibleBars} config={config} overlays={overlays} height={452} signals={signalOn ? signals : []} btEquity={btData?.points ?? []} />
             ) : (
               <div className="h-full flex flex-col items-center justify-center gap-2 text-slate-400">
                 <BarChart3 className="w-8 h-8 opacity-40" />

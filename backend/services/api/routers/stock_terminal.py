@@ -451,6 +451,142 @@ async def stock_signal_overlay(
     return {"success": True, "data": {"series": grouped}}
 
 
+@router.get("/chart-backtest")
+async def chart_backtest(
+    symbol: str = Query(...),
+    buy_expr: str = Query(..., description="买入条件，如 CROSSUP(MA(CLOSE,5),MA(CLOSE,20))"),
+    sell_expr: str = Query("", description="卖出条件；空=持有到结束"),
+    days: int = Query(500, ge=50, le=2000),
+    current_user: dict = Depends(get_current_user),
+):
+    """图表内简单策略回测：表达式条件 -> 次日开盘撮合（防未来函数）。
+
+    返回: 交易点列表 {date, side, price, pnl} + 净值/胜率/回撤/年化。
+    """
+    _ = current_user
+    sym = symbol.upper().strip()
+    if not _SYMBOL_RE.match(sym):
+        raise HTTPException(status_code=400, detail=f"非法代码 {sym}")
+
+    from datetime import timedelta as _td
+
+    def _load() -> pd.DataFrame:
+        from backend.services.engine.data_platform.quantdb_hub import QuantDBDataHub
+
+        hub = QuantDBDataHub.get_instance()
+        end = _date.today()
+        start = end - _td(days=int(days * 1.6))
+        df = hub.fetch_daily_kline(sym, start, end)
+        if df is None or df.empty:
+            return pd.DataFrame()
+        return df.sort_values("trade_date").tail(days).reset_index(drop=True)
+
+    def _run() -> dict:
+        from backend.services.engine.data_platform import expr_engine as ee
+
+        df = _load()
+        if df.empty:
+            raise ValueError("无 K 线数据")
+        ohlcv = df.rename(columns={"trade_date": "date"})[["date", "open", "high", "low", "close", "volume"]]
+        ctx = ee.build_context(ohlcv)
+        buy_sig = ee.eval_bool_expr(ee.compile_expr(buy_expr), ctx)
+        sell_sig = ee.eval_bool_expr(ee.compile_expr(sell_expr), ctx) if sell_expr.strip() else None
+
+        n = len(ohlcv)
+        trades: list[dict] = []
+        position = 0.0          # 持仓股数（满仓=资金/价，用1股基线）
+        cash = 100000.0
+        entry_price = 0.0
+        entry_date = ""
+        buy_signaled = False
+
+        # 次日开盘成交，防未来函数
+        for i in range(1, n):
+            date = ohlcv["date"].iloc[i]
+            open_p = float(ohlcv["open"].iloc[i])
+            if position == 0:
+                if buy_sig.iloc[i - 1]:
+                    shares = cash / open_p
+                    cash -= shares * open_p * 1.00025
+                    position = shares
+                    entry_price = open_p
+                    entry_date = date
+                    trades.append({"date": str(date)[:10], "side": "BUY", "price": round(open_p, 2),
+                                   "pnl": None, "signal_date": str(ohlcv["date"].iloc[i - 1])[:10]})
+                    buy_signaled = True
+            else:
+                sell_now = sell_sig is not None and sell_sig.iloc[i - 1]
+                # 若持有中且已无买入信号且超过20根，强制止盈/止损为下一个卖出信号
+                if sell_now:
+                    cash += position * open_p * (1 - 0.0013)  # 卖出费+印花税
+                    pnl = (open_p - entry_price) / entry_price * 100
+                    trades.append({"date": str(date)[:10], "side": "SELL", "price": round(open_p, 2),
+                                   "pnl": round(pnl, 2), "signal_date": str(ohlcv["date"].iloc[i - 1])[:10]})
+                    position = 0.0
+                    entry_price = 0.0
+
+        # 期末市值
+        final_close = float(ohlcv["close"].iloc[-1])
+        if position > 0:
+            cash += position * final_close
+            trades.append({"date": str(ohlcv["date"].iloc[-1])[:10], "side": "CLOSE",
+                           "price": round(final_close, 2), "pnl": round((final_close - entry_price) / entry_price * 100, 2),
+                           "signal_date": str(ohlcv["date"].iloc[-1])[:10]})
+
+        total_ret = (cash - 100000.0) / 100000.0 * 100
+        # 基准：买入持有
+        base_ret = (float(ohlcv["close"].iloc[-1]) - float(ohlcv["open"].iloc[0])) / float(ohlcv["open"].iloc[0]) * 100
+
+        sells = [t for t in trades if t["side"] == "SELL"]
+        wins = [t for t in sells if (t["pnl"] or 0) > 0]
+        # 净值曲线：按日模拟（重建持仓历史）
+        hist_pos = 0.0
+        hist_cash = 100000.0
+        hist_entry = 0.0
+        equity = []
+        for i in range(n):
+            if i > 0:
+                if hist_pos == 0 and buy_sig.iloc[i - 1]:
+                    hist_pos = hist_cash / float(ohlcv["open"].iloc[i])
+                    hist_cash -= hist_pos * float(ohlcv["open"].iloc[i]) * 1.00025
+                    hist_entry = float(ohlcv["open"].iloc[i])
+                elif hist_pos > 0 and sell_sig is not None and sell_sig.iloc[i - 1]:
+                    hist_cash += hist_pos * float(ohlcv["open"].iloc[i]) * (1 - 0.0013)
+                    hist_pos = 0.0
+            equity.append(hist_cash + hist_pos * float(ohlcv["close"].iloc[i]))
+        peak = -1e18
+        max_dd = 0.0
+        for e in equity:
+            peak = max(peak, e)
+            if peak > 0:
+                max_dd = max(max_dd, (peak - e) / peak * 100)
+
+        return {
+            "trades": trades,
+            "total_return": round(total_ret, 2),
+            "buy_hold_return": round(base_ret, 2),
+            "win_rate": round(len(wins) / len(sells) * 100, 1) if sells else None,
+            "trade_count": len(sells),
+            "max_drawdown": round(max_dd, 2),
+            "points": [
+                {"date": str(ohlcv["date"].iloc[i]), "close": round(float(ohlcv["close"].iloc[i]), 2),
+                 "equity": round(eq, 2)}
+                for i, eq in enumerate(equity)
+            ],
+        }
+
+    import asyncio
+
+    try:
+        result = await asyncio.to_thread(_run)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("chart-backtest %s failed: %s", sym, exc)
+        raise HTTPException(status_code=500, detail=f"回测失败: {exc}")
+    return {"success": True, "data": result}
+
+
 @router.get("/minute")
 async def stock_minute_kline(
     symbol: str = Query(...),

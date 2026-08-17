@@ -55,9 +55,10 @@ interface Props {
   overlays: IndexOverlay[];
   height?: number;
   signals?: SignalPoint[];
+  btEquity?: { date: string; equity: number }[];
 }
 
-export function KlineChart({ bars, config, overlays, height = 460, signals = [] }: Props) {
+export function KlineChart({ bars, config, overlays, height = 460, signals = [], btEquity = [] }: Props) {
   const option = useMemo(() => {
     const dates = bars.map(b => b.date);
     const closes = bars.map(b => b.close);
@@ -127,6 +128,23 @@ export function KlineChart({ bars, config, overlays, height = 460, signals = [] 
       line('BOLL下轨', bb.lower, COLORS.boll);
     }
     overlaySeries.forEach((ov, i) => line(ov.name, ov.data, ov.color, 1));
+
+    // 策略净值叠加（归一化到首日收盘价等比例，画在主图）
+    if (btEquity.length) {
+      const eqByDate = new Map(btEquity.map(p => [p.date, p.equity]));
+      const firstEq = btEquity.length ? btEquity[0].equity : 1;
+      const baseClose = bars.length ? bars[0].close : 1;
+      const eqData = bars.map(b => {
+        const eq = eqByDate.get(b.date);
+        if (eq == null || firstEq <= 0) return null;
+        return Number((baseClose * (eq / firstEq)).toFixed(2));
+      });
+      series.push({
+        name: '策略净值', type: 'line', xAxisIndex: 0, yAxisIndex: 0, data: eqData,
+        symbol: 'none', lineStyle: { width: 1.6, color: '#f97316', type: 'dashed' }, itemStyle: { color: '#f97316' },
+        z: 4, emphasis: { disabled: true },
+      });
+    }
 
     // 推理分数信号标记（BUY▲ / SELL▼）
     if (signals.length) {
@@ -213,7 +231,7 @@ export function KlineChart({ bars, config, overlays, height = 460, signals = [] 
       ],
       series,
     };
-  }, [bars, config, overlays, height, signals]);
+  }, [bars, config, overlays, height, signals, btEquity]);
 
   return (
     <ReactECharts

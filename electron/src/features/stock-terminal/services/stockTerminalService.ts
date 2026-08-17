@@ -120,6 +120,14 @@ class StockTerminalService {
     }
   }
 
+  async getChartBacktest(symbol: string, buyExpr: string, sellExpr: string, days = 500): Promise<any> {
+    const resp = await this.client.get('/stock-terminal/chart-backtest', {
+      params: { symbol, buy_expr: buyExpr, sell_expr: sellExpr, days },
+      timeout: 60000,
+    });
+    return resp.data?.data;
+  }
+
   async getSignalOverlay(symbol: string, days = 250): Promise<Record<string, { date: string; fusion: number | null; side: string }[]>> {
     try {
       const resp = await this.client.get('/stock-terminal/signal-overlay', { params: { symbol, days } });
