@@ -72,7 +72,7 @@ export const FloatingNavBar: React.FC<FloatingNavBarProps> = ({ current, onChang
     // 1. 大盘分析模块
     navItems.filter((item) => ['dashboard', 'market-analysis', 'rss-news'].includes(item.id)),
     // 2. 回测与交易区域
-    navItems.filter((item) => ['strategy', 'ai-ide', 'backtest', 'trading'].includes(item.id)),
+    navItems.filter((item) => ['strategy', 'stock-terminal', 'ai-ide', 'backtest', 'trading'].includes(item.id)),
     // 3. 模型区域
     navItems.filter((item) => ['model-training', 'model-registry', 'inference-center'].includes(item.id)),
     // 4. 智能投研区域
