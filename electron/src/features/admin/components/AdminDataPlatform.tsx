@@ -758,7 +758,7 @@ export const AdminDataPlatform: React.FC = () => {
                                         style={{ width: 140 }}
                                         value={alertFilter.severity}
                                         onChange={(v) =>
-                                            setAlertFilter((f) => ({ ...f, severity: v }))
+                                            setAlertFilter({ ...alertFilter, severity: v })
                                         }
                                         options={[
                                             { label: 'info', value: 'info' },
@@ -779,11 +779,11 @@ export const AdminDataPlatform: React.FC = () => {
                                                 : 'no'
                                         }
                                         onChange={(v) =>
-                                            setAlertFilter((f) => ({
-                                                ...f,
+                                            setAlertFilter({
+                                                ...alertFilter,
                                                 acknowledged:
                                                     v === undefined ? undefined : v === 'yes',
-                                            }))
+                                            })
                                         }
                                         options={[
                                             { label: '未确认', value: 'no' },

@@ -33,50 +33,50 @@ export const FactorList: React.FC<FactorListProps> = ({ metrics, onNavigate }) =
     const cacheKey = `alpha_explain_${factorId}`;
     const cached = localStorage.getItem(cacheKey);
     if (cached) {
-      setExplanations(prev => ({ ...prev, [factorId]: { loading: false, text: cached } }));
+      setExplanations((prev => ({ ...prev, [factorId]: { loading: false, text: cached } })) as unknown as Record<string, { loading: boolean; text?: string; error?: string }>);
       return;
     }
 
-    setExplanations(prev => ({ ...prev, [factorId]: { loading: true } }));
+    setExplanations((prev => ({ ...prev, [factorId]: { loading: true } })) as unknown as Record<string, { loading: boolean; text?: string; error?: string }>);
     try {
       const result = await explainFactor(factorId);
       if (result.success && result.data?.explanation) {
         const text = result.data.explanation;
         localStorage.setItem(cacheKey, text);
-        setExplanations(prev => ({ ...prev, [factorId]: { loading: false, text } }));
+        setExplanations((prev => ({ ...prev, [factorId]: { loading: false, text } })) as unknown as Record<string, { loading: boolean; text?: string; error?: string }>);
       } else {
-        setExplanations(prev => ({ ...prev, [factorId]: { loading: false, error: '解释失败' } }));
+        setExplanations((prev => ({ ...prev, [factorId]: { loading: false, error: '解释失败' } })) as unknown as Record<string, { loading: boolean; text?: string; error?: string }>);
       }
     } catch {
-      setExplanations(prev => ({ ...prev, [factorId]: { loading: false, error: '请求失败' } }));
+      setExplanations((prev => ({ ...prev, [factorId]: { loading: false, error: '请求失败' } })) as unknown as Record<string, { loading: boolean; text?: string; error?: string }>);
     }
   };
 
   const handlePromote = async (factorName: string, expression: string) => {
-    setPromoting(prev => ({ ...prev, [factorName]: 'loading' }));
+    setPromoting((prev => ({ ...prev, [factorName]: 'loading' })) as unknown as Record<string, 'loading' | 'done' | 'error'>);
     try {
       const result = await alphaAgentService.promoteByExpression([{ name: factorName, expression }]);
       if (result.success && result.promoted.length > 0) {
-        setPromoting(prev => ({ ...prev, [factorName]: 'done' }));
+        setPromoting((prev => ({ ...prev, [factorName]: 'done' })) as unknown as Record<string, 'loading' | 'done' | 'error'>);
       } else {
-        setPromoting(prev => ({ ...prev, [factorName]: 'error' }));
+        setPromoting((prev => ({ ...prev, [factorName]: 'error' })) as unknown as Record<string, 'loading' | 'done' | 'error'>);
       }
     } catch {
-      setPromoting(prev => ({ ...prev, [factorName]: 'error' }));
+      setPromoting((prev => ({ ...prev, [factorName]: 'error' })) as unknown as Record<string, 'loading' | 'done' | 'error'>);
     }
   };
 
   const handleExport = async (factorId: string, factorName: string) => {
-    setExporting(prev => ({ ...prev, [factorId]: 'loading' }));
+    setExporting((prev => ({ ...prev, [factorId]: 'loading' })) as unknown as Record<string, 'loading' | 'done' | 'error'>);
     try {
       const result = await exportFactorToIde(factorId);
       if (result.success) {
-        setExporting(prev => ({ ...prev, [factorId]: 'done' }));
+        setExporting((prev => ({ ...prev, [factorId]: 'done' })) as unknown as Record<string, 'loading' | 'done' | 'error'>);
       } else {
-        setExporting(prev => ({ ...prev, [factorId]: 'error' }));
+        setExporting((prev => ({ ...prev, [factorId]: 'error' })) as unknown as Record<string, 'loading' | 'done' | 'error'>);
       }
     } catch {
-      setExporting(prev => ({ ...prev, [factorId]: 'error' }));
+      setExporting((prev => ({ ...prev, [factorId]: 'error' })) as unknown as Record<string, 'loading' | 'done' | 'error'>);
     }
   };
 

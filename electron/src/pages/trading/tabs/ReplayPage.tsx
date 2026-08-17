@@ -811,8 +811,6 @@ function ProposalTable({
                     symbol: p.symbol,
                     side: p.side,
                     quantity: r.quantity,
-                    price: p.est_price,
-                    order_type: p.order_type || 'LIMIT',
                 });
             }
         }
@@ -1461,7 +1459,7 @@ const ReplayPage: React.FC = () => {
             setSessions(list);
             // If no selected session and sessions exist, select the first
             if (list.length > 0) {
-                setSelectedSessionId(prev => (prev && list.some(s => s.session_id === prev) ? prev : list[0].session_id));
+                setSelectedSessionId(selectedSessionId && list.some(s => s.session_id === selectedSessionId) ? selectedSessionId : list[0].session_id);
             } else {
                 setShowCreate(true);
             }

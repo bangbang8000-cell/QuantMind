@@ -193,7 +193,7 @@ export const ModelEvaluationModule: React.FC<ModelEvaluationModuleProps> = ({ in
   const deleteHistoryItem = async (runId: string) => {
     try {
       await modelTrainingService.deleteBacktestHistory(selectedModelId, runId);
-      setHistory(prev => prev.filter(h => h.run_id !== runId));
+      setHistory(history.filter(h => h.run_id !== runId));
       if (activeRunId === runId) {
         setResult(null);
         setActiveRunId('');

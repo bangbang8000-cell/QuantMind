@@ -26,7 +26,7 @@ export function useMarketReset() {
 
       // Reset all stores for the new market
       resetBacktest(currentMarket);
-      resetWizard(currentMarket);
+      if (currentMarket !== 'FUTURES') resetWizard(currentMarket);
       clearMarketCache();
     }
   }, [currentMarket, resetBacktest, resetWizard, clearMarketCache]);

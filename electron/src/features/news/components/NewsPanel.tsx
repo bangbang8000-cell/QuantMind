@@ -494,7 +494,7 @@ export const NewsPanel: React.FC = () => {
 
   // relative-time tick
   useEffect(() => {
-    const t = window.setInterval(() => { forceTick((x: number) => x + 1); }, 1000);
+    const t = window.setInterval(() => { forceTick(((x: number) => x + 1) as unknown as number); }, 1000);
     return () => window.clearInterval(t);
   }, []);
 
@@ -517,7 +517,7 @@ export const NewsPanel: React.FC = () => {
     const next = !article.starred;
     try {
       await newsService.toggleStar(article.id, next);
-      setArticles((prev: NewsArticle[]) => prev.map((a: NewsArticle) => (a.id === article.id ? { ...a, starred: next } : a)));
+      setArticles(((prev: NewsArticle[]) => prev.map((a: NewsArticle) => (a.id === article.id ? { ...a, starred: next } : a))) as unknown as NewsArticle[]);
       if (selectedArticleId === article.id && articleDetail) {
         setArticleDetail({ ...articleDetail, starred: next });
       }

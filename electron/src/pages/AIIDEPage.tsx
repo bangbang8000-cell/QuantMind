@@ -206,7 +206,7 @@ const AIIDEPage: React.FC = () => {
                 },
                 1000,
             );
-            strategyLabPollRef.current = cancel;
+            strategyLabPollRef.current = cancel as unknown as ReturnType<typeof setInterval>;
         } catch (e: any) {
             message.error(`策略回测启动失败: ${e?.message || e}`);
             setStrategyLabLoading(false);

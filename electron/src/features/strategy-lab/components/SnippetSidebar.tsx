@@ -94,12 +94,12 @@ export const SnippetSidebar: React.FC<Props> = ({ activeSnippetId, onSelect }) =
   }, [query]);
 
   const toggleCat = (cat: SnippetCategory) => {
-    setOpenCats((prev) => {
-      const next = new Set(prev);
+    setOpenCats((() => {
+      const next = new Set(openCats);
       if (next.has(cat)) next.delete(cat);
       else next.add(cat);
       return next;
-    });
+    })());
   };
 
   // When user is searching, expand every category that has matches

@@ -273,10 +273,6 @@ export const StockSelectionPanel: React.FC<StockSelectionPanelProps> = ({
         ? STOCK_POOL_TEMPLATES
         : STOCK_POOL_TEMPLATES.filter(t => t.category === activeCategory);
 
-    const visibleTemplates = activeCategory === '全部'
-        ? STOCK_POOL_TEMPLATES
-        : STOCK_POOL_TEMPLATES.filter(t => t.category === activeCategory);
-
     const applyTemplate = (template: StockPoolTemplate) => {
         setQuery(template.query);
         // 直接传 template.query 触发，避免 React state 异步更新导致读到空值

@@ -109,7 +109,7 @@ export const ChatWidget: React.FC<ChatWidgetProps> = ({ userId }) => {
       const task = await clientRef.current.getTask(taskId);
       if (!task) return;
 
-      setTasks((prev) => prev.map((t) => (t.task_id === taskId ? task : t)));
+      setTasks(((prev) => prev.map((t) => (t.task_id === taskId ? task : t))) as unknown as QuantBotTask[]);
 
       if (task.status === 'completed' || task.status === 'failed') {
         clearInterval(pollingRef.current[taskId]);
@@ -181,7 +181,7 @@ export const ChatWidget: React.FC<ChatWidgetProps> = ({ userId }) => {
           setMessages(newMsgs);
         }
         // 添加任务到任务列表
-        setTasks((prev) => [
+        setTasks(((prev) => [
           {
             task_id: taskId,
             status: 'running',
@@ -189,7 +189,7 @@ export const ChatWidget: React.FC<ChatWidgetProps> = ({ userId }) => {
             created_at: new Date().toISOString(),
           },
           ...prev,
-        ]);
+        ]) as unknown as QuantBotTask[]);
         startPolling(taskId);
         setLoading(false);
       },
@@ -282,7 +282,7 @@ export const ChatWidget: React.FC<ChatWidgetProps> = ({ userId }) => {
                       {task.status === 'completed' && task.result?.summary && (
                         <div style={{ fontSize: '13px' }}>
                           <p style={{ margin: '4px 0' }}>
-                            生成因子: <strong>{task.result.summary.total ?? task.result.total_factors ?? '-'}</strong> 个
+                            生成因子: <strong>{String(task.result.summary.total ?? task.result.total_factors ?? '-')}</strong> 个
                           </p>
                           {task.result.summary.avg_ic != null && (
                             <p style={{ margin: '4px 0' }}>

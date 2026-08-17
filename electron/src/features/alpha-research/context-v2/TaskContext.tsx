@@ -130,7 +130,7 @@ export const TaskProvider: React.FC<{ children: React.ReactNode }> = ({ children
   const handleMiningWsMessage = useCallback(
     (msg: WsMessage) => {
       if (!mountedRef.current) return;
-      setMiningTask((prev: Task | null) => {
+      setMiningTask(((prev: Task | null) => {
         if (!prev) return prev;
         const updated = { ...prev };
         switch (msg.type) {
@@ -162,6 +162,7 @@ export const TaskProvider: React.FC<{ children: React.ReactNode }> = ({ children
                 // Avoid duplicates
                 if (!currentFactors.some((f: any) => f.factorName === name)) {
                     const newFactor = {
+                        factorId: generateId(),
                         factorName: name,
                         factorExpression: expr,
                         rankIc: 0, rankIcir: 0, ic: 0, icir: 0,
@@ -222,7 +223,7 @@ export const TaskProvider: React.FC<{ children: React.ReactNode }> = ({ children
         }
         updated.updatedAt = new Date().toISOString();
         return updated;
-      });
+      }) as unknown as Task | null);
     },
     [],
   );
@@ -367,7 +368,7 @@ export const TaskProvider: React.FC<{ children: React.ReactNode }> = ({ children
         // ignore
       }
     }
-    setMiningTask((prev: Task | null) => (prev ? { ...prev, status: 'failed' } : prev));
+    setMiningTask((miningTask ? { ...miningTask, status: 'failed' } : null));
   }, [miningTask, backendAvailable]);
 
   // Reset mining task
@@ -406,22 +407,22 @@ export const TaskProvider: React.FC<{ children: React.ReactNode }> = ({ children
     if (!mountedRef.current) return;
     switch (msg.type) {
       case 'progress':
-        setBacktestTask((prev: BacktestTask | null) => {
+        setBacktestTask(((prev: BacktestTask | null) => {
           if (!prev) return prev;
           return { ...prev, progress: msg.data, updatedAt: new Date().toISOString() };
-        });
+        }) as unknown as BacktestTask | null);
         break;
       case 'log':
-        setBacktestLogs((l: LogEntry[]) => [...l.slice(-499), msg.data as LogEntry]);
+        setBacktestLogs(((l: LogEntry[]) => [...l.slice(-499), msg.data as LogEntry]) as unknown as LogEntry[]);
         break;
       case 'metrics':
-        setBacktestTask((prev: BacktestTask | null) => {
+        setBacktestTask(((prev: BacktestTask | null) => {
           if (!prev) return prev;
           return { ...prev, metrics: msg.data, updatedAt: new Date().toISOString() };
-        });
+        }) as unknown as BacktestTask | null);
         break;
       case 'result':
-        setBacktestTask((prev: BacktestTask | null) => {
+        setBacktestTask(((prev: BacktestTask | null) => {
           if (!prev) return prev;
           return {
             ...prev,
@@ -429,13 +430,13 @@ export const TaskProvider: React.FC<{ children: React.ReactNode }> = ({ children
             metrics: msg.data.metrics || prev.metrics,
             updatedAt: new Date().toISOString(),
           };
-        });
+        }) as unknown as BacktestTask | null);
         break;
       case 'error':
-        setBacktestTask((prev: BacktestTask | null) => {
+        setBacktestTask(((prev: BacktestTask | null) => {
           if (!prev) return prev;
           return { ...prev, status: 'failed', updatedAt: new Date().toISOString() };
-        });
+        }) as unknown as BacktestTask | null);
         break;
     }
   }, []);
@@ -477,7 +478,7 @@ export const TaskProvider: React.FC<{ children: React.ReactNode }> = ({ children
             const t = r.data.task as unknown as BacktestTask;
 
             // Always sync progress from polling (in case WS missed updates)
-            setBacktestTask((prev: BacktestTask | null) => {
+            setBacktestTask(((prev: BacktestTask | null) => {
               if (!prev) return t;
               return {
                 ...prev,
@@ -486,7 +487,7 @@ export const TaskProvider: React.FC<{ children: React.ReactNode }> = ({ children
                 metrics: (t.metrics && Object.keys(t.metrics).length > 0) ? t.metrics : prev.metrics,
                 updatedAt: t.updatedAt,
               };
-            });
+            }) as unknown as BacktestTask | null);
 
             if (t.status === 'completed' || t.status === 'failed' || t.status === 'cancelled') {
               // Final update: sync task + logs from backend (in case WS missed some)
@@ -520,7 +521,7 @@ export const TaskProvider: React.FC<{ children: React.ReactNode }> = ({ children
     } catch {
       // ignore
     }
-    setBacktestTask((prev: BacktestTask | null) => (prev ? { ...prev, status: 'cancelled' } : prev));
+    setBacktestTask((backtestTask ? { ...backtestTask, status: 'cancelled' } : null));
   }, [backtestTask]);
 
   // ==================================================================

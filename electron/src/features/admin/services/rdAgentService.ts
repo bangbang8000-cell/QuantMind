@@ -14,7 +14,7 @@ apiClient.interceptors.request.use((config) => {
   config.baseURL = SERVICE_ENDPOINTS.USER_SERVICE;
   const token = authService.getAccessToken();
   if (token) {
-    config.headers = config.headers || {};
+    config.headers = config.headers || ({} as any);
     (config.headers as any).Authorization = `Bearer ${token}`;
   }
   return config;

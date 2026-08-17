@@ -67,7 +67,7 @@ export const StockSearch: React.FC<StockSearchProps> = ({ market, onSelect, styl
                 placeholder={`搜索${market === 'A' ? 'A股' : market === 'HK' ? '港股' : '美股'}代码/名称...`}
                 prefix={<SearchOutlined style={{ color: '#9ca3af' }} />}
                 allowClear
-                loading={loading}
+                suffix={loading ? <span className="text-xs text-gray-400">加载中</span> : undefined}
             />
         </AutoComplete>
     );

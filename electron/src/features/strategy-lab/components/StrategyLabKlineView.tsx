@@ -387,7 +387,7 @@ export const StrategyLabKlineView: React.FC<Props> = ({
                 size="small"
                 type={drawMode ? 'primary' : 'default'}
                 icon={<EditOutlined />}
-                onClick={() => setDrawMode((v) => !v)}
+                onClick={() => setDrawMode(!drawMode)}
               >
                 {drawMode ? '点击图表选择价位…' : '+ 画线'}
               </Button>

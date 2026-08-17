@@ -186,6 +186,11 @@ class AdminService {
         return resp.data;
     }
 
+    async getMarketSourcesStatus(): Promise<any> {
+        const resp = await this.axiosInstance.get('/admin/data-platform/market-sources-status');
+        return resp.data;
+    }
+
     async refreshQuantDBFactorSources(): Promise<any> {
         const resp = await this.axiosInstance.post('/admin/training-data/sources/refresh');
         return resp.data;

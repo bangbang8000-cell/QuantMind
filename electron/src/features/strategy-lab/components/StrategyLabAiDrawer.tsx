@@ -86,7 +86,7 @@ const StrategyLabAiDrawer: React.FC<Props> = ({ open, onClose, code, lastError, 
 
     const user: ChatTurn = { role: 'user', content: msg };
     const assistant: ChatTurn = { role: 'assistant', content: '', streaming: true };
-    setHistory((h: ChatTurn[]) => [...h, user, assistant]);
+    setHistory(((h: ChatTurn[]) => [...h, user, assistant]) as unknown as ChatTurn[]);
     setInput('');
     setBusy(true);
 
@@ -139,24 +139,24 @@ const StrategyLabAiDrawer: React.FC<Props> = ({ open, onClose, code, lastError, 
           try {
             const obj = JSON.parse(payload);
             if (obj.delta) {
-              setHistory((h: ChatTurn[]) => {
+              setHistory(((h: ChatTurn[]) => {
                 const out = [...h];
                 const last = out[out.length - 1];
                 if (last && last.role === 'assistant') {
                   last.content += obj.delta;
                 }
                 return out;
-              });
+              }) as unknown as ChatTurn[]);
             } else if (obj.error) {
               const human = humanizeError(obj.error, '');
-              setHistory((h: ChatTurn[]) => {
+              setHistory(((h: ChatTurn[]) => {
                 const out = [...h];
                 const last = out[out.length - 1];
                 if (last && last.role === 'assistant') {
                   last.content = `❌ ${human.title}\n${human.hint || ''}\n\n${obj.error}`;
                 }
                 return out;
-              });
+              }) as unknown as ChatTurn[]);
             }
           } catch {
             /* ignore stray non-JSON lines */
@@ -167,23 +167,23 @@ const StrategyLabAiDrawer: React.FC<Props> = ({ open, onClose, code, lastError, 
       if (e?.name !== 'AbortError') {
         const human = humanizeError(String(e?.message || e), '');
         message.error(`AI 助手失败: ${human.title}`);
-        setHistory((h: ChatTurn[]) => {
+        setHistory(((h: ChatTurn[]) => {
           const out = [...h];
           const last = out[out.length - 1];
           if (last && last.role === 'assistant') {
             last.content = `❌ ${human.title}\n${human.hint || ''}\n\n${String(e?.message || e)}`;
           }
           return out;
-        });
+        }) as unknown as ChatTurn[]);
       }
     } finally {
       setBusy(false);
-      setHistory((h: ChatTurn[]) => {
+      setHistory(((h: ChatTurn[]) => {
         const out = [...h];
         const last = out[out.length - 1];
         if (last && last.role === 'assistant') last.streaming = false;
         return out;
-      });
+      }) as unknown as ChatTurn[]);
       cancelRef.current = null;
     }
   }, [busy, code, history, lastError]);

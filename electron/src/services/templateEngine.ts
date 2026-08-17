@@ -246,10 +246,12 @@ export class TemplateEngine {
 
     // 市场兼容性检查
     const compatibility: Record<MarketType, Record<MarketType, number>> = {
-      CN: { CN: 1.0, US: 0.3, HK: 0.5, GLOBAL: 0.2 },
-      US: { CN: 0.3, US: 1.0, HK: 0.6, GLOBAL: 0.4 },
-      HK: { CN: 0.5, US: 0.6, HK: 1.0, GLOBAL: 0.3 },
-      GLOBAL: { CN: 0.2, US: 0.4, HK: 0.3, GLOBAL: 1.0 }
+      CN: { CN: 1.0, US: 0.3, HK: 0.5, CRYPTO: 0.1, FUTURES: 0.2, GLOBAL: 0.2 },
+      US: { CN: 0.3, US: 1.0, HK: 0.6, CRYPTO: 0.2, FUTURES: 0.3, GLOBAL: 0.4 },
+      HK: { CN: 0.5, US: 0.6, HK: 1.0, CRYPTO: 0.1, FUTURES: 0.2, GLOBAL: 0.3 },
+      CRYPTO: { CN: 0.1, US: 0.2, HK: 0.1, CRYPTO: 1.0, FUTURES: 0.3, GLOBAL: 0.3 },
+      FUTURES: { CN: 0.2, US: 0.3, HK: 0.2, CRYPTO: 0.3, FUTURES: 1.0, GLOBAL: 0.3 },
+      GLOBAL: { CN: 0.2, US: 0.4, HK: 0.3, CRYPTO: 0.3, FUTURES: 0.3, GLOBAL: 1.0 }
     };
 
     return compatibility[template.suitableMarkets[0]]?.[params.market] || 0;

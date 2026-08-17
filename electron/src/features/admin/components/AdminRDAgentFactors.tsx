@@ -150,11 +150,11 @@ export const AdminRDAgentFactors: React.FC = () => {
   const [expandedTasks, setExpandedTasks] = useState<Set<string>>(new Set());
   const [showAllTasks, setShowAllTasks] = useState(false);
   const toggleTaskExpand = (taskId: string) => {
-    setExpandedTasks(prev => {
-      const next = new Set(prev);
+    setExpandedTasks((() => {
+      const next = new Set(expandedTasks);
       if (next.has(taskId)) next.delete(taskId); else next.add(taskId);
       return next;
-    });
+    })());
   };
 
   const [form] = Form.useForm();
@@ -513,7 +513,7 @@ export const AdminRDAgentFactors: React.FC = () => {
             {taskHighlight && (
               <Button size="small" onClick={() => setTaskHighlight(undefined)}>清除任务过滤</Button>
             )}
-            <Button size="small" onClick={() => setShowAllTasks(v => !v)}>
+            <Button size="small" onClick={() => setShowAllTasks(!showAllTasks)}>
               {showAllTasks ? '只看运行中' : '查看全部'}
             </Button>
           </Space>

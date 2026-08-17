@@ -443,7 +443,7 @@ const ManualTaskPage: React.FC<ManualTaskPageProps> = ({ tradingMode, onBack }) 
                 model_id: effectiveModelId,
                 run_id: selectedRunId,
                 strategy_id: selectedStrategyId,
-                trading_mode: isRealMode ? 'REAL' : 'SIMULATION',
+                trading_mode: isRealMode ? 'REAL' : undefined,
                 note: note.trim() || undefined,
             });
             setPreview(result);
