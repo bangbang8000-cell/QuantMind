@@ -341,6 +341,52 @@ async def stock_dividends(
     return {"success": True, "data": {"items": items}}
 
 
+@router.get("/minute")
+async def stock_minute_kline(
+    symbol: str = Query(...),
+    freq: str = Query("min5", description="min5 / min1"),
+    days: int = Query(10, ge=1, le=30),
+    current_user: dict = Depends(get_current_user),
+):
+    _ = current_user
+    sym = symbol.upper().strip()
+    if not _SYMBOL_RE.match(sym):
+        raise HTTPException(status_code=400, detail=f"非法代码 {sym}")
+
+    def _run() -> pd.DataFrame:
+        from backend.services.engine.data_platform.quantdb_hub import QuantDBDataHub
+
+        subdir = "min1_kline" if freq == "min1" else "min5_kline"
+        f = _quantdb_dir() / "1_kline_data" / subdir / f"{sym}.parquet"
+        if not f.exists():
+            return pd.DataFrame()
+        try:
+            return pd.read_parquet(f)
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("read %s/%s failed: %s", subdir, sym, exc)
+            return pd.DataFrame()
+
+    import asyncio
+
+    df = await asyncio.to_thread(_run)
+    if df.empty:
+        return {"success": True, "data": {"items": [], "available": False}}
+    df = df.sort_values("time").tail(days * 48)
+    items = [
+        {
+            "date": str(r.get("time"))[:16].replace(" ", " "),
+            "open": _safe_f(r.get("open")),
+            "high": _safe_f(r.get("high")),
+            "low": _safe_f(r.get("low")),
+            "close": _safe_f(r.get("close")),
+            "volume": _safe_f(r.get("volume")),
+            "amount": _safe_f(r.get("amount")),
+        }
+        for _, r in df.iterrows()
+    ]
+    return {"success": True, "data": {"items": items, "available": True}}
+
+
 @router.get("/financials")
 async def stock_financials(
     symbol: str = Query(..., description="600519.SH"),

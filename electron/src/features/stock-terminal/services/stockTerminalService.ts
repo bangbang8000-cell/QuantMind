@@ -83,6 +83,25 @@ class StockTerminalService {
     }
   }
 
+  async getMinuteKline(symbol: string, freq: 'min5' | 'min1', days = 10): Promise<{ items: KlineBar[]; available: boolean }> {
+    try {
+      const resp = await this.client.get('/stock-terminal/minute', { params: { symbol, freq, days } });
+      const data = resp.data?.data ?? {};
+      const items = (data.items ?? []).map((it: any) => ({
+        date: String(it.date ?? ''),
+        open: Number(it.open),
+        high: Number(it.high),
+        low: Number(it.low),
+        close: Number(it.close),
+        volume: it.volume != null ? Number(it.volume) : null,
+        amount: it.amount != null ? Number(it.amount) : null,
+      }));
+      return { items, available: !!data.available };
+    } catch {
+      return { items: [], available: false };
+    }
+  }
+
   async getFinancials(symbol: string, limit = 8): Promise<FinancialsResponse> {
     try {
       const resp = await this.client.get('/stock-terminal/financials', { params: { symbol, limit } });

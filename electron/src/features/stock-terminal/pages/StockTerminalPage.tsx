@@ -38,10 +38,39 @@ const TAB_META: { id: InfoTab; label: string }[] = [
   { id: 'holders', label: '股东分红' },
 ];
 
+/** 日线重采样为周/月线 */
+function resampleBars(bars: KlineBar[], period: 'weekly' | 'monthly'): KlineBar[] {
+  const map = new Map<string, KlineBar[]>();
+  for (const b of bars) {
+    const key = period === 'weekly'
+      ? weekKey(b.date)
+      : b.date.slice(0, 7);
+    if (!map.has(key)) map.set(key, []);
+    map.get(key)!.push(b);
+  }
+  return [...map.entries()].sort((a, b) => a[0].localeCompare(b[0])).map(([, grp]) => ({
+    date: period === 'weekly' ? grp[grp.length - 1].date : `${grp[0].date.slice(0, 7)}-月末`,
+    open: grp[0].open,
+    high: Math.max(...grp.map(g => g.high)),
+    low: Math.min(...grp.map(g => g.low)),
+    close: grp[grp.length - 1].close,
+    volume: grp.reduce((s, g) => s + (g.volume ?? 0), 0),
+  }));
+}
+function weekKey(date: string): string {
+  // 简化为 ISO 周：取该日期所在周一
+  const d = new Date(date + 'T00:00:00');
+  const day = (d.getDay() + 6) % 7;
+  d.setDate(d.getDate() - day);
+  return d.toISOString().slice(0, 10);
+}
+
 export default function StockTerminalPage() {
   const navigate = useNavigate();
   const [selected, setSelected] = useState<StockListItem | null>(null);
   const [bars, setBars] = useState<KlineBar[]>([]);
+  const [period, setPeriod] = useState<'daily' | 'weekly' | 'monthly' | 'min5' | 'min1'>('daily');
+  const [minAvail, setMinAvail] = useState<{ min5: boolean; min1: boolean }>({ min5: false, min1: false });
   const [profile, setProfile] = useState<StockProfile | null>(null);
   const [loadingKline, setLoadingKline] = useState(false);
 
@@ -67,21 +96,37 @@ export default function StockTerminalPage() {
     }).catch(() => setWatchlist(new Set()));
   }, []);
 
-  // 选股 -> 拉 K线 + 概况
+  // 选股/周期 -> 拉 K线 + 概况
   useEffect(() => {
     if (!selected) return;
     let cancelled = false;
     setLoadingKline(true);
     setReplayActive(false);
     setReplayCursor(1);
-    stockTerminalService.getDailyKline(selected.symbol, 500).then(items => {
-      if (!cancelled) setBars(items);
-    }).finally(() => { if (!cancelled) setLoadingKline(false); });
-    stockTerminalService.getProfile(selected.symbol).then(p => {
-      if (!cancelled) setProfile(p);
-    });
+    const sym = selected.symbol;
+    const load = async () => {
+      try {
+        if (period === 'min5' || period === 'min1') {
+          const { items, available } = await stockTerminalService.getMinuteKline(sym, period, 10);
+          if (!cancelled) {
+            setBars(items);
+            setMinAvail(period === 'min1' ? { min5: minAvail.min5, min1: available } : { min5: available, min1: minAvail.min1 });
+          }
+          return;
+        }
+        let items = await stockTerminalService.getDailyKline(sym, 1000);
+        if ((period === 'weekly' || period === 'monthly') && items.length) {
+          items = resampleBars(items, period);
+        }
+        if (!cancelled) setBars(items);
+      } finally {
+        if (!cancelled) setLoadingKline(false);
+      }
+    };
+    load();
+    stockTerminalService.getProfile(sym).then(p => { if (!cancelled) setProfile(p); });
     return () => { cancelled = true; };
-  }, [selected]);
+  }, [selected, period]);
 
   // 指数叠加懒加载
   useEffect(() => {
@@ -198,6 +243,21 @@ export default function StockTerminalPage() {
 
             {/* 指标/叠加/回放控制 */}
             <div className="flex items-center gap-2">
+              <div className="grid grid-cols-5 gap-0.5 p-0.5 bg-slate-100/70 rounded-lg shrink-0">
+                {([['daily', '日'], ['weekly', '周'], ['monthly', '月'], ['min5', '5分'], ['min1', '1分']] as const).map(([v, label]) => (
+                  <button
+                    key={v}
+                    disabled={v === 'min1' && minAvail.min1 === false && period !== 'min1'}
+                    onClick={() => setPeriod(v)}
+                    title={v === 'min1' ? (minAvail.min1 === false ? '本地无1分钟数据' : '1分钟') : undefined}
+                    className={`px-1.5 py-0.5 rounded-md text-[10px] font-bold transition-colors ${
+                      period === v ? 'bg-white text-blue-600 shadow-2xs' : 'text-slate-400 hover:text-slate-600'
+                    } disabled:text-slate-200 disabled:cursor-not-allowed`}
+                  >
+                    {label}
+                  </button>
+                ))}
+              </div>
               <div className="flex items-center gap-1 bg-slate-50 border border-slate-200 rounded-lg p-0.5">
                 {([
                   ['MA', 'ma', LineIcon],
