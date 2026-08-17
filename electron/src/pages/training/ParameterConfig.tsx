@@ -124,13 +124,17 @@ export const ParameterConfig: React.FC<ParameterConfigProps> = ({
                   </div>
                   <div className="grid grid-cols-2 gap-x-4 gap-y-2 pl-1">
                     {MODEL_TYPE_OPTIONS.filter(m => m.category === 'tree').map(m => (
-                      <Checkbox key={m.value} value={m.value} className="!flex items-start">
-                        <div className="leading-snug pt-0.5">
+                      <Checkbox
+                        key={m.value}
+                        value={m.value}
+                        className="!inline-flex !items-center [&_.ant-checkbox]:top-0 [&_.ant-checkbox]:self-center"
+                      >
+                        <span className="inline-flex items-center flex-wrap gap-x-1.5 leading-normal">
                           <Tooltip title={m.tooltip} placement="topLeft" overlayStyle={{ maxWidth: 360 }}>
                             <span className="text-sm cursor-help border-b border-dashed border-slate-300 font-medium text-slate-700">{m.label}</span>
                           </Tooltip>
-                          <span className="text-xs text-slate-400 ml-1.5">{m.description}</span>
-                        </div>
+                          <span className="text-xs text-slate-400">{m.description}</span>
+                        </span>
                       </Checkbox>
                     ))}
                   </div>
@@ -139,13 +143,17 @@ export const ParameterConfig: React.FC<ParameterConfigProps> = ({
                   </div>
                   <div className="grid grid-cols-2 gap-x-4 gap-y-2 pl-1">
                     {MODEL_TYPE_OPTIONS.filter(m => m.category === 'linear').map(m => (
-                      <Checkbox key={m.value} value={m.value} className="!flex items-start">
-                        <div className="leading-snug pt-0.5">
+                      <Checkbox
+                        key={m.value}
+                        value={m.value}
+                        className="!inline-flex !items-center [&_.ant-checkbox]:top-0 [&_.ant-checkbox]:self-center"
+                      >
+                        <span className="inline-flex items-center flex-wrap gap-x-1.5 leading-normal">
                           <Tooltip title={m.tooltip} placement="topLeft" overlayStyle={{ maxWidth: 360 }}>
                             <span className="text-sm cursor-help border-b border-dashed border-slate-300 font-medium text-slate-700">{m.label}</span>
                           </Tooltip>
-                          <span className="text-xs text-slate-400 ml-1.5">{m.description}</span>
-                        </div>
+                          <span className="text-xs text-slate-400">{m.description}</span>
+                        </span>
                       </Checkbox>
                     ))}
                   </div>
@@ -154,13 +162,17 @@ export const ParameterConfig: React.FC<ParameterConfigProps> = ({
                   </div>
                   <div className="grid grid-cols-2 gap-x-4 gap-y-2 pl-1">
                     {MODEL_TYPE_OPTIONS.filter(m => m.category === 'deep_learning').map(m => (
-                      <Checkbox key={m.value} value={m.value} className="!flex items-start">
-                        <div className="leading-snug pt-0.5">
+                      <Checkbox
+                        key={m.value}
+                        value={m.value}
+                        className="!inline-flex !items-center [&_.ant-checkbox]:top-0 [&_.ant-checkbox]:self-center"
+                      >
+                        <span className="inline-flex items-center flex-wrap gap-x-1.5 leading-normal">
                           <Tooltip title={m.tooltip} placement="topLeft" overlayStyle={{ maxWidth: 360 }}>
                             <span className="text-sm cursor-help border-b border-dashed border-slate-300 font-medium text-slate-700">{m.label}</span>
                           </Tooltip>
-                          <span className="text-xs text-slate-400 ml-1.5">{m.description}</span>
-                        </div>
+                          <span className="text-xs text-slate-400">{m.description}</span>
+                        </span>
                       </Checkbox>
                     ))}
                   </div>
