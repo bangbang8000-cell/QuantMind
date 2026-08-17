@@ -16,6 +16,14 @@ const SOURCE_OPTIONS = [
   { value: 'l2_factors', label: 'L2 因子' },
 ];
 
+const CATEGORY_OPTIONS = [
+  ['momentum', '动量'], ['volatility', '波动与风险'], ['money_flow', '成交额与资金'],
+  ['turnover', '换手与流动性'], ['volume_turnover', '成交量与换手率'], ['technical', '技术指标'], ['fundamental', '基本面与估值'],
+  ['style', '截面风格'], ['industry', '行业轮动'], ['chip', '筹码分布'],
+  ['concept', '概念板块'], ['money_flow_l2', '逐笔资金流'], ['order_flow', '撤单与委托流'],
+  ['toxicity', '信息不对称与毒性'], ['microstructure', '价差与微观结构'], ['other', '其他因子'],
+].map(([value, label]) => ({ value, label }));
+
 type Mapping = {
   mapping_id: string; source_dataset: string; source_column: string; key: string;
   feature_name: string; enabled: boolean; default_selected: boolean; required: boolean;
@@ -41,6 +49,7 @@ export const AdminTrainingDatasets: React.FC = () => {
   const [loading, setLoading] = useState(false);
   const [creating, setCreating] = useState(false);
   const [editing, setEditing] = useState<Mapping | null>(null);
+  const [keyword, setKeyword] = useState('');
   const [form] = Form.useForm();
 
   const mappings = useMemo<Mapping[]>(
@@ -62,8 +71,8 @@ export const AdminTrainingDatasets: React.FC = () => {
           row_no: 0,
           source_column: field.column_name,
           factor: mapping?.key || field.column_name,
-          style: mapping?.category_name || '待分类',
-          explanation: mapping?.feature_name || '尚未填写中文解释',
+          style: mapping?.category_name || field.dictionary?.category_name || '待分类',
+          explanation: mapping?.feature_name || field.dictionary?.explanation || '尚未填写中文解释',
           is_present: Boolean(field.is_present),
           mapping,
         };
@@ -71,6 +80,12 @@ export const AdminTrainingDatasets: React.FC = () => {
       .sort((a, b) => a.factor.localeCompare(b.factor))
       .map((row, index) => ({ ...row, row_no: index + 1 }));
   }, [fields, mappings]);
+  const visibleFactorRows = useMemo(() => {
+    const term = keyword.trim().toLowerCase();
+    if (!term) return factorRows;
+    return factorRows.filter(row => [row.factor, row.style, row.explanation]
+      .some(value => value.toLowerCase().includes(term)));
+  }, [factorRows, keyword]);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -195,7 +210,7 @@ export const AdminTrainingDatasets: React.FC = () => {
         const status = sources[option.value] || {};
         return <Col xs={24} md={8} key={option.value}><Card size="small" title={option.label}>
           <Statistic title={status.ready ? '可用于直读训练' : '尚不可用'} value={status.files || 0} suffix="个分区文件" valueStyle={{ color: status.ready ? '#3f8600' : '#cf1322', fontSize: 18 }} />
-          <div className="mt-2 text-xs text-gray-500">覆盖：{status.min_date || '--'} ～ {status.max_date || '--'} · {status.columns?.length || 0} 字段</div>
+          <div className="mt-2 text-xs text-gray-500">覆盖：{status.min_date || '--'} ～ {status.max_date || '--'} · {status.column_count || 0} 字段</div>
           {!status.ready && <Tag color="warning" className="mt-2">缺少：{(status.missing_required || []).join('、') || status.reason}</Tag>}
         </Card></Col>;
       })}
@@ -204,9 +219,9 @@ export const AdminTrainingDatasets: React.FC = () => {
     <Alert type="info" showIcon message="单次任务只能选择一个数据源" description="默认 L1+L2 合并宽表。L1、L2 是独立训练源，禁止跨源自由拼接；数据或 OHLCV 覆盖不完整时，直读训练入口会拒绝提交。" />
 
     <Row gutter={[16, 16]}>
-      <Col xs={24} lg={18}><Card title="因子目录" extra={<Space><Tag>{factorRows.length} 个已发现字段</Tag>{draft && <Tag color="orange">{pending.length} 个待分类</Tag>}</Space>}>
-        <div className="mb-3 text-xs text-gray-500">按编号、因子、风格、中文解释展示。创建草稿后可直接在本表设置训练启用、默认选择与分类映射。</div>
-        <Table size="small" rowKey="source_column" dataSource={factorRows} columns={factorColumns} pagination={{ pageSize: 20, showSizeChanger: false }} scroll={{ x: 880, y: 500 }} />
+      <Col xs={24} lg={18}><Card title="因子目录" extra={<Space><Input allowClear value={keyword} onChange={event => setKeyword(event.target.value)} placeholder="搜索因子、分类或中文解释" style={{ width: 220 }} /><Tag>{factorRows.length} 个已发现字段</Tag>{draft && <Tag color="orange">{pending.length} 个待分类</Tag>}</Space>}>
+        <div className="mb-3 text-xs text-gray-500">内置字典已依据 300 因子设计方案填充默认分类与中文解释；草稿中的修改优先于字典，发布后才影响新训练任务。</div>
+        <Table size="small" rowKey="source_column" dataSource={visibleFactorRows} columns={factorColumns} pagination={{ pageSize: 20, showSizeChanger: false }} scroll={{ x: 880, y: 500 }} />
       </Card></Col>
       <Col xs={24} lg={6}><Card size="small" title="分类映射草稿" extra={draft ? <Tag color="blue">编辑中</Tag> : <Tag>未创建</Tag>}>
         {draft ? <div className="space-y-3">
@@ -229,9 +244,9 @@ export const AdminTrainingDatasets: React.FC = () => {
       const values = await form.validateFields(); if (editing) { await saveMapping({ ...editing, ...values }); setEditing(null); }
     }}>
       <Form form={form} layout="vertical"><Form.Item name="feature_key" label="逻辑因子 ID" rules={[{ required: true }]}><Input /></Form.Item>
-        <Form.Item name="display_name" label="显示名" rules={[{ required: true }]}><Input /></Form.Item>
-        <Form.Item name="category_id" label="分类 ID" rules={[{ required: true }]}><Input /></Form.Item>
-        <Form.Item name="category_name" label="分类名称" rules={[{ required: true }]}><Input /></Form.Item></Form>
+        <Form.Item name="display_name" label="中文解释" rules={[{ required: true }]}><Input.TextArea rows={3} /></Form.Item>
+        <Form.Item name="category_id" label="分类" rules={[{ required: true }]}><Select options={CATEGORY_OPTIONS} onChange={(value) => form.setFieldValue('category_name', CATEGORY_OPTIONS.find(item => item.value === value)?.label)} /></Form.Item>
+        <Form.Item name="category_name" hidden rules={[{ required: true }]}><Input /></Form.Item></Form>
     </Modal>
   </div>;
 };

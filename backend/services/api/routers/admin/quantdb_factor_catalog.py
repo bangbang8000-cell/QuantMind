@@ -22,6 +22,7 @@ from backend.services.engine.data_platform.quantdb_factor_reader import (
     REQUIRED_COLUMNS,
     QuantDBFactorReader,
 )
+from backend.services.engine.data_platform.quantdb_factor_dictionary import definition_for
 from backend.shared.database_manager_v2 import get_session
 
 router = APIRouter(dependencies=[Depends(require_admin)])
@@ -187,6 +188,7 @@ def _unrefreshed_source_status(source: str) -> dict[str, Any]:
         "dataset_id": source,
         "path": str(QuantDBFactorReader().source_path(source)),
         "files": 0,
+        "column_count": 0,
         "columns": [],
         "column_types": {},
         "schema_hash": "",
@@ -223,6 +225,7 @@ async def _cached_factor_sources(session) -> dict[str, dict[str, Any]]:
             "dataset_id": source,
             "path": str(reader.source_path(source)),
             "files": int(row["files"] or 0),
+            "column_count": int(row["column_count"] or 0),
             "columns": [],
             "column_types": {},
             "schema_hash": str(row["schema_hash"] or ""),
@@ -284,6 +287,7 @@ async def _catalog_payload(session, version: dict[str, Any], source_dataset: str
             "feature_name": str(row["display_name"]), "source_dataset": str(row["source_dataset"]),
             "source_column": str(row["source_column"]), "enabled": bool(row["enabled"]),
             "default_selected": bool(row["default_selected"]), "required": bool(row["required"]),
+            "category_id": str(row["category_id"]), "category_name": str(row["category_name"]),
             "order_no": int(row["sort_order"]),
         })
         category["feature_count"] += 1
@@ -359,7 +363,13 @@ async def list_factor_fields(
             WHERE market = 'CN' AND dataset_id = :source_dataset
             ORDER BY column_name
         """), {"source_dataset": source_dataset})).mappings().all()
-    fields = [dict(row) for row in rows]
+    fields = [
+        {
+            **dict(row),
+            "dictionary": definition_for(str(row["column_name"])),
+        }
+        for row in rows
+    ]
     if not include_keys:
         fields = [row for row in fields if row["column_name"] not in KEY_COLUMNS | set(REQUIRED_COLUMNS)]
     return {"source_dataset": source_dataset, "fields": fields}
@@ -542,7 +552,9 @@ async def seed_draft_mappings(version_id: str, current_user: dict = Depends(requ
         for column in fields:
             if column in KEY_COLUMNS or column in REQUIRED_COLUMNS:
                 continue
-            cat_id, cat_name = _category_for(str(column))
+            definition = definition_for(str(column))
+            cat_id = str(definition["category_id"])
+            cat_name = str(definition["category_name"])
             inherited = legacy_defaults.get(str(column), {})
             await session.execute(text("""
                 INSERT INTO qm_training_factor_mapping
@@ -555,12 +567,12 @@ async def seed_draft_mappings(version_id: str, current_user: dict = Depends(requ
                 "mapping_id": uuid.uuid4().hex, "version_id": version_id,
                 "source_dataset": version["source_dataset"], "source_column": column,
                 "feature_key": column,
-                "category_name": inherited.get("category_name", cat_name),
-                "category_id": inherited.get("category_id", cat_id),
-                "display_name": inherited.get("display_name", column),
+                "category_name": cat_name,
+                "category_id": cat_id,
+                "display_name": str(definition["explanation"]),
                 "enabled": bool(inherited.get("enabled", False)),
                 "default_selected": bool(inherited.get("default_selected", False)),
-                "sort_order": int(inherited.get("sort_order", count)),
+                "sort_order": int(definition["sort_order"]) + count,
             })
             count += 1
     return {"version_id": version_id, "seeded_fields": count}

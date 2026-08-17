@@ -1,0 +1,163 @@
+"""Built-in semantic dictionary for QuantDB A-share training factors.
+
+Definitions are derived from ``300_factors_lightgbm_design_v2.md``.  The
+dictionary is deliberately code-owned: QuantDB remains raw/read-only while
+the administrator can override every generated label in a catalog draft.
+"""
+
+from __future__ import annotations
+
+import re
+from dataclasses import asdict, dataclass
+
+
+DICTIONARY_VERSION = "quantdb-300-v2"
+DICTIONARY_SOURCE = "300_factors_lightgbm_design_v2.md"
+
+
+@dataclass(frozen=True)
+class FactorDefinition:
+    display_name: str
+    explanation: str
+    category_id: str
+    category_name: str
+    sort_order: int
+    confidence: str = "documented"
+
+    def to_dict(self) -> dict[str, str | int]:
+        return asdict(self)
+
+
+_GROUPS = (
+    ("mom_", "momentum", "动量", 100),
+    ("vol_turnover_", "volume_turnover", "成交量与换手率", 220),
+    ("vol_price_", "volume_turnover", "成交量与换手率", 220),
+    ("vol_large_trade_", "volume_turnover", "成交量与换手率", 220),
+    ("vol_tick_density", "volume_turnover", "成交量与换手率", 220),
+    ("vol_gini", "volume_turnover", "成交量与换手率", 220),
+    ("vol_kurtosis", "volume_turnover", "成交量与换手率", 220),
+    ("vol_skew", "volume_turnover", "成交量与换手率", 220),
+    ("vol_persistence", "volume_turnover", "成交量与换手率", 220),
+    ("vol_up_down_ratio", "volume_turnover", "成交量与换手率", 220),
+    ("vol_weighted_price", "volume_turnover", "成交量与换手率", 220),
+    ("vol_", "volatility", "波动与风险", 200),
+    ("amt_", "money_flow", "成交额与资金", 300),
+    ("turn_", "turnover", "换手与流动性", 400),
+    ("mfi_", "money_flow", "成交额与资金", 300),
+    ("obv_", "money_flow", "成交额与资金", 300),
+    ("tech_", "technical", "技术指标", 500),
+    ("fun_", "fundamental", "基本面与估值", 600),
+    ("style_", "style", "截面风格", 700),
+    ("ind_", "industry", "行业轮动", 800),
+    ("chip_", "chip", "筹码分布", 900),
+    ("concept_", "concept", "概念板块", 1000),
+    ("flow_cancel_", "order_flow", "撤单与委托流", 1200),
+    ("flow_order_", "order_flow", "撤单与委托流", 1200),
+    ("flow_", "money_flow_l2", "逐笔资金流", 1100),
+    ("micro_vpin_", "toxicity", "信息不对称与毒性", 1300),
+    ("micro_adverse_", "toxicity", "信息不对称与毒性", 1300),
+    ("micro_toxicity_", "toxicity", "信息不对称与毒性", 1300),
+    ("micro_informed_", "toxicity", "信息不对称与毒性", 1300),
+    ("micro_order_imbalance_tox", "toxicity", "信息不对称与毒性", 1300),
+    ("micro_", "microstructure", "价差与微观结构", 1400),
+)
+
+# High-value exact descriptions. The token renderer below covers documented
+# variants and keeps newly published fields readable until an admin refines it.
+_EXACT = {
+    "amt_close_pos": ("成交额区间位置", "当前成交额在近期区间中的相对位置"),
+    "amt_log": ("成交额对数", "当日成交额的对数，衡量资金活跃度"),
+    "amt_z_20": ("20日成交额 Z 分数", "当前成交额相对近20日均值的标准化偏离"),
+    "mfi_14": ("14日资金流量指标", "基于典型价格与成交量的资金流强弱指标"),
+    "obv_slope_20": ("20日 OBV 斜率", "能量潮指标近20日趋势斜率"),
+    "fun_float_mv": ("流通市值", "流通市值的对数或标准化口径"),
+    "fun_np_growth": ("净利润增长率", "净利润同比增长速度"),
+    "tech_close_to_high_20": ("20日收盘接近高点程度", "收盘价相对20日最高价的位置"),
+    "tech_max_drawdown_20": ("20日最大回撤", "近20日价格路径的最大回撤幅度"),
+    "vol_amp_1": ("单日振幅", "当日最高价与最低价的相对振幅"),
+    "vol_amp_20": ("20日平均振幅", "近20日单日振幅的统计水平"),
+    "vol_gini": ("成交量基尼系数", "分钟成交量分布的不均匀程度"),
+    "vol_kurtosis": ("成交量峰度", "分钟成交量分布的尖峰程度"),
+    "vol_skew": ("成交量偏度", "分钟成交量分布的偏斜程度"),
+    "vol_tick_density": ("成交密度", "单位时间内的成交笔数"),
+    "vol_weighted_price": ("VWAP 偏离", "收盘价相对成交量加权平均价的偏离"),
+}
+
+_WORDS = {
+    "ret": "收益率", "ma": "移动均线", "ema": "指数均线", "gap": "偏离", "macd": "MACD",
+    "dif": "DIF", "dea": "DEA", "hist": "柱值", "rsi": "RSI", "kdj": "KDJ",
+    "std": "标准差", "atr": "平均真实波幅", "parkinson": "Parkinson 波动率",
+    "gk": "Garman-Klass 波动率", "rv": "已实现波动率", "rrv": "已实现范围波动率",
+    "rskew": "已实现偏度", "rkurt": "已实现峰度", "jump": "跳跃", "ratio": "比率",
+    "net": "净流入", "amount": "成交额", "volume": "成交量", "turnover": "换手率",
+    "depth": "订单簿深度", "spread": "价差", "imbalance": "不平衡度", "liquidity": "流动性",
+    "vpin": "VPIN", "trade": "成交", "order": "委托", "cancel": "撤单",
+    "profit": "获利", "concentration": "集中度", "momentum": "动量", "rotation": "轮动",
+    "crowding": "拥挤度", "beta": "Beta", "idio": "特质", "residual": "残差",
+    "mom": "动量", "amt": "成交额", "turn": "换手", "close": "收盘", "open": "开盘",
+    "high": "高位", "low": "低位", "pos": "位置", "score": "评分", "hot": "热点",
+    "days": "天数", "netflow": "资金净流入", "flow": "资金流", "buy": "买入", "sell": "卖出",
+    "large": "大单", "small": "小单", "super": "特大单", "medium": "中单",
+    "time": "时间加权", "equal": "等权", "weighted": "加权", "mean": "均值", "median": "中位数",
+    "skew": "偏度", "kurtosis": "峰度", "persistence": "持续性", "price": "价格",
+}
+
+
+def _group(column: str) -> tuple[str, str, int]:
+    for prefix, category_id, category_name, order in _GROUPS:
+        if column.startswith(prefix):
+            return category_id, category_name, order
+    return "other", "其他因子", 9999
+
+
+def _render_name(column: str) -> str:
+    if column in _EXACT:
+        return _EXACT[column][0]
+    patterns = (
+        (r"mom_ret_(\d+)d", "{0}日收益率"),
+        (r"mom_ma_gap_(\d+)", "收盘价偏离{0}日均线"),
+        (r"mom_rsi_(\d+)", "{0}日 RSI 相对强弱指标"),
+        (r"vol_std_(\d+)", "{0}日收益率标准差"),
+        (r"vol_atr_(\d+)", "{0}日平均真实波幅"),
+        (r"vol_parkinson_(\d+)", "{0}日 Parkinson 波动率"),
+        (r"amt_ma_(\d+)", "{0}日成交额均线"),
+        (r"amt_ratio_(\d+)_(\d+)", "成交额 {0} 日/{1} 日均线比"),
+        (r"amt_net_flow_(\d+)", "{0}日成交额净流入"),
+        (r"turn_(\d+)", "{0}日换手率"),
+        (r"turn_ratio_(\d+)_(\d+)", "换手率 {0} 日/{1} 日均线比"),
+        (r"chip_profit_ratio_(\d+)", "{0}日筹码获利比例"),
+        (r"ind_ret_(\d+)", "{0}日行业收益排名"),
+        (r"style_beta_(\d+)", "{0}日市场 Beta"),
+        (r"style_idio_vol_(\d+)", "{0}日特质波动率"),
+        (r"micro_vpin_(\d+)", "VPIN（{0} 等量分桶）"),
+        (r"micro_depth_ratio_(\d+)", "{0}档买卖盘深度比"),
+        (r"micro_depth_imbalance_(\d+)", "{0}档订单簿深度不平衡"),
+        (r"micro_liquidity_amihud_(\d+)", "{0}日 Amihud 非流动性"),
+        (r"micro_zone_vol_ratio_T(\d+)", "T{0} 时段成交量占比"),
+        (r"vol_realized_(\d+)min", "{0}分钟已实现波动率"),
+    )
+    for pattern, template in patterns:
+        match = re.fullmatch(pattern, column)
+        if match:
+            return template.format(*match.groups())
+    parts = column.split("_")
+    rendered = [_WORDS.get(part.lower(), part.upper() if part.isupper() else part) for part in parts]
+    return " ".join(rendered)
+
+
+def definition_for(column: str) -> dict[str, str | int]:
+    """Return a non-destructive default definition for a raw QuantDB column."""
+    category_id, category_name, order = _group(column)
+    if column in _EXACT:
+        name, explanation = _EXACT[column]
+    else:
+        name = _render_name(column)
+        explanation = f"{category_name}因子：{name}。具体计算口径见 {DICTIONARY_SOURCE}。"
+    return FactorDefinition(
+        display_name=name,
+        explanation=explanation,
+        category_id=category_id,
+        category_name=category_name,
+        sort_order=order,
+        confidence="documented" if category_id != "other" else "needs_review",
+    ).to_dict()
