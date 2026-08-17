@@ -19,13 +19,16 @@ const { Text } = Typography;
 
 const JOB_POLL_INTERVAL_MS = 3000;
 
-// 首次打开数据下载面板时，仅选择模型训练所需的最小数据集。
-// 其他数据（分钟/Tick、基础板块、财务、技术衍生等）均由管理员按需勾选。
-const DEFAULT_TRAINING_DATASETS = new Set([
+// 首次打开数据下载面板时，选择模型训练与系统基础运行所需的最小数据集。
+// 其他数据（分钟/Tick、财务、技术衍生等）均由管理员按需勾选。
+const DEFAULT_SYSTEM_DATASETS = new Set([
+    'daily_forward',
     'daily_backward',
     'daily_unadjusted',
     'features_daily',
-    'l1_l2_factors',
+    'l1_factors',
+    'l2_factors',
+    'instrument_detail',
 ]);
 
 const LAYOUT_LABELS: Record<QuantDBDataset['layout'], { text: string; color: string }> = {
@@ -72,7 +75,7 @@ export function QuantDBCatalogPanel({ connected, onPreview }: QuantDBCatalogPane
             setDataDir(resp.data_dir);
             if (!hasAppliedDefaultSelection.current) {
                 setSelected(resp.datasets
-                    .filter((dataset) => DEFAULT_TRAINING_DATASETS.has(dataset.dataset))
+                    .filter((dataset) => DEFAULT_SYSTEM_DATASETS.has(dataset.dataset))
                     .map((dataset) => dataset.dataset));
                 hasAppliedDefaultSelection.current = true;
             }
