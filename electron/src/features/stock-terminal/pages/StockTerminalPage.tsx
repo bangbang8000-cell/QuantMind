@@ -13,6 +13,7 @@ import { RankingPanel } from '../components/RankingPanel';
 import { OverviewTab } from '../components/OverviewTab';
 import { FinancialsTab, ValuationTab, ChipFlowTab, MarginTab, SentimentTab, HoldersTab } from '../components/tabs/P2Tabs';
 import { NewsTab } from '../components/tabs/NewsTab';
+import { StockScoreChart } from '../../../components/inference/StockScoreChart';
 
 type InfoTab = 'overview' | 'financials' | 'valuation' | 'chipflow' | 'margin' | 'sentiment' | 'holders' | 'news';
 
@@ -153,12 +154,12 @@ export default function StockTerminalPage() {
         </motion.div>
       </div>
 
-      {/* 整合 K 线弹窗：左侧 K 线主体，右侧竖排智能标签 */}
+      {/* 整合 K 线弹窗：左侧 K 线主体 + 推理分数模拟交易，右侧竖排智能标签 */}
       <Modal
         open={klineOpen}
         onCancel={() => setKlineOpen(false)}
         footer={null}
-        width={1180}
+        width={1260}
         destroyOnClose
         title={
           <span className="text-sm font-black text-slate-800 flex items-center gap-2">
@@ -166,15 +167,28 @@ export default function StockTerminalPage() {
             {selected?.name} · {selected?.symbol} 完整 K 线
           </span>
         }
-        styles={{ body: { height: 600, padding: 0 } }}
+        styles={{ body: { height: 760, padding: 0 } }}
       >
         {selected && klineOpen && (
           <div className="h-full flex">
-            {/* 左：K 线主体 */}
-            <div className="flex-1 min-w-0">
-              <KlineWorkspace stock={selected} profile={profile} height={570} />
+            {/* 左列：K 线主体 + 推理分数/模拟交易 */}
+            <div className="flex-1 min-w-0 flex flex-col">
+              <div className="flex-1 min-h-0">
+                <KlineWorkspace stock={selected} profile={profile} height={430} />
+              </div>
+              {/* 推理分数历史 + 模拟交易（复刻推理研究 StockScoreChart 全部功能） */}
+              <div className="border-t border-slate-100" style={{ height: 300 }}>
+                <StockScoreChart
+                  symbol={selected.symbol.split('.')[0]}
+                  name={selected.name}
+                  market="A"
+                  days={365}
+                  height={285}
+                  wideScale={false}
+                />
+              </div>
             </div>
-            {/* 右：竖排智能标签（原顶部标签移到这里） */}
+            {/* 右：竖排智能标签 */}
             <div className="w-60 shrink-0 border-l border-slate-100 overflow-y-auto">
               <TagStrip symbol={selected.symbol} onSelectStock={setSelected} vertical />
             </div>
