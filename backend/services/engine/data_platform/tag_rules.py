@@ -330,8 +330,54 @@ def preset_matched(symbol: str) -> list[dict[str, Any]]:
     return out
 
 
+def _latest_signal_scores() -> dict[str, dict]:
+    """最近有分数交易日 全市场 fusion/side（纯数字 symbol -> {fusion, side, date}）。
+    同步 psycopg2 直连（本函数在 to_thread 中调用，不可用 async 会话）。
+    """
+    import os
+    import urllib.parse
+
+    import psycopg2
+    import psycopg2.extras
+
+    db_url = os.getenv("DATABASE_URL", "")
+    if db_url:
+        # psycopg2 不认 asyncpg 协议前缀
+        db_url = db_url.replace("postgresql+asyncpg", "postgresql").replace("postgresql+psycopg2", "postgresql")
+    if not db_url:
+        db_url = (
+            f"postgresql://{os.getenv('DB_USER')}:{urllib.parse.quote_plus(os.getenv('DB_PASSWORD',''))}"
+            f"@{os.getenv('DB_HOST')}:{os.getenv('DB_PORT')}/{os.getenv('DB_NAME')}"
+        )
+    conn = psycopg2.connect(db_url)
+    try:
+        with conn.cursor() as cur:
+            cur.execute(
+                "SELECT trade_date FROM engine_signal_scores "
+                "WHERE tenant_id='default' GROUP BY trade_date "
+                "ORDER BY trade_date DESC LIMIT 1"
+            )
+            d0 = cur.fetchone()
+            if d0 is None:
+                return {}
+            d0 = d0[0]
+            cur.execute(
+                "SELECT symbol, fusion_score, signal_side FROM engine_signal_scores "
+                "WHERE tenant_id='default' AND trade_date=%s",
+                (d0,),
+            )
+            rows = cur.fetchall()
+    finally:
+        conn.close()
+    out: dict[str, dict] = {}
+    for r in rows:
+        out[str(r[0])] = {"fusion": float(r[1]) if r[1] is not None else None,
+                          "side": str(r[2] or "HOLD"), "date": str(d0)[:10]}
+    return out
+
+
 def stocks_for_tag(tag_id: str, limit: int = 50) -> list[dict[str, Any]]:
-    """标签同类股票（全市场匹配后按 sort_key 排序）。"""
+    """标签同类股票（全市场匹配后按 sort_key 排序，叠加最近推理分数）。"""
     tag = get_tag_by_id(tag_id)
     if tag is None:
         raise ValueError(f"未知标签 {tag_id}")
@@ -344,16 +390,23 @@ def stocks_for_tag(tag_id: str, limit: int = 50) -> list[dict[str, Any]]:
         hit = hit[~hit["_st"].fillna(False)]
     if tag.sort_key and tag.sort_key in hit.columns:
         hit = hit.sort_values(tag.sort_key, ascending=tag.sort_asc)
+    scores = _latest_signal_scores()
     out: list[dict[str, Any]] = []
     for _, r in hit.head(limit).iterrows():
         _, v = tag.match(r)
+        sym = str(r.get("symbol") or "")
+        code = sym.split(".")[0]
+        sc = scores.get(sym) or scores.get(code) or {}
         out.append({
-            "symbol": r.get("symbol"),
+            "symbol": sym,
             "name": r.get("Name"),
             "industry": r.get("rs_hyname"),
             "close": _num(r.get("close")),
             "pct_change": _num(r.get("pct_change")),
             "total_mv": _num(r.get("total_mv_yi")) or _num(r.get("Zsz")),
             "metric": v,
+            "fusion": sc.get("fusion"),
+            "side": sc.get("side"),
+            "signal_date": sc.get("date"),
         })
     return out

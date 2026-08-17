@@ -26,12 +26,25 @@ class StockTerminalService {
   async getStockList(params: {
     market?: string;
     industry?: string;
+    concept?: string;
     q?: string;
+    date?: string;
+    score_min?: number;
+    model?: string;
     page?: number;
     page_size?: number;
   }): Promise<StockListResponse> {
     const resp = await this.client.get('/stock-terminal/list', { params });
     return resp.data?.data ?? { total: 0, page: 1, page_size: 100, trade_date: '', items: [] };
+  }
+
+  async getConcepts(): Promise<string[]> {
+    try {
+      const resp = await this.client.get('/stock-terminal/concepts');
+      return resp.data?.data?.concepts ?? [];
+    } catch {
+      return [];
+    }
   }
 
   async getIndustries(): Promise<string[]> {

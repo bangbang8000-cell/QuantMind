@@ -903,6 +903,12 @@ async def list_stocks(
     industry: str | None = Query(None, description="行业名称（rs_hyname）"),
     q: str | None = Query(None, description="代码/名称模糊检索"),
     only_st: bool = Query(False, description="仅 ST 股"),
+    date: str | None = Query(None, description="推理分数基准日 YYYY-MM-DD，缺省=最近有分数日"),
+    model: str | None = Query(None, description="推理模型（model_version），缺省=全部模型融合"),
+    score_min: float | None = Query(None, description="推理分数下限（fusion_score）"),
+    score_max: float | None = Query(None, description="推理分数上限"),
+    only_signaled: bool = Query(False, description="仅 BUY/SELL（排除 HOLD）"),
+    concept: str | None = Query(None, description="概念板块（sector_members 板块名）"),
     page: int = Query(1, ge=1),
     page_size: int = Query(100, ge=10, le=300),
     current_user: dict = Depends(get_current_user),
@@ -920,12 +926,89 @@ async def list_stocks(
         df = df[df["Symbol"].str.contains(kw) | df["Name"].astype(str).str.contains(kw)]
     if only_st and "STGP" in df.columns:
         df = df[pd.to_numeric(df["STGP"], errors="coerce").fillna(0) > 0]
+    if concept:
+        members = _concept_members(concept)
+        if members:
+            df = df[df["Symbol"].isin(members)]
+
+    # 推理分数叠加（engine_signal_scores）：默认最近有分数交易日单日，分数降序
+    score_info: dict[str, dict] = {}
+    _signal_date = None
+    try:
+        from datetime import date as _date2
+
+        params: dict = {}
+        if date:
+            _signal_date = _date2.fromisoformat(date)
+            latest = _signal_date
+        else:
+            async with get_session() as session:
+                from sqlalchemy import text as _txt
+
+                _d0 = (
+                    await session.execute(
+                        _txt(
+                            "SELECT trade_date FROM engine_signal_scores "
+                            "WHERE tenant_id='default' GROUP BY trade_date "
+                            "ORDER BY trade_date DESC LIMIT 1"
+                        )
+                    )
+                ).scalar_one_or_none()
+            latest = _d0
+            _signal_date = str(_d0)[:10] if _d0 else None
+        if latest is not None:
+            where = "tenant_id = 'default' AND trade_date = :d"
+            params: dict = {"d": latest}
+            if model:
+                where += " AND model_version = :m"
+                params["m"] = model
+            if score_min is not None:
+                where += " AND fusion_score >= :smin"
+                params["smin"] = score_min
+            if score_max is not None:
+                where += " AND fusion_score <= :smax"
+                params["smax"] = score_max
+            if only_signaled:
+                where += " AND signal_side IN ('BUY','SELL')"
+            sql = (
+                "SELECT symbol, fusion_score, signal_side, model_version "
+                f"FROM engine_signal_scores WHERE {where}"
+            )
+            async with get_session() as session:
+                from sqlalchemy import text as _txt
+
+                rows = (await session.execute(_txt(sql), params)).fetchall()
+            for r in rows:
+                sym = str(r[0])
+                # engine_signal_scores.symbol 为纯数字 600519（不带市场后缀）
+                sfx = sym if "." in sym else sym
+                score_info[sfx] = {
+                    "fusion": float(r[1]) if r[1] is not None else None,
+                    "side": str(r[2] or "HOLD"),
+                    "date": str(latest)[:10],
+                    "model": str(r[3] or ""),
+                }
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("signal scores for list failed: %s", exc)
+
+    if score_info:
+        df["_code"] = df["Symbol"].str.split(".").str[0]
+        df["_fusion"] = df["_code"].map(lambda c: (score_info.get(c) or {}).get("fusion"))
+        df["_side"] = df["_code"].map(lambda c: (score_info.get(c) or {}).get("side"))
+        if score_min is not None:
+            df = df[df["_fusion"].notna() & (df["_fusion"] >= score_min)]
+        if score_max is not None:
+            df = df[df["_fusion"].notna() & (df["_fusion"] <= score_max)]
+        if only_signaled:
+            df = df[df["_side"].isin(["BUY", "SELL"])]
+        df = df.sort_values("_fusion", ascending=False, na_position="last")
 
     total = len(df)
     start = (page - 1) * page_size
     rows = df.iloc[start : start + page_size]
 
     def _item(r: pd.Series) -> dict[str, Any]:
+        info = score_info.get(str(r.get("Symbol")).split(".")[0]) if score_info else {}
         return {
             "symbol": r.get("Symbol"),
             "name": r.get("Name"),
@@ -939,6 +1022,10 @@ async def list_stocks(
             "pb": _safe_f(r.get("PB_MRQ")),
             "is_st": bool(pd.to_numeric(r.get("STGP"), errors="coerce").fillna(0) > 0)
             if "STGP" in r.index else False,
+            "fusion": (info.get("fusion") if info else None),
+            "side": (info.get("side") if info else None),
+            "signal_date": (info.get("date") if info else None),
+            "model": (info.get("model") if info else None),
         }
 
     return {
@@ -948,9 +1035,56 @@ async def list_stocks(
             "page": page,
             "page_size": page_size,
             "trade_date": trade_date,
+            "signal_date": _signal_date,
             "items": [_item(r) for _, r in rows.iterrows()],
         },
     }
+
+
+@router.get("/concepts")
+async def list_concepts(
+    market: str = Query("ALL", description="按市场过滤 SH/SZ/BJ/ALL"),
+    current_user: dict = Depends(get_current_user),
+):
+    """概念/行业板块列表（sector_members 全量）。"""
+    _ = current_user
+    d = _quantdb_dir()
+    f = d / "2_base_sector" / "sector_concept" / "sector_members.parquet"
+    if not f.exists():
+        return {"success": True, "data": {"concepts": []}}
+    try:
+        sm = pd.read_parquet(f)
+        name_col = "SectorName" if "SectorName" in sm.columns else "sector_name"
+        sym_col = "Symbol" if "Symbol" in sm.columns else "symbol"
+        type_col = "SectorType" if "SectorType" in sm.columns else None
+        names = sorted(sm[name_col].dropna().astype(str).unique().tolist())
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("concepts list failed: %s", exc)
+        names = []
+    return {"success": True, "data": {"concepts": names}}
+
+
+_concept_members_cache: dict[str, Any] = {"ts": 0.0, "by_name": {}}
+
+
+def _concept_members(concept: str) -> set[str]:
+    """概念 -> 成分 symbol 集合（suffix 格式）。"""
+    now = time.time()
+    if not _concept_members_cache["by_name"] or now - _concept_members_cache["ts"] > _UNIVERSE_TTL:
+        d = _quantdb_dir()
+        f = d / "2_base_sector" / "sector_concept" / "sector_members.parquet"
+        by_name: dict[str, set[str]] = {}
+        if f.exists():
+            try:
+                sm = pd.read_parquet(f)
+                name_col = "SectorName" if "SectorName" in sm.columns else "sector_name"
+                sym_col = "Symbol" if "Symbol" in sm.columns else "symbol"
+                for n, s in zip(sm[name_col], sm[sym_col]):
+                    by_name.setdefault(str(n), set()).add(str(s))
+            except Exception as exc:  # noqa: BLE001
+                logger.warning("concept members failed: %s", exc)
+        _concept_members_cache.update({"ts": now, "by_name": by_name})
+    return _concept_members_cache["by_name"].get(concept, set())
 
 
 @router.get("/industries")

@@ -104,15 +104,16 @@ export function TagStrip({ symbol, onSelectStock }: Props) {
             dataSource={similar}
             scroll={{ y: 360 }}
             columns={[
-              { title: '名称', dataIndex: 'name', width: 120, render: (v, r) => (
+              { title: '名称', dataIndex: 'name', width: 110, render: (v, r) => (
                 <button
                   className="text-blue-600 font-bold hover:underline"
                   onClick={() => { onSelectStock?.({ symbol: r.symbol, name: r.name } as StockListItem); setOpenTag(null); }}
                 >{v}</button>
               )},
-              { title: '代码', dataIndex: 'symbol', width: 110, render: v => <span className="font-mono text-slate-500">{v}</span> },
-              { title: '行业', dataIndex: 'industry', width: 100, render: v => v || '--' },
-              { title: '价格', dataIndex: 'close', width: 80, align: 'right', render: v => v?.toFixed?.(2) ?? '--' },
+              { title: '代码', dataIndex: 'symbol', width: 100, render: v => <span className="font-mono text-slate-500">{v}</span> },
+              { title: '行业', dataIndex: 'industry', width: 90, render: v => v || '--' },
+              { title: '价格', dataIndex: 'close', width: 70, align: 'right', render: v => v?.toFixed?.(2) ?? '--' },
+              { title: '分数', dataIndex: 'fusion', width: 70, align: 'right', render: (v) => v == null ? '--' : <span className="text-blue-600 font-bold font-mono">{(Number(v) * 100).toFixed(2)}</span> },
               { title: '标签值', dataIndex: 'metric', align: 'right', render: (v) => v == null ? '--' : Number(v).toFixed(2) },
             ]}
           />

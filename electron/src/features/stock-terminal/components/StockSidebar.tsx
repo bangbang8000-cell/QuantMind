@@ -1,7 +1,7 @@
 /** 个股终端左侧栏：检索 + SH/SZ/BJ 分类 + 行业过滤 + 股票列表（虚拟滚动简化版：分页加载） */
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { Search, RefreshCw, Star, Filter } from 'lucide-react';
+import { Search, RefreshCw, Star, Filter, Cpu, CalendarDays } from 'lucide-react';
 import { Input, Select, Spin, message } from 'antd';
 import { StockListItem, StockListResponse } from '../types';
 import { stockTerminalService } from '../services/stockTerminalService';
@@ -37,6 +37,12 @@ export function StockSidebar({ selected, onSelect, watchlistSymbols, onlyWatchli
   const [market, setMarket] = useState('ALL');
   const [industry, setIndustry] = useState<string | undefined>();
   const [industries, setIndustries] = useState<string[]>([]);
+  const [concept, setConcept] = useState<string | undefined>();
+  const [concepts, setConcepts] = useState<string[]>([]);
+  const [signalDate, setSignalDate] = useState<string | undefined>();
+  const [scoreMin, setScoreMin] = useState<number | undefined>();
+  const [model, setModel] = useState<string | undefined>();
+  const [models, setModels] = useState<string[]>([]);
   const [q, setQ] = useState('');
   const [data, setData] = useState<StockListResponse | null>(null);
   const [loading, setLoading] = useState(false);
@@ -45,14 +51,19 @@ export function StockSidebar({ selected, onSelect, watchlistSymbols, onlyWatchli
 
   useEffect(() => {
     stockTerminalService.getIndustries().then(setIndustries).catch(() => setIndustries([]));
+    stockTerminalService.getConcepts().then(setConcepts).catch(() => setConcepts([]));
   }, []);
 
   const fetchList = useCallback(async (page = 1, append = false) => {
     setLoading(true);
     try {
       const resp = await stockTerminalService.getStockList({
-        market, industry, q: q || undefined, page, page_size: PAGE_SIZE,
+        market, industry, concept, q: q || undefined, page, page_size: PAGE_SIZE,
+        date: signalDate, score_min: scoreMin, model,
       });
+      if (!models.length && resp.items.some(it => it.model)) {
+        setModels(Array.from(new Set(resp.items.map(it => it.model).filter(Boolean)) as any));
+      }
       itemsRef.current = append ? [...itemsRef.current, ...resp.items] : resp.items;
       setData({ ...resp, items: itemsRef.current });
     } catch {
@@ -60,7 +71,7 @@ export function StockSidebar({ selected, onSelect, watchlistSymbols, onlyWatchli
     } finally {
       setLoading(false);
     }
-  }, [market, industry, q]);
+  }, [market, industry, concept, q, signalDate, scoreMin, model, models.length]);
 
   useEffect(() => {
     const t = setTimeout(() => fetchList(1, false), q ? 300 : 0);
@@ -129,14 +140,14 @@ export function StockSidebar({ selected, onSelect, watchlistSymbols, onlyWatchli
       </div>
 
       {/* 行业过滤 */}
-      <div className="flex items-center gap-1 mb-2">
+      <div className="flex items-center gap-1 mb-1">
         <Filter className="w-3 h-3 text-slate-400 shrink-0" />
         <Select
           allowClear
           showSearch
           placeholder="行业过滤"
           value={industry}
-          onChange={setIndustry}
+          onChange={v => { setIndustry(v); }}
           options={industries.map(i => ({ label: i, value: i }))}
           optionFilterProp="label"
           size="small"
@@ -144,9 +155,58 @@ export function StockSidebar({ selected, onSelect, watchlistSymbols, onlyWatchli
         />
       </div>
 
+      {/* 概念板块过滤（582 个） */}
+      <div className="flex items-center gap-1 mb-1">
+        <Filter className="w-3 h-3 text-violet-400 shrink-0" />
+        <Select
+          allowClear
+          showSearch
+          placeholder="概念板块"
+          value={concept}
+          onChange={setConcept}
+          options={concepts.map(c => ({ label: c, value: c }))}
+          optionFilterProp="label"
+          size="small"
+          style={{ width: '100%' }}
+        />
+      </div>
+
+      {/* 推理模型 + 日期 + 分数筛选 */}
+      <div className="flex items-center gap-1 mb-1">
+        <Cpu className="w-3 h-3 text-blue-400 shrink-0" />
+        <Select
+          allowClear
+          placeholder="推理模型"
+          value={model}
+          onChange={setModel}
+          options={models.map(m => ({ label: m, value: m }))}
+          size="small"
+          style={{ width: '100%' }}
+        />
+      </div>
+      <div className="flex items-center gap-1 mb-1">
+        <CalendarDays className="w-3 h-3 text-amber-400 shrink-0" />
+        <Input
+          type="date"
+          value={signalDate}
+          onChange={e => setSignalDate(e.target.value || undefined)}
+          size="small"
+          placeholder="分数基准日"
+          style={{ width: '100%' }}
+        />
+        <Input
+          type="number"
+          value={scoreMin ?? ''}
+          onChange={e => setScoreMin(e.target.value ? Number(e.target.value) : undefined)}
+          size="small"
+          placeholder="分数≥"
+          style={{ width: 68 }}
+        />
+      </div>
+
       {/* 列表头 */}
-      <div className="grid grid-cols-[1fr_64px_58px_52px] gap-1 px-1 pb-1 text-[10px] font-bold text-slate-400 border-b border-slate-100">
-        <span>名称/代码</span><span className="text-right">价格</span><span className="text-right">涨跌</span><span className="text-right">市值</span>
+      <div className="grid grid-cols-[1fr_46px_44px_44px_44px] gap-1 px-1 pb-1 text-[10px] font-bold text-slate-400 border-b border-slate-100">
+        <span>名称/代码</span><span className="text-right">价格</span><span className="text-right">涨跌</span><span className="text-right">市值</span><span className="text-right">分数</span>
       </div>
 
       {/* 股票列表 */}
@@ -159,7 +219,7 @@ export function StockSidebar({ selected, onSelect, watchlistSymbols, onlyWatchli
               <button
                 key={it.symbol}
                 onClick={() => onSelect(it)}
-                className={`w-full grid grid-cols-[1fr_64px_58px_52px] gap-1 items-center px-1.5 py-1.5 rounded-lg text-left transition-colors ${
+                className={`w-full grid grid-cols-[1fr_46px_44px_44px_44px] gap-1 items-center px-1.5 py-1.5 rounded-lg text-left transition-colors ${
                   isSel ? 'bg-blue-50 border border-blue-200' : 'hover:bg-slate-50 border border-transparent'
                 }`}
               >
@@ -174,6 +234,9 @@ export function StockSidebar({ selected, onSelect, watchlistSymbols, onlyWatchli
                 <span className="text-right text-xs font-mono font-bold text-slate-700">{it.close?.toFixed(2) ?? '--'}</span>
                 <span className={`text-right text-[11px] font-mono font-bold ${up ? 'text-rose-500' : 'text-emerald-500'}`}>{fmtPct(it.pct_change)}</span>
                 <span className="text-right text-[10px] text-slate-400">{fmtMv(it.total_mv)}</span>
+                <span className={`text-right text-[10px] font-mono font-bold ${(it.fusion ?? 0) >= 0 ? 'text-blue-600' : 'text-slate-400'}`}>
+                  {it.fusion != null ? (it.fusion * 100).toFixed(2) : '--'}
+                </span>
               </button>
             );
           })}

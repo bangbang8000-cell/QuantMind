@@ -12,6 +12,10 @@ export interface StockListItem {
   pe: number | null;
   pb: number | null;
   is_st: boolean;
+  fusion: number | null;
+  side: string | null;
+  signal_date: string | null;
+  model: string | null;
 }
 
 export interface StockListResponse {
