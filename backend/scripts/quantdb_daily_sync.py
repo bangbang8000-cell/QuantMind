@@ -139,6 +139,24 @@ def _open_state():
     return conn
 
 
+def sha256_of(path: Path) -> str:
+    """分块读文件计算 sha256（内存友好）。"""
+    h = hashlib.sha256()
+    with open(path, "rb") as fh:
+        for block in iter(lambda: fh.read(1 << 20), b""):
+            h.update(block)
+    return h.hexdigest()
+
+
+def md5_of(path: Path) -> str:
+    """分块读文件计算 md5（内存友好）。"""
+    h = hashlib.md5()
+    with open(path, "rb") as fh:
+        for block in iter(lambda: fh.read(1 << 20), b""):
+            h.update(block)
+    return h.hexdigest()
+
+
 def _is_patch_key(key: str) -> bool:
     """patches/ 是上游重算的中间态快照，与 dt=* 分区重复且复权基准可能过期。
 
@@ -224,13 +242,48 @@ def _sync_v2_dataset(client, state, cat_id: str, dataset: str) -> tuple[int, int
         return 0, 0
 
     pending = []
+    verify = []
     for key, obj in latest.items():
         rel_path = obj.get("relative_path") or key
         target = QUANTDB_DATA_DIR / rel_path
         row = state.execute("SELECT path FROM objects WHERE key=?", (key,)).fetchone()
         if row and Path(row[0]).exists() and Path(row[0]).stat().st_size > 0:
             continue
-        pending.append((key, obj, target))
+        # 状态库无登记但文件已在磁盘：与云端 sha256 对上就登记跳过，
+        # 绝不整库重下（2026-08-17 状态库丢失曾把 1.3 万分区全量重拉）
+        if (
+            target.exists()
+            and target.stat().st_size > 0
+            and str(obj.get("sha256") or "").strip()
+        ):
+            verify.append((key, obj, target))
+        else:
+            pending.append((key, obj, target))
+
+    if verify:
+        verified_count = 0
+
+        def verify_work(item):
+            key, obj, target = item
+            expected = str(obj.get("sha256") or "").strip().lower()
+            actual = sha256_of(target)
+            return key, obj, target, actual if actual == expected else None
+
+        with ThreadPoolExecutor(max_workers=SYNC_WORKERS) as pool:
+            for key, obj, target, actual in pool.map(verify_work, verify):
+                if actual is None:
+                    pending.append((key, obj, target))
+                    continue
+                verified_count += 1
+                state.execute(
+                    "INSERT OR REPLACE INTO objects(key,etag,sha256,size,path,layout,dataset)"
+                    " VALUES(?,?,?,?,?,?,?)",
+                    (key, obj.get("etag", ""), actual, target.stat().st_size,
+                     str(target), "v2_daily_partition", dataset),
+                )
+        state.commit()
+        log.info("[V2] %s: %d 个已有文件与云端哈希一致，登记跳过（免重下）",
+                 dataset, verified_count)
 
     if not pending:
         return 0, 0
@@ -290,6 +343,22 @@ def _sync_v1_dataset(client, state, cat_id: str, dataset: str) -> tuple[int, int
             # ETag 未变且文件存在 → 跳过
             if local_etag and local_etag == remote_etag and local_path and Path(local_path).exists() and Path(local_path).stat().st_size > 0:
                 continue
+        # 状态库无登记但文件已在磁盘：md5 与云端 etag 对上就登记跳过，
+        # 绝不整库重下（与 V2 同因 2026-08-17 全量重拉事故）
+        if (
+            target.exists()
+            and target.stat().st_size > 0
+            and remote_etag
+            and "-" not in remote_etag
+            and md5_of(target) == remote_etag
+        ):
+            state.execute(
+                "INSERT OR REPLACE INTO objects(key,etag,sha256,size,path,layout,dataset)"
+                " VALUES(?,?,?,?,?,?,?)",
+                (key, f'"{remote_etag}"', sha256_of(target), target.stat().st_size,
+                 str(target), "v1_symbol", dataset),
+            )
+            continue
         pending.append((key, obj, target))
 
     if not pending:
@@ -362,20 +431,6 @@ def reseed_state(datasets: list[dict] | None = None) -> dict:
     client = _make_client()
     state = _open_state()
     summary = {"seeded": 0, "per_dataset": {}}
-
-    def sha256_of(path: Path) -> str:
-        h = hashlib.sha256()
-        with open(path, "rb") as fh:
-            for block in iter(lambda: fh.read(1 << 20), b""):
-                h.update(block)
-        return h.hexdigest()
-
-    def md5_of(path: Path) -> str:
-        h = hashlib.md5()
-        with open(path, "rb") as fh:
-            for block in iter(lambda: fh.read(1 << 20), b""):
-                h.update(block)
-        return h.hexdigest()
 
     for ds in datasets:
         sub, cat_id = ds["sub_category"], ds["category_id"]
