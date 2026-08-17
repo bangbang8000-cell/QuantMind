@@ -61,9 +61,9 @@ install_skills() {
   # 1.2 删除同名旧技能（池中同名技能会冲突；删除后上传最新版）
   local -a pool_names
   pool_names=(ai-ide-strategy-writing backtest-center batch-inference-analysis \
-              quantdb-sdk quantdb-fields quantmind-deploy quantmind-operations \
-              rd-agent-factor-mining simulation-trading smart-strategy-stock-picking \
-              stock-market-analysis trading-agents)
+              daily-review quantdb-sdk quantdb-fields quantmind-deploy \
+              quantmind-operations rd-agent-factor-mining simulation-trading \
+              smart-strategy-stock-picking stock-market-analysis trading-agents)
   for name in "${pool_names[@]}"; do
     local resp
     resp="$(curl -s -X DELETE "$QWENPAW_BASE_URL/api/skills/pool/$name")"
@@ -89,9 +89,9 @@ skills = d if isinstance(d, list) else d.get("skills", [])
 qm = [s["name"] for s in skills if s.get("source") != "builtin"
       and s["name"] in {
         "ai-ide-strategy-writing","backtest-center","batch-inference-analysis",
-        "quantdb-sdk","quantdb-fields","quantmind-deploy","quantmind-operations",
-        "rd-agent-factor-mining","simulation-trading","smart-strategy-stock-picking",
-        "stock-market-analysis","trading-agents"}]
+        "daily-review","quantdb-sdk","quantdb-fields","quantmind-deploy",
+        "quantmind-operations","rd-agent-factor-mining","simulation-trading",
+        "smart-strategy-stock-picking","stock-market-analysis","trading-agents"}]
 print("\n".join(sorted(qm)))')"
   local count=0
   while IFS= read -r name; do
