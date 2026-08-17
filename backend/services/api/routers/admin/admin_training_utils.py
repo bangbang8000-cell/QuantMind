@@ -522,6 +522,19 @@ def _normalize_payload(payload: dict[str, Any], allowed_features: list[str]) -> 
             "enabled": bool(payload["preprocessing"].get("enabled", False)),
             "winsor": bool(payload["preprocessing"].get("winsor", True)),
         }
+    # 因子筛选配置透传：此前被白名单剥掉，orchestrator 收不到 factor_selection，
+    # 永远走默认 top-80 筛选，用户显式指定的 n_top（如 L2 特征集 150）失效
+    if isinstance(payload.get("factor_selection"), dict):
+        raw_fs = payload["factor_selection"]
+        normalized["factor_selection"] = {
+            "method": str(raw_fs.get("method") or "").strip().lower(),
+            "n_top": _clamp_int(raw_fs.get("n_top"), 150, 10, 300),
+            "ic_threshold": float(raw_fs.get("ic_threshold", 0.01)),
+            "icir_threshold": float(raw_fs.get("icir_threshold", 0.15)),
+            "correlation_threshold": float(raw_fs.get("correlation_threshold", 0.9)),
+        }
+    if "auto_feature_filter" in payload:
+        normalized["auto_feature_filter"] = str(payload.get("auto_feature_filter") or "true").strip().lower()
     if horizons:
         normalized["horizons"] = horizons
     # 训练时长预算（分钟），默认 120
