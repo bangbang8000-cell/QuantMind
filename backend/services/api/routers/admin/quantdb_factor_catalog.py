@@ -2,10 +2,11 @@
 
 from __future__ import annotations
 
+import asyncio
 import re
 import uuid
 import json
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 from pathlib import Path
 from typing import Any, Literal
 
@@ -69,6 +70,20 @@ CREATE TABLE IF NOT EXISTS qm_training_factor_mapping (
 );
 CREATE INDEX IF NOT EXISTS idx_qm_training_factor_mapping_version
     ON qm_training_factor_mapping(version_id, source_dataset, category_id, sort_order);
+CREATE TABLE IF NOT EXISTS qm_quantdb_factor_source_status (
+    market VARCHAR(16) NOT NULL DEFAULT 'CN',
+    dataset_id VARCHAR(64) NOT NULL,
+    files INTEGER NOT NULL DEFAULT 0,
+    column_count INTEGER NOT NULL DEFAULT 0,
+    schema_hash VARCHAR(128) NOT NULL DEFAULT '',
+    min_date DATE,
+    max_date DATE,
+    ready BOOLEAN NOT NULL DEFAULT FALSE,
+    missing_required TEXT NOT NULL DEFAULT '[]',
+    reason TEXT,
+    refreshed_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    PRIMARY KEY (market, dataset_id)
+);
 """
 
 
@@ -166,6 +181,90 @@ async def _active_version(session, source_dataset: str | None = None) -> dict[st
     return dict(row) if row else None
 
 
+def _unrefreshed_source_status(source: str) -> dict[str, Any]:
+    """Fast explicit state for a source that has not been scanned yet."""
+    return {
+        "dataset_id": source,
+        "path": str(QuantDBFactorReader().source_path(source)),
+        "files": 0,
+        "columns": [],
+        "column_types": {},
+        "schema_hash": "",
+        "min_date": None,
+        "max_date": None,
+        "ready": False,
+        "missing_required": list(REQUIRED_COLUMNS),
+        "reason": "字段尚未刷新，请点击“刷新字段”执行 QuantDB 扫描",
+        "refreshed_at": None,
+    }
+
+
+async def _cached_factor_sources(session) -> dict[str, dict[str, Any]]:
+    """Read readiness from the registry, never by scanning parquet on page load."""
+    rows = (await session.execute(text("""
+        SELECT dataset_id, files, column_count, schema_hash, min_date, max_date,
+               ready, missing_required, reason, refreshed_at
+        FROM qm_quantdb_factor_source_status
+        WHERE market = 'CN'
+    """))).mappings().all()
+    cached = {str(row["dataset_id"]): dict(row) for row in rows}
+    sources: dict[str, dict[str, Any]] = {}
+    reader = QuantDBFactorReader()
+    for source in FACTOR_SOURCE_DIRS:
+        row = cached.get(source)
+        if not row:
+            sources[source] = _unrefreshed_source_status(source)
+            continue
+        try:
+            missing_required = json.loads(str(row["missing_required"] or "[]"))
+        except (TypeError, json.JSONDecodeError):
+            missing_required = list(REQUIRED_COLUMNS)
+        sources[source] = {
+            "dataset_id": source,
+            "path": str(reader.source_path(source)),
+            "files": int(row["files"] or 0),
+            "columns": [],
+            "column_types": {},
+            "schema_hash": str(row["schema_hash"] or ""),
+            "min_date": str(row["min_date"]) if row["min_date"] else None,
+            "max_date": str(row["max_date"]) if row["max_date"] else None,
+            "ready": bool(row["ready"]),
+            "missing_required": missing_required,
+            "reason": row["reason"],
+            "refreshed_at": str(row["refreshed_at"]) if row["refreshed_at"] else None,
+        }
+    return sources
+
+
+async def _store_discovered_sources(
+    session, discovered: dict[str, dict[str, Any]]
+) -> None:
+    for source, status in discovered.items():
+        await session.execute(text("""
+            INSERT INTO qm_quantdb_factor_source_status
+              (market, dataset_id, files, column_count, schema_hash, min_date,
+               max_date, ready, missing_required, reason, refreshed_at)
+            VALUES ('CN', :dataset_id, :files, :column_count, :schema_hash,
+                    :min_date, :max_date, :ready, :missing_required, :reason, NOW())
+            ON CONFLICT (market, dataset_id) DO UPDATE SET
+              files = EXCLUDED.files, column_count = EXCLUDED.column_count,
+              schema_hash = EXCLUDED.schema_hash, min_date = EXCLUDED.min_date,
+              max_date = EXCLUDED.max_date, ready = EXCLUDED.ready,
+              missing_required = EXCLUDED.missing_required, reason = EXCLUDED.reason,
+              refreshed_at = NOW()
+        """), {
+            "dataset_id": source,
+            "files": status["files"],
+            "column_count": len(status["columns"]),
+            "schema_hash": status["schema_hash"],
+            "min_date": date.fromisoformat(status["min_date"]) if status["min_date"] else None,
+            "max_date": date.fromisoformat(status["max_date"]) if status["max_date"] else None,
+            "ready": status["ready"],
+            "missing_required": json.dumps(status["missing_required"]),
+            "reason": status["reason"],
+        })
+
+
 async def _catalog_payload(session, version: dict[str, Any], source_dataset: str) -> dict[str, Any]:
     rows = (await session.execute(text("""
         SELECT mapping_id, source_dataset, source_column, feature_key, display_name,
@@ -207,19 +306,22 @@ async def load_active_factor_catalog(source_dataset: str = DEFAULT_FACTOR_SOURCE
 
 @router.get("/sources")
 async def get_factor_sources(current_user: dict = Depends(require_admin)):
-    """Return direct-read readiness, schema and coverage for the three factor sources."""
+    """Return cached direct-read readiness for the three factor sources."""
     _ = current_user
-    return {"sources": QuantDBFactorReader().discover(), "default_source": DEFAULT_FACTOR_SOURCE}
+    async with get_session() as session:
+        await _ensure_schema(session)
+        sources = await _cached_factor_sources(session)
+    return {"sources": sources, "default_source": DEFAULT_FACTOR_SOURCE}
 
 
 @router.post("/sources/refresh")
 async def refresh_factor_sources(current_user: dict = Depends(require_admin)):
     """Scan local QuantDB schemas and upsert the raw field registry."""
     _ = current_user
-    reader = QuantDBFactorReader()
-    discovered = reader.discover()
+    discovered = await asyncio.to_thread(QuantDBFactorReader().discover)
     async with get_session() as session:
         await _ensure_schema(session)
+        await _store_discovered_sources(session, discovered)
         for source, status in discovered.items():
             await session.execute(text("""
                 UPDATE qm_quantdb_factor_field SET is_present = FALSE, discovered_at = NOW()
@@ -235,7 +337,8 @@ async def refresh_factor_sources(current_user: dict = Depends(require_admin)):
                       max_date = EXCLUDED.max_date, is_present = TRUE, discovered_at = NOW()
                 """), {
                     "dataset_id": source, "column_name": column, "data_type": status["column_types"].get(column), "schema_hash": status["schema_hash"],
-                    "min_date": status["min_date"], "max_date": status["max_date"],
+                    "min_date": date.fromisoformat(status["min_date"]) if status["min_date"] else None,
+                    "max_date": date.fromisoformat(status["max_date"]) if status["max_date"] else None,
                 })
     return {"sources": discovered}
 

@@ -192,7 +192,11 @@ class AdminService {
     }
 
     async refreshQuantDBFactorSources(): Promise<any> {
-        const resp = await this.axiosInstance.post('/admin/training-data/sources/refresh');
+        const resp = await this.axiosInstance.post(
+            '/admin/training-data/sources/refresh',
+            undefined,
+            { timeout: 120_000 },
+        );
         return resp.data;
     }
 
