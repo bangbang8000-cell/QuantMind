@@ -64,7 +64,7 @@ _SYMBOL_RE = re.compile(r"^\d{6}\.(SH|SZ|BJ)$")
 # dt 为整数 YYYYMMDD；回看窗口用于裁剪分区扫描范围（约一个月）
 _DT_LOOKBACK = 100
 
-# 非因子列，不参与分类输出
+# 基础元数据列（不作为因子列参与任何处理）
 _META_COLUMNS = frozenset(
     {
         "symbol",
@@ -79,13 +79,79 @@ _META_COLUMNS = frozenset(
     }
 )
 
+# 排除在全量分类输出之外的列（基础价格与前瞻收益率标签，最新日全为 None，不属于历史技术特征）
+_EXCLUDED_FROM_CATEGORIES = frozenset(
+    {
+        "open",
+        "high",
+        "low",
+        "volume",
+        "amount",
+        "return_1d",
+        "return_3d",
+        "return_5d",
+        "return_10d",
+        "return_20d",
+        "return_60d",
+    }
+)
+
 # DuckDB 视图 → 默认输出类别（视图内未命中前缀规则的列归入此类别）
 _VIEW_DEFAULT_CATEGORY: dict[str, str] = {
+    "qdb_features_daily": "technical",
     "qdb_valuation": "valuation",
     "qdb_technical_indicators": "technical",
     "qdb_market_sentiment": "sentiment",
     "qdb_l1_factors": "other",
     "qdb_l2_factors": "other",
+}
+
+# 显式字段分类映射（用于 features_daily 等混合视图中无前缀列的精确归类）
+_COLUMN_EXPLICIT_CATEGORY: dict[str, str] = {
+    # 估值与基本面
+    "pe_ttm": "valuation",
+    "pe_static": "valuation",
+    "pb": "valuation",
+    "ps_ttm": "valuation",
+    "dividend_rate": "valuation",
+    "total_mv": "valuation",
+    "float_mv": "valuation",
+    "total_capital": "valuation",
+    "circulating_capital": "valuation",
+    "net_profit_ttm": "valuation",
+    "revenue_ttm": "valuation",
+    "equity": "valuation",
+    "annual_net_profit": "valuation",
+    # 核心技术指标（均线、乖离率、超买超卖、动能）
+    "ma5": "technical",
+    "ma10": "technical",
+    "ma20": "technical",
+    "ma30": "technical",
+    "ma60": "technical",
+    "ma_gap_5": "technical",
+    "ma_gap_10": "technical",
+    "ma_gap_20": "technical",
+    "ma_gap_60": "technical",
+    "rsi_6": "technical",
+    "rsi_14": "technical",
+    "kdj_k": "technical",
+    "kdj_d": "technical",
+    "kdj_j": "technical",
+    "macd_dif": "technical",
+    "macd_dea": "technical",
+    "macd_hist": "technical",
+    "vol_to_ma5": "technical",
+    "vol_to_ma20": "technical",
+    "volume_ma_3": "technical",
+    "amount_ma_5": "technical",
+    "volume_trend_3d": "technical",
+    "beta_20": "technical",
+    "pct_change": "technical",
+    # 波动率
+    "vol_std_5": "volatility",
+    "vol_std_20": "volatility",
+    "vol_std_60": "volatility",
+    "vol_atr_14": "volatility",
 }
 
 # 因子列前缀 → 类别（按前缀长度降序匹配，长前缀优先）
@@ -143,6 +209,8 @@ def normalize_symbols(symbols: list[str]) -> list[str]:
 
 
 def _category_for(column: str, default: str) -> str:
+    if column in _COLUMN_EXPLICIT_CATEGORY:
+        return _COLUMN_EXPLICIT_CATEGORY[column]
     for prefix, category in _PREFIX_CATEGORY:
         if column.startswith(prefix):
             return category
@@ -360,7 +428,7 @@ def _build_payload(symbol: str, sources: dict[str, dict[str, Any]]) -> dict[str,
         available.append(view.removeprefix("qdb_"))
         default_category = _VIEW_DEFAULT_CATEGORY.get(view, "other")
         for column, value in row.items():
-            if column in _META_COLUMNS:
+            if column in _META_COLUMNS or column in _EXCLUDED_FROM_CATEGORIES:
                 continue
             category = _category_for(column, default_category)
             grouped[category][column] = _to_jsonable(value)
@@ -473,20 +541,31 @@ def _cache_set(symbol: str, payload: dict[str, Any]) -> None:
 def _query_sources(symbols: list[str], *, include_daily: bool = False) -> dict[str, dict[str, Any]] | None:
     """查询全部 QuantDB 视图。数据目录不可用时返回 None。
 
-    include_daily 额外挂载日线视图（提供 volume，用于现算换手率）。仅投影路径需要，
-    全量路径保持原有五个视图，避免改变既有响应结构。
+    优先使用 52 维核心宽表 qdb_features_daily 替代旧的 qdb_valuation 与 qdb_technical_indicators，
+    未落盘 features_daily 时自动回退至旧分散视图。
+    include_daily 额外挂载日线视图（提供 volume，用于现算换手率）。仅投影路径需要。
     """
     hub = _get_hub()
     if not hub.available:
         logger.warning("QuantDB 数据目录不可用: %s", hub.data_dir)
         return None
-    sources = {
-        "qdb_valuation": _latest_rows("qdb_valuation", symbols),
-        "qdb_technical_indicators": _latest_rows("qdb_technical_indicators", symbols),
-        "qdb_market_sentiment": _latest_rows("qdb_market_sentiment", symbols),
-        "qdb_l1_factors": _fetch_l1(symbols),
-        "qdb_l2_factors": _latest_rows("qdb_l2_factors", symbols),
-    }
+
+    sources: dict[str, dict[str, Any]] = {}
+
+    # 1. 50+ 维日频特征宽表（优先主源）
+    features_daily_rows = _latest_rows("qdb_features_daily", symbols)
+    if features_daily_rows:
+        sources["qdb_features_daily"] = features_daily_rows
+    else:
+        # 回退至旧分散视图
+        sources["qdb_valuation"] = _latest_rows("qdb_valuation", symbols)
+        sources["qdb_technical_indicators"] = _latest_rows("qdb_technical_indicators", symbols)
+
+    # 2. 情绪面、L1 因子、L2 因子
+    sources["qdb_market_sentiment"] = _latest_rows("qdb_market_sentiment", symbols)
+    sources["qdb_l1_factors"] = _fetch_l1(symbols)
+    sources["qdb_l2_factors"] = _latest_rows("qdb_l2_factors", symbols)
+
     if include_daily:
         # 日线视图只用于取 volume（现算换手率的原料）。其余列必须丢弃：
         # amount/open/high/low 与 UI 字段同名但量纲不同（amount 是元，UI 期望亿元），
