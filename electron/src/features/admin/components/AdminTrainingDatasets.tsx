@@ -22,6 +22,16 @@ type Mapping = {
   category_id?: string; category_name?: string; order_no?: number;
 };
 
+type FactorDirectoryRow = {
+  row_no: number;
+  source_column: string;
+  factor: string;
+  style: string;
+  explanation: string;
+  is_present: boolean;
+  mapping?: Mapping;
+};
+
 export const AdminTrainingDatasets: React.FC = () => {
   const [source, setSource] = useState('l1_l2_factors');
   const [sources, setSources] = useState<Record<string, any>>({});
@@ -36,8 +46,31 @@ export const AdminTrainingDatasets: React.FC = () => {
   const mappings = useMemo<Mapping[]>(
     () => (draft?.categories || []).flatMap((category: any) => category.features || []), [draft],
   );
-  const mappedFields = useMemo(() => new Set(mappings.map(item => item.source_column)), [mappings]);
-  const pending = useMemo(() => fields.filter(field => !mappedFields.has(field.column_name)), [fields, mappedFields]);
+  const pending = useMemo(() => {
+    const mappingsByColumn = new Map(mappings.map(mapping => [mapping.source_column, mapping]));
+    return fields.filter((field) => {
+      const mapping = mappingsByColumn.get(field.column_name);
+      return !mapping || mapping.category_id === 'other' || mapping.feature_name === mapping.key;
+    });
+  }, [fields, mappings]);
+  const factorRows = useMemo<FactorDirectoryRow[]>(() => {
+    const mappingsByColumn = new Map(mappings.map(mapping => [mapping.source_column, mapping]));
+    return fields
+      .map((field) => {
+        const mapping = mappingsByColumn.get(field.column_name);
+        return {
+          row_no: 0,
+          source_column: field.column_name,
+          factor: mapping?.key || field.column_name,
+          style: mapping?.category_name || '待分类',
+          explanation: mapping?.feature_name || '尚未填写中文解释',
+          is_present: Boolean(field.is_present),
+          mapping,
+        };
+      })
+      .sort((a, b) => a.factor.localeCompare(b.factor))
+      .map((row, index) => ({ ...row, row_no: index + 1 }));
+  }, [fields, mappings]);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -131,13 +164,21 @@ export const AdminTrainingDatasets: React.FC = () => {
     } catch (error: any) { message.error(error?.response?.data?.detail || '复制发布版本失败'); }
   };
 
-  const columns: ColumnsType<Mapping> = [
-    { title: '原始字段', dataIndex: 'source_column', width: 180, render: (v) => <Text code>{v}</Text> },
-    { title: '逻辑因子', dataIndex: 'key', width: 170 },
-    { title: '分类', dataIndex: 'category_name', width: 130 },
-    { title: '启用', dataIndex: 'enabled', width: 80, render: (v, r) => <Switch size="small" checked={v} disabled={!draft} onChange={checked => saveMapping({ ...r, enabled: checked })} /> },
-    { title: '默认', dataIndex: 'default_selected', width: 80, render: (v, r) => <Switch size="small" checked={v} disabled={!draft || !r.enabled} onChange={checked => saveMapping({ ...r, default_selected: checked })} /> },
-    { title: '编辑', width: 68, render: (_, r) => <Button type="text" size="small" disabled={!draft} icon={<EditOutlined />} onClick={() => { setEditing(r); form.setFieldsValue({ feature_key: r.key, display_name: r.feature_name, category_id: r.category_id, category_name: r.category_name }); }} /> },
+  const factorColumns: ColumnsType<FactorDirectoryRow> = [
+    { title: '编号', dataIndex: 'row_no', width: 68, align: 'center' },
+    { title: '因子', dataIndex: 'factor', width: 200, render: (value) => <Text code>{value}</Text> },
+    { title: '风格', dataIndex: 'style', width: 130, render: (value) => <Tag color={value === '待分类' ? 'default' : 'blue'}>{value}</Tag> },
+    { title: '中文解释', dataIndex: 'explanation', ellipsis: true, render: (value) => <Text>{value}</Text> },
+    { title: '状态', width: 80, render: (_, row) => row.is_present ? <Tag color="green">已发现</Tag> : <Tag>已删除</Tag> },
+    { title: '训练配置', width: 174, render: (_, row) => row.mapping ? <Space size={4}>
+      <Switch size="small" checked={row.mapping.enabled} onChange={checked => saveMapping({ ...row.mapping!, enabled: checked })} />
+      <Text type="secondary" className="text-xs">默认</Text>
+      <Switch size="small" checked={row.mapping.default_selected} disabled={!row.mapping.enabled} onChange={checked => saveMapping({ ...row.mapping!, default_selected: checked })} />
+      <Button type="text" size="small" icon={<EditOutlined />} onClick={() => {
+        setEditing(row.mapping!);
+        form.setFieldsValue({ feature_key: row.mapping!.key, display_name: row.mapping!.feature_name, category_id: row.mapping!.category_id, category_name: row.mapping!.category_name });
+      }} />
+    </Space> : <Text type="secondary" className="text-xs">创建草稿后配置</Text> },
   ];
 
   return <div className="p-6 space-y-4">
@@ -163,18 +204,20 @@ export const AdminTrainingDatasets: React.FC = () => {
     <Alert type="info" showIcon message="单次任务只能选择一个数据源" description="默认 L1+L2 合并宽表。L1、L2 是独立训练源，禁止跨源自由拼接；数据或 OHLCV 覆盖不完整时，直读训练入口会拒绝提交。" />
 
     <Row gutter={[16, 16]}>
-      <Col xs={24} lg={9}><Card title="字段发现 / 待分类" extra={<Tag>{fields.length} 个可映射字段</Tag>}>
-        <div className="mb-2 text-xs text-gray-500">未进入当前草稿：{pending.length} 个。创建草稿会导入全部字段，默认禁用。</div>
-        <Table size="small" rowKey="column_name" dataSource={pending.slice(0, 100)} pagination={false} scroll={{ y: 265 }} columns={[
-          { title: '字段', dataIndex: 'column_name', render: (v: string) => <Text code>{v}</Text> },
-          { title: '状态', dataIndex: 'is_present', width: 70, render: (v: boolean) => v ? <Tag color="green">存在</Tag> : <Tag>删除</Tag> },
-        ]} />
+      <Col xs={24} lg={18}><Card title="因子目录" extra={<Space><Tag>{factorRows.length} 个已发现字段</Tag>{draft && <Tag color="orange">{pending.length} 个待分类</Tag>}</Space>}>
+        <div className="mb-3 text-xs text-gray-500">按编号、因子、风格、中文解释展示。创建草稿后可直接在本表设置训练启用、默认选择与分类映射。</div>
+        <Table size="small" rowKey="source_column" dataSource={factorRows} columns={factorColumns} pagination={{ pageSize: 20, showSizeChanger: false }} scroll={{ x: 880, y: 500 }} />
       </Card></Col>
-      <Col xs={24} lg={15}><Card title="分类映射草稿" extra={draft ? <Space><Tag color="blue">{draft.version_name}</Tag><Button type="primary" icon={<RocketOutlined />} onClick={publish}>发布</Button></Space> : null}>
-        {!draft ? <Form form={form} layout="inline" onFinish={createDraft}>
-          <Form.Item name="version_name" rules={[{ required: true, message: '请输入版本名称' }]}><Input placeholder="例如：2026-08 L1+L2 默认因子集" style={{ width: 280 }} /></Form.Item>
-          <Button type="primary" htmlType="submit" loading={creating} icon={<PlusOutlined />}>新建草稿并导入字段</Button>
-        </Form> : <Table size="small" rowKey="mapping_id" dataSource={mappings} columns={columns} pagination={{ pageSize: 20, showSizeChanger: false }} scroll={{ x: 780, y: 310 }} />}
+      <Col xs={24} lg={6}><Card size="small" title="分类映射草稿" extra={draft ? <Tag color="blue">编辑中</Tag> : <Tag>未创建</Tag>}>
+        {draft ? <div className="space-y-3">
+          <div><Text strong className="block truncate">{draft.version_name}</Text><Text type="secondary" className="text-xs">{mappings.length} 个映射 · {mappings.filter(item => item.enabled).length} 个启用</Text></div>
+          <Alert type="info" showIcon message="在左侧目录完成分类与中文解释" className="text-xs" />
+          <Button block type="primary" icon={<RocketOutlined />} onClick={publish}>发布此草稿</Button>
+        </div> : <Form form={form} layout="vertical" onFinish={createDraft}>
+          <Text type="secondary" className="block mb-3 text-xs">新建后自动导入当前数据源全部字段。</Text>
+          <Form.Item name="version_name" rules={[{ required: true, message: '请输入版本名称' }]}><Input placeholder="例如：2026-08 默认因子集" /></Form.Item>
+          <Button block type="primary" htmlType="submit" loading={creating} icon={<PlusOutlined />}>新建草稿</Button>
+        </Form>}
       </Card></Col>
     </Row>
 
