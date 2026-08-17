@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useMemo, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
     Alert, Button, Card, Checkbox, Collapse, Progress, Space, Table, Tag, Tooltip,
     Typography, message,
@@ -18,6 +18,15 @@ import { QuantDBDiffSummary } from './QuantDBDiffSummary';
 const { Text } = Typography;
 
 const JOB_POLL_INTERVAL_MS = 3000;
+
+// 首次打开数据下载面板时，仅选择模型训练所需的最小数据集。
+// 其他数据（分钟/Tick、基础板块、财务、技术衍生等）均由管理员按需勾选。
+const DEFAULT_TRAINING_DATASETS = new Set([
+    'daily_backward',
+    'daily_unadjusted',
+    'features_daily',
+    'l1_l2_factors',
+]);
 
 const LAYOUT_LABELS: Record<QuantDBDataset['layout'], { text: string; color: string }> = {
     partition: { text: '按日分区', color: 'blue' },
@@ -48,6 +57,7 @@ export function QuantDBCatalogPanel({ connected, onPreview }: QuantDBCatalogPane
     const [submitting, setSubmitting] = useState(false);
     const [activeJob, setActiveJob] = useState<QuantDBSyncJob | null>(null);
     const [cancelling, setCancelling] = useState(false);
+    const hasAppliedDefaultSelection = useRef(false);
 
     // Diff state
     const [diff, setDiff] = useState<QuantDBDiffResult | null>(null);
@@ -60,6 +70,12 @@ export function QuantDBCatalogPanel({ connected, onPreview }: QuantDBCatalogPane
             setGroups(resp.groups);
             setDatasets(resp.datasets);
             setDataDir(resp.data_dir);
+            if (!hasAppliedDefaultSelection.current) {
+                setSelected(resp.datasets
+                    .filter((dataset) => DEFAULT_TRAINING_DATASETS.has(dataset.dataset))
+                    .map((dataset) => dataset.dataset));
+                hasAppliedDefaultSelection.current = true;
+            }
         } catch (error: unknown) {
             message.error(`加载数据集目录失败: ${describeError(error)}`);
         } finally {
