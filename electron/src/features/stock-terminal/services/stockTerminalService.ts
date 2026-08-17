@@ -30,18 +30,18 @@ class StockTerminalService {
     page?: number;
     page_size?: number;
   }): Promise<StockListResponse> {
-    const resp = await this.client.get('/api/v1/stock-terminal/list', { params });
+    const resp = await this.client.get('/stock-terminal/list', { params });
     return resp.data?.data ?? { total: 0, page: 1, page_size: 100, trade_date: '', items: [] };
   }
 
   async getIndustries(): Promise<string[]> {
-    const resp = await this.client.get('/api/v1/stock-terminal/industries');
+    const resp = await this.client.get('/stock-terminal/industries');
     return resp.data?.data?.industries ?? [];
   }
 
   async getProfile(symbol: string): Promise<StockProfile | null> {
     try {
-      const resp = await this.client.get('/api/v1/stock-terminal/profile', { params: { symbol } });
+      const resp = await this.client.get('/stock-terminal/profile', { params: { symbol } });
       return resp.data?.data ?? null;
     } catch {
       return null;
@@ -50,7 +50,7 @@ class StockTerminalService {
 
   async getDailyKline(symbol: string, days = 500): Promise<KlineBar[]> {
     try {
-      const resp = await this.client.get('/api/v1/market/kline', {
+      const resp = await this.client.get('/market/kline', {
         params: { symbol, market: 'A', days },
       });
       const items = resp.data?.data?.items ?? [];
@@ -70,7 +70,7 @@ class StockTerminalService {
 
   async getIndexKline(symbol: string, days = 500): Promise<{ date: string; close: number }[]> {
     try {
-      const resp = await this.client.get('/api/v1/market/index-kline', {
+      const resp = await this.client.get('/market/index-kline', {
         params: { symbol, days },
       });
       const data = resp.data?.data ?? {};
