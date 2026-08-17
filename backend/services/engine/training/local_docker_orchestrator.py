@@ -271,14 +271,20 @@ class LocalDockerOrchestrator(TrainingOrchestrator):
                 logger.warning("[%s] Parquet dir not found: %s", run_id, parquet_dir)
                 return requested_features, []
 
-            # 读最新一年的 schema
-            parquet_files = sorted(parquet_dir.glob("model_features_*.parquet"))
-            if not parquet_files:
+            # 训练实际读 core parquet（存在时），否则读 A 股逐年文件。
+            # 用 core schema 或 2023-2026 逐年 schema 的并集做校验，
+            # 而不是 sorted(glob)[-1]（字母序最后一个是 model_features_us，
+            # 无 L2/行业列，会把 A 股特征误报 missing）。
+            parquet_cols: set[str] = set()
+            core = parquet_dir / "model_features_core.parquet"
+            if core.exists():
+                parquet_cols |= set(pq.ParquetFile(core).schema_arrow.names)
+            else:
+                for p in sorted(parquet_dir.glob("model_features_20*.parquet")):
+                    parquet_cols |= set(pq.ParquetFile(p).schema_arrow.names)
+            if not parquet_cols:
                 logger.warning("[%s] No parquet files in %s", run_id, parquet_dir)
                 return requested_features, []
-
-            schema = pq.ParquetFile(parquet_files[-1]).schema_arrow
-            parquet_cols = set(schema.names)
 
             valid = [f for f in requested_features if f in parquet_cols]
             missing = [f for f in requested_features if f not in parquet_cols]
