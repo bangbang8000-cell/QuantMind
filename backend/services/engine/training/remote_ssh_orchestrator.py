@@ -16,6 +16,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import os
+import shlex
 import tempfile
 from pathlib import Path
 from typing import Any
@@ -61,6 +62,7 @@ class RemoteSSHOrchestrator(TrainingOrchestrator):
             self.work_dir = str(node_config.get("work_dir") or "/workspace")
             self.docker_image = str(node_config.get("docker_image") or "quantmind-train:latest")
             self.gpus = str(node_config.get("gpus") or "").strip()
+            self.quantdb_dir = str(node_config.get("quantdb_dir") or "/data/quantdb")
         else:
             self.host = _env_or("TRAINING_AUTODL_HOST", "")
             self.port = int(_env_or("TRAINING_AUTODL_SSH_PORT", "22"))
@@ -72,6 +74,7 @@ class RemoteSSHOrchestrator(TrainingOrchestrator):
             # 远端容器挂载的 GPU（all=全部，0/空=不挂载，1/2=指定数量）
             # AutoDL 节点需安装 nvidia-container-toolkit 才能使用 GPU
             self.gpus = _env_or("TRAINING_AUTODL_GPUS", "").strip()
+            self.quantdb_dir = _env_or("TRAINING_AUTODL_QUANTDB_DIR", "/data/quantdb")
         self.api_base = _env_or("QUANTMIND_API_BASE_URL", "http://quantmind-api:8000")
         # 主节点局域网地址（供远端容器回调）；为空则回退 api_base（可能不可达）
         self.master_host = _env_or("TRAINING_MASTER_HOST", "")
@@ -324,29 +327,49 @@ class RemoteSSHOrchestrator(TrainingOrchestrator):
         self._log(run_id, "[SYSTEM] 远程训练启动（AutoDL），开始同步数据...", status="provisioning", progress=5)
 
         try:
-            # 1. 生成配置（local_dir 指向容器内挂载点 /tmp/feature_snapshots，
-            #    与 docker run -v {work_dir}/feature_snapshots:/tmp/feature_snapshots 一致）
+            # Direct jobs bind exactly one raw QuantDB source; legacy jobs keep
+            # their immutable snapshot mount for historical model compatibility.
             config = self._build_config_yaml(run_id, payload)
-            config["data"]["local_dir"] = "/tmp/feature_snapshots"
+            direct_source = str(config["data"].get("factor_source") or "")
+            config["data"]["local_dir"] = "/tmp/quantdb" if direct_source else "/tmp/feature_snapshots"
+            if direct_source:
+                config["data"]["quantdb_dir"] = "/tmp/quantdb"
             config["callback"]["url"] = self._callback_url(run_id)
 
             # 2. 确保远端工作目录结构
             await self._ssh_exec(
                 f"mkdir -p {self.work_dir}/feature_snapshots "
-                f"{self.work_dir}/quantdb/2_base_sector "
-                f"{self.work_dir}/templates"
+                f"{self.work_dir}/templates {self.work_dir}/modules"
             )
 
-            # 3. 推送特征快照（按训练区间选年）
-            feature_files = self._resolve_feature_files(payload)
-            if feature_files:
-                self._log(run_id, f"[SYNC] 推送 {len(feature_files)} 个特征快照到 AutoDL...", progress=10)
-                for f in feature_files:
-                    if Path(f).exists():
-                        await self._rsync_push(f, f"{self.work_dir}/feature_snapshots/")
-                self._log(run_id, "[SYNC] 特征快照同步完成", progress=15)
+            # 3. Only direct source data is synced on AutoDL.  The node owns
+            # /data/quantdb and its SDK state, so no raw parquet is copied from
+            # the coordinator.  Operators may override the command for a custom
+            # SDK installation with TRAINING_AUTODL_QUANTDB_SYNC_CMD.
+            if direct_source:
+                sync_cmd = _env_or(
+                    "TRAINING_AUTODL_QUANTDB_SYNC_CMD",
+                    "python /app/backend/scripts/quantdb_daily_sync.py",
+                )
+                quoted_dir = shlex.quote(self.quantdb_dir)
+                code, out, err = await self._ssh_exec(
+                    f"mkdir -p {quoted_dir} && QM_QUANTDB_DATA_DIR={quoted_dir} "
+                    f"{sync_cmd} --parquet-only --datasets l1_factors,l2_factors,l1_l2_factors",
+                    timeout=1800,
+                )
+                if code != 0:
+                    raise RuntimeError(f"AutoDL QuantDB sync failed: {err or out}")
+                self._log(run_id, f"[SYNC] QuantDB 因子源已增量同步: {direct_source}", progress=15)
             else:
-                self._log(run_id, "[SYNC] 未匹配到特征快照文件，跳过", progress=15)
+                feature_files = self._resolve_feature_files(payload)
+                if feature_files:
+                    self._log(run_id, f"[SYNC] 推送 {len(feature_files)} 个特征快照到 AutoDL...", progress=10)
+                    for f in feature_files:
+                        if Path(f).exists():
+                            await self._rsync_push(f, f"{self.work_dir}/feature_snapshots/")
+                    self._log(run_id, "[SYNC] 特征快照同步完成", progress=15)
+                else:
+                    self._log(run_id, "[SYNC] 未匹配到特征快照文件，跳过", progress=15)
 
             # 4. 推送 config.yaml + train.py（写临时文件再 scp 到固定名）
             self._log(run_id, "[SYNC] 推送训练配置与训练脚本...", progress=18)
@@ -369,6 +392,12 @@ class RemoteSSHOrchestrator(TrainingOrchestrator):
                 await self._rsync_push(prep_script, f"{self.work_dir}/preprocessing.py")
                 self._log(run_id, "[SYNC] preprocessing.py 已同步")
 
+            if direct_source:
+                for module in (self._resolve_quantdb_factor_reader(), self._resolve_quantdb_hub()):
+                    if module:
+                        await self._rsync_push(module, f"{self.work_dir}/modules/")
+                self._log(run_id, "[SYNC] QuantDB 直读 Reader 已同步")
+
             # 统一推理模板 inference_parquet.py 也推送并挂载，
             # 保证远端训练产出与本地一致的完整 inference.py（而非简化 fallback）。
             template = self._resolve_inference_template()
@@ -381,7 +410,7 @@ class RemoteSSHOrchestrator(TrainingOrchestrator):
             # 5. 远端启动训练容器
             self._log(run_id, "[SYSTEM] 在 AutoDL 启动训练容器...", progress=20)
             container_name = f"qm-train-{run_id}"
-            docker_cmd = self._build_docker_run_cmd(container_name)
+            docker_cmd = self._build_docker_run_cmd(container_name, direct_source=direct_source)
             code, out, err = await self._ssh_exec(docker_cmd, timeout=120)
             if code != 0:
                 raise RuntimeError(f"远端 docker run 失败: {err or out}")
@@ -536,6 +565,12 @@ class RemoteSSHOrchestrator(TrainingOrchestrator):
                 "features": features,
                 "source_mode": "LOCAL",
                 "local_dir": "/tmp/feature_snapshots",
+                "factor_source": str(payload.get("factor_source") or "") or None,
+                "factor_catalog_version": str(payload.get("factor_catalog_version") or "") or None,
+                "factor_schema_hash": str(payload.get("factor_schema_hash") or "") or None,
+                "factor_field_sources": dict(payload.get("factor_field_sources") or {}),
+                "factor_catalog_published_at": str(payload.get("factor_catalog_published_at") or "") or None,
+                "factor_coverage": dict(payload.get("factor_coverage") or {}),
             },
             "model": {
                 "type": payload.get("model_type", "lightgbm"),
@@ -664,7 +699,7 @@ class RemoteSSHOrchestrator(TrainingOrchestrator):
         base = f"http://{self.master_host}:8000" if self.master_host else self.api_base
         return f"{base}/api/v1/models/training-runs/{run_id}/complete"
 
-    def _build_docker_run_cmd(self, container_name: str) -> str:
+    def _build_docker_run_cmd(self, container_name: str, *, direct_source: str = "") -> str:
         """构造远端 docker run 命令字符串。
 
         train.py 与 inference 模板已 rsync 到工作目录并挂载覆盖镜像内置版，
@@ -677,15 +712,24 @@ class RemoteSSHOrchestrator(TrainingOrchestrator):
         gpus_flag = ""
         if self.gpus and self.gpus != "0":
             gpus_flag = f"--gpus \"{self.gpus}\" "
+        # Direct jobs never mount feature_snapshots.  The configuration itself
+        # remains the source of truth inside train.py.
+        data_mount = (
+            f"-v {self.quantdb_dir}:/tmp/quantdb:ro "
+            if direct_source else
+            f"-v {self.work_dir}/feature_snapshots:/tmp/feature_snapshots:ro "
+        )
         return (
             f"docker run -d --name {container_name} "
             f"{gpus_flag}"
             f"-v {self.work_dir}:/workspace "
-            f"-v {self.work_dir}/feature_snapshots:/tmp/feature_snapshots:ro "
+            f"{data_mount}"
             f"-v {self.work_dir}/train.py:/app/train.py:ro "
             f"-v {self.work_dir}/preprocessing.py:/app/preprocessing.py:ro "
             f"-v {self.work_dir}/templates:/app/backend/services/engine/inference/templates:ro "
-            f"{self.docker_image} python /app/train.py --config /workspace/config.yaml"
+            + (f"-v {self.work_dir}/modules/quantdb_factor_reader.py:/app/backend/services/engine/data_platform/quantdb_factor_reader.py:ro " if direct_source else "")
+            + (f"-v {self.work_dir}/modules/quantdb_hub.py:/app/backend/services/engine/data_platform/quantdb_hub.py:ro " if direct_source else "")
+            + f"{self.docker_image} python /app/train.py --config /workspace/config.yaml"
         )
 
     def _resolve_train_script(self) -> str | None:
@@ -711,6 +755,20 @@ class RemoteSSHOrchestrator(TrainingOrchestrator):
             if Path(p).exists():
                 return p
         return None
+
+    def _resolve_quantdb_factor_reader(self) -> str | None:
+        candidates = [
+            str(Path(__file__).resolve().parents[2] / "data_platform" / "quantdb_factor_reader.py"),
+            "/app/backend/services/engine/data_platform/quantdb_factor_reader.py",
+        ]
+        return next((path for path in candidates if Path(path).is_file()), None)
+
+    def _resolve_quantdb_hub(self) -> str | None:
+        candidates = [
+            str(Path(__file__).resolve().parents[2] / "data_platform" / "quantdb_hub.py"),
+            "/app/backend/services/engine/data_platform/quantdb_hub.py",
+        ]
+        return next((path for path in candidates if Path(path).is_file()), None)
 
     def _resolve_inference_template(self) -> str | None:
         """定位本地统一推理模板 inference_parquet.py。"""

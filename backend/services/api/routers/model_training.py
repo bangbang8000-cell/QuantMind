@@ -24,6 +24,7 @@ from backend.services.api.routers.admin.model_management import (
 from backend.services.api.routers.admin.model_management_utils import (
     _enrich_feature_catalog_with_data_coverage_async,
 )
+from backend.services.api.routers.admin.quantdb_factor_catalog import load_active_factor_catalog
 from backend.services.api.training_shap_summary import read_shap_summary_rows, to_int_or
 from backend.services.api.user_app.middleware.auth import get_current_user
 from backend.services.engine.inference.batch_aggregator import aggregate_batch
@@ -32,6 +33,7 @@ from backend.services.engine.inference.batch_orchestrator import (
 )
 from backend.services.engine.inference.router_service import InferenceRouterService
 from backend.services.engine.inference.script_runner import InferenceScriptRunner
+from backend.services.engine.data_platform.quantdb_factor_reader import QuantDBFactorReader
 from backend.services.engine.services.model_inference_batch_persistence import (
     model_inference_batch_persistence,
 )
@@ -498,10 +500,21 @@ async def list_system_models(
 @router.get("/feature-catalog", summary="获取模型训练特征字典（用户态）")
 async def get_model_feature_catalog(
     market: str | None = None,
+    factor_source: str = Query("l1_l2_factors", description="QuantDB 因子源"),
     include_coverage: bool = Query(False, description="是否附带 parquet 数据覆盖统计（默认 false，加速首屏）"),
     current_user: dict[str, Any] = Depends(get_current_user),
 ):
     _ = current_user
+    market_upper = str(market or "CN").upper()
+    if market_upper in {"CN", "A", "A_SHARE"}:
+        try:
+            direct_catalog = await load_active_factor_catalog(factor_source)
+        except Exception:
+            direct_catalog = None
+        if direct_catalog:
+            if include_coverage:
+                direct_catalog["data_coverage"] = QuantDBFactorReader().describe(factor_source).to_dict()
+            return direct_catalog
     try:
         catalog = await _load_feature_catalog_from_db(market=market)
     except Exception:

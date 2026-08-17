@@ -532,10 +532,11 @@ class ModelTrainingService {
     );
   }
 
-  async getFeatureCatalog(market?: string, includeCoverage = false): Promise<AdminModelFeatureCatalog> {
+  async getFeatureCatalog(market?: string, includeCoverage = false, factorSource?: string): Promise<AdminModelFeatureCatalog> {
     const params: Record<string, string> = {};
     if (market) params.market = market;
     if (includeCoverage) params.include_coverage = 'true';
+    if (factorSource) params.factor_source = factorSource;
     const resp = await this.client.get<AdminModelFeatureCatalog>('/models/feature-catalog', { params });
     return resp.data;
   }

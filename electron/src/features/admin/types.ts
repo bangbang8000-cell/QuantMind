@@ -114,6 +114,12 @@ export interface AdminModelFeatureDataCoverage {
     min_date: string;
     max_date: string;
     suggested_periods?: AdminModelFeatureSuggestedPeriods | null;
+    /** Direct QuantDB factor source compatibility fields. */
+    dataset_id?: string;
+    schema_hash?: string;
+    ready?: boolean;
+    missing_required?: string[];
+    reason?: string | null;
 }
 
 export interface AdminModelFeatureCatalog {
@@ -121,7 +127,9 @@ export interface AdminModelFeatureCatalog {
     version_name: string;
     feature_count: number;
     categories: AdminModelFeatureCategory[];
-    source: 'database' | 'file';
+    source: 'database' | 'file' | 'quantdb_factor_catalog';
+    source_dataset?: string;
+    status?: 'draft' | 'published' | 'archived';
     fallback_path?: string;
     data_coverage?: AdminModelFeatureDataCoverage;
 }

@@ -70,6 +70,7 @@ V2_DATASETS = [
     {"category_id": "6", "sub_category": "features_daily", "dir": "6_ml_datasets"},
     {"category_id": "6", "sub_category": "l1_factors", "dir": "6_ml_datasets"},
     {"category_id": "6", "sub_category": "l2_factors", "dir": "6_ml_datasets"},
+    {"category_id": "6", "sub_category": "l1_l2_factors", "dir": "6_ml_datasets"},
 ]
 
 # V1 非分区数据集 (全量 ETag 增量)
@@ -925,8 +926,11 @@ def run_daily_sync(
         log.info("=== Phase 3: Update Qlib cache ===")
         result["qlib_cache"] = update_qlib_cache()
 
-    # Phase 4: generate feature snapshot for current year
-    if not skip_snapshot:
+    # Phase 4 is legacy-only.  New training/inference reads the three raw
+    # QuantDB factor sources and must never materialise model_features_*.parquet.
+    # Keep an explicit break-glass flag solely for historical parquet models.
+    legacy_snapshot_enabled = os.getenv("QM_ENABLE_LEGACY_FEATURE_SNAPSHOT", "").lower() in {"1", "true", "yes"}
+    if not skip_snapshot and legacy_snapshot_enabled:
         log.info("=== Phase 4: Generate feature snapshot ===")
         try:
             from backend.scripts.generate_feature_snapshots import _build_snapshot
@@ -940,6 +944,11 @@ def run_daily_sync(
         except Exception as exc:
             log.warning("Feature snapshot failed: %s", exc)
             result["feature_snapshot"] = {"status": "error", "reason": str(exc)}
+    elif not skip_snapshot:
+        result["feature_snapshot"] = {
+            "status": "skipped",
+            "reason": "direct QuantDB factor reader is active; legacy snapshot generation disabled",
+        }
 
     result["finished"] = datetime.now().isoformat()
     log.info("Daily sync complete")

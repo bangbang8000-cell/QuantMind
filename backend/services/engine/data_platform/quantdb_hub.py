@@ -24,6 +24,7 @@ QuantDB 数据中枢 — A 股所有数据读取的单一入口。
     6_ml_datasets/features_daily/dt=YYYYMMDD/data.parquet
     6_ml_datasets/l1_factors/l1_factors_YYYYMMDD.parquet or dt=YYYYMMDD/
     6_ml_datasets/l2_factors/dt=YYYYMMDD/data.parquet
+    6_ml_datasets/l1_l2_factors/dt=YYYYMMDD/data.parquet
 """
 
 from __future__ import annotations
@@ -187,6 +188,7 @@ class QuantDBDataHub:
             "qdb_features_daily": "6_ml_datasets/features_daily",
             "qdb_margin_trading": "2_base_sector/margin_trading",
             "qdb_l2_factors": "6_ml_datasets/l2_factors",
+            "qdb_l1_l2_factors": "6_ml_datasets/l1_l2_factors",
         }
         # l1_factors has mixed format (flat files + partitioned dirs); only read partitioned dirs
         l1_dir = dd / "6_ml_datasets" / "l1_factors"

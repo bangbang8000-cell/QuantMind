@@ -337,12 +337,35 @@ class LocalDockerOrchestrator(TrainingOrchestrator):
 
         # 强制使用本地数据，不回落到 COS 下载
         data_source_mode = payload.get("data_source_mode", "LOCAL")
+        factor_source = str(payload.get("factor_source") or "").strip()
 
-        # 过滤掉 parquet 中不存在的特征，避免无效内存分配
+        # 直读模式按选定的单一 QuantDB 因子源过滤；旧模型仍走快照兼容路径。
         requested_features = payload.get("features", [])
-        valid_features, missing_features = self._filter_features_by_parquet(
-            run_id, requested_features
-        )
+        if factor_source:
+            try:
+                from backend.services.engine.data_platform.quantdb_factor_reader import QuantDBFactorReader
+
+                source_status = QuantDBFactorReader(_qdb_dir).assert_ready(
+                    factor_source,
+                    start=str(payload.get("train_start") or "") or None,
+                    end=str(payload.get("test_end") or payload.get("valid_end") or payload.get("train_end") or "") or None,
+                )
+                available = set(source_status.columns)
+                field_sources = dict(payload.get("factor_field_sources") or {})
+                valid_features = [
+                    feature for feature in requested_features
+                    if field_sources.get(feature, feature) in available
+                ]
+                missing_features = [
+                    feature for feature in requested_features
+                    if field_sources.get(feature, feature) not in available
+                ]
+            except Exception as exc:
+                raise RuntimeError(f"QuantDB factor source {factor_source} is not ready: {exc}") from exc
+        else:
+            valid_features, missing_features = self._filter_features_by_parquet(
+                run_id, requested_features
+            )
         if missing_features:
             logger.warning(
                 "[%s] %d/%d requested features not in parquet, filtered out: %s...",
@@ -363,9 +386,16 @@ class LocalDockerOrchestrator(TrainingOrchestrator):
                 "train_end": payload.get("train_end", "2024-12-31"),
                 "features": valid_features,
                 "source_mode": data_source_mode,
-                "local_dir": _LOCAL_DATA_MOUNT_DIR
-                if data_source_mode == "LOCAL"
-                else None,
+                "local_dir": _QUANTDB_DATA_MOUNT_DIR if factor_source else (
+                    _LOCAL_DATA_MOUNT_DIR if data_source_mode == "LOCAL" else None
+                ),
+                "factor_source": factor_source or None,
+                "factor_catalog_version": str(payload.get("factor_catalog_version") or "") or None,
+                "factor_schema_hash": source_status.schema_hash if factor_source else None,
+                "factor_field_sources": dict(payload.get("factor_field_sources") or {}),
+                "factor_catalog_published_at": str(payload.get("factor_catalog_published_at") or "") or None,
+                "factor_coverage": dict(payload.get("factor_coverage") or {}),
+                "quantdb_dir": _QUANTDB_DATA_MOUNT_DIR if factor_source else None,
             },
             "model": {
                 "type": payload.get("model_type", "lightgbm"),
@@ -572,8 +602,9 @@ class LocalDockerOrchestrator(TrainingOrchestrator):
         # 始终挂载本地数据目录（宿主机路径，API 容器内 os.path.exists 无法感知）
         volumes: dict[str, dict[str, str]] = {
             str(host_output_dir): {"bind": "/workspace", "mode": "rw"},
-            str(_LOCAL_DATA_PATH): {"bind": _LOCAL_DATA_MOUNT_DIR, "mode": "ro"},
         }
+        if not config.get("data", {}).get("factor_source"):
+            volumes[str(_LOCAL_DATA_PATH)] = {"bind": _LOCAL_DATA_MOUNT_DIR, "mode": "ro"}
         # 挂载 QuantDB 全量数据（6大类：kline/base_sector/financial/bond_etf/technical_derived/ml_datasets）
         # 存在性检查必须针对【容器内】可见的 _qdb_dir，而非宿主机路径
         # （API 容器内 os.path.exists 无法感知宿主机路径，与 _LOCAL_DATA_PATH 同理）
@@ -601,12 +632,8 @@ class LocalDockerOrchestrator(TrainingOrchestrator):
             host_output_dir,
             container_work_dir,
         )
-        logger.info(
-            "[%s] Local data path mounted: %s -> %s",
-            run_id,
-            _LOCAL_DATA_PATH,
-            _LOCAL_DATA_MOUNT_DIR,
-        )
+        if not config.get("data", {}).get("factor_source"):
+            logger.info("[%s] Local data path mounted: %s -> %s", run_id, _LOCAL_DATA_PATH, _LOCAL_DATA_MOUNT_DIR)
         # 始终挂载宿主机 train.py 覆盖镜像内脚本（注意：os.path.exists 在 API 容器内无法感知宿主机路径，固定挂载）
         volumes[str(_TRAINING_SCRIPT_HOST_PATH)] = {
             "bind": "/app/train.py",

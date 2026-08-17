@@ -706,22 +706,11 @@ async def update_feature_parquet_endpoint(
     year: int = Query(0, description="指定年份 (默认: 当前年份)"),
     current_user: dict = Depends(require_admin),
 ):
-    """异步提交特征快照生成任务到 Celery，立即返回 task_id。"""
-    try:
-        from backend.services.engine.tasks.celery_tasks import feature_snapshot_task
-
-        task = feature_snapshot_task.delay(year=year)
-        return {
-            "success": True,
-            "data": {
-                "task_id": task.id,
-                "status": "submitted",
-                "message": f"特征快照生成任务已提交 (task_id={task.id})，后台执行中",
-            },
-        }
-    except Exception as exc:  # noqa: BLE001
-        logger.error("update_feature_parquet failed: %s", exc, exc_info=True)
-        raise HTTPException(status_code=500, detail=f"failed: {exc}")
+    _ = year, current_user
+    raise HTTPException(
+        status_code=410,
+        detail="特征快照生成已停用；A 股模型训练改为直读 QuantDB 因子源",
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -1070,4 +1059,3 @@ async def sync_alpha_agent_market(
     except Exception as exc:  # noqa: BLE001
         logger.error("sync_alpha_agent_market failed: %s", exc, exc_info=True)
         raise HTTPException(status_code=500, detail=f"failed: {exc}")
-

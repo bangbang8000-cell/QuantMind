@@ -1390,15 +1390,10 @@ def run_sync(
             result["errors"].append(f"calibrate: {exc}")
             log.warning("Indicator calibration failed: %s", exc)
 
-    # 7. 增量更新 feature parquet
-    _update_sync_progress("parquet", "更新特征Parquet...", pct=92)
-    try:
-        parquet_result = update_feature_parquet()
-        result["parquet_updated"] = parquet_result
-        log.info("Feature parquet updated: %s", parquet_result.get("status", "ok"))
-    except Exception as exc:
-        result["errors"].append(f"parquet: {exc}")
-        log.warning("Feature parquet update failed: %s", exc)
+    # 7. New A-share models read QuantDB factors directly.  Do not materialise
+    # or update model_features_*.parquet during routine sync.
+    _update_sync_progress("parquet", "跳过旧特征快照（QuantDB 直读）", pct=92)
+    result["parquet_updated"] = {"status": "skipped", "reason": "QuantDB direct factor reader"}
 
     # 关闭 baostock
     if _BS_LOGGED_IN:

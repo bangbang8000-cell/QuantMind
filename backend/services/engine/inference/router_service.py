@@ -71,6 +71,8 @@ def _get_model_data_dir(model_dir: Path) -> str:
                 return qlib_data_path
 
             data_source = str(meta.get("data_source", "")).lower()
+            if data_source == "quantdb_factors":
+                return os.getenv("QUANTDB_DATA_DIR", "/app/data/quantdb")
             if data_source == "qlib":
                 from backend.shared.qlib_paths import resolve_qlib_provider_uri
                 return resolve_qlib_provider_uri()

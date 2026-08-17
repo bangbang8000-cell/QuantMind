@@ -646,6 +646,9 @@ def load_data(
     local_dir: str | None = None,
     market: str = "CN",
     industry_as_feature: bool = False,
+    factor_source: str | None = None,
+    quantdb_dir: str | None = None,
+    factor_field_sources: dict[str, str] | None = None,
 ) -> tuple:
     local_root = Path(local_dir).expanduser() if local_dir else None
     if local_root is None:
@@ -678,7 +681,27 @@ def load_data(
     upper_bound = test_end or valid_end or train_end
     range_end = pd.Timestamp(upper_bound) + pd.Timedelta(days=max(7, horizon + 3))
 
-    if market_upper in _MARKET_PARQUET_FILES:
+    direct_factor_source = str(factor_source or "").strip()
+    if market_upper == "CN" and direct_factor_source:
+        # Direct QuantDB mode: one factor source only, never materialise or merge snapshots.
+        from backend.services.engine.data_platform.quantdb_factor_reader import QuantDBFactorReader
+
+        reader = QuantDBFactorReader(quantdb_dir or os.getenv("QUANTDB_DATA_DIR") or None)
+        df = reader.read_range(
+            direct_factor_source,
+            features=features,
+            feature_sources=factor_field_sources,
+            start=range_start.date(),
+            end=range_end.date(),
+        )
+        logger.info(
+            "Direct QuantDB factor source %s: %d rows, %s to %s",
+            direct_factor_source,
+            len(df),
+            df["trade_date"].min() if not df.empty else "N/A",
+            df["trade_date"].max() if not df.empty else "N/A",
+        )
+    elif market_upper in _MARKET_PARQUET_FILES:
         # ── 非 A 股市场：从单一 parquet 文件加载 ──
         parquet_name = _MARKET_PARQUET_FILES[market_upper]
         parquet_path = local_root / parquet_name
@@ -894,7 +917,13 @@ def load_data(
 
     df = df.sort_values(["symbol", "trade_date"]).reset_index(drop=True)
     _mom_col = f"mom_ret_{_horizon}d"
-    if _horizon == 1:
+    if direct_factor_source:
+        # Raw factor sources carry close, so labels are always true forward returns.
+        _lag = 1  # A股信号 T 日生成、T+1 执行
+        execution_close = df.groupby("symbol")["close"].shift(-_lag)
+        future_close = df.groupby("symbol")["close"].shift(-(_lag + _horizon))
+        df["label"] = future_close / execution_close - 1.0
+    elif _horizon == 1:
         df["label"] = df.groupby("symbol")["mom_ret_1d"].shift(-1)
     elif _mom_col in df.columns:
         df["label"] = df.groupby("symbol")[_mom_col].shift(-_horizon)
@@ -905,7 +934,11 @@ def load_data(
             .transform(lambda s: (1 + s).rolling(_horizon).apply(np.prod, raw=True) - 1)
             .shift(-_horizon)
         )
-    logger.info(f"Label built with target_horizon_days={_horizon} (column={_mom_col if _mom_col in df.columns else 'rolling'})")
+    logger.info(
+        "Label built with target_horizon_days=%s (%s)",
+        _horizon,
+        "direct close" if direct_factor_source else _mom_col if _mom_col in df.columns else "rolling",
+    )
 
     valid_count_before = len(df)
     df = df[df["label"].notna()].copy()
@@ -3578,8 +3611,14 @@ def main() -> int:
 
         # 数据加载（特征列自动补齐基础6列）
         submitted_features = list(dict.fromkeys([str(item).strip() for item in (cfg["data"].get("features", []) or []) if str(item).strip()]))
-        auto_appended_features = [feature for feature in TRAINING_BASE_FEATURES if feature not in submitted_features]
-        features = list(dict.fromkeys(TRAINING_BASE_FEATURES + submitted_features))
+        factor_source = str((cfg.get("data", {}) or {}).get("factor_source") or "").strip()
+        if factor_source:
+            # Factor catalog already owns the selected raw QuantDB fields.
+            auto_appended_features = []
+            features = submitted_features
+        else:
+            auto_appended_features = [feature for feature in TRAINING_BASE_FEATURES if feature not in submitted_features]
+            features = list(dict.fromkeys(TRAINING_BASE_FEATURES + submitted_features))
         source_mode = str((cfg.get("data", {}) or {}).get("source_mode") or "LOCAL").strip().upper()
         local_data_dir = str((cfg.get("data", {}) or {}).get("local_dir") or "").strip() or None
         explain_cfg = _normalize_explain_cfg(cfg.get("explain") or {})
@@ -3599,6 +3638,9 @@ def main() -> int:
             local_dir=local_data_dir,
             market=market,
             industry_as_feature=bool(cfg.get("context", {}).get("industry_as_feature", False)),
+            factor_source=factor_source or None,
+            quantdb_dir=str((cfg.get("data", {}) or {}).get("quantdb_dir") or "").strip() or None,
+            factor_field_sources=(cfg.get("data", {}) or {}).get("factor_field_sources") or None,
         )
 
         # ── 因子筛选 ──
@@ -3779,7 +3821,14 @@ def main() -> int:
                 "val_end":     (cfg.get("split", {}).get("valid") or [None, None])[1] or "",
                 "test_start":  (cfg.get("split", {}).get("test")  or [None, None])[0] or "",
                 "test_end":    (cfg.get("split", {}).get("test")  or [None, None])[1] or "",
-                "data_source": "parquet",
+                "data_source": "quantdb_factors" if factor_source else "parquet",
+                "factor_source": factor_source or None,
+                "factor_catalog_version": str((cfg.get("data", {}) or {}).get("factor_catalog_version") or "") or None,
+                "factor_schema_hash": str((cfg.get("data", {}) or {}).get("factor_schema_hash") or "") or None,
+                "quantdb_dir": str((cfg.get("data", {}) or {}).get("quantdb_dir") or "") or None,
+                "factor_field_sources": (cfg.get("data", {}) or {}).get("factor_field_sources") or {},
+                "factor_catalog_published_at": str((cfg.get("data", {}) or {}).get("factor_catalog_published_at") or "") or None,
+                "factor_coverage": (cfg.get("data", {}) or {}).get("factor_coverage") or {},
                 "context": context_cfg,
                 "best_iteration": best_iteration,
                 "target_horizon_days": int((cfg.get("label", {}) or {}).get("target_horizon_days") or 1),
@@ -3960,7 +4009,14 @@ def main() -> int:
                 "val_end":     (cfg.get("split", {}).get("valid") or [None, None])[1] or "",
                 "test_start":  (cfg.get("split", {}).get("test")  or [None, None])[0] or "",
                 "test_end":    (cfg.get("split", {}).get("test")  or [None, None])[1] or "",
-                "data_source": "parquet",
+                "data_source": "quantdb_factors" if factor_source else "parquet",
+                "factor_source": factor_source or None,
+                "factor_catalog_version": str((cfg.get("data", {}) or {}).get("factor_catalog_version") or "") or None,
+                "factor_schema_hash": str((cfg.get("data", {}) or {}).get("factor_schema_hash") or "") or None,
+                "quantdb_dir": str((cfg.get("data", {}) or {}).get("quantdb_dir") or "") or None,
+                "factor_field_sources": (cfg.get("data", {}) or {}).get("factor_field_sources") or {},
+                "factor_catalog_published_at": str((cfg.get("data", {}) or {}).get("factor_catalog_published_at") or "") or None,
+                "factor_coverage": (cfg.get("data", {}) or {}).get("factor_coverage") or {},
                 "context": context_cfg,
                 "best_iteration": best_iteration,
                 "target_horizon_days": int((cfg.get("label", {}) or {}).get("target_horizon_days") or 1),

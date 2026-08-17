@@ -19,6 +19,7 @@ from sqlalchemy import text
 
 from backend.services.api.user_app.middleware.auth import require_admin
 from backend.services.engine.inference.script_runner import InferenceScriptRunner
+from backend.services.engine.data_platform.quantdb_factor_reader import QuantDBFactorReader
 from backend.shared.database_manager_v2 import get_session
 from backend.shared.redis_sentinel_client import get_redis_sentinel_client
 from backend.shared.trading_calendar import calendar_service
@@ -29,6 +30,7 @@ except ImportError:
     celery_app = None
 
 from .data_status_scanner import scan_data_status
+from .quantdb_factor_catalog import load_active_factor_catalog
 from .model_management_utils import (
     FEATURE_SNAPSHOT_DIR,
     MODELS_PRODUCTION,
@@ -144,6 +146,7 @@ async def scan_model_directories(
 @router.get("/feature-catalog", summary="获取模型训练特征字典（动态）")
 async def get_model_feature_catalog(
     market: str | None = None,
+    factor_source: str = Query("l1_l2_factors", description="QuantDB 因子源"),
     include_coverage: bool = Query(False, description="是否附带 parquet 数据覆盖统计（默认 false，加速首屏）"),
     current_user: dict = Depends(require_admin),
 ):
@@ -154,6 +157,16 @@ async def get_model_feature_catalog(
     - data_coverage（parquet 行数/日期范围）默认不附带，需 ?include_coverage=true
     """
     _ = current_user
+    market_upper = str(market or "CN").upper()
+    if market_upper in {"CN", "A", "A_SHARE"}:
+        try:
+            direct_catalog = await load_active_factor_catalog(factor_source)
+        except Exception:
+            direct_catalog = None
+        if direct_catalog:
+            if include_coverage:
+                direct_catalog["data_coverage"] = QuantDBFactorReader().describe(factor_source).to_dict()
+            return direct_catalog
     try:
         catalog = await _load_feature_catalog_from_db(market=market)
     except Exception:
@@ -305,25 +318,12 @@ async def update_feature_parquet(
     year: int = Query(0, description="指定年份 (默认: 当前年份)"),
     current_user: dict = Depends(require_admin),
 ):
-    """异步提交特征快照生成任务到 Celery，立即返回 task_id。
-
-    使用 generate_feature_snapshots.py 从 QuantDB 直读 daily_backward + features_daily + l1/l2_factors，
-    替代旧版 update_feature_parquet.py（前复权 + PG 依赖）。
-    """
-    try:
-        from backend.services.engine.tasks.celery_tasks import feature_snapshot_task
-
-        task = feature_snapshot_task.delay(year=year)
-        return {
-            "success": True,
-            "data": {
-                "task_id": task.id,
-                "status": "submitted",
-                "message": f"特征快照生成任务已提交 (task_id={task.id})，后台执行中",
-            },
-        }
-    except Exception as exc:
-        raise HTTPException(status_code=500, detail=f"failed: {exc}")
+    """Deprecated: new models must use direct QuantDB factor sources."""
+    _ = year, current_user
+    raise HTTPException(
+        status_code=410,
+        detail="特征快照生成已停用；请在模型训练数据集发布 QuantDB 因子映射后直接训练",
+    )
 
 
 @router.post(
@@ -1245,4 +1245,3 @@ def _serialize_backtest_result(result: Any) -> dict[str, Any]:
         "errors": result.errors,
         "warnings": result.warnings,
     }
-

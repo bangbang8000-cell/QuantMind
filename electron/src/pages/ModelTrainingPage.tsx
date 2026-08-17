@@ -158,6 +158,8 @@ export const ModelTrainingPage: React.FC = () => {
   const [currentStep, setCurrentStep] = useState(0);
   const [featureCategories, setFeatureCategories] = useState<FeatureCategory[]>(DEFAULT_FEATURE_CATEGORIES);
   const [featureCatalogLoading, setFeatureCatalogLoading] = useState(false);
+  const [factorSource, setFactorSource] = useState('l1_l2_factors');
+  const [factorCatalogVersion, setFactorCatalogVersion] = useState<string | null>(null);
   const [dataCoverage, setDataCoverage] = useState<AdminModelFeatureDataCoverage | null>(null);
   const [trainingStatus, setTrainingStatus] = useState<TrainingStatus>('draft');
   const [executionStage, setExecutionStage] = useState('待配置');
@@ -207,7 +209,10 @@ export const ModelTrainingPage: React.FC = () => {
     () => buildTrainingRequest(selectedFeatures, featureCategories, timePeriods, target, params, context, displayName, currentMarket, wfaConfig),
     [selectedFeatures, featureCategories, timePeriods, target, params, context, displayName, currentMarket, wfaConfig]
   );
-  const isReadyToTrain = selectedFeatures.length > 0 && target.horizonDays >= 1 && totalDays > 0;
+  const isDirectCatalogReady = currentMarket !== 'CN' || (
+    !!factorCatalogVersion && dataCoverage?.ready === true
+  );
+  const isReadyToTrain = selectedFeatures.length > 0 && target.horizonDays >= 1 && totalDays > 0 && isDirectCatalogReady;
   const isTrainingInProgress =
     trainingStatus === 'running' ||
     ['pending', 'provisioning', 'running', 'waiting_callback'].includes((backendRunStatus || '').toLowerCase());
@@ -244,20 +249,26 @@ export const ModelTrainingPage: React.FC = () => {
     let active = true;
     const loadCatalog = async () => {
       setFeatureCatalogLoading(true);
+      setFactorCatalogVersion(null);
       try {
-        const catalog = await modelTrainingService.getFeatureCatalog(currentMarket, false);
+        const catalog = await modelTrainingService.getFeatureCatalog(currentMarket, false, factorSource);
         if (!active) return;
         const dynamicCats = toDynamicCategories(catalog);
         setFeatureCategories(dynamicCats);
+        setFactorCatalogVersion(catalog.source === 'quantdb_factor_catalog' ? catalog.version_id : null);
         dispatch({ type: 'SET_FEATURES', payload: resolveDefaultSelectedFeatures(dynamicCats, currentMarket) });
       } catch (error) {
-        if (active) message.warning('特征字典加载失败，已回退到内置字段');
+        if (active && currentMarket === 'CN') {
+          setFeatureCategories([]);
+          dispatch({ type: 'SET_FEATURES', payload: [] });
+          message.warning('当前 QuantDB 因子源没有已发布映射，无法创建直读训练任务');
+        } else if (active) message.warning('特征字典加载失败，已回退到内置字段');
       } finally {
         if (active) setFeatureCatalogLoading(false);
       }
 
       try {
-        const catalogWithCoverage = await modelTrainingService.getFeatureCatalog(currentMarket, true);
+        const catalogWithCoverage = await modelTrainingService.getFeatureCatalog(currentMarket, true, factorSource);
         if (!active) return;
         if (catalogWithCoverage.data_coverage) {
           setDataCoverage(catalogWithCoverage.data_coverage);
@@ -275,7 +286,7 @@ export const ModelTrainingPage: React.FC = () => {
     };
     loadCatalog();
     return () => { active = false; };
-  }, [currentMarket]);
+  }, [currentMarket, factorSource]);
 
   // P0-4: 草稿恢复 — 一次 dispatch 原子化写入（替代 7 个 setState）
   useEffect(() => {
@@ -342,7 +353,10 @@ export const ModelTrainingPage: React.FC = () => {
       message.warning('训练任务进行中，请稍候');
       return;
     }
-    if (!isReadyToTrain) { message.warning('配置不完整'); return; }
+    if (!isReadyToTrain) {
+      message.warning(currentMarket === 'CN' ? 'QuantDB 数据源、映射版本或覆盖范围尚未就绪' : '配置不完整');
+      return;
+    }
     clearTimers();
     setResultError('');
     setResult(null);
@@ -353,6 +367,10 @@ export const ModelTrainingPage: React.FC = () => {
 
     try {
       const payload = buildBackendTrainingPayload(requestPreview, timePeriods, { nodeId: selectedNode, maxTimeMinutes });
+      if (currentMarket === 'CN' && factorCatalogVersion) {
+        payload.factor_source = factorSource;
+        payload.factor_catalog_version = factorCatalogVersion;
+      }
       const { runId } = await modelTrainingService.runTraining(payload);
       pushLog(`提交成功，Run ID: ${runId}`);
 
@@ -569,6 +587,24 @@ export const ModelTrainingPage: React.FC = () => {
                       </Button>
                     </Space>
                   </div>
+                  {currentMarket === 'CN' && (
+                    <div className="mt-4 flex items-center gap-3 text-xs">
+                      <span className="font-medium text-slate-600">QuantDB 因子源</span>
+                      <Select
+                        value={factorSource}
+                        onChange={setFactorSource}
+                        className="min-w-52"
+                        options={[
+                          { value: 'l1_l2_factors', label: 'L1 + L2 合并宽表（默认）' },
+                          { value: 'l1_factors', label: 'L1 因子' },
+                          { value: 'l2_factors', label: 'L2 因子' },
+                        ]}
+                      />
+                      {factorCatalogVersion
+                        ? <Tag color="blue">目录版本 {factorCatalogVersion}</Tag>
+                        : <Tag>尚未发布 QuantDB 因子目录</Tag>}
+                    </div>
+                  )}
                 </Card>
 
                 <div className="grid grid-cols-2 lg:grid-cols-5 gap-3">

@@ -567,6 +567,53 @@ CREATE TABLE IF NOT EXISTS qm_feature_set_item (
 );
 
 -- ========================
+-- 22.1 QUANTDB TRAINING FACTOR CATALOG (direct-read)
+-- ========================
+CREATE TABLE IF NOT EXISTS qm_quantdb_factor_field (
+    market          VARCHAR(16) NOT NULL DEFAULT 'CN',
+    dataset_id      VARCHAR(64) NOT NULL,
+    column_name     VARCHAR(128) NOT NULL,
+    data_type       VARCHAR(64),
+    schema_hash     VARCHAR(128) NOT NULL DEFAULT '',
+    min_date        DATE,
+    max_date        DATE,
+    is_present      BOOLEAN NOT NULL DEFAULT TRUE,
+    discovered_at   TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    PRIMARY KEY (market, dataset_id, column_name)
+);
+
+CREATE TABLE IF NOT EXISTS qm_training_factor_catalog_version (
+    version_id      VARCHAR(64) PRIMARY KEY,
+    version_name    VARCHAR(128) NOT NULL,
+    status          VARCHAR(16) NOT NULL DEFAULT 'draft',
+    source_dataset  VARCHAR(64),
+    created_by      VARCHAR(128),
+    created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    published_at    TIMESTAMPTZ,
+    CHECK (status IN ('draft', 'published', 'archived'))
+);
+
+CREATE TABLE IF NOT EXISTS qm_training_factor_mapping (
+    mapping_id       VARCHAR(64) PRIMARY KEY,
+    version_id       VARCHAR(64) NOT NULL REFERENCES qm_training_factor_catalog_version(version_id) ON DELETE CASCADE,
+    source_dataset   VARCHAR(64) NOT NULL,
+    source_column    VARCHAR(128) NOT NULL,
+    feature_key      VARCHAR(128) NOT NULL,
+    display_name     VARCHAR(256) NOT NULL,
+    category_id      VARCHAR(64) NOT NULL,
+    category_name    VARCHAR(128) NOT NULL,
+    enabled          BOOLEAN NOT NULL DEFAULT TRUE,
+    default_selected BOOLEAN NOT NULL DEFAULT FALSE,
+    required         BOOLEAN NOT NULL DEFAULT FALSE,
+    sort_order       INTEGER NOT NULL DEFAULT 0,
+    UNIQUE(version_id, source_dataset, feature_key),
+    UNIQUE(version_id, source_dataset, source_column)
+);
+
+CREATE INDEX IF NOT EXISTS idx_qm_training_factor_mapping_version
+    ON qm_training_factor_mapping(version_id, source_dataset, category_id, sort_order);
+
+-- ========================
 -- 23. QM_MARKET_CALENDAR_DAY
 -- ========================
 CREATE TABLE IF NOT EXISTS qm_market_calendar_day (
@@ -2159,4 +2206,3 @@ ON CONFLICT (user_id) DO NOTHING;
 -- ========================
 -- DONE - 所有缺失表已创建
 -- ========================
-

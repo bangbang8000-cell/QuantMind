@@ -180,6 +180,59 @@ class AdminService {
         return resp.data;
     }
 
+    // Versioned direct QuantDB training-factor catalog (admin only).
+    async getQuantDBFactorSources(): Promise<any> {
+        const resp = await this.axiosInstance.get('/admin/training-data/sources');
+        return resp.data;
+    }
+
+    async refreshQuantDBFactorSources(): Promise<any> {
+        const resp = await this.axiosInstance.post('/admin/training-data/sources/refresh');
+        return resp.data;
+    }
+
+    async getQuantDBFactorFields(sourceDataset: string): Promise<any> {
+        const resp = await this.axiosInstance.get('/admin/training-data/fields', {
+            params: { source_dataset: sourceDataset },
+        });
+        return resp.data;
+    }
+
+    async getQuantDBFactorCatalog(sourceDataset: string, versionId?: string): Promise<any> {
+        const resp = await this.axiosInstance.get('/admin/training-data/catalog', {
+            params: { source_dataset: sourceDataset, version_id: versionId },
+        });
+        return resp.data;
+    }
+
+    async createQuantDBFactorDraft(versionName: string, sourceDataset: string): Promise<any> {
+        const resp = await this.axiosInstance.post('/admin/training-data/versions', {
+            version_name: versionName,
+            source_dataset: sourceDataset,
+        });
+        return resp.data;
+    }
+
+    async seedQuantDBFactorDraft(versionId: string): Promise<any> {
+        const resp = await this.axiosInstance.post(`/admin/training-data/versions/${versionId}/seed`);
+        return resp.data;
+    }
+
+    async saveQuantDBFactorMapping(versionId: string, mapping: any): Promise<any> {
+        const resp = await this.axiosInstance.put(`/admin/training-data/versions/${versionId}/mappings`, { mapping });
+        return resp.data;
+    }
+
+    async publishQuantDBFactorDraft(versionId: string): Promise<any> {
+        const resp = await this.axiosInstance.post(`/admin/training-data/versions/${versionId}/publish`);
+        return resp.data;
+    }
+
+    async cloneQuantDBFactorCatalog(versionId: string, versionName: string): Promise<any> {
+        const resp = await this.axiosInstance.post(`/admin/training-data/versions/${versionId}/clone`, { version_name: versionName });
+        return resp.data;
+    }
+
     async getDataStatus(refresh = false, market = 'a_share'): Promise<AdminDataStatusResult> {
         const resp = await this.axiosInstance.get<AdminDataStatusResult>('/admin/models/data-status', {
             params: { refresh, market },

@@ -825,14 +825,15 @@ def update_qlib_cache_task(self) -> dict[str, Any]:
 # ---------------------------------------------------------------------------
 @celery_app.task(name="engine.tasks.feature_snapshot", max_retries=1, default_retry_delay=120, bind=True)
 def feature_snapshot_task(self, year: int = 0) -> dict[str, Any]:
-    """Celery 任务：从 QuantDB parquet 生成特征快照。
-
-    调用 generate_feature_snapshots._build_snapshot(year)，
-    替代旧的 update_feature_parquet.py 同步 subprocess。
-    """
+    """Legacy compatibility task; new models read raw QuantDB factors directly."""
     from datetime import date as _date
 
     target_year = year if year > 0 else _date.today().year
+    if os.getenv("QM_ENABLE_LEGACY_FEATURE_SNAPSHOT", "").lower() not in {"1", "true", "yes"}:
+        return {
+            "status": "skipped", "year": target_year,
+            "reason": "direct QuantDB factor reader is active; legacy snapshot generation disabled",
+        }
     logger.info("[FeatureSnapshot] 开始: year=%d task_id=%s", target_year, self.request.id)
 
     try:

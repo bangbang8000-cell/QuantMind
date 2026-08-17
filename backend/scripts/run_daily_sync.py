@@ -260,8 +260,7 @@ def step_parquet(market: str = "A", since: Optional[str] = None) -> dict:
 
     try:
         if market == "A":
-            from backend.scripts.daily_data_sync import update_feature_parquet
-            result = update_feature_parquet(since=since or "")
+            result = {"status": "skipped", "reason": "A 股训练已直读 QuantDB；不再更新 feature_snapshots"}
         else:
             # For HK/US/Crypto, use update_market_features.py
             script = PROJECT_ROOT / "backend" / "scripts" / "update_market_features.py"

@@ -67,6 +67,15 @@ logger = logging.getLogger("inference_parquet")
 _DEFAULT_DATA_DIR = "/app/db/feature_snapshots"
 
 
+def _quantdb_reader(meta: dict, data_dir: Path):
+    """Open the immutable raw QuantDB source for new direct-read models."""
+    if meta.get("data_source") != "quantdb_factors":
+        return None
+    from backend.services.engine.data_platform.quantdb_factor_reader import QuantDBFactorReader
+    pinned_dir = Path(str(meta.get("quantdb_dir") or ""))
+    return QuantDBFactorReader(pinned_dir if pinned_dir.is_dir() else data_dir)
+
+
 # ═══════════════════════════════════════════════════════════════════════════
 # 1. 参数解析
 # ═══════════════════════════════════════════════════════════════════════════
@@ -326,17 +335,35 @@ def _resolve_parquet_path(data_dir: Path, trade_date: str, meta: dict) -> Path |
 
 def load_date_data(trade_date: str, data_dir: Path, meta: dict) -> pd.DataFrame | None:
     """加载指定日期的特征数据。返回 None 表示该日期无数据（exit 2）。"""
-    parquet_path = _resolve_parquet_path(data_dir, trade_date, meta)
-    if parquet_path is None:
-        logger.warning("找不到可用的 parquet 文件 (data_dir=%s, market=%s)", data_dir, (meta.get("context") or {}).get("market", ""))
-        return None
+    reader = _quantdb_reader(meta, data_dir)
+    if reader is not None:
+        features = list(meta.get("feature_columns") or meta.get("features") or [])
+        source = str(meta.get("factor_source") or "l1_l2_factors")
+        try:
+            status = reader.assert_ready(source, start=trade_date, end=trade_date)
+            expected_hash = str(meta.get("factor_schema_hash") or "")
+            if expected_hash and expected_hash != status.schema_hash:
+                raise RuntimeError("QuantDB schema hash differs from model metadata")
+            day_df = reader.read_day(
+                source, features=features, trade_date=trade_date,
+                feature_sources=meta.get("factor_field_sources") or None,
+            )
+            day_df["trade_date"] = pd.to_datetime(day_df["trade_date"]).dt.strftime("%Y-%m-%d")
+        except Exception as exc:
+            logger.error("QuantDB 直读失败: %s", exc)
+            return None
+    else:
+        parquet_path = _resolve_parquet_path(data_dir, trade_date, meta)
+        if parquet_path is None:
+            logger.warning("找不到可用的 parquet 文件 (data_dir=%s, market=%s)", data_dir, (meta.get("context") or {}).get("market", ""))
+            return None
 
-    df = pd.read_parquet(parquet_path, engine="pyarrow")
-    # 非 A 股 parquet 使用 'instrument' 列而非 'symbol'
-    if "symbol" not in df.columns and "instrument" in df.columns:
-        df = df.rename(columns={"instrument": "symbol"})
-    df["trade_date"] = pd.to_datetime(df["trade_date"]).dt.strftime("%Y-%m-%d")
-    day_df = df[df["trade_date"] == trade_date].copy()
+        df = pd.read_parquet(parquet_path, engine="pyarrow")
+        # 非 A 股 parquet 使用 'instrument' 列而非 'symbol'
+        if "symbol" not in df.columns and "instrument" in df.columns:
+            df = df.rename(columns={"instrument": "symbol"})
+        df["trade_date"] = pd.to_datetime(df["trade_date"]).dt.strftime("%Y-%m-%d")
+        day_df = df[df["trade_date"] == trade_date].copy()
 
     if len(day_df) == 0:
         logger.warning("日期 %s 在 parquet 中无数据", trade_date)
@@ -424,6 +451,22 @@ def load_window_data(trade_date: str, data_dir: Path, meta: dict, step_len: int)
     每 symbol 取 step_len 天窗口（含当日）。无历史窗口的 symbol 会因样本不足
     被 _build_ts_dataloader 丢弃——这里是按 symbol 过滤窗口。
     """
+    reader = _quantdb_reader(meta, data_dir)
+    if reader is not None:
+        source = str(meta.get("factor_source") or "l1_l2_factors")
+        features = list(meta.get("feature_columns") or meta.get("features") or [])
+        try:
+            dates = [d for d in reader.available_dates(source, end=trade_date) if d <= trade_date]
+            if not dates:
+                return pd.DataFrame()
+            return reader.read_range(
+                source, features=features, feature_sources=meta.get("factor_field_sources") or None,
+                start=dates[max(0, len(dates) - step_len)], end=trade_date,
+            )
+        except Exception as exc:
+            logger.error("QuantDB 时序窗口读取失败: %s", exc)
+            return pd.DataFrame()
+
     parquet_path = _resolve_parquet_path(data_dir, trade_date, meta)
     if parquet_path is None:
         logger.warning("找不到可用的 parquet 文件 (data_dir=%s, market=%s)", data_dir, (meta.get("context") or {}).get("market", ""))

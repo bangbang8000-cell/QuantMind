@@ -19,6 +19,7 @@ from backend.services.api.user_app.middleware.auth import require_admin
 from backend.services.engine.training.orchestrator_base import get_orchestrator, REGISTRY
 from backend.services.engine.training.local_docker_orchestrator import LocalDockerOrchestrator
 from backend.services.engine.training.training_log_stream import TrainingRunLogStream
+from backend.services.engine.data_platform.quantdb_factor_reader import QuantDBFactorReader
 from backend.shared.database_manager_v2 import get_session
 from backend.shared.model_registry import model_registry_service
 
@@ -543,6 +544,13 @@ def _normalize_payload(payload: dict[str, Any], allowed_features: list[str]) -> 
         normalized["wfa"] = wfa_config
     if model_types and len(model_types) > 1:
         normalized["model_types"] = model_types
+    if payload.get("factor_source"):
+        normalized["factor_source"] = str(payload["factor_source"])
+        normalized["factor_catalog_version"] = str(payload.get("factor_catalog_version") or "")
+        normalized["factor_field_sources"] = dict(payload.get("factor_field_sources") or {})
+        normalized["factor_schema_hash"] = str(payload.get("factor_schema_hash") or "")
+        normalized["factor_catalog_published_at"] = str(payload.get("factor_catalog_published_at") or "")
+        normalized["factor_coverage"] = dict(payload.get("factor_coverage") or {})
 
     explicit_fields = ["valid_start", "valid_end", "test_start", "test_end"]
     has_explicit_split = any(payload.get(k) for k in explicit_fields)
@@ -614,6 +622,51 @@ def _normalize_payload(payload: dict[str, Any], allowed_features: list[str]) -> 
         normalized["generated_at"] = generated_at
 
     return normalized
+
+
+async def _resolve_quantdb_factor_payload(payload: dict[str, Any], market: str) -> tuple[dict[str, Any], list[str]]:
+    """Validate an immutable published mapping and pin logical fields to raw columns."""
+    source = str(payload.get("factor_source") or "").strip()
+    if not source:
+        return payload, await _load_allowed_features(market=market)
+    if market != "CN":
+        raise HTTPException(status_code=422, detail="QuantDB direct factor training currently supports CN only")
+    version_id = str(payload.get("factor_catalog_version") or "").strip()
+    if not version_id:
+        raise HTTPException(status_code=422, detail="factor_catalog_version is required for QuantDB direct training")
+    try:
+        status = QuantDBFactorReader().assert_ready(
+            source,
+            start=str(payload.get("train_start") or "") or None,
+            end=str(payload.get("test_end") or payload.get("valid_end") or payload.get("train_end") or "") or None,
+        )
+    except Exception as exc:
+        raise HTTPException(status_code=422, detail=f"QuantDB factor source is not ready: {exc}") from exc
+
+    async with get_session() as session:
+        version = (await session.execute(text("""
+            SELECT version_id, published_at FROM qm_training_factor_catalog_version
+            WHERE version_id = :version_id AND status = 'published' AND source_dataset = :source
+        """), {"version_id": version_id, "source": source})).first()
+        if not version:
+            raise HTTPException(status_code=422, detail="factor_catalog_version is not the active published source version")
+        rows = (await session.execute(text("""
+            SELECT feature_key, source_column FROM qm_training_factor_mapping
+            WHERE version_id = :version_id AND source_dataset = :source AND enabled
+        """), {"version_id": version_id, "source": source})).mappings().all()
+    mapping = {str(row["feature_key"]): str(row["source_column"]) for row in rows}
+    requested = [str(item).strip() for item in (payload.get("features") or []) if str(item).strip()]
+    invalid = [feature for feature in requested if feature not in mapping]
+    if invalid:
+        raise HTTPException(status_code=422, detail=f"Features are not enabled in pinned QuantDB catalog: {', '.join(invalid[:8])}")
+    if not requested:
+        raise HTTPException(status_code=422, detail="At least one enabled QuantDB factor must be selected")
+    pinned = dict(payload)
+    pinned["factor_field_sources"] = {feature: mapping[feature] for feature in requested}
+    pinned["factor_schema_hash"] = status.schema_hash
+    pinned["factor_catalog_published_at"] = str(version.published_at or "")
+    pinned["factor_coverage"] = {"min_date": status.min_date, "max_date": status.max_date}
+    return pinned, list(mapping)
 
 
 def _normalize_artifacts(raw: Any) -> list[dict[str, str]]:
@@ -840,7 +893,7 @@ async def submit_training_job(
     context = context_raw if isinstance(context_raw, dict) else {}
     benchmark_hint = str(context.get("benchmark") or "SH000300").strip()
     market = _resolve_market(context.get("market"), benchmark_hint)
-    allowed_features = await _load_allowed_features(market=market)
+    payload, allowed_features = await _resolve_quantdb_factor_payload(payload, market)
     normalized_payload = _normalize_payload(payload, allowed_features)
     run_id = f"train_{datetime.now(timezone.utc).strftime('%Y%m%d%H%M%S')}_{uuid.uuid4().hex[:8]}"
 

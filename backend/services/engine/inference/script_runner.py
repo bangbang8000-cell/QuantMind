@@ -377,7 +377,27 @@ class InferenceScriptRunner:
                 primary_meta.get("data_dir")
                 or os.getenv("MODEL_TRAINING_DATA_DIR", "/app/db/feature_snapshots")
             )
+        if data_source == "quantdb_factors":
+            return str(os.getenv("QUANTDB_DATA_DIR", "/app/data/quantdb"))
         return str(os.getenv("QLIB_PRIMARY_DATA_PATH", "db/qlib_data"))
+
+    def _query_quantdb_readiness(self, trade_date: str) -> dict:
+        meta = self._read_primary_metadata()
+        try:
+            from backend.services.engine.data_platform.quantdb_factor_reader import QuantDBFactorReader
+            data_dir = Path(os.getenv("QUANTDB_DATA_DIR", "/app/data/quantdb"))
+            reader = QuantDBFactorReader(data_dir)
+            status = reader.assert_ready(str(meta.get("factor_source") or "l1_l2_factors"), start=trade_date, end=trade_date)
+            schema_hash = str(meta.get("factor_schema_hash") or "")
+            if schema_hash and schema_hash != status.schema_hash:
+                return {"ready": False, "detail": "QuantDB schema hash differs from model metadata"}
+            missing = [
+                source for source in (meta.get("factor_field_sources") or {}).values()
+                if source not in status.columns
+            ]
+            return {"ready": not missing, "detail": "ok" if not missing else f"missing mapped fields: {missing[:5]}"}
+        except Exception as exc:
+            return {"ready": False, "detail": f"QuantDB unavailable: {exc}"}
 
     def _query_parquet_readiness(self, trade_date: str) -> dict:
         """
@@ -845,7 +865,7 @@ class InferenceScriptRunner:
         active_data_source = self._resolve_primary_active_data_source(primary_meta)
         if not script_path.is_file():
             # parquet 数据源模型：自动写入模板脚本，无需手动部署
-            if data_source == "parquet" and self._try_deploy_parquet_template(
+            if data_source in ("parquet", "quantdb_factors") and self._try_deploy_parquet_template(
                 script_path
             ):
                 logger.info(
@@ -882,7 +902,7 @@ class InferenceScriptRunner:
                     prediction_trade_date=prediction_trade_date,
                 )
 
-        if data_source == "parquet":
+        if data_source in ("parquet", "quantdb_factors"):
             # 模板选择以 metadata 为准（marker 嗅探会被覆写过的脚本骗过：
             # 融合脚本一旦被 parquet 模板覆写，头标记就变成了 parquet，
             # 永远无法自愈）。融合模型强制同步 ensemble_src 模板。
@@ -914,6 +934,8 @@ class InferenceScriptRunner:
         # 判断数据源：针对不同存储引擎执行对应的就绪检查
         if data_source == "parquet":
             readiness = self._query_parquet_readiness(trade_date=date)
+        elif data_source == "quantdb_factors":
+            readiness = self._query_quantdb_readiness(trade_date=date)
         elif data_source in ("qlib", "qlib_bin", "bin"):
             readiness = self._query_qlib_readiness(trade_date=date)
         else:
@@ -960,11 +982,15 @@ class InferenceScriptRunner:
 
         # 注入平台环境变量
         env = self._get_subprocess_env()
-        # Resolve parquet data dir from metadata or default
+        # Resolve raw source directory.  Direct QuantDB models never fall back
+        # to model_features_*.parquet.
         primary_meta = self._read_primary_metadata()
-        parquet_data_dir = str(
-            primary_meta.get("data_dir")
-            or os.getenv("MODEL_TRAINING_DATA_DIR", "/app/db/feature_snapshots")
+        parquet_data_dir = (
+            os.getenv("QUANTDB_DATA_DIR", "/app/data/quantdb")
+            if data_source == "quantdb_factors" else str(
+                primary_meta.get("data_dir")
+                or os.getenv("MODEL_TRAINING_DATA_DIR", "/app/db/feature_snapshots")
+            )
         )
         env.update(
             {

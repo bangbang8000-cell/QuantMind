@@ -21,6 +21,19 @@ _DEFAULT_DATA_DIR = "/app/db/feature_snapshots"
 FORWARD_RETURN_COL = "fwd_return"
 
 
+def _quantdb_reader(meta: dict, data_dir: Path):
+    """Return the direct reader only for models explicitly bound to QuantDB.
+
+    Old models deliberately remain on their immutable parquet snapshots.
+    """
+    if meta.get("data_source") != "quantdb_factors":
+        return None
+    from backend.services.engine.data_platform.quantdb_factor_reader import QuantDBFactorReader
+
+    pinned_dir = Path(str(meta.get("quantdb_dir") or ""))
+    return QuantDBFactorReader(pinned_dir if pinned_dir.is_dir() else data_dir)
+
+
 def resolve_parquet_path(data_dir: Path, trade_date: str, meta: dict | None = None) -> Path | None:
     """Resolve parquet file path based on market context and date."""
     meta = meta or {}
@@ -111,20 +124,40 @@ def load_date_data(
     data_dir = Path(data_dir) if data_dir else Path(_DEFAULT_DATA_DIR)
     meta = meta or {}
 
-    parquet_path = resolve_parquet_path(data_dir, trade_date, meta)
-    if parquet_path is None:
-        logger.warning(
-            "找不到可用的 parquet 文件 (data_dir=%s, market=%s)",
-            data_dir, (meta.get("context") or {}).get("market", ""),
-        )
-        return None
+    reader = _quantdb_reader(meta, data_dir)
+    if reader is not None:
+        source = str(meta.get("factor_source") or "l1_l2_factors")
+        features = list(meta.get("feature_columns") or meta.get("features") or [])
+        try:
+            status = reader.assert_ready(source, start=trade_date, end=trade_date)
+            expected_hash = str(meta.get("factor_schema_hash") or "")
+            if expected_hash and expected_hash != status.schema_hash:
+                raise RuntimeError(
+                    f"QuantDB schema changed for {source}: expected {expected_hash}, got {status.schema_hash}"
+                )
+            day_df = reader.read_day(
+                source, features=features, trade_date=trade_date,
+                feature_sources=meta.get("factor_field_sources") or None,
+            )
+        except Exception as exc:
+            logger.error("QuantDB direct inference cannot load %s: %s", trade_date, exc)
+            return None
+        day_df["trade_date"] = pd.to_datetime(day_df["trade_date"]).dt.strftime("%Y-%m-%d")
+    else:
+        parquet_path = resolve_parquet_path(data_dir, trade_date, meta)
+        if parquet_path is None:
+            logger.warning(
+                "找不到可用的 parquet 文件 (data_dir=%s, market=%s)",
+                data_dir, (meta.get("context") or {}).get("market", ""),
+            )
+            return None
 
-    df = pd.read_parquet(parquet_path, engine="pyarrow")
-    # Non-A-share parquet uses 'instrument' column instead of 'symbol'
-    if "symbol" not in df.columns and "instrument" in df.columns:
-        df = df.rename(columns={"instrument": "symbol"})
-    df["trade_date"] = pd.to_datetime(df["trade_date"]).dt.strftime("%Y-%m-%d")
-    day_df = df[df["trade_date"] == trade_date].copy()
+        df = pd.read_parquet(parquet_path, engine="pyarrow")
+        # Non-A-share parquet uses 'instrument' column instead of 'symbol'
+        if "symbol" not in df.columns and "instrument" in df.columns:
+            df = df.rename(columns={"instrument": "symbol"})
+        df["trade_date"] = pd.to_datetime(df["trade_date"]).dt.strftime("%Y-%m-%d")
+        day_df = df[df["trade_date"] == trade_date].copy()
 
     if len(day_df) == 0:
         logger.warning("日期 %s 在 parquet 中无数据", trade_date)
@@ -185,6 +218,27 @@ def load_forward_labels(
 
     if not dates:
         return pd.DataFrame(columns=["symbol", "trade_date", FORWARD_RETURN_COL])
+
+    reader = _quantdb_reader(meta, data_dir)
+    if reader is not None:
+        source = str(meta.get("factor_source") or "l1_l2_factors")
+        try:
+            # Include enough trailing dates for a valid forward return window.
+            available = reader.available_dates(source, start=min(dates))
+            if not available:
+                return pd.DataFrame(columns=["symbol", "trade_date", FORWARD_RETURN_COL])
+            max_needed = available[min(len(available) - 1, len(dates) + horizon + signal_lag_days - 1)]
+            frame = reader.read_range(
+                source, features=[], start=min(dates), end=max_needed,
+            )
+            labels = reader.forward_labels(
+                frame, horizon=horizon, signal_lag_days=signal_lag_days,
+            ).rename(columns={"label": FORWARD_RETURN_COL})
+            labels["trade_date"] = pd.to_datetime(labels["trade_date"]).dt.strftime("%Y-%m-%d")
+            return labels[labels["trade_date"].isin(dates)].dropna(subset=[FORWARD_RETURN_COL])
+        except Exception as exc:
+            logger.error("构造 QuantDB 前瞻标签失败: %s", exc)
+            return pd.DataFrame(columns=["symbol", "trade_date", FORWARD_RETURN_COL])
 
     # 需要读取的年度 parquet：回测区间 + 末尾 horizon 天可能跨年
     years = {int(d[:4]) for d in dates if len(d) >= 4}
@@ -340,6 +394,17 @@ def get_available_dates(
     """Get list of available trading dates from parquet data."""
     data_dir = Path(data_dir) if data_dir else Path(_DEFAULT_DATA_DIR)
     meta = meta or {}
+
+    reader = _quantdb_reader(meta, data_dir)
+    if reader is not None:
+        try:
+            return reader.available_dates(
+                str(meta.get("factor_source") or "l1_l2_factors"),
+                start=start_date, end=end_date,
+            )
+        except Exception as exc:
+            logger.error("读取 QuantDB 交易日失败: %s", exc)
+            return []
 
     # Collect all parquet files
     parquet_files = sorted(data_dir.glob("model_features_*.parquet"))
