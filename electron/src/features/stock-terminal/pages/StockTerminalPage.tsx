@@ -13,7 +13,6 @@ import { RankingPanel } from '../components/RankingPanel';
 import { OverviewTab } from '../components/OverviewTab';
 import { FinancialsTab, ValuationTab, ChipFlowTab, MarginTab, SentimentTab, HoldersTab } from '../components/tabs/P2Tabs';
 import { NewsTab } from '../components/tabs/NewsTab';
-import { StockScoreChart } from '../../../components/inference/StockScoreChart';
 
 type InfoTab = 'overview' | 'financials' | 'valuation' | 'chipflow' | 'margin' | 'sentiment' | 'holders' | 'news';
 
@@ -154,7 +153,7 @@ export default function StockTerminalPage() {
         </motion.div>
       </div>
 
-      {/* 整合 K 线弹窗：左侧 K 线主体 + 推理分数模拟交易，右侧竖排智能标签 */}
+      {/* 整合 K 线弹窗：左侧 K 线主体（融合全部功能），右侧竖排智能标签 */}
       <Modal
         open={klineOpen}
         onCancel={() => setKlineOpen(false)}
@@ -167,26 +166,13 @@ export default function StockTerminalPage() {
             {selected?.name} · {selected?.symbol} 完整 K 线
           </span>
         }
-        styles={{ body: { height: 760, padding: 0 } }}
+        styles={{ body: { height: 640, padding: 0 } }}
       >
         {selected && klineOpen && (
           <div className="h-full flex">
-            {/* 左列：K 线主体 + 推理分数/模拟交易 */}
-            <div className="flex-1 min-w-0 flex flex-col">
-              <div className="flex-1 min-h-0">
-                <KlineWorkspace stock={selected} profile={profile} height={430} />
-              </div>
-              {/* 推理分数历史 + 模拟交易（复刻推理研究 StockScoreChart 全部功能） */}
-              <div className="border-t border-slate-100" style={{ height: 300 }}>
-                <StockScoreChart
-                  symbol={selected.symbol.split('.')[0]}
-                  name={selected.name}
-                  market="A"
-                  days={365}
-                  height={285}
-                  wideScale={false}
-                />
-              </div>
+            {/* 左：K 线主体（周期/指标/指数/回放/信号/回测/多模型分数/模拟交易/参考线） */}
+            <div className="flex-1 min-w-0">
+              <KlineWorkspace stock={selected} profile={profile} height={610} />
             </div>
             {/* 右：竖排智能标签 */}
             <div className="w-60 shrink-0 border-l border-slate-100 overflow-y-auto">

@@ -4,12 +4,12 @@ import { useCallback, useEffect, useMemo, useState } from 'react';
 import {
   CandlestickChart, Star, Activity, TrendingUp, ArrowLeftRight,
 } from 'lucide-react';
-import { Button, Select, Tooltip, message } from 'antd';
+import { Button, Select, Tooltip, message, Modal, InputNumber, Input } from 'antd';
 import { useNavigate } from 'react-router-dom';
 import { StockListItem, StockProfile, KlineBar } from '../../types';
 import { stockTerminalService } from '../../services/stockTerminalService';
 import { researchService } from '../../../../services/researchService';
-import { KlineChart, IndicatorConfig, IndexOverlay, SignalPoint, ScoreSeries, OVERLAY_COLORS, SubplotType } from './KlineChart';
+import { KlineChart, IndicatorConfig, IndexOverlay, SignalPoint, ScoreSeries, TradeMarker, RefLine, OVERLAY_COLORS, SubplotType } from './KlineChart';
 import { KlineReplay } from './KlineReplay';
 import { ChartBacktestPanel, ChartBacktestData } from '../ChartBacktestPanel';
 import { toPrefix } from '../StockSidebar';
@@ -58,6 +58,15 @@ export function KlineWorkspace({ stock, profile, height = 460 }: Props) {
   const [scoreModels, setScoreModels] = useState<{ model_id: string; display_name?: string }[]>([]);
   const [scoreSeries, setScoreSeries] = useState<ScoreSeries[]>([]);
   const [scoreLoading, setScoreLoading] = useState(false);
+  const [selectedModel, setSelectedModel] = useState<string>('all');
+  // 模拟交易
+  const [trades, setTrades] = useState<TradeMarker[]>([]);
+  const [tradeModal, setTradeModal] = useState<{ bar: KlineBar } | null>(null);
+  const [tradeShares, setTradeShares] = useState(100);
+  // 参考线（按模型 localStorage 持久化）
+  const [refLines, setRefLines] = useState<RefLine[]>([]);
+  const [refLineModal, setRefLineModal] = useState(false);
+  const [newRefLine, setNewRefLine] = useState({ value: 0.1, label: '可买', color: '#10b981' });
 
   // 自选状态
   useEffect(() => {
@@ -66,6 +75,22 @@ export function KlineWorkspace({ stock, profile, height = 460 }: Props) {
     }).catch(() => { /* ignore */ });
   }, []);
   const isWatched = watchlist.has(toPrefix(stock.symbol));
+
+  // 参考线：localStorage 按模型持久化
+  const refLineKey = `qm:ref-lines:${selectedModel !== 'all' ? selectedModel : 'default'}`;
+  useEffect(() => {
+    try {
+      const raw = localStorage.getItem(refLineKey);
+      if (raw) {
+        const parsed = JSON.parse(raw);
+        if (Array.isArray(parsed)) setRefLines(parsed.filter((l: any) => l && typeof l.value === 'number'));
+      }
+    } catch { /* ignore */ }
+  }, [refLineKey]);
+  const saveRefLines = (lines: RefLine[]) => {
+    setRefLines(lines);
+    try { localStorage.setItem(refLineKey, JSON.stringify(lines)); } catch { /* ignore */ }
+  };
 
   const toggleWatch = useCallback(async () => {
     const prefix = toPrefix(stock.symbol);
@@ -170,6 +195,49 @@ export function KlineWorkspace({ stock, profile, height = 460 }: Props) {
     });
   };
 
+  // 模型切换：重建分数序列（all=全部模型，否则单模型）
+  const activeScoreSeries = useMemo(() => {
+    if (selectedModel === 'all') return scoreSeries;
+    return scoreSeries.filter(s => s.model === selectedModel);
+  }, [scoreSeries, selectedModel]);
+
+  // 模拟交易统计（持仓/已实现/浮动/总收益）
+  const tradeStats = useMemo(() => {
+    let shares = 0, cost = 0, realizedPnl = 0;
+    for (const t of trades) {
+      if (t.side === 'buy') { shares += t.shares; cost += t.price * t.shares; }
+      else if (shares > 0) {
+        const avgCost = cost / shares;
+        realizedPnl += (t.price - avgCost) * t.shares;
+        cost -= avgCost * t.shares;
+        shares -= t.shares;
+      }
+    }
+    const curPrice = bars.length ? bars[bars.length - 1].close : 0;
+    const holdingValue = curPrice * shares;
+    const unrealizedPnl = holdingValue - cost;
+    const totalInvested = trades.filter(t => t.side === 'buy').reduce((s, t) => s + t.price * t.shares, 0);
+    const pnl = realizedPnl + unrealizedPnl;
+    const pnlPct = totalInvested > 0 ? (pnl / totalInvested) * 100 : 0;
+    return { realizedPnl, unrealizedPnl, holdingValue, curPrice, remainingShares: shares, pnl, pnlPct };
+  }, [trades, bars]);
+
+  const doBuy = () => {
+    if (!tradeModal) return;
+    const { bar } = tradeModal;
+    setTrades([...trades, { date: bar.date, side: 'buy', price: bar.open, shares: tradeShares }]);
+    setTradeModal(null);
+    message.success(`买入 ${tradeShares} 股 @ ${bar.open.toFixed(2)}`);
+  };
+  const doSell = () => {
+    if (!tradeModal) return;
+    const { bar } = tradeModal;
+    if (tradeShares > tradeStats.remainingShares) { message.warning('持仓不足'); return; }
+    setTrades([...trades, { date: bar.date, side: 'sell', price: bar.close, shares: tradeShares }]);
+    setTradeModal(null);
+    message.success(`卖出 ${tradeShares} 股 @ ${bar.close.toFixed(2)}`);
+  };
+
   const up = (profile?.pct_change ?? stock.pct_change ?? 0) >= 0;
 
   return (
@@ -224,13 +292,31 @@ export function KlineWorkspace({ stock, profile, height = 460 }: Props) {
             title={signals.length ? '模型推理分数信号' : '无推理信号'}>
             <TrendingUp className="w-3 h-3" /> 信号{signals.length > 0 && <span className="text-[9px] bg-rose-100 rounded px-0.5">{signals.length}</span>}
           </button>
-          {scoreSeries.length > 0 && (
-            <Tooltip title={`推理历史分数（${scoreSeries.map(s => s.model).join(', ')}）`}>
-              <span className="flex items-center gap-1 text-[10px] font-bold text-indigo-600 bg-indigo-50 border border-indigo-100 px-1.5 py-0.5 rounded-lg">
-                <TrendingUp className="w-2.5 h-2.5" /> 分数{scoreSeries.length > 1 ? `×${scoreSeries.length}` : ''}
-              </span>
-            </Tooltip>
+          {scoreModels.length > 1 && (
+            <Select
+              value={selectedModel}
+              onChange={setSelectedModel}
+              size="small"
+              style={{ width: 130 }}
+              popupMatchSelectWidth={false}
+              options={[
+                { value: 'all', label: '全部模型' },
+                ...scoreModels.map(m => ({ value: m.model_id, label: m.display_name || m.model_id })),
+              ]}
+            />
           )}
+          <Tooltip title="点击 K 线日期模拟买卖">
+            <Button size="small" onClick={() => message.info('点击 K 线图任意日期即可买入/卖出')}
+              className="rounded-lg text-[10px] font-bold h-6 px-2 text-amber-600 border-amber-200">
+              模拟交易
+            </Button>
+          </Tooltip>
+          <Tooltip title="分数参考线管理">
+            <Button size="small" onClick={() => setRefLineModal(true)}
+              className="rounded-lg text-[10px] font-bold h-6 px-2 text-violet-600 border-violet-200">
+              参考线
+            </Button>
+          </Tooltip>
           <ChartBacktestPanel symbol={stock.symbol} onResult={setBtData} />
           <KlineReplay active={replayActive} onToggle={() => { setReplayActive(!replayActive); setReplayCursor(0.5); setReplayPlaying(false); }}
             cursor={replayCursor} onCursor={setReplayCursor} playing={replayPlaying} onPlaying={setReplayPlaying}
@@ -253,7 +339,7 @@ export function KlineWorkspace({ stock, profile, height = 460 }: Props) {
             <TrendingUp className="w-4 h-4 animate-pulse text-blue-400" /> 加载 K 线数据…
           </div>
         ) : bars.length ? (
-          <KlineChart bars={visibleBars} config={config} overlays={overlays} height={height} signals={signalOn ? signals : []} btEquity={btData?.points ?? []} scoreSeries={scoreSeries} />
+          <KlineChart bars={visibleBars} config={config} overlays={overlays} height={height} signals={signalOn ? signals : []} btEquity={btData?.points ?? []} scoreSeries={activeScoreSeries} trades={trades} refLines={refLines} onBarClick={(bar) => setTradeModal({ bar })} />
         ) : (
           <div className="h-full flex flex-col items-center justify-center gap-2 text-slate-400">
             <Activity className="w-8 h-8 opacity-40" />
@@ -261,6 +347,83 @@ export function KlineWorkspace({ stock, profile, height = 460 }: Props) {
           </div>
         )}
       </div>
+
+      {/* 模拟交易统计条 */}
+      {trades.length > 0 && (
+        <div className="flex items-center gap-3 px-3 py-1 border-t border-slate-100 text-[10px] font-mono text-slate-600 bg-slate-50/60 shrink-0">
+          <span>持仓 <b className="text-slate-800">{tradeStats.remainingShares}</b> 股</span>
+          {tradeStats.remainingShares > 0 && (
+            <span>市值 <b className="text-slate-800">{tradeStats.holdingValue.toFixed(2)}</b>（现价 {tradeStats.curPrice.toFixed(2)}）</span>
+          )}
+          <span>已实现 <b className={tradeStats.realizedPnl >= 0 ? 'text-rose-600' : 'text-emerald-600'}>{tradeStats.realizedPnl >= 0 ? '+' : ''}{tradeStats.realizedPnl.toFixed(2)}</b></span>
+          {tradeStats.remainingShares > 0 && (
+            <span>浮动 <b className={tradeStats.unrealizedPnl >= 0 ? 'text-rose-600' : 'text-emerald-600'}>{tradeStats.unrealizedPnl >= 0 ? '+' : ''}{tradeStats.unrealizedPnl.toFixed(2)}</b></span>
+          )}
+          <span>总收益 <b className={tradeStats.pnl >= 0 ? 'text-rose-600' : 'text-emerald-600'}>{tradeStats.pnl >= 0 ? '+' : ''}{tradeStats.pnl.toFixed(2)} ({tradeStats.pnlPct >= 0 ? '+' : ''}{tradeStats.pnlPct.toFixed(2)}%)</b></span>
+        </div>
+      )}
+
+      {/* 模拟交易 Modal */}
+      <Modal
+        open={!!tradeModal}
+        onCancel={() => setTradeModal(null)}
+        footer={null}
+        width={360}
+        title={<span className="text-sm font-black text-slate-800">模拟交易 · {tradeModal?.bar.date}</span>}
+      >
+        {tradeModal && (
+          <div className="flex flex-col gap-3">
+            <div className="text-[11px] text-slate-500">
+              开盘 <b className="font-mono text-slate-800">{tradeModal.bar.open.toFixed(2)}</b>
+              {'  '}收盘 <b className="font-mono text-slate-800">{tradeModal.bar.close.toFixed(2)}</b>
+            </div>
+            <div className="flex items-center gap-2">
+              <span className="text-[11px] font-bold text-slate-500">数量</span>
+              <InputNumber value={tradeShares} onChange={(v) => setTradeShares(v ?? 100)} min={100} step={100} size="small" style={{ flex: 1 }} />
+            </div>
+            <div className="flex gap-2">
+              <Button type="primary" size="small" className="flex-1 bg-rose-500" onClick={doBuy}>买入（开盘价）</Button>
+              <Button danger size="small" className="flex-1" onClick={doSell}>卖出（收盘价）</Button>
+            </div>
+          </div>
+        )}
+      </Modal>
+
+      {/* 参考线管理 Modal */}
+      <Modal
+        open={refLineModal}
+        onCancel={() => setRefLineModal(false)}
+        footer={null}
+        width={420}
+        title={<span className="text-sm font-black text-slate-800">分数参考线</span>}
+      >
+        <div className="flex flex-col gap-2">
+          <div className="flex items-center gap-2">
+            <InputNumber value={newRefLine.value} onChange={(v) => setNewRefLine({ ...newRefLine, value: v ?? 0 })}
+              size="small" step={0.05} style={{ width: 90 }} />
+            <Input placeholder="标签（如 可买/热门/危险）" value={newRefLine.label} size="small"
+              onChange={(e) => setNewRefLine({ ...newRefLine, label: e.target.value })} style={{ flex: 1 }} />
+            <Select value={newRefLine.color} onChange={(c) => setNewRefLine({ ...newRefLine, color: c })} size="small"
+              options={[
+                { value: '#10b981', label: '绿·可买' },
+                { value: '#f59e0b', label: '橙·谨慎' },
+                { value: '#ef4444', label: '红·危险' },
+                { value: '#6366f1', label: '紫·提示' },
+              ]} style={{ width: 100 }} />
+          </div>
+          <Button size="small" type="primary" onClick={() => {
+            saveRefLines([...refLines, { id: `rl-${Date.now()}`, value: newRefLine.value, label: newRefLine.label, color: newRefLine.color }]);
+          }}>添加参考线</Button>
+          {refLines.map(l => (
+            <div key={l.id} className="flex items-center gap-2 text-[11px]">
+              <span className="w-3 h-3 rounded-full" style={{ background: l.color }} />
+              <span className="font-mono font-bold text-slate-700">{l.label} {l.value >= 0 ? '+' : ''}{l.value.toFixed(2)}</span>
+              <Button size="small" type="text" danger className="ml-auto p-0 h-6 w-6"
+                onClick={() => saveRefLines(refLines.filter(x => x.id !== l.id))}>删</Button>
+            </div>
+          ))}
+        </div>
+      </Modal>
     </div>
   );
 }

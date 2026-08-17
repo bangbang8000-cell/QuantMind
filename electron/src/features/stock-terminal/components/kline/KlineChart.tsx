@@ -33,6 +33,23 @@ export interface ScoreSeries {
   points: { date: string; fusion: number | null; side: string | null }[];
 }
 
+/** 模拟交易点：buy/sell */
+export interface TradeMarker {
+  date: string;
+  side: 'buy' | 'sell';
+  price: number;
+  shares: number;
+}
+
+/** 参考线：分数轴虚线 */
+export interface RefLine {
+  id: string;
+  value: number;
+  label: string;
+  color: string;
+  visible?: boolean;
+}
+
 const COLORS = {
   up: '#e11d48',        // A股：涨红
   down: '#059669',      // 跌绿
@@ -64,9 +81,12 @@ interface Props {
   signals?: SignalPoint[];
   btEquity?: { date: string; equity: number }[];
   scoreSeries?: ScoreSeries[];
+  trades?: TradeMarker[];
+  refLines?: RefLine[];
+  onBarClick?: (bar: KlineBar) => void;
 }
 
-export function KlineChart({ bars, config, overlays, height = 460, signals = [], btEquity = [], scoreSeries = [] }: Props) {
+export function KlineChart({ bars, config, overlays, height = 460, signals = [], btEquity = [], scoreSeries = [], trades = [], refLines = [], onBarClick }: Props) {
   const option = useMemo(() => {
     const dates = bars.map(b => b.date);
     const closes = bars.map(b => b.close);
@@ -207,6 +227,49 @@ export function KlineChart({ bars, config, overlays, height = 460, signals = [],
       if (sellData.length) series.push(mk(sellData, 'triangle', COLORS.down, 8));
     }
 
+    // 模拟交易标记（买▲红/卖▼绿）
+    if (trades.length) {
+      const buyT: any[] = [];
+      const sellT: any[] = [];
+      const idxByDate = new Map(dates.map((d, i) => [d, i]));
+      for (const t of trades) {
+        const i = idxByDate.get(t.date);
+        if (i == null) continue;
+        const bar = bars[i];
+        const v = t.side === 'buy' ? bar.low * 0.985 : bar.high * 1.015;
+        const pt = { value: [i, Number(v.toFixed(2))], t };
+        if (t.side === 'buy') buyT.push(pt); else sellT.push(pt);
+      }
+      const tmk = (data: any[], symbol: string, color: string, offset: number) => ({
+        name: '交易', type: 'scatter', xAxisIndex: 0, yAxisIndex: 0,
+        data, symbol, symbolSize: 14, symbolOffset: [0, offset],
+        itemStyle: { color, borderColor: '#fff', borderWidth: 1.5 },
+        label: { show: true, formatter: (p: any) => p.data.t.shares, fontSize: 8, color, fontWeight: 'bold', position: 'bottom' },
+        z: 11, tooltip: { formatter: (p: any) => {
+          const t = p.data.t;
+          return `${t.date}<br/>${t.side === 'buy' ? '买入' : '卖出'} ${t.shares} 股 @ ${t.price}`;
+        } },
+      });
+      if (buyT.length) series.push(tmk(buyT, 'triangle', COLORS.up, -12));
+      if (sellT.length) series.push(tmk(sellT, 'triangle', COLORS.down, 12));
+    }
+
+    // 参考线：分数轴 markLine（挂在第一条分数线上）
+    const visRef = refLines.filter(l => l.visible !== false);
+    if (visRef.length && scoreSeries.length) {
+      const firstScore = series.find((s: any) => String(s.name).startsWith('分数·'));
+      if (firstScore) {
+        firstScore.markLine = {
+          silent: true, symbol: 'none',
+          data: visRef.map(l => ({
+            yAxis: l.value,
+            lineStyle: { color: l.color, type: 'dashed', width: 1.5 },
+            label: { formatter: `${l.label} ${l.value >= 0 ? '+' : ''}${l.value.toFixed(2)}`, fontSize: 9, position: 'insideEndTop', color: l.color },
+          })),
+        };
+      }
+    }
+
     // 副图
     config.subplots.forEach((sp, idx) => {
       const gi = idx + 1;
@@ -264,7 +327,15 @@ export function KlineChart({ bars, config, overlays, height = 460, signals = [],
       ],
       series,
     };
-  }, [bars, config, overlays, height, signals, btEquity, scoreSeries]);
+  }, [bars, config, overlays, height, signals, btEquity, scoreSeries, trades, refLines]);
+
+  const onEvents = onBarClick ? {
+    click: (params: any) => {
+      const idx = params?.dataIndex;
+      if (idx == null || idx < 0 || idx >= bars.length) return;
+      onBarClick(bars[idx]);
+    },
+  } : undefined;
 
   return (
     <ReactECharts
@@ -273,6 +344,7 @@ export function KlineChart({ bars, config, overlays, height = 460, signals = [],
       lazyUpdate
       style={{ width: '100%', height }}
       opts={{ renderer: 'canvas' }}
+      onEvents={onEvents}
     />
   );
 }
