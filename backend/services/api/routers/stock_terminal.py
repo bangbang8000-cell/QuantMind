@@ -341,6 +341,67 @@ async def stock_dividends(
     return {"success": True, "data": {"items": items}}
 
 
+@router.get("/tags")
+async def stock_tags(
+    symbol: str = Query(...),
+    current_user: dict = Depends(get_current_user),
+):
+    """个股命中标签 + 命中的组合预设。"""
+    _ = current_user
+    sym = symbol.upper().strip()
+    if not _SYMBOL_RE.match(sym):
+        raise HTTPException(status_code=400, detail=f"非法代码 {sym}")
+
+    import asyncio
+
+    def _run() -> tuple[list[dict], list[dict]]:
+        from backend.services.engine.data_platform import tag_rules
+
+        return tag_rules.match_tags_for_symbol(sym), tag_rules.preset_matched(sym)
+
+    try:
+        tags, presets = await asyncio.to_thread(_run)
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("tag match %s failed: %s", sym, exc)
+        tags, presets = [], []
+    return {"success": True, "data": {"tags": tags, "presets": presets}}
+
+
+@router.get("/tags/{tag_id}/stocks")
+async def tag_stocks(
+    tag_id: str,
+    limit: int = Query(50, ge=1, le=100),
+    current_user: dict = Depends(get_current_user),
+):
+    """标签同类股票（按 sort_key 排序 TopN）。"""
+    _ = current_user
+
+    import asyncio
+
+    def _run() -> list[dict]:
+        from backend.services.engine.data_platform import tag_rules
+
+        return tag_rules.stocks_for_tag(tag_id, limit=limit)
+
+    try:
+        items = await asyncio.to_thread(_run)
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc))
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("tag stocks %s failed: %s", tag_id, exc)
+        items = []
+    return {"success": True, "data": {"items": items}}
+
+
+@router.get("/presets")
+async def list_presets(current_user: dict = Depends(get_current_user)):
+    _ = current_user
+    return {"success": True, "data": {"presets": [
+        {"id": p["id"], "name": p["name"], "logic": p["logic"], "tags": p["tags"]}
+        for p in __import__("backend.services.engine.data_platform.tag_rules", fromlist=["PRESETS"]).PRESETS
+    ]}}
+
+
 @router.get("/minute")
 async def stock_minute_kline(
     symbol: str = Query(...),

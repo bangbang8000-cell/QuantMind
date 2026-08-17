@@ -14,6 +14,7 @@ import { StockSidebar, toPrefix } from '../components/StockSidebar';
 import { KlineChart, IndicatorConfig, IndexOverlay, OVERLAY_COLORS, SubplotType } from '../components/kline/KlineChart';
 import { KlineReplay } from '../components/kline/KlineReplay';
 import { OverviewTab } from '../components/OverviewTab';
+import { TagStrip } from '../components/TagStrip';
 import { FinancialsTab, ValuationTab, ChipFlowTab, MarginTab, SentimentTab, HoldersTab } from '../components/tabs/P2Tabs';
 import { researchService } from '../../../services/researchService';
 
@@ -333,6 +334,8 @@ export default function StockTerminalPage() {
               </Tooltip>
             </div>
           </div>
+
+          <TagStrip symbol={selected?.symbol ?? null} onSelectStock={setSelected} />
 
           {/* 图表 */}
           <div className="flex-1 min-h-0">

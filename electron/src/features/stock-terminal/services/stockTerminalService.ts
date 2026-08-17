@@ -120,6 +120,24 @@ class StockTerminalService {
     }
   }
 
+  async getTags(symbol: string): Promise<{ tags: any[]; presets: any[] }> {
+    try {
+      const resp = await this.client.get('/stock-terminal/tags', { params: { symbol }, timeout: 30000 });
+      return resp.data?.data ?? { tags: [], presets: [] };
+    } catch {
+      return { tags: [], presets: [] };
+    }
+  }
+
+  async getTagStocks(tagId: string, limit = 30): Promise<any[]> {
+    try {
+      const resp = await this.client.get(`/stock-terminal/tags/${tagId}/stocks`, { params: { limit }, timeout: 30000 });
+      return resp.data?.data?.items ?? [];
+    } catch {
+      return [];
+    }
+  }
+
   async getDividends(symbol: string): Promise<DividendItem[]> {
     try {
       const resp = await this.client.get('/stock-terminal/dividends', { params: { symbol } });
