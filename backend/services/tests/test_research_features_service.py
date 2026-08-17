@@ -712,3 +712,90 @@ def test_daily_view_contributes_only_volume(monkeypatch):
     # 未被日线的原始 amount 污染
     assert "amount" not in values
     assert "open" not in values
+
+
+def test_get_symbol_full_features_from_features_daily(monkeypatch):
+    """测试优先从 qdb_features_daily 宽表提取估值、技术与波动率指标。"""
+    _install_hub(
+        monkeypatch,
+        _FakeHub(
+            {
+                "qdb_features_daily": [
+                    {
+                        "symbol": "600036.SH",
+                        "time": "2026-07-29",
+                        "dt": 20260729,
+                        "close": 39.0,
+                        "pe_ttm": 6.6,
+                        "pb": 0.85,
+                        "total_mv": 9.8e11,  # 9800 亿元
+                        "ma5": 39.08,
+                        "ma_gap_5": 0.5,
+                        "rsi_14": 55.1,
+                        "vol_atr_14": 0.88,
+                        "return_1d": 0.015,
+                    }
+                ],
+            }
+        ),
+    )
+
+    result = asyncio.run(svc.get_symbol_full_features("SH600036"))
+    data = result["data"]
+
+    assert result["code"] == 200
+    assert data["symbol"] == "600036.SH"
+    assert data["tradeDate"] == "2026-07-29"
+    assert "features_daily" in data["sources"]
+    assert data["valuation"]["pe_ttm"] == 6.6
+    assert data["valuation"]["pb"] == 0.85
+    # total_mv 应被换算为 9800 (亿元)
+    assert data["valuation"]["total_mv"] == pytest.approx(9800.0)
+    assert data["technical"]["ma5"] == 39.08
+    assert data["technical"]["ma_gap_5"] == 0.5
+    assert data["technical"]["rsi_14"] == 55.1
+    assert data["volatility"]["vol_atr_14"] == 0.88
+    assert data["momentum"]["return_1d"] == 0.015
+
+
+def test_batch_projected_features_from_features_daily(monkeypatch):
+    """测试批量投影模式直接从 qdb_features_daily 提取字段并自动别名与缩放。"""
+    _install_hub(
+        monkeypatch,
+        _FakeHub(
+            {
+                "qdb_features_daily": [
+                    {
+                        "symbol": "600036.SH",
+                        "time": "2026-07-29",
+                        "dt": 20260729,
+                        "pe_ttm": 6.6,
+                        "pb": 0.85,
+                        "total_mv": 9.8e11,
+                        "ma5": 39.08,
+                        "ma_gap_5": 0.5,
+                        "vol_atr_14": 0.88,
+                    }
+                ],
+            }
+        ),
+    )
+    monkeypatch.setattr(svc, "_latest_l1_from_files", lambda symbols: {})
+
+    result = asyncio.run(
+        svc.get_batch_full_features(
+            ["600036.SH"],
+            fields=["pe", "pb", "totalMv", "ma5", "maGap5", "atr"],
+        )
+    )
+
+    items = result["data"]["items"]
+    assert len(items) == 1
+    values = items[0]["values"]
+    assert values["pe"] == 6.6
+    assert values["pb"] == 0.85
+    assert values["totalMv"] == pytest.approx(9800.0)
+    assert values["ma5"] == 39.08
+    assert values["maGap5"] == 0.5
+    assert values["atr"] == 0.88
+
