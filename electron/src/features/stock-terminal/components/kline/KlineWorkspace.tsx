@@ -9,7 +9,7 @@ import { useNavigate } from 'react-router-dom';
 import { StockListItem, StockProfile, KlineBar } from '../../types';
 import { stockTerminalService } from '../../services/stockTerminalService';
 import { researchService } from '../../../../services/researchService';
-import { KlineChart, IndicatorConfig, IndexOverlay, SignalPoint, OVERLAY_COLORS, SubplotType } from './KlineChart';
+import { KlineChart, IndicatorConfig, IndexOverlay, SignalPoint, ScoreSeries, OVERLAY_COLORS, SubplotType } from './KlineChart';
 import { KlineReplay } from './KlineReplay';
 import { ChartBacktestPanel, ChartBacktestData } from '../ChartBacktestPanel';
 import { toPrefix } from '../StockSidebar';
@@ -46,6 +46,10 @@ export function KlineWorkspace({ stock, profile, height = 460 }: Props) {
   const [replayPlaying, setReplayPlaying] = useState(false);
   const [replaySpeed, setReplaySpeed] = useState(1);
   const [watchlist, setWatchlist] = useState<Set<string>>(new Set());
+  // 推理分数历史（多模型叠加）
+  const [scoreModels, setScoreModels] = useState<{ model_id: string; display_name?: string }[]>([]);
+  const [scoreSeries, setScoreSeries] = useState<ScoreSeries[]>([]);
+  const [scoreLoading, setScoreLoading] = useState(false);
 
   // 自选状态
   useEffect(() => {
@@ -89,7 +93,7 @@ export function KlineWorkspace({ stock, profile, height = 460 }: Props) {
           }
           return;
         }
-        let items = await stockTerminalService.getDailyKline(sym, 1000);
+        let items = await stockTerminalService.getDailyKline(sym, 250);
         if ((period === 'weekly' || period === 'monthly') && items.length) items = resampleBars(items, period);
         if (!cancelled) setBars(items);
       } finally {
@@ -101,13 +105,34 @@ export function KlineWorkspace({ stock, profile, height = 460 }: Props) {
       if (cancelled) return;
       setSignals(Object.values(sigMap).flat().sort((a, b) => a.date.localeCompare(b.date)));
     });
+    // 推理分数历史（多模型）：/models/inference/stock/{symbol}/history
+    setScoreLoading(true);
+    import('../../../../services/modelTrainingService').then(({ modelTrainingService }) => {
+      const code = stock.symbol.split('.')[0];
+      return modelTrainingService.getStockInferenceHistory(code, 500).then(resp => {
+        if (cancelled) return;
+        setScoreModels(resp?.models ?? []);
+        const byModel = new Map<string, { date: string; fusion: number | null; side: string | null }[]>();
+        for (const it of resp?.items ?? []) {
+          const m = it.signal_model_id || 'default';
+          if (!byModel.has(m)) byModel.set(m, []);
+          byModel.get(m)!.push({ date: it.trade_date.slice(0, 10), fusion: it.fusion_score, side: it.signal_side });
+        }
+        const palette = ['#6366f1', '#f59e0b', '#10b981', '#e11d48', '#0ea5e9'];
+        const out: ScoreSeries[] = [...byModel.entries()].map(([m, pts], i) => ({
+          model: m, color: palette[i % palette.length],
+          points: pts.sort((a, b) => a.date.localeCompare(b.date)),
+        }));
+        setScoreSeries(out);
+      });
+    }).catch(() => { if (!cancelled) setScoreSeries([]); }).finally(() => { if (!cancelled) setScoreLoading(false); });
     return () => { cancelled = true; };
   }, [stock, period]); // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => {
     overlayCodes.forEach(async code => {
       if (overlayCache[code]) return;
-      const closes = await stockTerminalService.getIndexKline(code, 1000);
+      const closes = await stockTerminalService.getIndexKline(code, 250);
       setOverlayCache({ ...overlayCache, [code]: closes });
     });
   }, [overlayCodes, overlayCache]);
@@ -191,6 +216,13 @@ export function KlineWorkspace({ stock, profile, height = 460 }: Props) {
             title={signals.length ? '模型推理分数信号' : '无推理信号'}>
             <TrendingUp className="w-3 h-3" /> 信号{signals.length > 0 && <span className="text-[9px] bg-rose-100 rounded px-0.5">{signals.length}</span>}
           </button>
+          {scoreSeries.length > 0 && (
+            <Tooltip title={`推理历史分数（${scoreSeries.map(s => s.model).join(', ')}）`}>
+              <span className="flex items-center gap-1 text-[10px] font-bold text-indigo-600 bg-indigo-50 border border-indigo-100 px-1.5 py-0.5 rounded-lg">
+                <TrendingUp className="w-2.5 h-2.5" /> 分数{scoreSeries.length > 1 ? `×${scoreSeries.length}` : ''}
+              </span>
+            </Tooltip>
+          )}
           <ChartBacktestPanel symbol={stock.symbol} onResult={setBtData} />
           <KlineReplay active={replayActive} onToggle={() => { setReplayActive(!replayActive); setReplayCursor(0.5); setReplayPlaying(false); }}
             cursor={replayCursor} onCursor={setReplayCursor} playing={replayPlaying} onPlaying={setReplayPlaying}
@@ -213,7 +245,7 @@ export function KlineWorkspace({ stock, profile, height = 460 }: Props) {
             <TrendingUp className="w-4 h-4 animate-pulse text-blue-400" /> 加载 K 线数据…
           </div>
         ) : bars.length ? (
-          <KlineChart bars={visibleBars} config={config} overlays={overlays} height={height} signals={signalOn ? signals : []} btEquity={btData?.points ?? []} />
+          <KlineChart bars={visibleBars} config={config} overlays={overlays} height={height} signals={signalOn ? signals : []} btEquity={btData?.points ?? []} scoreSeries={scoreSeries} />
         ) : (
           <div className="h-full flex flex-col items-center justify-center gap-2 text-slate-400">
             <Activity className="w-8 h-8 opacity-40" />

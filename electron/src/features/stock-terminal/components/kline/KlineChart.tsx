@@ -26,6 +26,13 @@ export interface SignalPoint {
   side: string;
 }
 
+/** 推理分数历史叠加（多模型）：每模型一条分数线 */
+export interface ScoreSeries {
+  model: string;
+  color: string;
+  points: { date: string; fusion: number | null; side: string | null }[];
+}
+
 const COLORS = {
   up: '#e11d48',        // A股：涨红
   down: '#059669',      // 跌绿
@@ -56,9 +63,10 @@ interface Props {
   height?: number;
   signals?: SignalPoint[];
   btEquity?: { date: string; equity: number }[];
+  scoreSeries?: ScoreSeries[];
 }
 
-export function KlineChart({ bars, config, overlays, height = 460, signals = [], btEquity = [] }: Props) {
+export function KlineChart({ bars, config, overlays, height = 460, signals = [], btEquity = [], scoreSeries = [] }: Props) {
   const option = useMemo(() => {
     const dates = bars.map(b => b.date);
     const closes = bars.map(b => b.close);
@@ -146,6 +154,31 @@ export function KlineChart({ bars, config, overlays, height = 460, signals = [],
       });
     }
 
+    // 推理分数历史叠加（多模型分数线，独立右轴）
+    if (scoreSeries.length) {
+      const idxByDate = new Map(dates.map((d, i) => [d, i]));
+      const scoreIdx = yAxes.length; // 当前主图 y 轴数
+      yAxes.push({
+        type: 'value', gridIndex: 0, position: 'right', scale: true,
+        axisLabel: { fontSize: 9, color: '#94a3b8', formatter: (v: number) => v.toFixed(1) },
+        splitLine: { show: false },
+      });
+      scoreSeries.forEach(sr => {
+        const data = bars.map((b, i) => {
+          const p = sr.points.find(p => p.date === b.date);
+          return p && p.fusion != null ? Number(p.fusion) : null;
+        });
+        series.push({
+          name: `分数·${sr.model}`, type: 'line', xAxisIndex: 0, yAxisIndex: scoreIdx,
+          data, symbol: 'circle', symbolSize: 7, connectNulls: false,
+          lineStyle: { width: 1.6, color: sr.color },
+          itemStyle: { color: sr.color, borderColor: '#fff', borderWidth: 1 },
+          label: { show: true, position: 'top', fontSize: 8, fontWeight: 'bold', formatter: (p: any) => p?.value == null ? '' : Number(p.value).toFixed(3), color: sr.color },
+          emphasis: { scale: 1.4 },
+        });
+      });
+    }
+
     // 推理分数信号标记（BUY▲ / SELL▼）
     if (signals.length) {
       const buyData: any[] = [];
@@ -226,12 +259,12 @@ export function KlineChart({ bars, config, overlays, height = 460, signals = [],
       xAxis: xAxes,
       yAxis: yAxes,
       dataZoom: [
-        { type: 'inside', xAxisIndex: xAxes.map((_, i) => i), start: 55, end: 100 },
+        { type: 'inside', xAxisIndex: xAxes.map((_, i) => i), start: 60, end: 100 },
         { type: 'slider', xAxisIndex: xAxes.map((_, i) => i), bottom: 2, height: 16, borderColor: '#e2e8f0', fillerColor: 'rgba(59,130,246,0.08)' },
       ],
       series,
     };
-  }, [bars, config, overlays, height, signals, btEquity]);
+  }, [bars, config, overlays, height, signals, btEquity, scoreSeries]);
 
   return (
     <ReactECharts

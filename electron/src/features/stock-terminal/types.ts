@@ -23,6 +23,7 @@ export interface StockListResponse {
   page: number;
   page_size: number;
   trade_date: string;
+  signal_date?: string;
   items: StockListItem[];
 }
 
