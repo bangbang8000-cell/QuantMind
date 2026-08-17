@@ -612,7 +612,8 @@ services:
       redis:
         condition: service_healthy
     healthcheck:
-      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:1200/healthz >/dev/null 2>&1 || exit 1"]
+      # 新版 diygod/rsshub 镜像不含 wget，改用 node fetch 探测
+      test: ["CMD-SHELL", "node -e \"fetch('http://127.0.0.1:1200/healthz').then(r=>{if(!r.ok)process.exit(1)}).catch(()=>process.exit(1))\""]
       interval: 30s
       timeout: 5s
       retries: 5
