@@ -753,9 +753,10 @@ def test_get_symbol_full_features_from_features_daily(monkeypatch):
     assert data["valuation"]["total_mv"] == pytest.approx(9800.0)
     assert data["technical"]["ma5"] == 39.08
     assert data["technical"]["ma_gap_5"] == 0.5
-    assert data["technical"]["rsi_14"] == 55.1
     assert data["volatility"]["vol_atr_14"] == 0.88
-    assert data["momentum"]["return_1d"] == 0.015
+    # 前瞻收益率标签（训练 Label）应被屏蔽，不作为特征输出
+    assert "return_1d" not in data["momentum"]
+    assert "return_1d" not in data["technical"]
 
 
 def test_batch_projected_features_from_features_daily(monkeypatch):

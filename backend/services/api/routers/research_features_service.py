@@ -64,7 +64,7 @@ _SYMBOL_RE = re.compile(r"^\d{6}\.(SH|SZ|BJ)$")
 # dt 为整数 YYYYMMDD；回看窗口用于裁剪分区扫描范围（约一个月）
 _DT_LOOKBACK = 100
 
-# 非因子列，不参与分类输出
+# 基础元数据列（不作为因子列参与任何处理）
 _META_COLUMNS = frozenset(
     {
         "symbol",
@@ -76,6 +76,23 @@ _META_COLUMNS = frozenset(
         "published_at",
         "rn",
         "close",
+    }
+)
+
+# 排除在全量分类输出之外的列（基础价格与前瞻收益率标签，最新日全为 None，不属于历史技术特征）
+_EXCLUDED_FROM_CATEGORIES = frozenset(
+    {
+        "open",
+        "high",
+        "low",
+        "volume",
+        "amount",
+        "return_1d",
+        "return_3d",
+        "return_5d",
+        "return_10d",
+        "return_20d",
+        "return_60d",
     }
 )
 
@@ -105,7 +122,7 @@ _COLUMN_EXPLICIT_CATEGORY: dict[str, str] = {
     "revenue_ttm": "valuation",
     "equity": "valuation",
     "annual_net_profit": "valuation",
-    # 技术指标
+    # 核心技术指标（均线、乖离率、超买超卖、动能）
     "ma5": "technical",
     "ma10": "technical",
     "ma20": "technical",
@@ -135,13 +152,6 @@ _COLUMN_EXPLICIT_CATEGORY: dict[str, str] = {
     "vol_std_20": "volatility",
     "vol_std_60": "volatility",
     "vol_atr_14": "volatility",
-    # 前瞻收益
-    "return_1d": "momentum",
-    "return_3d": "momentum",
-    "return_5d": "momentum",
-    "return_10d": "momentum",
-    "return_20d": "momentum",
-    "return_60d": "momentum",
 }
 
 # 因子列前缀 → 类别（按前缀长度降序匹配，长前缀优先）
@@ -418,7 +428,7 @@ def _build_payload(symbol: str, sources: dict[str, dict[str, Any]]) -> dict[str,
         available.append(view.removeprefix("qdb_"))
         default_category = _VIEW_DEFAULT_CATEGORY.get(view, "other")
         for column, value in row.items():
-            if column in _META_COLUMNS:
+            if column in _META_COLUMNS or column in _EXCLUDED_FROM_CATEGORIES:
                 continue
             category = _category_for(column, default_category)
             grouped[category][column] = _to_jsonable(value)
