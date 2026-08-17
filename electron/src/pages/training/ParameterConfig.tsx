@@ -122,39 +122,45 @@ export const ParameterConfig: React.FC<ParameterConfigProps> = ({
                   <div className="text-xs font-medium text-slate-600 flex items-center gap-1">
                     <TreePine size={12} /> 树模型
                   </div>
-                  <div className="grid grid-cols-2 gap-x-4 gap-y-1 pl-1">
+                  <div className="grid grid-cols-2 gap-x-4 gap-y-2 pl-1">
                     {MODEL_TYPE_OPTIONS.filter(m => m.category === 'tree').map(m => (
-                      <Checkbox key={m.value} value={m.value}>
-                        <Tooltip title={m.tooltip} placement="topLeft" overlayStyle={{ maxWidth: 360 }}>
-                          <span className="text-sm cursor-help border-b border-dashed border-slate-300">{m.label}</span>
-                        </Tooltip>
-                        <span className="text-xs text-slate-400 ml-1">{m.description}</span>
+                      <Checkbox key={m.value} value={m.value} className="!flex items-start">
+                        <div className="leading-snug pt-0.5">
+                          <Tooltip title={m.tooltip} placement="topLeft" overlayStyle={{ maxWidth: 360 }}>
+                            <span className="text-sm cursor-help border-b border-dashed border-slate-300 font-medium text-slate-700">{m.label}</span>
+                          </Tooltip>
+                          <span className="text-xs text-slate-400 ml-1.5">{m.description}</span>
+                        </div>
                       </Checkbox>
                     ))}
                   </div>
                   <div className="text-xs font-medium text-slate-600 flex items-center gap-1">
                     <Ruler size={12} /> 线性基线
                   </div>
-                  <div className="grid grid-cols-2 gap-x-4 gap-y-1 pl-1">
+                  <div className="grid grid-cols-2 gap-x-4 gap-y-2 pl-1">
                     {MODEL_TYPE_OPTIONS.filter(m => m.category === 'linear').map(m => (
-                      <Checkbox key={m.value} value={m.value}>
-                        <Tooltip title={m.tooltip} placement="topLeft" overlayStyle={{ maxWidth: 360 }}>
-                          <span className="text-sm cursor-help border-b border-dashed border-slate-300">{m.label}</span>
-                        </Tooltip>
-                        <span className="text-xs text-slate-400 ml-1">{m.description}</span>
+                      <Checkbox key={m.value} value={m.value} className="!flex items-start">
+                        <div className="leading-snug pt-0.5">
+                          <Tooltip title={m.tooltip} placement="topLeft" overlayStyle={{ maxWidth: 360 }}>
+                            <span className="text-sm cursor-help border-b border-dashed border-slate-300 font-medium text-slate-700">{m.label}</span>
+                          </Tooltip>
+                          <span className="text-xs text-slate-400 ml-1.5">{m.description}</span>
+                        </div>
                       </Checkbox>
                     ))}
                   </div>
                   <div className="text-xs font-medium text-slate-600 flex items-center gap-1">
                     <Cpu size={12} /> 深度学习
                   </div>
-                  <div className="grid grid-cols-2 gap-x-4 gap-y-1 pl-1">
+                  <div className="grid grid-cols-2 gap-x-4 gap-y-2 pl-1">
                     {MODEL_TYPE_OPTIONS.filter(m => m.category === 'deep_learning').map(m => (
-                      <Checkbox key={m.value} value={m.value}>
-                        <Tooltip title={m.tooltip} placement="topLeft" overlayStyle={{ maxWidth: 360 }}>
-                          <span className="text-sm cursor-help border-b border-dashed border-slate-300">{m.label}</span>
-                        </Tooltip>
-                        <span className="text-xs text-slate-400 ml-1">{m.description}</span>
+                      <Checkbox key={m.value} value={m.value} className="!flex items-start">
+                        <div className="leading-snug pt-0.5">
+                          <Tooltip title={m.tooltip} placement="topLeft" overlayStyle={{ maxWidth: 360 }}>
+                            <span className="text-sm cursor-help border-b border-dashed border-slate-300 font-medium text-slate-700">{m.label}</span>
+                          </Tooltip>
+                          <span className="text-xs text-slate-400 ml-1.5">{m.description}</span>
+                        </div>
                       </Checkbox>
                     ))}
                   </div>
@@ -266,16 +272,16 @@ export const ParameterConfig: React.FC<ParameterConfigProps> = ({
               <div className="text-xs text-slate-500">
                 display_name 用于模型管理页展示和训练结果命名，自动规则为“日期_T+N_模型维度_版本”。
               </div>
-              <div className="flex gap-2">
+              <div className="flex items-center gap-2">
                 <Input
                   value={displayName}
                   onChange={(event) => onDisplayNameChange(event.target.value, 'manual')}
                   placeholder={autoDisplayName}
-                  className="rounded-xl"
+                  className="rounded-xl flex-1"
                   maxLength={128}
                 />
                 <Button
-                  className="rounded-xl"
+                  className="rounded-xl flex-shrink-0"
                   onClick={() => onDisplayNameChange(autoDisplayName, 'auto')}
                 >
                   恢复自动
