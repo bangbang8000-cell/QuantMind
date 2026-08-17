@@ -17,6 +17,7 @@ import { OverviewTab } from '../components/OverviewTab';
 import { TagStrip } from '../components/TagStrip';
 import { ChartBacktestPanel, ChartBacktestData } from '../components/ChartBacktestPanel';
 import { FinancialsTab, ValuationTab, ChipFlowTab, MarginTab, SentimentTab, HoldersTab } from '../components/tabs/P2Tabs';
+import { NewsTab } from '../components/tabs/NewsTab';
 import { researchService } from '../../../services/researchService';
 
 const INDEX_OPTIONS = [
@@ -28,7 +29,7 @@ const INDEX_OPTIONS = [
 
 const SUBPLOT_META: Record<SubplotType, string> = { vol: 'VOL', macd: 'MACD', kdj: 'KDJ', rsi: 'RSI' };
 
-type InfoTab = 'overview' | 'financials' | 'valuation' | 'chipflow' | 'margin' | 'sentiment' | 'holders';
+type InfoTab = 'overview' | 'financials' | 'valuation' | 'chipflow' | 'margin' | 'sentiment' | 'holders' | 'news';
 
 const TAB_META: { id: InfoTab; label: string }[] = [
   { id: 'overview', label: '概况' },
@@ -38,6 +39,7 @@ const TAB_META: { id: InfoTab; label: string }[] = [
   { id: 'margin', label: '融资融券' },
   { id: 'sentiment', label: '技术形态' },
   { id: 'holders', label: '股东分红' },
+  { id: 'news', label: '个股资讯' },
 ];
 
 /** 日线重采样为周/月线 */
@@ -417,6 +419,7 @@ export default function StockTerminalPage() {
             {infoTab === 'margin' && selected && <MarginTab symbol={selected.symbol} />}
             {infoTab === 'sentiment' && selected && <SentimentTab symbol={selected.symbol} />}
             {infoTab === 'holders' && selected && <HoldersTab symbol={selected.symbol} />}
+            {infoTab === 'news' && selected && <NewsTab symbol={selected.symbol} />}
           </div>
         </motion.div>
       </div>

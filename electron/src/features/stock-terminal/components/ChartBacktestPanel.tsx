@@ -1,8 +1,8 @@
 /** P5 图表策略回测：表达式 DSL -> 跑回测 -> 买卖点+净值叠加 */
 
 import { useEffect, useRef, useState } from 'react';
-import { FlaskConical, Play, Loader2 } from 'lucide-react';
-import { Modal, Input, message } from 'antd';
+import { FlaskConical, Play, Loader2, Sparkles } from 'lucide-react';
+import { Modal, Input, message, Tooltip } from 'antd';
 import { stockTerminalService } from '../services/stockTerminalService';
 
 interface BacktestResult {
@@ -33,12 +33,29 @@ export function ChartBacktestPanel({ symbol, onResult }: Props) {
   const [open, setOpen] = useState(false);
   const [buyExpr, setBuyExpr] = useState(PRESETS[0].buy);
   const [sellExpr, setSellExpr] = useState(PRESETS[0].sell);
+  const [hint, setHint] = useState('');
   const [loading, setLoading] = useState(false);
+  const [aiLoading, setAiLoading] = useState(false);
   const [result, setResult] = useState<BacktestResult | null>(null);
   const timer = useRef<any>(null);
 
   // 关闭时清除叠加
   useEffect(() => () => { if (timer.current) clearTimeout(timer.current); onResult?.(null); }, [onResult]);
+
+  const aiGenerate = async () => {
+    if (!symbol) { message.warning('先选择股票'); return; }
+    setAiLoading(true);
+    try {
+      const r = await stockTerminalService.getAiBacktest(symbol, hint);
+      if (r.buy) setBuyExpr(r.buy);
+      if (r.sell) setSellExpr(r.sell);
+      if (r.llm_error) message.info(`AI 生成回退默认（${r.llm_error}），配置 LLM Key 后可用`);
+    } catch {
+      message.error('AI 生成失败');
+    } finally {
+      setAiLoading(false);
+    }
+  };
 
   const run = async () => {
     if (!symbol) { message.warning('先选择股票'); return; }
@@ -78,6 +95,24 @@ export function ChartBacktestPanel({ symbol, onResult }: Props) {
         destroyOnClose
       >
         <div className="flex flex-col gap-3">
+          <div className="flex items-center gap-2">
+            <Input
+              value={hint}
+              onChange={e => setHint(e.target.value)}
+              placeholder="AI 意图描述，如：底部放量突破"
+              className="text-xs"
+              onPressEnter={aiGenerate}
+            />
+            <Tooltip title="AI 基于命中标签+技术形态生成买卖表达式">
+              <button
+                onClick={aiGenerate}
+                disabled={aiLoading}
+                className="flex items-center gap-1 px-2 py-1 rounded-lg bg-violet-50 text-violet-600 border border-violet-100 text-[11px] font-bold hover:bg-violet-100 shrink-0 disabled:opacity-50"
+              >
+                <Sparkles className="w-3 h-3" /> {aiLoading ? '生成中…' : 'AI 生成'}
+              </button>
+            </Tooltip>
+          </div>
           <div className="flex flex-wrap gap-1">
             {PRESETS.map(p => (
               <button

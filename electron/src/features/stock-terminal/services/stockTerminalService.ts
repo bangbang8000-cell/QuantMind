@@ -120,6 +120,20 @@ class StockTerminalService {
     }
   }
 
+  async getNews(symbol: string): Promise<{ items: any[]; available: boolean }> {
+    try {
+      const resp = await this.client.get('/stock-terminal/news', { params: { symbol } });
+      return resp.data?.data ?? { items: [], available: false };
+    } catch {
+      return { items: [], available: false };
+    }
+  }
+
+  async getAiBacktest(symbol: string, hint = ''): Promise<any> {
+    const resp = await this.client.get('/stock-terminal/ai-backtest', { params: { symbol, hint }, timeout: 60000 });
+    return resp.data?.data;
+  }
+
   async getChartBacktest(symbol: string, buyExpr: string, sellExpr: string, days = 500): Promise<any> {
     const resp = await this.client.get('/stock-terminal/chart-backtest', {
       params: { symbol, buy_expr: buyExpr, sell_expr: sellExpr, days },

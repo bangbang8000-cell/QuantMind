@@ -587,6 +587,170 @@ async def chart_backtest(
     return {"success": True, "data": result}
 
 
+@router.get("/news")
+async def stock_news(
+    symbol: str = Query(...),
+    limit: int = Query(15, ge=1, le=50),
+    current_user: dict = Depends(get_current_user),
+):
+    """个股 RSS 资讯：Huntly SQLite immutable 只读快照 + 标题关键词检索。
+
+    不用 news.py 的共享 _list_articles_from_sqlite（mode=ro 会被 Huntly Java
+    写锁阻塞，PRAGMA 都拿不到读锁）；这里用 immutable=1 跳过锁协商直接读。
+    匹配字段限 title（全文 LIKE 太慢，1.4GB 库 2.9s/标题，正文会分钟级）。
+    """
+    _ = current_user
+    sym = symbol.upper().strip()
+    if not _SYMBOL_RE.match(sym):
+        raise HTTPException(status_code=400, detail=f"非法代码 {sym}")
+
+    import os as _os
+    import sqlite3 as _sq
+
+    huntly_db = _os.getenv("HUNTLY_SQLITE_PATH", "/data/huntly/db.sqlite")
+    if not _os.path.exists(huntly_db):
+        return {"success": True, "data": {"items": [], "total": 0, "available": False}}
+
+    code = sym.split(".")[0]
+    name = ""
+    try:
+        detail = pd.read_parquet(_quantdb_dir() / "2_base_sector" / "instrument_detail" / "instrument_detail.parquet",
+                                 columns=["Symbol", "Name"])
+        hit = detail[detail["Symbol"] == sym]
+        if not hit.empty:
+            name = str(hit.iloc[0]["Name"] or "").strip()
+    except Exception:  # noqa: BLE001
+        pass
+
+    keywords = [k for k in {code, name, name.replace(" ", "")} if k]
+    items: list[dict] = []
+    seen: set[int] = set()
+    try:
+        conn = _sq.connect(f"file:{huntly_db}?immutable=1", uri=True, timeout=3)
+        conn.row_factory = _sq.Row
+        for kw in keywords:
+            rows = conn.execute(
+                "SELECT id, title, url, updated_at, connector_id FROM page "
+                "WHERE title LIKE ? ORDER BY id DESC LIMIT ?",
+                (f"%{kw}%", limit),
+            ).fetchall()
+            for r in rows:
+                rid = r["id"]
+                if rid in seen:
+                    continue
+                seen.add(rid)
+                items.append({
+                    "id": rid,
+                    "title": r["title"],
+                    "link": r["url"],
+                    "published_at": str(r["updated_at"] or "")[:19],
+                    "source": str(r["connector_id"] or ""),
+                })
+        conn.close()
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("stock_news %s failed: %s", sym, exc)
+        return {"success": True, "data": {"items": items, "total": len(items), "available": False}}
+    items = items[:limit]
+    return {"success": True, "data": {"items": items, "total": len(items), "available": True}}
+
+
+@router.get("/ai-backtest")
+async def ai_backtest(
+    symbol: str = Query(...),
+    hint: str = Query("", description="用户提示词，如 '底部放量突破'"),
+    current_user: dict = Depends(get_current_user),
+):
+    """AI 生成策略表达式（利用命中标签+技术形态）-> 建议 buy/sell DSL 表达式。"""
+    _ = current_user
+    sym = symbol.upper().strip()
+    if not _SYMBOL_RE.match(sym):
+        raise HTTPException(status_code=400, detail=f"非法代码 {sym}")
+
+    from backend.services.engine.ai_strategy.provider_registry import get_provider
+
+    # 收集上下文：命中标签 + 最新技术指标
+    context_lines = []
+    try:
+        import asyncio as _aio
+
+        def _tags():
+            from backend.services.engine.data_platform import tag_rules
+
+            return tag_rules.match_tags_for_symbol(sym)
+
+        tags = await asyncio.to_thread(_tags)
+        context_lines.append("命中标签: " + ", ".join(t["name"] for t in tags[:10]))
+    except Exception:  # noqa: BLE001
+        pass
+    try:
+        ti = pd.read_parquet(_latest_partition(_quantdb_dir() / "5_technical_derived" / "technical_indicators"),
+                             columns=["symbol", "close", "ma5", "ma20", "rsi_14", "vol_to_ma5", "macd_hist"])
+        r = ti[ti["symbol"] == sym]
+        if not r.empty:
+            x = r.iloc[0]
+            context_lines.append(
+                f"最新收盘 {x.get('close'):.2f}, MA5 {x.get('ma5'):.2f}, MA20 {x.get('ma20'):.2f}, "
+                f"RSI14 {x.get('rsi_14'):.1f}, 量比MA5 {x.get('vol_to_ma5'):.2f}, MACD柱 {x.get('macd_hist'):.4f}"
+            )
+    except Exception:  # noqa: BLE001
+        pass
+
+    prompt = (
+        "你是 A 股量化策略专家。给定个股 {sym} 的状态，生成一套简单均线/指标策略的买卖条件表达式。\n"
+        "可用函数: MA(CLOSE,N), EMA(CLOSE,N), RSI(CLOSE,14), HHV(HIGH,N), LLV(LOW,N), "
+        "REF(X,N), CROSSUP(A,B), CROSSDOWN(A,B), CROSS(A,B), AND(A,B), OR(A,B), NOT(A)\n"
+        "变量: CLOSE, OPEN, HIGH, LOW, VOLUME\n"
+        "上下文:\n{ctx}\n用户意图: {hint}\n\n"
+        "只输出 JSON: {{\"buy\": \"...\", \"sell\": \"...\", \"name\": \"策略名\"}}，不要其他文字。"
+    ).format(sym=sym, ctx="\n".join(context_lines) or "无", hint=hint or "通用趋势策略")
+
+    try:
+        # 系统配置了 DEEPSEEK_API_KEY 时优先用 deepseek（qwen 无 key 会 401）
+        import os as _os2
+
+        provider_name = "deepseek" if _os2.getenv("DEEPSEEK_API_KEY") else None
+        provider = get_provider(provider_name)
+        import json as _json
+
+        resp = await provider.chat([
+            {"role": "system", "content": "你是严谨的量化策略专家，只输出 JSON。"},
+            {"role": "user", "content": prompt},
+        ])
+        text = resp if isinstance(resp, str) else (resp.get("content") or str(resp))
+        # 提取 JSON
+        start = text.find("{")
+        end = text.rfind("}") + 1
+        parsed = _json.loads(text[start:end]) if start >= 0 and end > start else {}
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("ai-backtest llm failed: %s", exc)
+        return {"success": True, "data": {
+            "buy": "CROSSUP(MA(CLOSE,5),MA(CLOSE,20))",
+            "sell": "CROSSDOWN(MA(CLOSE,5),MA(CLOSE,20))",
+            "name": f"AI默认-{sym}",
+            "llm_error": str(exc),
+        }}
+
+    # 校验表达式能编译
+    from backend.services.engine.data_platform import expr_engine as _ee
+
+    buy_expr = str(parsed.get("buy") or "").strip()
+    sell_expr = str(parsed.get("sell") or "").strip()
+    try:
+        _ee.compile_expr(buy_expr)
+    except Exception as exc:  # noqa: BLE001
+        return {"success": True, "data": {
+            "buy": "CROSSUP(MA(CLOSE,5),MA(CLOSE,20))", "sell": sell_expr,
+            "name": str(parsed.get("name") or "AI策略"),
+            "llm_error": f"买入表达式无法编译: {exc}",
+        }}
+    return {"success": True, "data": {
+        "buy": buy_expr,
+        "sell": sell_expr or "",
+        "name": str(parsed.get("name") or "AI策略"),
+        "llm_error": None,
+    }}
+
+
 @router.get("/minute")
 async def stock_minute_kline(
     symbol: str = Query(...),
