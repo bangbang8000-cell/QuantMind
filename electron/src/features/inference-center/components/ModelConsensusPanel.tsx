@@ -5,11 +5,14 @@ import { Layers, ShieldCheck, CheckCircle2, TrendingUp, Inbox } from 'lucide-rea
 interface ModelConsensusPanelProps {
   consensus: ModelConsensusItem[];
   consensusScore: number;
+  /** 用户自选的共识模型数量（0=自动取当日全部） */
+  selectedCount?: number;
 }
 
 export const ModelConsensusPanel: React.FC<ModelConsensusPanelProps> = ({
   consensus,
   consensusScore,
+  selectedCount = 0,
 }) => {
   const getRatingBadge = (rating: string) => {
     switch (rating) {
@@ -44,19 +47,40 @@ export const ModelConsensusPanel: React.FC<ModelConsensusPanelProps> = ({
         </div>
       </div>
 
+      {selectedCount > 0 && consensus.length > 0 && (
+        <div className="flex items-center gap-1 text-[10px] text-slate-400 -mt-1 mb-1">
+          <span className="font-bold text-violet-600">自选模式</span>
+          <span>已匹配 {consensus.length}/{selectedCount} 个模型当日分数</span>
+        </div>
+      )}
+
       <div className="grid grid-cols-2 gap-3 flex-1 min-h-0 overflow-y-auto">
         {consensus.length === 0 ? (
-          <div className="col-span-2 flex flex-col items-center justify-center gap-2 py-8 text-center">
-            <div className="w-10 h-10 rounded-xl bg-slate-50 border border-slate-100 flex items-center justify-center text-slate-300">
-              <Inbox className="w-5 h-5" />
+          selectedCount > 0 ? (
+            <div className="col-span-2 flex flex-col items-center justify-center gap-2 py-8 text-center">
+              <div className="w-10 h-10 rounded-xl bg-amber-50 border border-amber-100 flex items-center justify-center text-amber-400">
+                <Inbox className="w-5 h-5" />
+              </div>
+              <p className="text-xs font-semibold text-slate-500 m-0">所选 {selectedCount} 个模型当日均无持久化分数</p>
+              <p className="text-[11px] text-slate-400 m-0 leading-relaxed max-w-[260px]">
+                自选共识只显示选定模型在基准日的真实推理分数。
+                <br />
+                可调整基准日、更换所选模型，或清空选择恢复自动模式。
+              </p>
             </div>
-            <p className="text-xs font-semibold text-slate-500 m-0">暂无多模型共识数据</p>
-            <p className="text-[11px] text-slate-400 m-0 leading-relaxed max-w-[240px]">
-              该标的在所选基准日未匹配到多个模型的持久化推理分数。
-              <br />
-              可切换模型或基准日重试，或改用其他标的。
-            </p>
-          </div>
+          ) : (
+            <div className="col-span-2 flex flex-col items-center justify-center gap-2 py-8 text-center">
+              <div className="w-10 h-10 rounded-xl bg-slate-50 border border-slate-100 flex items-center justify-center text-slate-300">
+                <Inbox className="w-5 h-5" />
+              </div>
+              <p className="text-xs font-semibold text-slate-500 m-0">暂无多模型共识数据</p>
+              <p className="text-[11px] text-slate-400 m-0 leading-relaxed max-w-[240px]">
+                该标的在所选基准日未匹配到多个模型的持久化推理分数。
+                <br />
+                可切换模型或基准日重试，或改用其他标的。
+              </p>
+            </div>
+          )
         ) : (
           consensus.map((item, idx) => (
             <div

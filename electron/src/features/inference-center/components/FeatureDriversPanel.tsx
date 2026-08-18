@@ -4,9 +4,11 @@ import { ArrowUpRight, ArrowDownRight, Zap, ShieldAlert, Sparkles, Inbox } from 
 
 interface FeatureDriversPanelProps {
   drivers: FeatureDriverItem[];
+  /** 'shap'=真·模型SHAP归因 | 'heuristic'=特征启发式系数 */
+  source?: 'shap' | 'heuristic';
 }
 
-export const FeatureDriversPanel: React.FC<FeatureDriversPanelProps> = ({ drivers }) => {
+export const FeatureDriversPanel: React.FC<FeatureDriversPanelProps> = ({ drivers, source }) => {
   const positiveDrivers = drivers.filter(d => d.direction === 'positive' || d.impact > 0);
   const negativeDrivers = drivers.filter(d => d.direction === 'negative' || d.impact < 0);
 
@@ -22,9 +24,18 @@ export const FeatureDriversPanel: React.FC<FeatureDriversPanelProps> = ({ driver
             <p className="text-[11px] text-slate-400 m-0">驱动未来预测得分的核心正负向特征</p>
           </div>
         </div>
-        <span className="text-[11px] text-indigo-600 font-semibold bg-indigo-50 px-2 py-0.5 rounded-md">
-          Top {drivers.length} 核心因子
-        </span>
+        <div className="flex items-center gap-1.5">
+          {source === 'shap' ? (
+            <span className="text-[11px] font-bold text-indigo-600 bg-indigo-50 px-2 py-0.5 rounded-md border border-indigo-100">
+              模型 SHAP 归因
+            </span>
+          ) : (
+            <span className="text-[11px] font-semibold text-slate-400 bg-slate-50 px-2 py-0.5 rounded-md border border-slate-200">
+              特征启发式
+            </span>
+          )}
+          <span className="text-[11px] text-slate-400 font-mono">Top {drivers.length}</span>
+        </div>
       </div>
 
       <div className="grid grid-cols-2 gap-4 flex-1 min-h-0 overflow-y-auto">

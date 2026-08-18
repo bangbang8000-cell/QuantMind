@@ -213,6 +213,7 @@ export const InferenceCenterPage: React.FC = () => {
   const [modelCategoryFilter, setModelCategoryFilter] = useState<'all' | 'dl' | 'tree' | 'ensemble'>('all');
   const [horizon, setHorizon] = useState<number>(5);
   const [inferenceDate, setInferenceDate] = useState<dayjs.Dayjs | null>(dayjs());
+  const [consensusModelIds, setConsensusModelIds] = useState<string[]>([]);
   const [loading, setLoading] = useState(false);
 
   // 数据展示状态
@@ -317,6 +318,7 @@ export const InferenceCenterPage: React.FC = () => {
         date: dateStr,
         horizon: hor,
         market: currentMarket,
+        consensus_model_ids: consensusModelIds.length ? consensusModelIds : undefined,
       });
 
       if (res && res.status === 'success') {
@@ -329,7 +331,7 @@ export const InferenceCenterPage: React.FC = () => {
     } finally {
       setLoading(false);
     }
-  }, [symbol, selectedModelId, horizon, inferenceDate, currentMarket]);
+  }, [symbol, selectedModelId, horizon, inferenceDate, currentMarket, consensusModelIds]);
 
   const getRatingBadge = (rating: string) => {
     switch (rating) {
@@ -436,6 +438,25 @@ export const InferenceCenterPage: React.FC = () => {
               onChange={d => setInferenceDate(d)}
               style={{ width: '100%', height: 32, borderRadius: 8 }}
               allowClear={false}
+            />
+          </div>
+
+          {/* 3.5 共识模型多选（最多4个，留空=当日全部） */}
+          <div className="flex flex-col gap-1">
+            <span className="text-[11px] font-bold text-slate-500 flex items-center gap-1">
+              <Layers className="w-3 h-3 text-violet-500" /> 共识模型 (最多4个)
+            </span>
+            <Select
+              mode="multiple"
+              maxCount={4}
+              allowClear
+              placeholder="留空 = 当日全部有分数模型"
+              value={consensusModelIds}
+              onChange={vals => setConsensusModelIds(vals || [])}
+              style={{ width: '100%' }}
+              options={models.map(m => ({ label: m.modelName, value: m.modelId }))}
+              optionFilterProp="label"
+              maxTagTextLength={6}
             />
           </div>
         </div>
@@ -646,8 +667,12 @@ export const InferenceCenterPage: React.FC = () => {
 
           {/* 下半部：单股因子归因 (左) + 多模型共识 (右) */}
           <div className="grid grid-cols-1 lg:grid-cols-2 gap-3.5" style={{ minHeight: '250px' }}>
-            <FeatureDriversPanel drivers={prediction.drivers} />
-            <ModelConsensusPanel consensus={prediction.consensus} consensusScore={prediction.consensus_score} />
+            <FeatureDriversPanel drivers={prediction.drivers} source={prediction.drivers_source} />
+            <ModelConsensusPanel
+              consensus={prediction.consensus}
+              consensusScore={prediction.consensus_score}
+              selectedCount={consensusModelIds.length}
+            />
           </div>
         </div>
       </div>
