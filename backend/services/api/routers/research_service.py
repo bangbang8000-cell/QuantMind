@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 import math
@@ -1322,6 +1323,164 @@ async def get_stock_kline(symbol: str, days: int) -> dict[str, Any]:
     return payload
 
 
+# ---- 真·SHAP 单因子归因（树模型原生 pred_contrib，不依赖 shap 库） ----
+_SHAP_TREE_FRAMEWORKS = {"lightgbm", "xgboost", "catboost"}
+_SHAP_TIMEOUT_SEC = 8.0
+_SHAP_MAX_DRIVERS = 6
+_SHAP_MIN_DRIVERS = 3  # 真值特征少于 3 个上榜则放弃 SHAP，降级启发式
+
+_SNAPSHOT_MARKET_FILE = {
+    "CN": None,  # CN 按年分文件 model_features_{year}.parquet
+    "HK": "model_features_hk.parquet",
+    "US": "model_features_us.parquet",
+    "CRYPTO": "model_features_crypto.parquet",
+    "FUTURES": "model_features_futures.parquet",
+}
+
+
+def _resolve_snapshot_parquet(market: str, year: int):
+    """特征快照 parquet 路径（CN 按年，其他市场单文件）。找不到返回 None。"""
+    from pathlib import Path
+
+    base = Path(os.getenv("MODEL_TRAINING_DATA_DIR", "/app/db/feature_snapshots"))
+    name = _SNAPSHOT_MARKET_FILE.get(market)
+    if market == "CN":
+        name = f"model_features_{year}.parquet"
+    if not name:
+        return None
+    p = base / name
+    return p if p.exists() else None
+
+
+def _snapshot_symbol(market: str, normalized_symbol: str) -> str:
+    """快照 parquet 的 symbol 口径：CN 为无前缀 6 位码（SH600519 -> 600519）。"""
+    if market == "CN" and normalized_symbol[:2] in ("SH", "SZ", "BJ"):
+        return normalized_symbol[2:]
+    return normalized_symbol
+
+
+def _compute_shap_drivers_sync(
+    model_id: str, normalized_symbol: str, as_of_date_str: str, market: str
+) -> list[dict[str, Any]] | None:
+    """加载 headline 树模型 + 该标的快照真实特征，原生 pred_contrib 取 |SHAP| top6。
+
+    设计要点：
+    - 缺失特征（如 gtja_alpha_* qlib 表达式因子不落盘）按训练时 fill_values 补齐入模，
+      但不参与 top6 排名——保证上榜因子全部为真实快照值。
+    - 任何一步失败返回 None（调用方降级启发式因子）。
+    """
+    import glob as _glob
+    from pathlib import Path
+
+    metas = _glob.glob(f"/app/models/users/*/*/{model_id}/metadata.json")
+    if not metas:
+        return None
+    try:
+        meta = json.load(open(metas[0], encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return None
+    framework = str(meta.get("framework") or "").lower()
+    if framework not in _SHAP_TREE_FRAMEWORKS:
+        return None
+    feat_cols = list(meta.get("feature_columns") or [])
+    if len(feat_cols) < 4:
+        return None
+
+    try:
+        d_ref = date.fromisoformat(as_of_date_str)
+    except (ValueError, TypeError):
+        d_ref = date.today()
+    snap = _resolve_snapshot_parquet(market, d_ref.year)
+    if snap is None:
+        return None
+    sym = _snapshot_symbol(market, normalized_symbol)
+
+    import numpy as np
+    import pandas as pd
+    import pyarrow.parquet as pq
+
+    schema = set(pq.read_schema(snap).names)
+    avail = [c for c in feat_cols if c in schema]
+    if not avail:
+        return None
+    try:
+        tbl = pq.read_table(
+            snap, columns=["symbol", "trade_date"] + avail,
+            filters=[("symbol", "=", sym)],
+        )
+        df = tbl.to_pandas()
+    except Exception:
+        return None
+    if df.empty:
+        return None
+    df = df[df["trade_date"].astype(str) <= as_of_date_str]
+    if df.empty:
+        return None
+    row = df.sort_values("trade_date").iloc[-1]
+
+    fill_values: dict[str, Any] = meta.get("fill_values") or {}
+    x = np.array(
+        [
+            [
+                float(row[c])
+                if (c in avail and pd.notna(row.get(c)))
+                else float(fill_values.get(c, 0.0) or 0.0)
+                for c in feat_cols
+            ]
+        ],
+        dtype=np.float64,
+    )
+    # 仅真实快照值参与排名（fill 的 qlib 表达式因子不进 top6）
+    real_cols = {c for c in avail if pd.notna(row.get(c))}
+
+    model_file = Path(metas[0]).parent / str(meta.get("model_file") or "")
+    if not model_file.exists():
+        return None
+    try:
+        if framework == "lightgbm":
+            import lightgbm as lgb
+
+            booster = lgb.Booster(model_file=str(model_file))
+            contrib = booster.predict(x, pred_contrib=True)  # (n, n_features+1)
+        elif framework == "xgboost":
+            import xgboost as xgb
+
+            booster = xgb.Booster()
+            booster.load_model(str(model_file))
+            contrib = booster.predict(
+                xgb.DMatrix(x, feature_names=feat_cols), pred_contribs=True
+            )
+        else:  # catboost
+            from catboost import CatBoost, Pool
+
+            booster = CatBoost()
+            booster.load_model(str(model_file))
+            contrib = booster.get_feature_importance(
+                Pool(x, feature_names=feat_cols), type="ShapValues"
+            )  # (n, n_features+1)
+        shap_vals = np.asarray(contrib, dtype=float)
+        if shap_vals.ndim != 2 or shap_vals.shape[1] < len(feat_cols):
+            return None
+        shap_vals = shap_vals[0, : len(feat_cols)]  # 末列 base value 丢弃
+    except Exception:
+        return None
+
+    order = sorted(range(len(feat_cols)), key=lambda i: -abs(float(shap_vals[i])))
+    picked = [i for i in order if feat_cols[i] in real_cols][:_SHAP_MAX_DRIVERS]
+    if len(picked) < _SHAP_MIN_DRIVERS:
+        return None
+    return [
+        {
+            "name": feat_cols[i],
+            "category": "模型SHAP",
+            "value": round(float(x[0, i]), 4),
+            "impact": round(float(shap_vals[i]), 5),
+            "direction": "positive" if float(shap_vals[i]) >= 0 else "negative",
+        }
+        for i in picked
+    ]
+
+
 async def predict_single_stock(
     tid: str,
     uid: str,
@@ -1372,7 +1531,7 @@ async def predict_single_stock(
             # vol_atr_14 为绝对价格 ATR。优先 vol_std，回退 ATR/close
             vol_std = float(row[3] or 0.0)
             atr = float(row[4] or 0.0)
-            ma_gap_5 = float(row[5] or 0.0)
+            _ma_gap_5_unused = float(row[5] or 0.0)  # row[5]=ma_gap_5，仅保位（SELECT 按位取值）
             ma_gap_20 = float(row[6] or 0.0)
             main_flow = float(row[7] or 0.0) or 0.0
             if vol_std and vol_std > 0.3:
@@ -1434,17 +1593,32 @@ async def predict_single_stock(
     resolved_date = latest_date
     main_row = None
     consensus_rows: list[Any] = []
+    # 自选共识成员（截取前 4 个）；None/空 = 自动取当日全部有分数模型
+    selected_set = {m for m in (consensus_model_ids or [])[:4] if m}
     if score_rows:
-        resolved_date = str(score_rows[0]["trade_date"])
+        if selected_set:
+            # 选定模型可能有分数的最近交易日（score_rows 已按 trade_date DESC 排序）
+            sel_rows = [
+                r for r in score_rows if (r["run_model_id"] or r["run_id"]) in selected_set
+            ]
+            if sel_rows:
+                resolved_date = str(sel_rows[0]["trade_date"])
+        else:
+            resolved_date = str(score_rows[0]["trade_date"])
         day_rows = [r for r in score_rows if str(r["trade_date"]) == resolved_date]
-        # 主预测：选中模型当日分数，否则当日 fusion_score 最高
+        pool = (
+            [r for r in day_rows if (r["run_model_id"] or r["run_id"]) in selected_set]
+            if selected_set
+            else day_rows
+        )
+        # 主预测：选中模型当日分数，否则当日 fusion_score 最高（自选时回退限定在所选集合内）
         if model_id:
             main_row = next((r for r in day_rows if r["run_model_id"] == model_id), None)
-        if main_row is None and day_rows:
-            main_row = max(day_rows, key=lambda r: float(r["fusion_score"] or 0.0))
+        if main_row is None and pool:
+            main_row = max(pool, key=lambda r: float(r["fusion_score"] or 0.0))
         # 共识：当日各模型去重（同模型多 run 取 fusion 最高）
         seen: set[str] = set()
-        for r in sorted(day_rows, key=lambda x: float(x["fusion_score"] or 0.0), reverse=True):
+        for r in sorted(pool, key=lambda x: float(x["fusion_score"] or 0.0), reverse=True):
             mid = r["run_model_id"] or r["run_id"]
             if mid in seen:
                 continue
@@ -1546,6 +1720,28 @@ async def predict_single_stock(
         rating = "HOLD"
         data_source = "fallback"
 
+    # 5.5 真·SHAP 单因子归因：headline 为树模型(lgb/xgb/catboost)时用原生 pred_contrib
+    # 替换启发式因子；to_thread+wait_for 隔离，失败/超时降级启发式（predict-stock-hang-fix 教训）
+    drivers_source = "heuristic"
+    if data_source == "persisted":
+        try:
+            shap_drivers = await asyncio.wait_for(
+                asyncio.to_thread(
+                    _compute_shap_drivers_sync,
+                    chosen_model_id,
+                    normalized_symbol,
+                    resolved_date,
+                    market,
+                ),
+                timeout=_SHAP_TIMEOUT_SEC,
+            )
+        except Exception as e:
+            shap_drivers = None
+            logger.warning("SHAP 归因失败，降级启发式因子: %s", e)
+        if shap_drivers:
+            drivers = shap_drivers
+            drivers_source = "shap"
+
     p50_ret = round(fusion_score, 4)
     # 分位数锥：真实波动率推导（z=1.28 → 80% 区间 → 10/90 分位）
     horizon_vol = daily_vol_pct * (horizon ** 0.5)
@@ -1628,6 +1824,7 @@ async def predict_single_stock(
         "consensus": consensus,
         "consensus_score": consensus_score,
         "data_source": data_source,
+        "drivers_source": drivers_source,
         "error": None,
     }
     return {"code": 200, "data": payload_data}

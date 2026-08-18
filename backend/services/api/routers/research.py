@@ -195,5 +195,6 @@ async def predict_single_stock(
         target_date=req.date,
         horizon=req.horizon,
         market=req.market,
+        consensus_model_ids=req.consensus_model_ids,
     )
 
