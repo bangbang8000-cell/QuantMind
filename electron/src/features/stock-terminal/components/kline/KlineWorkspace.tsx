@@ -494,10 +494,6 @@ export function KlineWorkspace({ stock, profile, height = 460, onSelectStock }: 
                 参考线
               </Button>
             </Tooltip>
-            <ChartBacktestPanel symbol={stock.symbol} onResult={setBtData} />
-            <KlineReplay active={replayActive} onToggle={() => { setReplayActive(!replayActive); setReplayCursor(0.5); setReplayPlaying(false); }}
-              cursor={replayCursor} onCursor={setReplayCursor} playing={replayPlaying} onPlaying={setReplayPlaying}
-              speed={replaySpeed} onSpeed={setReplaySpeed} totalBars={bars.length} cursorIndex={visibleBars.length} />
           </div>
         </div>
         <div className="flex items-center gap-1.5">
@@ -538,6 +534,14 @@ export function KlineWorkspace({ stock, profile, height = 460, onSelectStock }: 
               icon={<ArrowLeftRight className="w-3.5 h-3.5 text-slate-500" />} />
           </Tooltip>
         </div>
+      </div>
+
+      {/* 第二行：策略回测 + 回放 */}
+      <div className="flex items-center gap-2 px-3 py-1 border-b border-slate-100 shrink-0">
+        <ChartBacktestPanel symbol={stock.symbol} onResult={setBtData} />
+        <KlineReplay active={replayActive} onToggle={() => { setReplayActive(!replayActive); setReplayCursor(0.5); setReplayPlaying(false); }}
+          cursor={replayCursor} onCursor={setReplayCursor} playing={replayPlaying} onPlaying={setReplayPlaying}
+          speed={replaySpeed} onSpeed={setReplaySpeed} totalBars={bars.length} cursorIndex={visibleBars.length} />
       </div>
 
       {/* 信息条：当前分数 / 排名 / 策略统计 / 大盘状态（同推理研究 K 线） */}
@@ -581,7 +585,7 @@ export function KlineWorkspace({ stock, profile, height = 460, onSelectStock }: 
             <TrendingUp className="w-4 h-4 animate-pulse text-blue-400" /> 加载 K 线数据…
           </div>
         ) : bars.length ? (
-          <KlineChart bars={visibleBars} config={config} overlays={overlays} height={height} signals={signalOn ? signals : []} btEquity={btData?.points ?? []} scoreSeries={activeScoreSeries} alerts={strategyAlerts} trades={trades} refLines={refLines} onBarClick={(bar) => setTradeModal({ bar })} />
+          <KlineChart bars={visibleBars} config={config} overlays={overlays} height={height - 30} signals={signalOn ? signals : []} btEquity={btData?.points ?? []} scoreSeries={activeScoreSeries} alerts={strategyAlerts} trades={trades} refLines={refLines} onBarClick={(bar) => setTradeModal({ bar })} />
         ) : (
           <div className="h-full flex flex-col items-center justify-center gap-2 text-slate-400">
             <Activity className="w-8 h-8 opacity-40" />
