@@ -178,10 +178,10 @@ export function TagStrip({ symbol, onSelectStock, vertical = false, onSelectTag,
         {!tags.length && <span className="text-[10px] text-slate-400">选择股票后自动匹配智能标签</span>}
       </div>
       {presets.length > 0 && (
-        <div className="flex flex-col gap-0.5 shrink-0 max-w-[220px] border-l border-slate-100 pl-2">
-          <span className="text-[9px] text-slate-400 font-bold">命中组合</span>
+        <div className="flex flex-wrap items-center gap-1 shrink-0 border-l border-slate-100 pl-2 max-w-[420px]">
+          <span className="text-[9px] text-slate-400 font-bold shrink-0">命中组合</span>
           {presets.map(p => (
-            <span key={p.id} className="truncate px-1.5 py-0.5 rounded-md bg-blue-50 text-blue-600 border border-blue-100 text-[10px] font-bold">
+            <span key={p.id} className="shrink-0 whitespace-nowrap px-1.5 py-0.5 rounded-md bg-blue-50 text-blue-600 border border-blue-100 text-[10px] font-bold">
               {p.name}
             </span>
           ))}

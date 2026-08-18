@@ -39,6 +39,8 @@ class StockTerminalService {
     index_code?: string;
     page?: number;
     page_size?: number;
+    /** 附带各筛选下拉选项的命中数（option_counts） */
+    with_counts?: boolean;
   }): Promise<StockListResponse> {
     const resp = await this.client.get('/stock-terminal/list', { params });
     return resp.data?.data ?? { total: 0, page: 1, page_size: 100, trade_date: '', items: [] };

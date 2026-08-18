@@ -912,6 +912,38 @@ def _index_members(index_code: str) -> set[str]:
         return set()
 
 
+# 筛选面板选项（与前端 StockFilterPanel 保持一致）
+BOARD_OPTIONS = ["沪市主板", "深市主板", "科创板", "创业板", "北交所"]
+CAP_TIER_OPTIONS = [
+    {"value": "微盘", "label": "微盘 <30亿"},
+    {"value": "小盘", "label": "小盘 30-100亿"},
+    {"value": "中盘", "label": "中盘 100-300亿"},
+    {"value": "大盘", "label": "大盘 300-1000亿"},
+    {"value": "超大盘", "label": "超大盘 >1000亿"},
+]
+TREND_OPTIONS = [
+    {"value": "连续上升", "label": "连续上升"},
+    {"value": "连续下降", "label": "连续下降"},
+    {"value": "先升后降", "label": "先升后降 · 最佳买点"},
+    {"value": "上升", "label": "单日上升"},
+    {"value": "下降", "label": "单日下降"},
+    {"value": "持平", "label": "持平"},
+]
+
+
+def _cap_mask(mv: pd.Series, tier: str) -> pd.Series:
+    """市值档布尔掩码（与 _cap_tier_of 同阈值）。"""
+    if tier == "微盘":
+        return mv < 30
+    if tier == "小盘":
+        return (mv >= 30) & (mv < 100)
+    if tier == "中盘":
+        return (mv >= 100) & (mv < 300)
+    if tier == "大盘":
+        return (mv >= 300) & (mv < 1000)
+    return mv >= 1000
+
+
 def _cap_tier_of(mv_yi) -> str:
     """市值分档（亿元）：同推理研究阈值。"""
     mv = _safe_f(mv_yi)
@@ -933,7 +965,7 @@ async def _trend_map(model: str | None) -> dict[str, str]:
     from sqlalchemy import text as _txt
 
     async with get_session() as session:
-        mwhere = "AND model_version = :m" if model else ""
+        mwhere = "AND run_id IN (SELECT run_id FROM qm_model_inference_runs WHERE model_id = :m)" if model else ""
         mparams: dict = {"m": model} if model else {}
         dates = [
             r[0]  # date 对象（asyncpg 需 date 类型绑定；显示用 str）
@@ -1000,7 +1032,7 @@ async def list_stocks(
     q: str | None = Query(None, description="代码/名称模糊检索"),
     only_st: bool = Query(False, description="仅 ST 股"),
     date: str | None = Query(None, description="推理分数基准日 YYYY-MM-DD，缺省=最近有分数日"),
-    model: str | None = Query(None, description="推理模型（model_version），缺省=全部模型融合"),
+    model: str | None = Query(None, description="推理模型（qm_model_inference_runs.model_id），缺省=全部模型融合"),
     score_min: float | None = Query(None, description="推理分数下限（fusion_score）"),
     score_max: float | None = Query(None, description="推理分数上限"),
     only_signaled: bool = Query(False, description="仅 BUY/SELL（排除 HOLD）"),
@@ -1010,6 +1042,7 @@ async def list_stocks(
     trend: str | None = Query(None, description="分数趋势：连续上升/连续下降/先升后降/上升/下降/持平"),
     tag: str | None = Query(None, description="智能标签 id（tag_rules）"),
     index_code: str | None = Query(None, description="宽基指数成分过滤（index_weights parquet 名）"),
+    with_counts: bool = Query(False, description="附带筛选下拉的选项命中数（option_counts）"),
     page: int = Query(1, ge=1),
     page_size: int = Query(100, ge=10, le=6000),
     current_user: dict = Depends(get_current_user),
@@ -1031,26 +1064,12 @@ async def list_stocks(
         members = _concept_members(concept)
         if members:
             df = df[df["Symbol"].isin(members)]
-    if board:
-        df = df[df["board"] == board]
     if index_code:
         members = _index_members(index_code)
         if members:
             df = df[df["Symbol"].isin(members)]
         else:
             df = df.iloc[0:0]
-    if cap_tier:
-        mv = pd.to_numeric(df["Zsz"], errors="coerce")
-        if cap_tier == "微盘":
-            df = df[mv < 30]
-        elif cap_tier == "小盘":
-            df = df[(mv >= 30) & (mv < 100)]
-        elif cap_tier == "中盘":
-            df = df[(mv >= 100) & (mv < 300)]
-        elif cap_tier == "大盘":
-            df = df[(mv >= 300) & (mv < 1000)]
-        elif cap_tier == "超大盘":
-            df = df[mv >= 1000]
     if tag:
         try:
             from backend.services.engine.data_platform.tag_rules import stocks_for_tag
@@ -1064,12 +1083,32 @@ async def list_stocks(
         except Exception as exc:  # noqa: BLE001
             logger.warning("tag filter %s failed: %s", tag, exc)
 
+    # 维度筛选（board/cap_tier/trend/model/分数档）前的快照，供 option_counts 统计：
+    # 其余已选条件（市场/行业/概念/检索/ST/宽基/标签）保持生效
+    base_df = df.copy()
+    if board:
+        df = df[df["board"] == board]
+    if cap_tier:
+        mv = pd.to_numeric(df["Zsz"], errors="coerce")
+        if cap_tier == "微盘":
+            df = df[mv < 30]
+        elif cap_tier == "小盘":
+            df = df[(mv >= 30) & (mv < 100)]
+        elif cap_tier == "中盘":
+            df = df[(mv >= 100) & (mv < 300)]
+        elif cap_tier == "大盘":
+            df = df[(mv >= 300) & (mv < 1000)]
+        elif cap_tier == "超大盘":
+            df = df[mv >= 1000]
+
     # 推理分数叠加（engine_signal_scores）：默认最近有分数交易日单日，分数降序
     score_info: dict[str, dict] = {}
     _signal_date = None
     try:
         from datetime import date as _date2
 
+        mwhere = "AND run_id IN (SELECT run_id FROM qm_model_inference_runs WHERE model_id = :m)" if model else ""
+        mparams: dict = {"m": model} if model else {}
         params: dict = {}
         if date:
             _signal_date = _date2.fromisoformat(date)
@@ -1081,10 +1120,11 @@ async def list_stocks(
                 _d0 = (
                     await session.execute(
                         _txt(
-                            "SELECT trade_date FROM engine_signal_scores "
-                            "WHERE tenant_id='default' GROUP BY trade_date "
-                            "ORDER BY trade_date DESC LIMIT 1"
-                        )
+                            "SELECT trade_date FROM engine_signal_scores e "
+                            f"WHERE e.tenant_id='default' {mwhere} "
+                            "GROUP BY trade_date ORDER BY trade_date DESC LIMIT 1"
+                        ),
+                        mparams,
                     )
                 ).scalar_one_or_none()
             latest = _d0
@@ -1093,7 +1133,9 @@ async def list_stocks(
             where = "tenant_id = 'default' AND trade_date = :d"
             params: dict = {"d": latest}
             if model:
-                where += " AND model_version = :m"
+                # model_version 列恒为 'inference_script'（历史遗留），真实模型标识
+                # 在 qm_model_inference_runs.model_id，按 run_id 关联过滤
+                where += " AND run_id IN (SELECT run_id FROM qm_model_inference_runs WHERE model_id = :m)"
                 params["m"] = model
             if score_min is not None:
                 where += " AND fusion_score >= :smin"
@@ -1124,6 +1166,14 @@ async def list_stocks(
     except Exception as exc:  # noqa: BLE001
         logger.warning("signal scores for list failed: %s", exc)
 
+    # 选了具体模型：只保留该模型有分数的股票（score_info 即该模型的当日分数）；
+    # 模型在该信号日无分数则返回空集，不能静默回退成全市场
+    if model:
+        if score_info:
+            df = df[df["Symbol"].str.split(".").str[0].isin(score_info.keys())]
+        else:
+            df = df.iloc[0:0]
+
     if score_info:
         df["_code"] = df["Symbol"].str.split(".").str[0]
         df["_fusion"] = df["_code"].map(lambda c: (score_info.get(c) or {}).get("fusion"))
@@ -1146,10 +1196,119 @@ async def list_stocks(
             logger.warning("trend map failed: %s", exc)
     if trend and trend_map:
         df = df[df["_code"].isin([sym for sym, t in trend_map.items() if t == trend])]
+    elif trend:
+        # 趋势筛选但该模型数据不足算趋势：返回空集（不能静默回退成全量）
+        df = df.iloc[0:0]
 
     total = len(df)
     start = (page - 1) * page_size
     rows = df.iloc[start : start + page_size]
+
+    # 筛选下拉的选项命中数（with_counts=true 时附带，供前端下拉后面显示数字）。
+    # 统计口径：除该维度自身外，其余已选条件保持生效（base_df 已按其余条件过滤）。
+    option_counts: dict[str, dict[str, int]] = {}
+    if with_counts:
+        try:
+            for dim, col, opts in (
+                ("board", "board", BOARD_OPTIONS),
+                ("capTier", None, [c["value"] for c in CAP_TIER_OPTIONS]),
+                ("trend", None, [t["value"] for t in TREND_OPTIONS]),
+            ):
+                counts: dict[str, int] = {}
+                for optv in opts:
+                    if dim == "board":
+                        n = int((base_df[col] == optv).sum())
+                    elif dim == "capTier":
+                        mv = pd.to_numeric(base_df["Zsz"], errors="coerce")
+                        n = int((_cap_mask(mv, optv)).sum())
+                    else:
+                        codes = base_df["Symbol"].str.split(".").str[0]
+                        n = int((codes.map(trend_map) == optv).sum())
+                    counts[optv] = n
+                option_counts[dim] = counts
+            if not model:
+                # 推理模型命中数：各模型在最近信号日涉及的股票数
+                model_counts: dict[str, int] = {}
+                try:
+                    async with get_session() as _s2:
+                        from sqlalchemy import text as _txt
+
+                        _d1 = (
+                            await _s2.execute(
+                                _txt("SELECT MAX(trade_date) FROM engine_signal_scores WHERE tenant_id='default'")
+                            )
+                        ).scalar_one_or_none()
+                        if _d1 is not None:
+                            _mr = (
+                                await _s2.execute(
+                                    _txt(
+                                        "SELECT r.model_id, COUNT(*) c FROM engine_signal_scores e "
+                                        "JOIN qm_model_inference_runs r ON r.run_id = e.run_id "
+                                        "WHERE e.tenant_id='default' AND e.trade_date = :d "
+                                        "GROUP BY r.model_id"
+                                    ),
+                                    {"d": _d1},
+                                )
+                            ).fetchall()
+                            model_counts = {str(m): int(c) for m, c in _mr}
+                except Exception as exc:  # noqa: BLE001
+                    logger.warning("model counts failed: %s", exc)
+                option_counts["model"] = model_counts
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("option counts failed: %s", exc)
+
+    # 推理模型选项（供筛选下拉）：最近 90 天内有信号的全部模型（真实 model_id + display_name）。
+    # engine_signal_scores.model_version 恒为 'inference_script'（历史遗留无意义），
+    # 真实模型标识在 qm_model_inference_runs.model_id（同 model_training history 逻辑）。
+    model_options: list[dict[str, Any]] = []
+    if not model:
+        try:
+            async with get_session() as _s:
+                from sqlalchemy import text as _txt
+
+                _date_sql = (
+                    "SELECT DISTINCT trade_date FROM engine_signal_scores "
+                    "WHERE tenant_id='default' ORDER BY trade_date DESC LIMIT 1"
+                )
+                _latest_date = (await _s.execute(_txt(_date_sql))).scalar_one_or_none()
+                if _latest_date is not None:
+                    _from = _latest_date - _timedelta(days=90)
+                    _mrows = (
+                        await _s.execute(
+                            _txt(
+                                "SELECT r.model_id, MAX(e.trade_date) AS latest "
+                                "FROM engine_signal_scores e "
+                                "JOIN qm_model_inference_runs r ON r.run_id = e.run_id "
+                                "WHERE e.tenant_id='default' AND e.trade_date >= :d_from "
+                                "GROUP BY r.model_id ORDER BY latest DESC LIMIT 20"
+                            ),
+                            {"d_from": _from},
+                        )
+                    ).fetchall()
+                    _mids = [str(_r[0]) for _r in _mrows]
+                    _meta_map: dict[str, str] = {}
+                    if _mids:
+                        _meta_rows = (
+                            await _s.execute(
+                                _txt(
+                                    "SELECT model_id, metadata_json FROM qm_user_models "
+                                    "WHERE model_id = ANY(:mids)"
+                                ),
+                                {"mids": _mids},
+                            )
+                        ).fetchall()
+                        for _mid2, _meta_json in _meta_rows:
+                            _meta = _meta_json if isinstance(_meta_json, dict) else {}
+                            _meta_map[str(_mid2)] = (
+                                _meta.get("display_name") or _meta.get("model_name") or ""
+                            )
+                    for _mid, _latest in _mrows:
+                        model_options.append({
+                            "model_id": str(_mid),
+                            "display_name": _meta_map.get(str(_mid), ""),
+                        })
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("model options for list failed: %s", exc)
 
     def _item(r: pd.Series) -> dict[str, Any]:
         info = score_info.get(str(r.get("Symbol")).split(".")[0]) if score_info else {}
@@ -1186,6 +1345,8 @@ async def list_stocks(
             "trade_date": trade_date,
             "signal_date": _signal_date,
             "items": [_item(r) for _, r in rows.iterrows()],
+            "models": model_options,
+            "option_counts": option_counts,
         },
     }
 

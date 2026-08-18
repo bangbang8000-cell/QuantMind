@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from 'react';
 import { SlidersHorizontal, X, RotateCcw } from 'lucide-react';
-import { Select, Input } from 'antd';
+import { Select } from 'antd';
 import { stockTerminalService } from '../services/stockTerminalService';
 
 export interface ListFilters {
@@ -56,14 +56,16 @@ export function bucketScoreRange(bucket?: string): { min?: number; max?: number 
 interface Props {
   filters: ListFilters;
   onChange: (f: ListFilters) => void;
-  total: number;        // 筛选后数量
+  total: number;        // 筛选后数量（已选条件的命中数）
   fullTotal: number;    // 全市场数量
-  models?: string[];    // 可选推理模型（由列表数据回填）
+  models?: { model_id: string; display_name?: string }[];  // 真实模型（值用 model_id，标签用显示名）
   /** 左侧列内嵌模式：筛选网格 2 列紧凑排布 */
   compact?: boolean;
+  /** 各条件下拉选项命中数（由父级统计），如 { board: {沪市主板: 1500}, capTier: {中盘: 800} } */
+  optionCounts?: Record<string, Record<string, number>>;
 }
 
-export function StockFilterPanel({ filters, onChange, total, fullTotal, models: modelOptions = [], compact = false }: Props) {
+export function StockFilterPanel({ filters, onChange, total, fullTotal, models: modelOptions = [], compact = false, optionCounts = {} }: Props) {
   const [industries, setIndustries] = useState<string[]>([]);
   const [concepts, setConcepts] = useState<string[]>([]);
 
@@ -74,6 +76,12 @@ export function StockFilterPanel({ filters, onChange, total, fullTotal, models: 
 
   const set = (patch: Partial<ListFilters>) => onChange({ ...filters, ...patch });
 
+  /** 选项 label：名称 + 命中数量（父级传的统计），未统计则只显示名称 */
+  const opt = (dim: string, name: string) => {
+    const n = optionCounts[dim]?.[name];
+    return n != null ? `${name} ${n}` : name;
+  };
+
   const activeChips: { key: string; label: string; clear: () => void }[] = [];
   if (filters.board) activeChips.push({ key: 'board', label: `板块 ${filters.board}`, clear: () => set({ board: undefined }) });
   if (filters.capTier) activeChips.push({ key: 'cap', label: `市值 ${filters.capTier}`, clear: () => set({ capTier: undefined }) });
@@ -83,7 +91,10 @@ export function StockFilterPanel({ filters, onChange, total, fullTotal, models: 
   if (filters.industry) activeChips.push({ key: 'industry', label: `行业 ${filters.industry}`, clear: () => set({ industry: undefined }) });
   if (filters.concept) activeChips.push({ key: 'concept', label: `概念 ${filters.concept}`, clear: () => set({ concept: undefined }) });
   if (filters.indexCode) activeChips.push({ key: 'index', label: `宽基 ${filters.indexName ?? filters.indexCode}`, clear: () => set({ indexCode: undefined, indexName: undefined }) });
-  if (filters.model) activeChips.push({ key: 'model', label: `模型 ${filters.model}`, clear: () => set({ model: undefined }) });
+  if (filters.model) {
+    const m = modelOptions.find(x => x.model_id === filters.model);
+    activeChips.push({ key: 'model', label: `模型 ${m?.display_name || filters.model}`, clear: () => set({ model: undefined }) });
+  }
   if (filters.date) activeChips.push({ key: 'date', label: `日期 ${filters.date}`, clear: () => set({ date: undefined }) });
   if (filters.scoreMin != null && !filters.bucket) activeChips.push({ key: 'smin', label: `分数≥${filters.scoreMin}`, clear: () => set({ scoreMin: undefined }) });
   if (filters.tagId) activeChips.push({ key: 'tag', label: `标签 ${filters.tagName}`, clear: () => set({ tagId: undefined, tagName: undefined }) });
@@ -106,28 +117,26 @@ export function StockFilterPanel({ filters, onChange, total, fullTotal, models: 
         )}
       </div>
 
-      {/* 筛选下拉网格：左侧内嵌 2 列，右侧看板 4 列 */}
+      {/* 筛选下拉网格：左侧内嵌 2 列，右侧看板 4 列（日期筛选已移除） */}
       <div className={`grid gap-1.5 ${compact ? 'grid-cols-2' : 'grid-cols-4'}`}>
         <Select allowClear size="small" placeholder="板块" value={filters.board || undefined}
-          onChange={v => set({ board: v })} options={BOARD_OPTIONS.map(b => ({ label: b, value: b }))} />
+          onChange={v => set({ board: v })} options={BOARD_OPTIONS.map(b => ({ label: opt('board', b), value: b }))} />
         <Select allowClear size="small" placeholder="市值档" value={filters.capTier || undefined}
-          onChange={v => set({ capTier: v })} options={CAP_TIER_OPTIONS} />
+          onChange={v => set({ capTier: v })} options={CAP_TIER_OPTIONS.map(c => ({ label: opt('capTier', c.value), value: c.value }))} />
         <Select allowClear size="small" placeholder="分数档" value={filters.bucket || undefined}
           onChange={v => set({ bucket: v, scoreMin: undefined })}
-          options={BUCKET_OPTIONS.map(b => ({ label: b.label, value: b.value }))} />
+          options={BUCKET_OPTIONS.map(b => ({ label: opt('bucket', b.value), value: b.value }))} />
         <Select allowClear size="small" placeholder="趋势" value={filters.trend || undefined}
-          onChange={v => set({ trend: v })} options={TREND_OPTIONS} />
+          onChange={v => set({ trend: v })} options={TREND_OPTIONS.map(t => ({ label: opt('trend', t.value), value: t.value }))} />
         <Select allowClear showSearch size="small" placeholder="行业" value={filters.industry || undefined}
           optionFilterProp="label" onChange={v => set({ industry: v })}
           options={industries.map(i => ({ label: i, value: i }))} />
         <Select allowClear showSearch size="small" placeholder="概念板块" value={filters.concept || undefined}
           optionFilterProp="label" onChange={v => set({ concept: v })}
           options={concepts.map(c => ({ label: c, value: c }))} />
-        <Select allowClear size="small" placeholder="推理模型" value={filters.model || undefined}
-          onChange={v => set({ model: v })}
-          options={modelOptions.map(m => ({ label: m, value: m }))} />
-        <Input type="date" size="small" value={filters.date || ''} placeholder="分数基准日"
-          onChange={e => set({ date: e.target.value || undefined })} />
+        <Select allowClear showSearch size="small" placeholder="推理模型" value={filters.model || undefined}
+          optionFilterProp="label" onChange={v => set({ model: v })}
+          options={modelOptions.map(m => ({ label: m.display_name || m.model_id, value: m.model_id }))} />
       </div>
 
       {/* 已选条件：每个条件单独一行（命中组合排版） */}

@@ -50,7 +50,7 @@ export function bucketByMonth(items: { trade_date: string; fusion_score: number 
     .map(([key, b]) => ({ key, ...b }));
 }
 
-const WD = ['一', '二', '三', '四', '五', '六', '日'];
+const WD = ['日', '一', '二', '三', '四', '五', '六'];  // 周天为第一天
 
 interface Props {
   symbol: string;          // suffix（600519.SH）
@@ -91,7 +91,7 @@ export function ScoreCalendar({ symbol, onBarClick }: Props) {
     if (!bucket) return [];
     const { year, month } = bucket;
     const first = new Date(year, month - 1, 1);
-    const lead = (first.getDay() + 6) % 7;   // 周一开头
+    const lead = first.getDay();   // 周天(0)为第一天
     const days = new Date(year, month, 0).getDate();
     const out: ({ kind: 'blank' } | { kind: 'day'; date: string; day: number; value: number | null; side: string | null; today: boolean })[] = [];
     for (let i = 0; i < lead; i++) out.push({ kind: 'blank' });

@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from 'react';
 import { motion } from 'framer-motion';
-import { CandlestickChart, Layers, CalendarDays, Activity } from 'lucide-react';
+import { CandlestickChart, Layers, CalendarDays, Activity, ChevronUp } from 'lucide-react';
 import { Modal, Tooltip } from 'antd';
 import { StockListItem, StockProfile } from '../types';
 import { stockTerminalService, IndexQuote } from '../services/stockTerminalService';
@@ -32,6 +32,7 @@ export default function StockTerminalPage() {
   const [selected, setSelected] = useState<StockListItem | null>(null);
   const [profile, setProfile] = useState<StockProfile | null>(null);
   const [klineOpen, setKlineOpen] = useState(false);
+  const [calendarCollapsed, setCalendarCollapsed] = useState(false);
   const [infoTab, setInfoTab] = useState<InfoTab>('overview');
   const [watchlist, setWatchlist] = useState<Set<string>>(new Set());
   const [onlyWatchlist, setOnlyWatchlist] = useState(false);
@@ -39,6 +40,7 @@ export default function StockTerminalPage() {
   const [listFilters, setListFilters] = useState<ListFilters>({});
   const [listTotal, setListTotal] = useState(0);
   const [fullTotal, setFullTotal] = useState(0);
+  const [listModels, setListModels] = useState<{ model_id: string; display_name?: string }[]>([]);
   const [quotes, setQuotes] = useState<IndexQuote[]>([]);
 
   useEffect(() => {
@@ -71,53 +73,34 @@ export default function StockTerminalPage() {
     <div className="w-full h-full relative overflow-hidden flex gap-4 p-5 pt-3 pb-5 select-none"
       style={{ background: 'linear-gradient(135deg, #f8fafc 0%, #eff6ff 50%, #f8fafc 100%)' }}>
 
-      {/* 左栏：检索 + 看板筛选 + 信息丰富的分数列表 */}
-      <StockSidebar
-        selected={selected?.symbol ?? null}
-        onSelect={setSelected}
-        watchlistSymbols={watchlist}
-        onlyWatchlist={onlyWatchlist}
-        onOnlyWatchlist={setOnlyWatchlist}
-        filters={{
-          ...listFilters,
-          tagId: tagFilter?.id,
-          tagName: tagFilter?.name,
-        }}
-        onFiltersChange={setListFilters}
-        onTotals={(total) => {
-          setListTotal(total);
-          const hasActive = Object.values(listFilters).some(v => v != null && v !== '') || !!tagFilter;
-          if (!hasActive) setFullTotal(total);
-        }}
-        fullTotal={fullTotal}
-      />
-
-      {/* 右侧：当日指数条 + 股票信息 + 智能标签 + 分数日历 + 信息 Tabs */}
-      <div className="flex-1 min-w-0 flex flex-col gap-4 min-h-0">
-
-        {/* 当日指数条：A股核心指数快照（红色涨绿色跌） */}
+      {/* 左栏：当日指数条 + 检索/筛选/列表 */}
+      <div className="flex flex-col gap-4 min-h-0 h-full">
+        {/* 当日指数条：A股核心指数快照（红色涨绿色跌），置于股票列表上方 */}
         <motion.div
           initial={{ opacity: 0, y: 8 }}
           animate={{ opacity: 1, y: 0 }}
           transition={{ duration: 0.3 }}
-          className="bg-white/80 backdrop-blur-xl rounded-3xl border border-white/90 shadow-xs px-4 py-2 flex items-center gap-2 shrink-0"
+          className="bg-white/80 backdrop-blur-xl rounded-3xl border border-white/90 shadow-xs px-3 py-2 flex flex-col gap-1.5 shrink-0"
         >
-          <div className="flex items-center gap-1.5 shrink-0 pr-2 border-r border-slate-100">
-            <Activity className="w-3.5 h-3.5 text-blue-500" />
-            <span className="text-xs font-black text-slate-700">今日指数</span>
-            {quotes.length > 0 && <span className="text-[9px] text-slate-400 font-mono">{quotes[0]?.trade_date ?? ''}</span>}
+          <div className="flex items-center gap-1.5">
+            <Activity className="w-3 h-3 text-blue-500" />
+            <span className="text-[11px] font-black text-slate-700">今日指数</span>
+            <span className="text-[9px] text-slate-400 font-bold">· 股票列表 分数降序</span>
+            {quotes.length > 0 && <span className="text-[9px] text-slate-400 font-mono ml-auto">{quotes[0]?.trade_date ?? ''}</span>}
           </div>
           {quotes.length ? (
-            <div className="flex items-center gap-3 flex-wrap min-w-0">
+            <div className="grid grid-cols-4 gap-x-2 gap-y-1">
               {quotes.map(q => {
                 const qup = q.change_percent >= 0;
                 return (
-                  <Tooltip key={q.symbol} title={`${q.name} ${q.price} · ${q.trade_date ?? ''}`}>
-                    <span className="flex items-center gap-1.5 text-[11px] font-mono">
-                      <span className="font-bold text-slate-600">{q.name}</span>
-                      <span className="font-bold text-slate-800">{Number(q.price).toFixed(2)}</span>
-                      <span className={`font-bold ${qup ? 'text-rose-600' : 'text-emerald-600'}`}>
-                        {qup ? '+' : ''}{Number(q.change_percent).toFixed(2)}%
+                  <Tooltip key={q.symbol} title={`${q.name} ${q.price}`}>
+                    <span className="flex flex-col leading-tight">
+                      <span className="text-[9px] text-slate-400 font-bold truncate">{q.name}</span>
+                      <span className="flex items-baseline gap-1 font-mono">
+                        <span className="text-[10px] font-bold text-slate-700">{Number(q.price).toFixed(2)}</span>
+                        <span className={`text-[9px] font-bold ${qup ? 'text-rose-600' : 'text-emerald-600'}`}>
+                          {qup ? '+' : ''}{Number(q.change_percent).toFixed(2)}%
+                        </span>
                       </span>
                     </span>
                   </Tooltip>
@@ -129,12 +112,38 @@ export default function StockTerminalPage() {
           )}
         </motion.div>
 
+        <StockSidebar
+          selected={selected?.symbol ?? null}
+          onSelect={setSelected}
+          watchlistSymbols={watchlist}
+          onlyWatchlist={onlyWatchlist}
+          onOnlyWatchlist={setOnlyWatchlist}
+          filters={{
+            ...listFilters,
+            tagId: tagFilter?.id,
+            tagName: tagFilter?.name,
+          }}
+          onFiltersChange={setListFilters}
+          onModels={setListModels}
+          models={listModels}
+          onTotals={(total) => {
+            setListTotal(total);
+            const hasActive = Object.values(listFilters).some(v => v != null && v !== '') || !!tagFilter;
+            if (!hasActive) setFullTotal(total);
+          }}
+          fullTotal={fullTotal}
+        />
+      </div>
+
+      {/* 右侧：股票信息 + 智能标签 + 分数日历 + 信息 Tabs */}
+      <div className="flex-1 min-w-0 flex flex-col gap-4 min-h-0">
+
         {/* 顶部标头：股票名（点击弹整合 K 线）+ 宽基/概念 chips（点击筛选左侧列表） */}
         <motion.div
           initial={{ opacity: 0, y: 8 }}
           animate={{ opacity: 1, y: 0 }}
           transition={{ duration: 0.3, delay: 0.02 }}
-          className="bg-white/80 backdrop-blur-xl rounded-3xl border border-white/90 shadow-xs px-4 py-3 flex items-start justify-between gap-3 shrink-0"
+          className="bg-white/80 backdrop-blur-xl rounded-3xl border border-white/90 shadow-xs px-4 py-3 flex items-center justify-between gap-3 shrink-0"
         >
           <div className="flex items-start gap-2.5 min-w-0 flex-1">
             <button
@@ -157,24 +166,21 @@ export default function StockTerminalPage() {
                       {profile?.close?.toFixed(2) ?? '--'} {up ? '+' : ''}{(profile?.pct_change ?? 0).toFixed(2)}%
                     </span>
                     <span className="text-[10px] text-slate-400">{profile?.board} · {profile?.industry ?? '--'}</span>
-                    <span className="text-[10px] text-slate-300 flex items-center gap-0.5">
-                      <CandlestickChart className="w-2.5 h-2.5" /> 点击查看 K 线
-                    </span>
                   </div>
                 )}
               </div>
             </button>
-            {/* 宽基归属与标识 + 概念板块（从概况移到顶部） */}
+            {/* 宽基归属与标识 + 概念板块（从概况移到顶部，点击筛选） */}
             {selected && profile && (
-              <div className="flex-1 min-w-0 flex flex-col gap-1 pt-0.5">
-                <div className="flex flex-wrap gap-1 items-center">
+              <div className="flex-1 min-w-0 flex flex-col gap-1.5 pt-0.5">
+                <div className="flex flex-wrap gap-1.5 items-center">
                   <span className="text-[10px] font-bold text-slate-400 shrink-0" title="点击筛选成分股">宽基</span>
                   {profile.index_membership.map(m => {
                     const active = listFilters.indexCode === m.index_code;
                     return (
                       <button key={m.index_code} title={`按 ${m.index_name} 成分筛选`}
                         onClick={() => setListFilters({ ...listFilters, indexCode: active ? undefined : m.index_code, indexName: active ? undefined : m.index_name })}
-                        className={`text-[10px] rounded px-1.5 py-0.5 font-bold transition-colors ${
+                        className={`text-[11px] rounded px-2 py-0.5 font-bold transition-colors ${
                           active ? 'bg-violet-600 text-white' : 'bg-violet-50 text-violet-600 hover:bg-violet-100'
                         }`}>
                         {m.index_name}{m.weight != null ? ` ${m.weight.toFixed(1)}%` : ''}
@@ -186,7 +192,7 @@ export default function StockTerminalPage() {
                   {profile.flags.sh_hk_connect && <span className="text-[10px] bg-cyan-50 text-cyan-600 rounded px-1.5 py-0.5 font-bold">沪港通</span>}
                   {!profile.index_membership.length && <span className="text-[10px] text-slate-300">无</span>}
                 </div>
-                <div className="flex flex-wrap gap-1 items-center">
+                <div className="flex flex-wrap gap-1.5 items-center">
                   <span className="text-[10px] font-bold text-slate-400 shrink-0" title="点击筛选同概念股">概念</span>
                   {profile.concepts.length
                     ? profile.concepts.map(c => {
@@ -194,7 +200,7 @@ export default function StockTerminalPage() {
                         return (
                           <button key={c} title={`按概念「${c}」筛选`}
                             onClick={() => setListFilters({ ...listFilters, concept: active ? undefined : c })}
-                            className={`text-[10px] rounded px-1.5 py-0.5 transition-colors ${
+                            className={`text-[11px] rounded px-2 py-0.5 transition-colors ${
                               active ? 'bg-amber-500 text-white font-bold' : 'bg-amber-50/70 text-amber-700 hover:bg-amber-100'
                             }`}>
                             {c}
@@ -225,28 +231,32 @@ export default function StockTerminalPage() {
           </motion.div>
         )}
 
-        {/* 分数日历：个股历史推理分数（推理排名区域替换） */}
+        {/* 分数日历：个股历史推理分数（可折叠，展开 260px / 收起仅标题行） */}
         <motion.div
           initial={{ opacity: 0, y: 8 }}
           animate={{ opacity: 1, y: 0 }}
           transition={{ duration: 0.3, delay: 0.06 }}
           className="bg-white/80 backdrop-blur-xl rounded-3xl border border-white/90 shadow-xs flex flex-col overflow-hidden shrink-0"
-          style={{ height: 260 }}
+          style={{ height: calendarCollapsed ? 36 : 260 }}
         >
           <div className="flex items-center justify-between px-4 py-2 border-b border-slate-100 shrink-0">
-            <div className="flex items-center gap-1.5">
+            <button onClick={() => setCalendarCollapsed(!calendarCollapsed)}
+              className="flex items-center gap-1.5 text-left hover:opacity-70 transition-opacity">
               <CalendarDays className="w-3.5 h-3.5 text-indigo-500" />
               <span className="text-xs font-black text-slate-700">推理分数日历</span>
-            </div>
-            {selected && (
+              <ChevronUp className={`w-3 h-3 text-slate-400 transition-transform ${calendarCollapsed ? 'rotate-180' : ''}`} />
+            </button>
+            {!calendarCollapsed && selected && (
               <span className="text-[10px] text-slate-400 font-mono truncate ml-2">
                 {selected.name} · 历史推理分数（红正绿负）
               </span>
             )}
           </div>
-          <div className="flex-1 min-h-0 overflow-y-auto px-4 py-2">
-            <ScoreCalendar symbol={selected?.symbol ?? ''} />
-          </div>
+          {!calendarCollapsed && (
+            <div className="flex-1 min-h-0 overflow-y-auto px-4 py-2">
+              <ScoreCalendar symbol={selected?.symbol ?? ''} />
+            </div>
+          )}
         </motion.div>
 
         {/* 信息 Tab 区 */}
