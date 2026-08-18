@@ -16,6 +16,8 @@ export interface StockListItem {
   side: string | null;
   signal_date: string | null;
   model: string | null;
+  cap_tier?: string;   // 微盘/小盘/中盘/大盘/超大盘
+  trend?: string;      // 连续上升/连续下降/先升后降/上升/下降/持平/-
 }
 
 export interface StockListResponse {

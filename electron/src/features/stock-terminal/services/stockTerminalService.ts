@@ -36,6 +36,7 @@ class StockTerminalService {
     cap_tier?: string;
     trend?: string;
     tag?: string;
+    index_code?: string;
     page?: number;
     page_size?: number;
   }): Promise<StockListResponse> {

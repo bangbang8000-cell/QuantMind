@@ -897,6 +897,37 @@ async def stock_series(
 # ---------------------------------------------------------------------------
 
 
+def _index_members(index_code: str) -> set[str]:
+    """宽基指数成分 symbol 集合（index_weights parquet）。"""
+    d = _quantdb_dir()
+    f = d / "2_base_sector" / "index_weights" / f"{index_code}.parquet"
+    if not f.exists():
+        return set()
+    try:
+        w = pd.read_parquet(f)
+        sym_col = "Symbol" if "Symbol" in w.columns else "symbol"
+        return set(w[sym_col].astype(str))
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("read index members %s failed: %s", index_code, exc)
+        return set()
+
+
+def _cap_tier_of(mv_yi) -> str:
+    """市值分档（亿元）：同推理研究阈值。"""
+    mv = _safe_f(mv_yi)
+    if mv is None:
+        return ""
+    if mv < 30:
+        return "微盘"
+    if mv < 100:
+        return "小盘"
+    if mv < 300:
+        return "中盘"
+    if mv < 1000:
+        return "大盘"
+    return "超大盘"
+
+
 async def _trend_map(model: str | None) -> dict[str, str]:
     """每股最近 3 个信号日的分数趋势（symbol 纯数字 -> 趋势标签）。"""
     from sqlalchemy import text as _txt
@@ -905,7 +936,7 @@ async def _trend_map(model: str | None) -> dict[str, str]:
         mwhere = "AND model_version = :m" if model else ""
         mparams: dict = {"m": model} if model else {}
         dates = [
-            str(r[0])
+            r[0]  # date 对象（asyncpg 需 date 类型绑定；显示用 str）
             for r in (
                 await session.execute(
                     _txt(
@@ -919,15 +950,15 @@ async def _trend_map(model: str | None) -> dict[str, str]:
         ]
         if len(dates) < 2:
             return {}
+        from sqlalchemy import bindparam as _bindparam
+
+        stmt = _txt(
+            "SELECT symbol, trade_date, fusion_score, created_at FROM engine_signal_scores "
+            "WHERE tenant_id='default' AND trade_date IN :ds "
+            f"{mwhere} ORDER BY created_at"
+        ).bindparams(_bindparam("ds", expanding=True))
         rows = (
-            await session.execute(
-                _txt(
-                    "SELECT symbol, trade_date, fusion_score, created_at FROM engine_signal_scores "
-                    "WHERE tenant_id='default' AND trade_date IN :ds "
-                    f"{mwhere} ORDER BY created_at"
-                ),
-                {**mparams, "ds": tuple(dates)},
-            )
+            await session.execute(stmt, {**mparams, "ds": tuple(dates)})
         ).fetchall()
     # 每 (symbol, date) 取 created_at 最新一条
     per: dict[tuple[str, str], float] = {}
@@ -936,11 +967,11 @@ async def _trend_map(model: str | None) -> dict[str, str]:
             per[(str(sym), str(d))] = float(fusion)
     out: dict[str, str] = {}
     for (sym, d), fusion in per.items():
-        idx = dates.index(d)
+        idx = next((i for i, dt in enumerate(dates) if str(dt) == d), -1)
         if idx == 0:  # 最新日
             s2 = fusion
-            s1 = per.get((sym, dates[1])) if len(dates) > 1 else None
-            s0 = per.get((sym, dates[2])) if len(dates) > 2 else None
+            s1 = per.get((sym, str(dates[1]))) if len(dates) > 1 else None
+            s0 = per.get((sym, str(dates[2]))) if len(dates) > 2 else None
             if s1 is None:
                 continue
             if s0 is not None:
@@ -978,6 +1009,7 @@ async def list_stocks(
     cap_tier: str | None = Query(None, description="市值档：微盘/小盘/中盘/大盘/超大盘"),
     trend: str | None = Query(None, description="分数趋势：连续上升/连续下降/先升后降/上升/下降/持平"),
     tag: str | None = Query(None, description="智能标签 id（tag_rules）"),
+    index_code: str | None = Query(None, description="宽基指数成分过滤（index_weights parquet 名）"),
     page: int = Query(1, ge=1),
     page_size: int = Query(100, ge=10, le=6000),
     current_user: dict = Depends(get_current_user),
@@ -1001,6 +1033,12 @@ async def list_stocks(
             df = df[df["Symbol"].isin(members)]
     if board:
         df = df[df["board"] == board]
+    if index_code:
+        members = _index_members(index_code)
+        if members:
+            df = df[df["Symbol"].isin(members)]
+        else:
+            df = df.iloc[0:0]
     if cap_tier:
         mv = pd.to_numeric(df["Zsz"], errors="coerce")
         if cap_tier == "微盘":
@@ -1099,15 +1137,15 @@ async def list_stocks(
         df = df.sort_values("_fusion", ascending=False, na_position="last")
 
     # 分数趋势：最近 3 个信号日的 fusion 比较判定（每股 s0<-s1<-s2）
-    if trend and score_info:
+    # 无论是否筛选都计算，供列表趋势列展示
+    trend_map: dict[str, str] = {}
+    if score_info:
         try:
             trend_map = await _trend_map(model)
-            if trend_map:
-                df = df[df["_code"].isin(
-                    [sym for sym, t in trend_map.items() if t == trend]
-                )]
         except Exception as exc:  # noqa: BLE001
-            logger.warning("trend filter failed: %s", exc)
+            logger.warning("trend map failed: %s", exc)
+    if trend and trend_map:
+        df = df[df["_code"].isin([sym for sym, t in trend_map.items() if t == trend])]
 
     total = len(df)
     start = (page - 1) * page_size
@@ -1132,6 +1170,11 @@ async def list_stocks(
             "side": (info.get("side") if info else None),
             "signal_date": (info.get("date") if info else None),
             "model": (info.get("model") if info else None),
+            "cap_tier": _cap_tier_of(r.get("Zsz")),
+            "trend": (
+                trend_map.get(str(r.get("Symbol")).split(".")[0], "-")
+                if trend_map else "-"
+            ),
         }
 
     return {

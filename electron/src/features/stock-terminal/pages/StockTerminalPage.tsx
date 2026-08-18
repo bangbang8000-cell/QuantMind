@@ -8,6 +8,7 @@ import { StockListItem, StockProfile } from '../types';
 import { stockTerminalService } from '../services/stockTerminalService';
 import { StockSidebar } from '../components/StockSidebar';
 import { TagStrip } from '../components/TagStrip';
+import { StockFilterPanel, ListFilters } from '../components/StockFilterPanel';
 import { KlineWorkspace } from '../components/kline/KlineWorkspace';
 import { RankingPanel } from '../components/RankingPanel';
 import { OverviewTab } from '../components/OverviewTab';
@@ -35,6 +36,10 @@ export default function StockTerminalPage() {
   const [watchlist, setWatchlist] = useState<Set<string>>(new Set());
   const [onlyWatchlist, setOnlyWatchlist] = useState(false);
   const [tagFilter, setTagFilter] = useState<{ id: string; name: string } | null>(null);
+  const [listFilters, setListFilters] = useState<ListFilters>({});
+  const [listModels, setListModels] = useState<string[]>([]);
+  const [listTotal, setListTotal] = useState(0);
+  const [fullTotal, setFullTotal] = useState(0);
 
   useEffect(() => {
     if (!selected) { setProfile(null); return; }
@@ -66,8 +71,17 @@ export default function StockTerminalPage() {
         watchlistSymbols={watchlist}
         onlyWatchlist={onlyWatchlist}
         onOnlyWatchlist={setOnlyWatchlist}
-        tagFilter={tagFilter}
-        onTagFilter={setTagFilter}
+        filters={{
+          ...listFilters,
+          tagId: tagFilter?.id,
+          tagName: tagFilter?.name,
+        }}
+        onModels={setListModels}
+        onTotals={(total) => {
+          setListTotal(total);
+          const hasActive = Object.values(listFilters).some(v => v != null && v !== '') || !!tagFilter;
+          if (!hasActive) setFullTotal(total);
+        }}
       />
 
       {/* 右侧：推理排名 + 信息 Tabs（默认不显示 K 线，点股票弹整合 K 线窗） */}
@@ -112,25 +126,40 @@ export default function StockTerminalPage() {
             {selected && profile && (
               <div className="flex-1 min-w-0 flex flex-col gap-1 pt-0.5">
                 <div className="flex flex-wrap gap-1 items-center">
-                  <span className="text-[10px] font-bold text-slate-400 shrink-0">宽基</span>
-                  {profile.index_membership.map(m => (
-                    <span key={m.index_code} className="text-[10px] bg-violet-50 text-violet-600 rounded px-1.5 py-0.5 font-bold">
-                      {m.index_name}{m.weight != null ? ` ${m.weight.toFixed(1)}%` : ''}
-                    </span>
-                  ))}
+                  <span className="text-[10px] font-bold text-slate-400 shrink-0" title="点击筛选成分股">宽基</span>
+                  {profile.index_membership.map(m => {
+                    const active = listFilters.indexCode === m.index_code;
+                    return (
+                      <button key={m.index_code} title={`按 ${m.index_name} 成分筛选`}
+                        onClick={() => setListFilters({ ...listFilters, indexCode: active ? undefined : m.index_code, indexName: active ? undefined : m.index_name })}
+                        className={`text-[10px] rounded px-1.5 py-0.5 font-bold transition-colors ${
+                          active ? 'bg-violet-600 text-white' : 'bg-violet-50 text-violet-600 hover:bg-violet-100'
+                        }`}>
+                        {m.index_name}{m.weight != null ? ` ${m.weight.toFixed(1)}%` : ''}
+                      </button>
+                    );
+                  })}
                   {profile.flags.is_st && <span className="text-[10px] bg-rose-50 text-rose-500 rounded px-1.5 py-0.5 font-bold">ST</span>}
                   {profile.flags.marginable && <span className="text-[10px] bg-blue-50 text-blue-600 rounded px-1.5 py-0.5 font-bold">融资融券</span>}
                   {profile.flags.sh_hk_connect && <span className="text-[10px] bg-cyan-50 text-cyan-600 rounded px-1.5 py-0.5 font-bold">沪港通</span>}
                   {!profile.index_membership.length && <span className="text-[10px] text-slate-300">无</span>}
                 </div>
                 <div className="flex flex-wrap gap-1 items-center">
-                  <span className="text-[10px] font-bold text-slate-400 shrink-0">概念</span>
+                  <span className="text-[10px] font-bold text-slate-400 shrink-0" title="点击筛选同概念股">概念</span>
                   {profile.concepts.length
-                    ? profile.concepts.slice(0, 12).map(c => (
-                        <span key={c} className="text-[10px] bg-amber-50/70 text-amber-700 rounded px-1.5 py-0.5">{c}</span>
-                      ))
+                    ? profile.concepts.map(c => {
+                        const active = listFilters.concept === c;
+                        return (
+                          <button key={c} title={`按概念「${c}」筛选`}
+                            onClick={() => setListFilters({ ...listFilters, concept: active ? undefined : c })}
+                            className={`text-[10px] rounded px-1.5 py-0.5 transition-colors ${
+                              active ? 'bg-amber-500 text-white font-bold' : 'bg-amber-50/70 text-amber-700 hover:bg-amber-100'
+                            }`}>
+                            {c}
+                          </button>
+                        );
+                      })
                     : <span className="text-[10px] text-slate-300">无</span>}
-                  {profile.concepts.length > 12 && <span className="text-[10px] text-slate-400">+{profile.concepts.length - 12}</span>}
                 </div>
               </div>
             )}
@@ -154,13 +183,22 @@ export default function StockTerminalPage() {
           </motion.div>
         )}
 
+        {/* 条件筛选面板（驱动左侧列表，看板风格） */}
+        <StockFilterPanel
+          filters={listFilters}
+          onChange={setListFilters}
+          total={listTotal}
+          fullTotal={fullTotal}
+          models={listModels}
+        />
+
         {/* 推理排名（推理研究内容，右侧上方） */}
         <motion.div
           initial={{ opacity: 0, y: 8 }}
           animate={{ opacity: 1, y: 0 }}
           transition={{ duration: 0.3, delay: 0.04 }}
           className="bg-white/80 backdrop-blur-xl rounded-3xl border border-white/90 shadow-xs flex flex-col overflow-hidden shrink-0"
-          style={{ height: 300 }}
+          style={{ height: 260 }}
         >
           <RankingPanel signalDate={profile?.trade_date} onSelectStock={setSelected} onOpenKline={() => setKlineOpen(true)} />
         </motion.div>
