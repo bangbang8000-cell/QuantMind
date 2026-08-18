@@ -4,12 +4,12 @@ import { useCallback, useEffect, useMemo, useState } from 'react';
 import {
   CandlestickChart, Star, Activity, TrendingUp, ArrowLeftRight,
 } from 'lucide-react';
-import { Button, Select, Tooltip, message, Modal, InputNumber, Input } from 'antd';
+import { Button, Select, Tooltip, message, Modal, InputNumber, Input, Switch, Tag } from 'antd';
 import { useNavigate } from 'react-router-dom';
 import { StockListItem, StockProfile, KlineBar } from '../../types';
 import { stockTerminalService } from '../../services/stockTerminalService';
 import { researchService } from '../../../../services/researchService';
-import { KlineChart, IndicatorConfig, IndexOverlay, SignalPoint, ScoreSeries, TradeMarker, RefLine, OVERLAY_COLORS, SubplotType } from './KlineChart';
+import { KlineChart, IndicatorConfig, IndexOverlay, SignalPoint, ScoreSeries, TradeMarker, RefLine, AlertPoint, OVERLAY_COLORS, SubplotType } from './KlineChart';
 import { KlineReplay } from './KlineReplay';
 import { ChartBacktestPanel, ChartBacktestData } from '../ChartBacktestPanel';
 import { toPrefix } from '../StockSidebar';
@@ -67,6 +67,24 @@ export function KlineWorkspace({ stock, profile, height = 460 }: Props) {
   const [refLines, setRefLines] = useState<RefLine[]>([]);
   const [refLineModal, setRefLineModal] = useState(false);
   const [newRefLine, setNewRefLine] = useState({ value: 0.1, label: '可买', color: '#10b981' });
+  // 大盘状态（上证指数 vs MA20）
+  const [indexStatus, setIndexStatus] = useState<{ latestClose: number; ma20: number | null; below: boolean } | null>(null);
+  // 当前排名（按最近推理日 + 所选模型在全市场中的分数排名）
+  const [scoreRank, setScoreRank] = useState<number | null>(null);
+
+  // 大盘状态：上证指数收盘 vs MA20（QuantDB index_daily）
+  useEffect(() => {
+    let cancelled = false;
+    stockTerminalService.getIndexKline('000001.SH', 120).then(closes => {
+      if (cancelled || closes.length < 21) return;
+      const arr = closes.map(c => c.close);
+      const last20 = arr.slice(-20);
+      const ma20 = last20.reduce((a, b) => a + b, 0) / last20.length;
+      const latestClose = arr[arr.length - 1];
+      setIndexStatus({ latestClose: Number(latestClose.toFixed(2)), ma20: Number(ma20.toFixed(2)), below: latestClose < ma20 });
+    }).catch(() => { /* ignore */ });
+    return () => { cancelled = true; };
+  }, []);
 
   // 自选状态
   useEffect(() => {
@@ -151,10 +169,14 @@ export function KlineWorkspace({ stock, profile, height = 460 }: Props) {
           if (!byModel.has(m)) byModel.set(m, []);
           byModel.get(m)!.push({ date: it.trade_date.slice(0, 10), fusion: it.fusion_score, side: it.signal_side });
         }
-        const palette = ['#6366f1', '#f59e0b', '#10b981', '#e11d48', '#0ea5e9'];
-        const out: ScoreSeries[] = [...byModel.entries()].map(([m, pts], i) => ({
-          model: m, color: palette[i % palette.length],
-          points: pts.sort((a, b) => a.date.localeCompare(b.date)),
+        const palette = ['#6366f1', '#f59e0b', '#10b981', '#e11d48', '#0ea5e9', '#0ea5e9', '#a855f7', '#f97316'];
+        // 全部模型：只保留最近活跃的 3 个模型（点数多的优先），避免 43 条线杂乱
+        const sorted = [...byModel.entries()]
+          .map(([m, pts]) => ({ m, pts: pts.sort((a, b) => a.date.localeCompare(b.date)) }))
+          .sort((a, b) => b.pts.length - a.pts.length);
+        const top = sorted.slice(0, 3);
+        const out: ScoreSeries[] = top.map(({ m, pts }, i) => ({
+          model: m, color: palette[i % palette.length], points: pts,
         }));
         setScoreSeries(out);
       });
@@ -200,6 +222,111 @@ export function KlineWorkspace({ stock, profile, height = 460 }: Props) {
     if (selectedModel === 'all') return scoreSeries;
     return scoreSeries.filter(s => s.model === selectedModel);
   }, [scoreSeries, selectedModel]);
+
+  // 市值分档（与后端 model_training 同阈值：亿）
+  const capTier = useMemo(() => {
+    const mv = profile?.total_mv ?? stock.total_mv;
+    if (mv == null) return '';
+    if (mv < 30) return '微盘';
+    if (mv < 100) return '小盘';
+    if (mv < 300) return '中盘';
+    if (mv < 1000) return '大盘';
+    return '超大盘';
+  }, [profile, stock]);
+
+  // 当前模型分数序列（策略统计/提醒基于第一条活跃模型）
+  const primaryScores = activeScoreSeries.length ? activeScoreSeries[0].points : [];
+
+  // 策略提醒规则引擎（选股策略 v2.0，同 StockScoreChart）
+  const strategyAlerts = useMemo<AlertPoint[]>(() => {
+    const sorted = primaryScores
+      .filter(p => p.fusion !== null && p.fusion !== undefined)
+      .sort((a, b) => a.date.localeCompare(b.date));
+    const board = stock.board || '';
+    const isMainBoard = board.includes('主板');
+    const negTag = (() => {
+      const last = sorted[sorted.length - 1];
+      return last && last.fusion !== null && last.fusion <= -0.20 ? '极端负分' : '';
+    })();
+    const out: AlertPoint[] = [];
+    for (let i = 0; i < sorted.length; i++) {
+      const sc = Number(sorted[i].fusion);
+      const date = sorted[i].date;
+      const prev = i > 0 ? Number(sorted[i - 1].fusion) : null;
+      const next = i < sorted.length - 1 ? Number(sorted[i + 1].fusion) : null;
+      // 第1组：分数区间
+      if (sc >= 0.10 && sc < 0.12) {
+        out.push({ date, severity: 'positive', message: isMainBoard ? '黄金买入区间（0.10-0.12·主板）' : '黄金区间（0.10-0.12）', score: sc });
+      } else if (sc >= 0.12 && sc < 0.15) {
+        out.push({ date, severity: 'warning', message: '可选但警惕追高（0.12-0.15）', score: sc });
+      } else if (sc >= 0.15 && sc < 0.20) {
+        out.push({ date, severity: 'warning', message: '高分谨慎区（0.15-0.20）', score: sc });
+      } else if (sc >= 0.20) {
+        out.push({ date, severity: 'danger', message: '极端高分，样本极少，勿追', score: sc });
+      } else if (sc <= -0.20) {
+        out.push({ date, severity: 'danger', message: '极端负分（≤-0.20）', score: sc });
+      } else if (sc <= -0.15) {
+        out.push({ date, severity: 'danger', message: '负分做空候选（≤-0.15）', score: sc });
+      }
+      // 第2组：3天趋势
+      if (prev !== null && next !== null) {
+        if (prev < sc && sc > next) out.push({ date, severity: 'positive', message: '先升后降·最佳买点', score: sc });
+        else if (prev < sc && sc < next) out.push({ date, severity: 'warning', message: '连续上升·过热不追', score: sc });
+        else if (prev > sc && sc > next) out.push({ date, severity: 'info', message: '连续下降·信号衰退', score: sc });
+      }
+      // 第3组：市值分档 + 负分
+      if (sc <= -0.15 && capTier === '微盘') out.push({ date, severity: 'danger', message: '微盘+负分·做空首选（下跌概率68-72%）', score: sc });
+      else if (sc <= -0.15 && capTier === '大盘') out.push({ date, severity: 'info', message: '大盘+负分·可能错杀，关注', score: sc });
+      if (negTag === '极端负分' && capTier === '微盘') out.push({ date, severity: 'danger', message: '极端负分微盘·下跌概率77.7%', score: sc });
+      // 第4组：板块过滤
+      if (board.includes('科创') && sc >= 0.15) out.push({ date, severity: 'warning', message: '科创板高分不追（胜率仅47%）', score: sc });
+      else if (board.includes('北交')) out.push({ date, severity: 'warning', message: '北交所排除·流动性差', score: sc });
+      else if (sc >= 0.12 && sc < 0.20 && !isMainBoard) out.push({ date, severity: 'warning', message: `非主板高分（${board || '未知'}）·谨慎`, score: sc });
+    }
+    // 同日去重：保留 severity 最高的
+    const rank = { danger: 3, warning: 2, positive: 1, info: 0 };
+    const byDate = new Map<string, AlertPoint>();
+    for (const a of out) {
+      const ex = byDate.get(a.date);
+      if (!ex || rank[a.severity] > rank[ex.severity]) byDate.set(a.date, a);
+    }
+    return [...byDate.values()].sort((a, b) => a.date.localeCompare(b.date));
+  }, [primaryScores, stock, capTier]);
+
+  // 策略汇总统计：黄金/危险/负分/买入信号 各多少天
+  const strategySummary = useMemo(() => {
+    const scored = primaryScores.filter(p => p.fusion !== null && p.fusion !== undefined);
+    let golden = 0, danger = 0, buyPoint = 0, neg = 0;
+    for (const p of scored) {
+      const sc = Number(p.fusion);
+      if (sc >= 0.10 && sc < 0.12) golden++;
+      if (sc <= -0.15) neg++;
+      if (sc <= -0.20 || sc >= 0.20) danger++;
+      if (p.side?.toUpperCase() === 'BUY') buyPoint++;
+    }
+    return { total: scored.length, golden, danger, buyPoint, neg };
+  }, [primaryScores]);
+
+  // 当前分数 + 最近推理日
+  const latestScore = primaryScores.length
+    ? primaryScores.reduce((a, b) => (a.date >= b.date ? a : b))
+    : null;
+
+  // 当前排名：用最近推理日 + 所选模型查全市场列表取名次
+  useEffect(() => {
+    if (!latestScore) { setScoreRank(null); return; }
+    let cancelled = false;
+    stockTerminalService.getStockList({
+      date: latestScore.date,
+      model: selectedModel !== 'all' ? selectedModel : undefined,
+      page_size: 5000,
+    }).then(resp => {
+      if (cancelled) return;
+      const idx = resp.items.findIndex(it => it.symbol === stock.symbol);
+      setScoreRank(idx >= 0 ? idx + 1 : null);
+    }).catch(() => { if (!cancelled) setScoreRank(null); });
+    return () => { cancelled = true; };
+  }, [latestScore?.date, selectedModel, stock.symbol]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // 模拟交易统计（持仓/已实现/浮动/总收益）
   const tradeStats = useMemo(() => {
@@ -332,6 +459,40 @@ export function KlineWorkspace({ stock, profile, height = 460 }: Props) {
         </div>
       </div>
 
+      {/* 信息条：当前分数 / 排名 / 策略统计 / 大盘状态（同推理研究 K 线） */}
+      {(latestScore || indexStatus) && (
+        <div className="flex items-center gap-2 px-3 py-1 border-b border-slate-100 bg-slate-50/40 flex-wrap text-[10px] shrink-0">
+          {latestScore && (
+            <>
+              <span className="text-slate-400">当前排名</span>
+              <b className="text-slate-800 font-mono">#{scoreRank ?? '--'}</b>
+              <span className="text-slate-400">当前分数</span>
+              <b className="font-mono text-indigo-600">{Number(latestScore.fusion).toFixed(4)}</b>
+              <span className="text-slate-300">|</span>
+              <Tag color="green" className="m-0 rounded-full text-[9px] font-bold px-2">黄金区间 {strategySummary.golden}天</Tag>
+              <Tag color="volcano" className="m-0 rounded-full text-[9px] font-bold px-2">危险分 {strategySummary.danger}天</Tag>
+              <Tag color="red" className="m-0 rounded-full text-[9px] font-bold px-2">负分 {strategySummary.neg}天</Tag>
+              <Tag color="blue" className="m-0 rounded-full text-[9px] font-bold px-2">买入信号 {strategySummary.buyPoint}天</Tag>
+              <span className="text-slate-500">共 <b className="text-slate-700">{strategySummary.total}</b> 推理日</span>
+            </>
+          )}
+          {indexStatus && (
+            <>
+              <span className="text-slate-300">|</span>
+              <span className={indexStatus.below ? 'text-emerald-600 font-bold' : 'text-rose-600 font-bold'}>
+                {indexStatus.below ? '📉 大盘空' : '📈 大盘多'}
+              </span>
+              <span className="text-slate-500 font-mono">上证{indexStatus.latestClose} / MA20 {indexStatus.ma20}</span>
+            </>
+          )}
+          {strategyAlerts.length > 0 && (
+            <Tooltip title={strategyAlerts.slice(-8).reverse().map(a => `${a.date} ${a.message}`).join('\n')}>
+              <Tag color="purple" className="m-0 rounded-full text-[9px] font-bold px-2 cursor-pointer">策略提醒 {strategyAlerts.length}条</Tag>
+            </Tooltip>
+          )}
+        </div>
+      )}
+
       {/* 图表 */}
       <div className="flex-1 min-h-0">
         {loadingKline ? (
@@ -339,7 +500,7 @@ export function KlineWorkspace({ stock, profile, height = 460 }: Props) {
             <TrendingUp className="w-4 h-4 animate-pulse text-blue-400" /> 加载 K 线数据…
           </div>
         ) : bars.length ? (
-          <KlineChart bars={visibleBars} config={config} overlays={overlays} height={height} signals={signalOn ? signals : []} btEquity={btData?.points ?? []} scoreSeries={activeScoreSeries} trades={trades} refLines={refLines} onBarClick={(bar) => setTradeModal({ bar })} />
+          <KlineChart bars={visibleBars} config={config} overlays={overlays} height={height} signals={signalOn ? signals : []} btEquity={btData?.points ?? []} scoreSeries={activeScoreSeries} alerts={strategyAlerts} trades={trades} refLines={refLines} onBarClick={(bar) => setTradeModal({ bar })} />
         ) : (
           <div className="h-full flex flex-col items-center justify-center gap-2 text-slate-400">
             <Activity className="w-8 h-8 opacity-40" />
@@ -416,6 +577,8 @@ export function KlineWorkspace({ stock, profile, height = 460 }: Props) {
           }}>添加参考线</Button>
           {refLines.map(l => (
             <div key={l.id} className="flex items-center gap-2 text-[11px]">
+              <Switch size="small" checked={l.visible !== false}
+                onChange={(v) => saveRefLines(refLines.map(x => x.id === l.id ? { ...x, visible: v } : x))} />
               <span className="w-3 h-3 rounded-full" style={{ background: l.color }} />
               <span className="font-mono font-bold text-slate-700">{l.label} {l.value >= 0 ? '+' : ''}{l.value.toFixed(2)}</span>
               <Button size="small" type="text" danger className="ml-auto p-0 h-6 w-6"

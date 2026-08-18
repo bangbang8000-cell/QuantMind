@@ -1,4 +1,4 @@
-/** 个股终端 K 线图：主图（蜡烛+MA/BOLL+指数叠加）+ 副图（VOL/MACD/KDJ/RSI 可增删） */
+/** 个股终端 K 线图：主图（蜡烛+MA/BOLL+指数叠加+交易/参考线）+ 副图（VOL/MACD/KDJ/RSI）+ 推理分数副图（多模型+策略提醒+参考线） */
 
 import { useMemo } from 'react';
 import ReactECharts from 'echarts-for-react';
@@ -31,6 +31,14 @@ export interface ScoreSeries {
   model: string;
   color: string;
   points: { date: string; fusion: number | null; side: string | null }[];
+}
+
+/** 策略提醒点：标记在分数副图上 */
+export interface AlertPoint {
+  date: string;
+  severity: 'danger' | 'warning' | 'positive' | 'info';
+  message: string;
+  score?: number | null;
 }
 
 /** 模拟交易点：buy/sell */
@@ -70,8 +78,20 @@ const COLORS = {
   rsi: '#6366f1',
 };
 
-const SUB_HEIGHT = 110; // 每个副图高度 px
-const MAIN_MIN = 300;
+const SEVERITY_COLOR: Record<AlertPoint['severity'], string> = {
+  danger: '#e11d48',
+  warning: '#f59e0b',
+  positive: '#10b981',
+  info: '#6366f1',
+};
+
+const AXIS_LABEL = { fontSize: 10, color: '#64748b' };
+const AXIS_LINE = { lineStyle: { color: '#e2e8f0' } };
+const SPLIT_LINE = { lineStyle: { color: '#f1f5f9' } };
+const SUB_HEIGHT = 100; // 每个副图高度 px
+const SCORE_HEIGHT = 90; // 分数副图高度 px
+/** 默认黄金线（策略 v2.0 主板黄金买入区间 0.10-0.12 的下沿） */
+const DEFAULT_REF_LINE: RefLine = { id: 'default-golden', value: 0.10, label: '黄金线', color: '#10b981' };
 
 interface Props {
   bars: KlineBar[];
@@ -81,17 +101,21 @@ interface Props {
   signals?: SignalPoint[];
   btEquity?: { date: string; equity: number }[];
   scoreSeries?: ScoreSeries[];
+  alerts?: AlertPoint[];
   trades?: TradeMarker[];
   refLines?: RefLine[];
   onBarClick?: (bar: KlineBar) => void;
 }
 
-export function KlineChart({ bars, config, overlays, height = 460, signals = [], btEquity = [], scoreSeries = [], trades = [], refLines = [], onBarClick }: Props) {
+export function KlineChart({
+  bars, config, overlays, height = 460,
+  signals = [], btEquity = [], scoreSeries = [], alerts = [], trades = [], refLines = [], onBarClick,
+}: Props) {
   const option = useMemo(() => {
     const dates = bars.map(b => b.date);
     const closes = bars.map(b => b.close);
     const volumes = bars.map(b => b.volume ?? 0);
-
+    const idxByDate = new Map(dates.map((d, i) => [d, i]));
     const ma5 = config.ma ? sma(closes, 5) : null;
     const ma10 = config.ma ? sma(closes, 10) : null;
     const ma20 = config.ma ? sma(closes, 20) : null;
@@ -103,7 +127,7 @@ export function KlineChart({ bars, config, overlays, height = 460, signals = [],
     const volMa5 = config.subplots.includes('vol') ? volMa(bars, 5) : null;
     const volMa10 = config.subplots.includes('vol') ? volMa(bars, 10) : null;
 
-    // 指数叠加：以各自首日为基准归一化为百分比，按日期对齐到 K 线轴
+    // 指数叠加：以各自首日为基准归一化为百分比
     const overlaySeries = overlays.map(ov => {
       const byDate = new Map(ov.closes.map(c => [c.date, c.close]));
       const base = ov.closes.length ? ov.closes[0].close : 1;
@@ -114,23 +138,35 @@ export function KlineChart({ bars, config, overlays, height = 460, signals = [],
       return { name: ov.name, data: aligned, color: ov.color };
     });
 
-    // 主图也叠加个股自身归一化曲线？不需要--蜡烛本身就是价格。指数归一化直接画在独立 y 轴。
+    // ── grid 布局：主图 + 副图依次下排 + 分数副图（最底） ──
+    // axes 下标与 grid 下标独立：用 gridAxes 记录每个 grid 的 x/y 轴在 xAxis/yAxis 数组中的下标
+    const GRID_L = 64, GRID_R = 16;
+    const GAP = 34;                    // 主图与第一个副图间距
+    const SUB_GAP = 30;                // 副图之间间距
+    const TOP = 18;
     const subCount = config.subplots.length;
-    const mainHeight = Math.max(MAIN_MIN, height - subCount * SUB_HEIGHT - 8);
-    const gridSpace = subCount * (SUB_HEIGHT + 36);
-
-    const grids: any[] = [
-      { left: 64, right: 16, top: 24, height: mainHeight },
-    ];
+    const subTotal = subCount > 0 ? (subCount * SUB_HEIGHT + (subCount - 1) * SUB_GAP) : 0;
+    const scoreTotal = scoreSeries.length ? SCORE_HEIGHT + GAP : 0;
+    const mainH = Math.max(160, height - TOP - GAP - subTotal - scoreTotal - 20);
+    const grids: any[] = [];
     const xAxes: any[] = [];
     const yAxes: any[] = [];
     const series: any[] = [];
+    const gridAxes: { x: number; y: number }[] = []; // gridIdx -> axes idx
 
-    // 主图网格 + 轴
-    xAxes.push({ type: 'category', gridIndex: 0, data: dates, show: false, boundaryGap: true });
-    yAxes.push({ type: 'value', gridIndex: 0, scale: true, splitLine: { lineStyle: { color: '#f1f5f9' } }, axisLabel: { fontSize: 10, color: '#64748b' } });
+    // 主图
+    grids.push({ left: GRID_L, right: GRID_R, top: TOP, height: mainH });
+    xAxes.push({ type: 'category', gridIndex: 0, data: dates, boundaryGap: true, axisLine: AXIS_LINE, axisTick: { show: false }, axisLabel: { show: false } });
+    yAxes.push({ type: 'value', gridIndex: 0, scale: true, axisLabel: AXIS_LABEL, axisLine: AXIS_LINE, splitLine: SPLIT_LINE });
+    gridAxes[0] = { x: 0, y: 0 };
+    // 指数归一化百分比右轴（主图）
     if (overlaySeries.length) {
-      yAxes.push({ type: 'value', gridIndex: 0, scale: true, axisLabel: { show: false }, splitLine: { show: false }, min: -30, max: (v: any) => Math.max(30, Math.ceil(Math.abs(v.max) / 10) * 10) });
+      yAxes.push({
+        type: 'value', gridIndex: 0, position: 'right', scale: true,
+        axisLabel: { show: false }, splitLine: { show: false },
+        min: (v: any) => -Math.max(30, Math.ceil(Math.abs(v.min) / 10) * 10),
+        max: (v: any) => Math.max(30, Math.ceil(Math.abs(v.max) / 10) * 10),
+      });
     }
 
     // 蜡烛
@@ -140,10 +176,10 @@ export function KlineChart({ bars, config, overlays, height = 460, signals = [],
       itemStyle: { color: COLORS.up, color0: COLORS.down, borderColor: COLORS.up, borderColor0: COLORS.down },
     });
 
-    const line = (name: string, data: Series, color: string, yAxisIdx = 0) =>
+    const line = (name: string, data: Series, color: string, yAxisIdx = 0, width = 1) =>
       series.push({
         name, type: 'line', xAxisIndex: 0, yAxisIndex: yAxisIdx, data,
-        symbol: 'none', lineStyle: { width: 1, color }, itemStyle: { color }, emphasis: { disabled: true }, z: 3,
+        symbol: 'none', lineStyle: { width, color }, itemStyle: { color }, emphasis: { disabled: true }, z: 3,
       });
 
     if (ma5) line('MA5', ma5, COLORS.ma5);
@@ -155,113 +191,178 @@ export function KlineChart({ bars, config, overlays, height = 460, signals = [],
       line('BOLL上轨', bb.upper, COLORS.boll);
       line('BOLL下轨', bb.lower, COLORS.boll);
     }
-    overlaySeries.forEach((ov, i) => line(ov.name, ov.data, ov.color, 1));
+    overlaySeries.forEach((ov, i) => line(ov.name, ov.data, ov.color, 1, 1.2));
 
-    // 策略净值叠加（归一化到首日收盘价等比例，画在主图）
+    // 策略净值叠加
     if (btEquity.length) {
       const eqByDate = new Map(btEquity.map(p => [p.date, p.equity]));
       const firstEq = btEquity.length ? btEquity[0].equity : 1;
       const baseClose = bars.length ? bars[0].close : 1;
-      const eqData = bars.map(b => {
-        const eq = eqByDate.get(b.date);
-        if (eq == null || firstEq <= 0) return null;
-        return Number((baseClose * (eq / firstEq)).toFixed(2));
-      });
       series.push({
-        name: '策略净值', type: 'line', xAxisIndex: 0, yAxisIndex: 0, data: eqData,
-        symbol: 'none', lineStyle: { width: 1.6, color: '#f97316', type: 'dashed' }, itemStyle: { color: '#f97316' },
-        z: 4, emphasis: { disabled: true },
+        name: '策略净值', type: 'line', xAxisIndex: 0, yAxisIndex: 0,
+        data: bars.map(b => {
+          const eq = eqByDate.get(b.date);
+          if (eq == null || firstEq <= 0) return null;
+          return Number((baseClose * (eq / firstEq)).toFixed(2));
+        }),
+        symbol: 'none', lineStyle: { width: 1.6, color: '#f97316', type: 'dashed' }, itemStyle: { color: '#f97316' }, z: 4, emphasis: { disabled: true },
       });
     }
 
-    // 推理分数历史叠加（多模型分数线，独立右轴）
-    if (scoreSeries.length) {
-      const idxByDate = new Map(dates.map((d, i) => [d, i]));
-      const scoreIdx = yAxes.length; // 当前主图 y 轴数
-      yAxes.push({
-        type: 'value', gridIndex: 0, position: 'right', scale: true,
-        axisLabel: { fontSize: 9, color: '#94a3b8', formatter: (v: number) => v.toFixed(1) },
-        splitLine: { show: false },
-      });
-      scoreSeries.forEach(sr => {
-        const data = bars.map((b, i) => {
-          const p = sr.points.find(p => p.date === b.date);
-          return p && p.fusion != null ? Number(p.fusion) : null;
-        });
-        series.push({
-          name: `分数·${sr.model}`, type: 'line', xAxisIndex: 0, yAxisIndex: scoreIdx,
-          data, symbol: 'circle', symbolSize: 7, connectNulls: false,
-          lineStyle: { width: 1.6, color: sr.color },
-          itemStyle: { color: sr.color, borderColor: '#fff', borderWidth: 1 },
-          label: { show: true, position: 'top', fontSize: 8, fontWeight: 'bold', formatter: (p: any) => p?.value == null ? '' : Number(p.value).toFixed(3), color: sr.color },
-          emphasis: { scale: 1.4 },
-        });
-      });
-    }
-
-    // 推理分数信号标记（BUY▲ / SELL▼）
+    // 推理信号标记
     if (signals.length) {
-      const buyData: any[] = [];
-      const sellData: any[] = [];
-      const idxByDate = new Map(dates.map((d, i) => [d, i]));
+      const buyData: any[] = [], sellData: any[] = [];
       for (const sig of signals) {
         const i = idxByDate.get(sig.date);
         if (i == null) continue;
         const bar = bars[i];
         const v = sig.side === 'BUY' ? bar.low * 0.99 : bar.high * 1.01;
-        const pt = { value: [i, Number(v.toFixed(2))], sig };
-        if (sig.side === 'BUY') buyData.push(pt);
-        else if (sig.side === 'SELL') sellData.push(pt);
+        if (sig.side === 'BUY') buyData.push({ value: [i, Number(v.toFixed(2))], sig });
+        else if (sig.side === 'SELL') sellData.push({ value: [i, Number(v.toFixed(2))], sig });
       }
       const mk = (data: any[], symbol: string, color: string, offset: number) => ({
         name: '信号', type: 'scatter', xAxisIndex: 0, yAxisIndex: 0,
-        data, symbol, symbolSize: 12, symbolOffset: [0, offset],
+        data, symbol, symbolSize: 11, symbolOffset: [0, offset],
         itemStyle: { color, borderColor: '#fff', borderWidth: 1 },
         label: { show: true, formatter: (p: any) => p.data.sig.side, fontSize: 8, color, fontWeight: 'bold', position: 'top' },
-        z: 10, tooltip: { formatter: (p: any) => {
-          const s = p.data.sig;
-          return `${s.date}<br/>模型: ${s.side}<br/>fusion: ${s.fusion == null ? '--' : Number(s.fusion).toFixed(4)}`;
-        } },
+        z: 10,
       });
       if (buyData.length) series.push(mk(buyData, 'triangle', COLORS.up, -8));
       if (sellData.length) series.push(mk(sellData, 'triangle', COLORS.down, 8));
     }
 
-    // 模拟交易标记（买▲红/卖▼绿）
+    // 模拟交易标记
     if (trades.length) {
-      const buyT: any[] = [];
-      const sellT: any[] = [];
-      const idxByDate = new Map(dates.map((d, i) => [d, i]));
+      const buyT: any[] = [], sellT: any[] = [];
       for (const t of trades) {
         const i = idxByDate.get(t.date);
         if (i == null) continue;
         const bar = bars[i];
         const v = t.side === 'buy' ? bar.low * 0.985 : bar.high * 1.015;
-        const pt = { value: [i, Number(v.toFixed(2))], t };
-        if (t.side === 'buy') buyT.push(pt); else sellT.push(pt);
+        if (t.side === 'buy') buyT.push({ value: [i, Number(v.toFixed(2))], t });
+        else sellT.push({ value: [i, Number(v.toFixed(2))], t });
       }
       const tmk = (data: any[], symbol: string, color: string, offset: number) => ({
         name: '交易', type: 'scatter', xAxisIndex: 0, yAxisIndex: 0,
-        data, symbol, symbolSize: 14, symbolOffset: [0, offset],
+        data, symbol, symbolSize: 13, symbolOffset: [0, offset],
         itemStyle: { color, borderColor: '#fff', borderWidth: 1.5 },
         label: { show: true, formatter: (p: any) => p.data.t.shares, fontSize: 8, color, fontWeight: 'bold', position: 'bottom' },
-        z: 11, tooltip: { formatter: (p: any) => {
-          const t = p.data.t;
-          return `${t.date}<br/>${t.side === 'buy' ? '买入' : '卖出'} ${t.shares} 股 @ ${t.price}`;
-        } },
+        z: 11,
       });
       if (buyT.length) series.push(tmk(buyT, 'triangle', COLORS.up, -12));
       if (sellT.length) series.push(tmk(sellT, 'triangle', COLORS.down, 12));
     }
 
-    // 参考线：分数轴 markLine（挂在第一条分数线上）
-    const visRef = refLines.filter(l => l.visible !== false);
-    if (visRef.length && scoreSeries.length) {
+    // ── 副图：依次下排（grids 1..N）──
+    let subTop = TOP + mainH + GAP;
+    config.subplots.forEach((sp, idx) => {
+      const gi = idx + 1;
+      const xi = xAxes.length;
+      const yi = yAxes.length;
+      grids.push({ left: GRID_L, right: GRID_R, top: subTop, height: SUB_HEIGHT });
+      const showLabel = idx === config.subplots.length - 1 && !scoreSeries.length;
+      xAxes.push({
+        type: 'category', gridIndex: gi, data: dates, boundaryGap: true,
+        axisLine: AXIS_LINE, axisTick: { show: false },
+        axisLabel: showLabel ? { ...AXIS_LABEL, color: '#94a3b8' } : { show: false },
+      });
+      yAxes.push({ type: 'value', gridIndex: gi, scale: true, axisLabel: AXIS_LABEL, axisLine: AXIS_LINE, splitLine: SPLIT_LINE });
+      gridAxes[gi] = { x: xi, y: yi };
+
+      if (sp === 'vol') {
+        series.push({
+          name: '成交量', type: 'bar', xAxisIndex: xi, yAxisIndex: yi,
+          data: volumes.map((v, i) => ({ value: v, itemStyle: { color: bars[i].close >= bars[i].open ? COLORS.volUp : COLORS.volDown } })),
+        });
+        series.push({ name: 'VMA5', type: 'line', xAxisIndex: xi, yAxisIndex: yi, data: volMa5, symbol: 'none', lineStyle: { width: 1, color: COLORS.ma5 }, z: 3 });
+        series.push({ name: 'VMA10', type: 'line', xAxisIndex: xi, yAxisIndex: yi, data: volMa10, symbol: 'none', lineStyle: { width: 1, color: COLORS.ma10 }, z: 3 });
+      } else if (sp === 'macd' && macdRes) {
+        series.push({
+          name: 'MACD柱', type: 'bar', xAxisIndex: xi, yAxisIndex: yi,
+          data: macdRes.hist.map(v => ({ value: v, itemStyle: { color: (v ?? 0) >= 0 ? COLORS.histUp : COLORS.histDown } })),
+        });
+        series.push({ name: 'DIF', type: 'line', xAxisIndex: xi, yAxisIndex: yi, data: macdRes.dif, symbol: 'none', lineStyle: { width: 1, color: COLORS.dif }, z: 3 });
+        series.push({ name: 'DEA', type: 'line', xAxisIndex: xi, yAxisIndex: yi, data: macdRes.dea, symbol: 'none', lineStyle: { width: 1, color: COLORS.dea }, z: 3 });
+      } else if (sp === 'kdj' && kdjRes) {
+        series.push({ name: 'K', type: 'line', xAxisIndex: xi, yAxisIndex: yi, data: kdjRes.k, symbol: 'none', lineStyle: { width: 1, color: COLORS.k }, z: 3 });
+        series.push({ name: 'D', type: 'line', xAxisIndex: xi, yAxisIndex: yi, data: kdjRes.d, symbol: 'none', lineStyle: { width: 1, color: COLORS.d }, z: 3 });
+        series.push({ name: 'J', type: 'line', xAxisIndex: xi, yAxisIndex: yi, data: kdjRes.j, symbol: 'none', lineStyle: { width: 1, color: COLORS.j }, z: 3 });
+      } else if (sp === 'rsi' && rsiRes) {
+        series.push({ name: 'RSI14', type: 'line', xAxisIndex: xi, yAxisIndex: yi, data: rsiRes, symbol: 'none', lineStyle: { width: 1.2, color: COLORS.rsi }, z: 3 });
+      }
+      subTop += SUB_HEIGHT + SUB_GAP;
+    });
+
+    // ── 推理分数：独立副图（最底，grid 下标 = subCount+1）──
+    if (scoreSeries.length) {
+      const gi = subCount + 1;
+      const xi = xAxes.length;
+      const yi = yAxes.length;
+      const scoreTop = subCount > 0 ? TOP + mainH + GAP + subCount * (SUB_HEIGHT + SUB_GAP) : TOP + mainH + GAP;
+      grids.push({ left: GRID_L, right: GRID_R, top: scoreTop, height: SCORE_HEIGHT });
+      xAxes.push({
+        type: 'category', gridIndex: gi, data: dates, boundaryGap: true,
+        axisLine: AXIS_LINE, axisTick: { show: false }, axisLabel: { ...AXIS_LABEL, color: '#94a3b8' },
+      });
+      yAxes.push({ type: 'value', gridIndex: gi, scale: true, axisLabel: AXIS_LABEL, axisLine: AXIS_LINE, splitLine: SPLIT_LINE });
+      gridAxes[gi] = { x: xi, y: yi };
+
+      scoreSeries.forEach(sr => {
+        const scoreMap = new Map(sr.points.map(p => [p.date, p.fusion]));
+        series.push({
+          name: `分数·${sr.model}`, type: 'line', xAxisIndex: xi, yAxisIndex: yi,
+          data: bars.map(b => {
+            const f = scoreMap.get(b.date);
+            return f != null ? Number(f) : null;
+          }),
+          symbol: 'circle', symbolSize: 5, connectNulls: false,
+          lineStyle: { width: 1.6, color: sr.color }, itemStyle: { color: sr.color, borderColor: '#fff', borderWidth: 1 },
+          z: 6, emphasis: { scale: 1.3 },
+        });
+      });
+
+      // 策略提醒标记（菱形，按 severity 着色）
+      if (alerts.length) {
+        const byDate = new Map(alerts.map(a => [a.date, a]));
+        const alertData = bars
+          .map((b, i) => {
+            const a = byDate.get(b.date);
+            if (!a) return null;
+            const sr = scoreSeries[0];
+            const f = a.score ?? sr?.points.find(p => p.date === b.date)?.fusion ?? null;
+            return f == null ? null : { value: [i, Number(f)], a };
+          })
+          .filter(Boolean);
+        if (alertData.length) {
+          series.push({
+            name: '策略提醒', type: 'scatter', xAxisIndex: xi, yAxisIndex: yi,
+            data: alertData, symbol: 'diamond', symbolSize: 12,
+            itemStyle: {
+              color: (p: any) => SEVERITY_COLOR[p.data.a.severity] ?? '#6366f1',
+              borderColor: '#fff', borderWidth: 1,
+            },
+            label: { show: false },
+            tooltip: {
+              formatter: (p: any) => {
+                const a = p.data.a;
+                const sc = a.score != null ? ` · 分数 ${Number(a.score).toFixed(4)}` : '';
+                return `<div><b>${dates[p.data.value[0]]}</b><br/><span style="color:${SEVERITY_COLOR[a.severity]};font-weight:bold">${a.message}</span>${sc}</div>`;
+              },
+            },
+            z: 12,
+          });
+        }
+      }
+
+      // 参考线 + 默认黄金线 0.10：分数副图 markLine
+      const visRef = refLines.filter(l => l.visible !== false);
+      const hasGolden = visRef.some(l => Math.abs(l.value - DEFAULT_REF_LINE.value) < 1e-6);
+      const allLines = hasGolden ? visRef : [DEFAULT_REF_LINE, ...visRef];
       const firstScore = series.find((s: any) => String(s.name).startsWith('分数·'));
       if (firstScore) {
         firstScore.markLine = {
           silent: true, symbol: 'none',
-          data: visRef.map(l => ({
+          data: allLines.map(l => ({
             yAxis: l.value,
             lineStyle: { color: l.color, type: 'dashed', width: 1.5 },
             label: { formatter: `${l.label} ${l.value >= 0 ? '+' : ''}${l.value.toFixed(2)}`, fontSize: 9, position: 'insideEndTop', color: l.color },
@@ -270,49 +371,12 @@ export function KlineChart({ bars, config, overlays, height = 460, signals = [],
       }
     }
 
-    // 副图
-    config.subplots.forEach((sp, idx) => {
-      const gi = idx + 1;
-      grids.push({ left: 64, right: 16, top: 24 + mainHeight + 40 + idx * (SUB_HEIGHT + 36), height: SUB_HEIGHT });
-      const showLabel = idx === config.subplots.length - 1;
-      xAxes.push({ type: 'category', gridIndex: gi, data: dates, show: showLabel, axisLabel: { fontSize: 10, color: '#94a3b8' }, boundaryGap: true });
-      yAxes.push({ type: 'value', gridIndex: gi, scale: true, splitLine: { lineStyle: { color: '#f8fafc' } }, axisLabel: { fontSize: 10, color: '#64748b' } });
-
-      if (sp === 'vol') {
-        series.push({
-          name: '成交量', type: 'bar', xAxisIndex: gi, yAxisIndex: gi,
-          data: volumes.map((v, i) => ({
-            value: v,
-            itemStyle: { color: bars[i].close >= bars[i].open ? COLORS.volUp : COLORS.volDown },
-          })),
-        });
-        series.push({ name: 'VMA5', type: 'line', xAxisIndex: gi, yAxisIndex: gi, data: volMa5, symbol: 'none', lineStyle: { width: 1, color: COLORS.ma5 }, z: 3 });
-        series.push({ name: 'VMA10', type: 'line', xAxisIndex: gi, yAxisIndex: gi, data: volMa10, symbol: 'none', lineStyle: { width: 1, color: COLORS.ma10 }, z: 3 });
-      } else if (sp === 'macd' && macdRes) {
-        series.push({
-          name: 'MACD柱', type: 'bar', xAxisIndex: gi, yAxisIndex: gi,
-          data: macdRes.hist.map(v => ({
-            value: v,
-            itemStyle: { color: (v ?? 0) >= 0 ? COLORS.histUp : COLORS.histDown },
-          })),
-        });
-        series.push({ name: 'DIF', type: 'line', xAxisIndex: gi, yAxisIndex: gi, data: macdRes.dif, symbol: 'none', lineStyle: { width: 1, color: COLORS.dif }, z: 3 });
-        series.push({ name: 'DEA', type: 'line', xAxisIndex: gi, yAxisIndex: gi, data: macdRes.dea, symbol: 'none', lineStyle: { width: 1, color: COLORS.dea }, z: 3 });
-      } else if (sp === 'kdj' && kdjRes) {
-        series.push({ name: 'K', type: 'line', xAxisIndex: gi, yAxisIndex: gi, data: kdjRes.k, symbol: 'none', lineStyle: { width: 1, color: COLORS.k }, z: 3 });
-        series.push({ name: 'D', type: 'line', xAxisIndex: gi, yAxisIndex: gi, data: kdjRes.d, symbol: 'none', lineStyle: { width: 1, color: COLORS.d }, z: 3 });
-        series.push({ name: 'J', type: 'line', xAxisIndex: gi, yAxisIndex: gi, data: kdjRes.j, symbol: 'none', lineStyle: { width: 1, color: COLORS.j }, z: 3 });
-      } else if (sp === 'rsi' && rsiRes) {
-        series.push({ name: 'RSI14', type: 'line', xAxisIndex: gi, yAxisIndex: gi, data: rsiRes, symbol: 'none', lineStyle: { width: 1.2, color: COLORS.rsi }, z: 3 });
-      }
-    });
-
     return {
       animation: false,
       backgroundColor: 'transparent',
       tooltip: {
         trigger: 'axis',
-        axisPointer: { type: 'cross', label: { fontSize: 10 } },
+        axisPointer: { type: 'cross', label: { backgroundColor: '#475569', fontSize: 10 } },
         backgroundColor: 'rgba(255,255,255,0.96)',
         borderColor: '#e2e8f0',
         textStyle: { color: '#334155', fontSize: 11 },
@@ -327,13 +391,15 @@ export function KlineChart({ bars, config, overlays, height = 460, signals = [],
       ],
       series,
     };
-  }, [bars, config, overlays, height, signals, btEquity, scoreSeries, trades, refLines]);
+  }, [bars, config, overlays, height, signals, btEquity, scoreSeries, alerts, trades, refLines]);
 
   const onEvents = onBarClick ? {
     click: (params: any) => {
-      const idx = params?.dataIndex;
-      if (idx == null || idx < 0 || idx >= bars.length) return;
-      onBarClick(bars[idx]);
+      const raw = params?.data;
+      const idx = typeof raw === 'object' && raw?.value ? raw.value[0] : params?.dataIndex;
+      const i = Number.isInteger(idx) && idx >= 0 && idx < bars.length ? idx : -1;
+      if (i < 0) return;
+      onBarClick(bars[i]);
     },
   } : undefined;
 
