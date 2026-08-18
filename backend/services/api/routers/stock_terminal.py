@@ -910,7 +910,7 @@ async def list_stocks(
     only_signaled: bool = Query(False, description="仅 BUY/SELL（排除 HOLD）"),
     concept: str | None = Query(None, description="概念板块（sector_members 板块名）"),
     page: int = Query(1, ge=1),
-    page_size: int = Query(100, ge=10, le=300),
+    page_size: int = Query(100, ge=10, le=6000),
     current_user: dict = Depends(get_current_user),
 ):
     _ = current_user

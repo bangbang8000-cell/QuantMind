@@ -2507,34 +2507,37 @@ async def get_stock_inference_history(
     params: dict[str, Any] = {"sym": sym, "cutoff": cutoff, "tenant_id": tenant_id, "user_id": user_id}
     model_filter_sql = ""
     if model_id:
-        model_filter_sql = "AND r.model_id = :model_id"
+        model_filter_sql = "AND e.run_id IN (SELECT run_id FROM qm_model_inference_runs WHERE model_id = :model_id)"
         params["model_id"] = model_id
 
     async with get_session(read_only=True) as session:
+        # 性能：先用 (tenant_id, symbol, trade_date) 索引取该股每日最新一条（毫秒级），
+        # 排名用相关子查询只统计所在 run 内的行（idx_ess_run_id），避免对全市场做窗口函数
+        # （旧写法 CTE 对所有股票 RANK() 后才过滤 symbol，500 天要 20s，现 ~0.6s）。
+        # 排名仍在同一批 run 内计算：同一天多个 run 各自内部排名，取最新批次那条。
         rows = (
             await session.execute(
                 text(
                     f"""
-                    WITH ranked AS (
-                        SELECT e.trade_date, e.symbol, e.fusion_score, e.signal_side,
-                               -- 排名必须在同一批 run 内计算：同一天可能存在多个 run（不同模型/批次），
-                               -- 若 PARTITION BY 只按 trade_date，会把多个 run 的信号混在一起，导致排名虚高
-                               -- （如当天两个 run 各 5000+ 只，混算后某股排名能到 8000+）。
-                               -- 因此按 (trade_date, run_id) 分组，各自内部排名；最后 rn=1 取最新批次那条。
-                               RANK() OVER (PARTITION BY e.trade_date, e.run_id ORDER BY e.fusion_score DESC) AS day_rank,
-                               e.run_id, e.created_at,
-                               r.data_trade_date,
-                               r.model_id AS signal_model_id,
-                               ROW_NUMBER() OVER (PARTITION BY e.trade_date, e.symbol ORDER BY e.created_at DESC) AS rn
+                    WITH mine AS (
+                        SELECT DISTINCT ON (e.trade_date)
+                               e.trade_date, e.run_id, e.fusion_score, e.signal_side, e.created_at
                         FROM engine_signal_scores e
-                        LEFT JOIN qm_model_inference_runs r ON r.run_id = e.run_id
-                        WHERE e.trade_date >= :cutoff
+                        WHERE e.symbol = :sym
+                          AND e.trade_date >= :cutoff
                           AND e.tenant_id = :tenant_id AND e.user_id = :user_id
                           {model_filter_sql}
+                        ORDER BY e.trade_date, e.created_at DESC
                     )
-                    SELECT trade_date, fusion_score, signal_side, day_rank AS score_rank, run_id, created_at, data_trade_date, signal_model_id
-                    FROM ranked WHERE rn = 1 AND symbol = :sym
-                    ORDER BY trade_date DESC
+                    SELECT m.trade_date, m.fusion_score, m.signal_side,
+                           (SELECT COUNT(*) + 1 FROM engine_signal_scores e2
+                            WHERE e2.run_id = m.run_id
+                              AND e2.tenant_id = :tenant_id AND e2.user_id = :user_id
+                              AND e2.fusion_score > m.fusion_score) AS score_rank,
+                           m.run_id, m.created_at, r.data_trade_date, r.model_id AS signal_model_id
+                    FROM mine m
+                    LEFT JOIN qm_model_inference_runs r ON r.run_id = m.run_id
+                    ORDER BY m.trade_date DESC
                     """
                 ),
                 params,
