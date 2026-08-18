@@ -37,6 +37,7 @@ class StockTerminalService {
     trend?: string;
     tag?: string;
     index_code?: string;
+    side?: string;
     page?: number;
     page_size?: number;
     /** 附带各筛选下拉选项的命中数（option_counts） */

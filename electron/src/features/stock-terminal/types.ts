@@ -31,6 +31,8 @@ export interface StockListResponse {
   models?: { model_id: string; display_name?: string }[];
   /** 筛选下拉选项命中数（with_counts=true 时返回），如 { board: {沪市主板: 1500}, model: {...} } */
   option_counts?: Record<string, Record<string, number>>;
+  /** 列表内各列的取值集合（表头筛选选项），如 { board: [...], industry: [...], cap_tier: [...], trend: [...], side: [...] } */
+  facets?: Record<string, string[]>;
 }
 
 export interface IndexMembership {

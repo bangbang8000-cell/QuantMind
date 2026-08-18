@@ -1,11 +1,11 @@
 /** 个股终端左侧栏：搜索 + 市场分段 + 看板筛选（页面持有条件）+ 信息丰富的股票列表 */
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { Search, RefreshCw, Star } from 'lucide-react';
-import { Input, Spin, message } from 'antd';
+import { Search, RefreshCw, Star, ChevronDown } from 'lucide-react';
+import { Input, Spin, message, Dropdown } from 'antd';
 import { StockListItem, StockListResponse } from '../types';
 import { stockTerminalService } from '../services/stockTerminalService';
-import { ListFilters, bucketScoreRange, StockFilterPanel } from './StockFilterPanel';
+import { ListFilters, bucketScoreRange, StockFilterPanel, BOARD_OPTIONS, CAP_TIER_OPTIONS, TREND_OPTIONS, BUCKET_OPTIONS } from './StockFilterPanel';
 
 interface Props {
   selected: string | null;
@@ -79,6 +79,7 @@ export function StockSidebar({ selected, onSelect, watchlistSymbols, onlyWatchli
   const [data, setData] = useState<StockListResponse | null>(null);
   const [loading, setLoading] = useState(false);
   const [optionCounts, setOptionCounts] = useState<Record<string, Record<string, number>>>({});
+  const [facets, setFacets] = useState<Record<string, string[]>>({});
   const listRef = useRef<HTMLDivElement>(null);
   const itemsRef = useRef<StockListItem[]>([]);
   const initialAutoSelected = useRef(false);
@@ -100,11 +101,15 @@ export function StockSidebar({ selected, onSelect, watchlistSymbols, onlyWatchli
         trend: filters.trend,
         tag: filters.tagId,
         index_code: filters.indexCode,
+        side: filters.side,
         with_counts: !append,  // 下拉命中数只在首页请求附带
       });
       const models = resp.models ?? [];
       if (models.length) onModels?.(models);
-      if (!append) setOptionCounts(resp.option_counts ?? {});
+      if (!append) {
+        setOptionCounts(resp.option_counts ?? {});
+        setFacets(resp.facets ?? {});
+      }
       itemsRef.current = append ? [...itemsRef.current, ...resp.items] : resp.items;
       setData({ ...resp, items: itemsRef.current });
       onTotals?.(resp.total);
@@ -140,6 +145,41 @@ export function StockSidebar({ selected, onSelect, watchlistSymbols, onlyWatchli
 
   // 板块等列紧凑化，1.7fr 把剩余空间都留给股票名称
   const GRID = 'grid grid-cols-[30px_1.7fr_62px_86px_48px_56px_54px_34px] gap-1';
+
+  const SIDE_LABEL: Record<string, string> = { BUY: '买入', SELL: '卖出', HOLD: '持有' };
+  /** 得分档表头短名（列宽有限） */
+  const BUCKET_SHORT: Record<string, string> = {
+    golden: '黄金', optional: '可选', caution: '谨慎', extreme: '极端高',
+    neg_extreme: '极端低', neg_short: '做空', pos: '正分', neg: '负分',
+  };
+
+  /** 表头列筛选下拉（板块/行业/市值/趋势/得分/信号） */
+  const headerDropdown = (items: { value: string; label: string }[], current: string | undefined, onPick: (v?: string) => void, placeholder: string) => (
+    <Dropdown
+      trigger={['click']}
+      placement="bottom"
+      menu={{
+        items: [
+          { key: '__all', label: `全部${placeholder}` },
+          ...items.map(x => ({ key: x.value, label: x.label })),
+        ],
+        selectable: true,
+        selectedKeys: current ? [current] : ['__all'],
+        onClick: ({ key }) => onPick(key === '__all' ? undefined : key),
+      }}
+    >
+      <button className={`flex items-center justify-center gap-0.5 px-0.5 rounded transition-colors ${current ? 'text-blue-600 font-black' : 'hover:text-blue-500'}`}>
+        <span className="truncate">{current ? (SIDE_LABEL[current] ?? current) : placeholder}</span>
+        <ChevronDown className="w-2.5 h-2.5 shrink-0 opacity-60" />
+      </button>
+    </Dropdown>
+  );
+
+  /** 列筛选值集合（优先后端 facets，回退全量选项） */
+  const fac = (key: string, fallback: { value: string; label: string }[]): { value: string; label: string }[] => {
+    const f = facets[key];
+    return f && f.length ? f.map(v => ({ value: v, label: v })) : fallback;
+  };
 
   return (
     <div className="w-[37rem] shrink-0 flex flex-col bg-white/80 backdrop-blur-xl rounded-3xl border border-white/90 shadow-xs p-4 overflow-hidden">
@@ -181,7 +221,7 @@ export function StockSidebar({ selected, onSelect, watchlistSymbols, onlyWatchli
         </div>
       </div>
 
-      {/* 看板筛选（条件由页面持有，命中组合每条件单独一行） */}
+      {/* 筛选面板：columnOnly 只留 模型+概念 两列（其余维度在列表表头筛选） */}
       <StockFilterPanel
         filters={filters}
         onChange={onFiltersChange}
@@ -189,13 +229,21 @@ export function StockSidebar({ selected, onSelect, watchlistSymbols, onlyWatchli
         fullTotal={fullTotal}
         models={modelOptions}
         compact
+        columnOnly
         optionCounts={optionCounts}
       />
 
-      {/* 列表头 */}
+      {/* 列表头：板块/行业/市值/趋势/得分/信号 直接点表头筛选 */}
       <div className={`${GRID} px-1 pb-1 pt-2 text-[10px] font-bold text-slate-400 border-b border-slate-100 shrink-0`}>
-        <span className="text-center">排名</span><span>股票</span><span className="text-center">板块</span><span className="text-center">行业</span>
-        <span className="text-center">市值</span><span className="text-center">趋势</span><span className="text-right">得分</span><span className="text-center">信号</span>
+        <span className="text-center">排名</span>
+        <span>股票</span>
+        <span className="text-center">{headerDropdown(fac('board', BOARD_OPTIONS.map(b => ({ value: b, label: b }))), filters.board, v => onFiltersChange({ ...filters, board: v }), '板块')}</span>
+        <span className="text-center">{headerDropdown(fac('industry', []), filters.industry, v => onFiltersChange({ ...filters, industry: v }), '行业')}</span>
+        <span className="text-center">{headerDropdown(fac('cap_tier', CAP_TIER_OPTIONS), filters.capTier, v => onFiltersChange({ ...filters, capTier: v }), '市值')}</span>
+        <span className="text-center">{headerDropdown(fac('trend', TREND_OPTIONS), filters.trend, v => onFiltersChange({ ...filters, trend: v }), '趋势')}</span>
+        <span className="text-right">{headerDropdown(fac('bucket', BUCKET_OPTIONS), filters.bucket, v => onFiltersChange({ ...filters, bucket: v, scoreMin: undefined }),
+          filters.bucket ? (BUCKET_SHORT[filters.bucket] ?? '得分') : '得分')}</span>
+        <span className="text-center">{headerDropdown(fac('side', [{ value: 'BUY', label: '买入' }, { value: 'SELL', label: '卖出' }, { value: 'HOLD', label: '持有' }]), filters.side, v => onFiltersChange({ ...filters, side: v }), '信号')}</span>
       </div>
 
       {/* 股票列表 */}

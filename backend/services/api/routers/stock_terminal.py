@@ -1036,6 +1036,7 @@ async def list_stocks(
     score_min: float | None = Query(None, description="推理分数下限（fusion_score）"),
     score_max: float | None = Query(None, description="推理分数上限"),
     only_signaled: bool = Query(False, description="仅 BUY/SELL（排除 HOLD）"),
+    side: str | None = Query(None, description="信号方向：BUY / SELL / HOLD"),
     concept: str | None = Query(None, description="概念板块（sector_members 板块名）"),
     board: str | None = Query(None, description="板块：沪市主板/深市主板/科创板/创业板/北交所"),
     cap_tier: str | None = Query(None, description="市值档：微盘/小盘/中盘/大盘/超大盘"),
@@ -1184,6 +1185,8 @@ async def list_stocks(
             df = df[df["_fusion"].notna() & (df["_fusion"] <= score_max)]
         if only_signaled:
             df = df[df["_side"].isin(["BUY", "SELL"])]
+        if side:
+            df = df[df["_side"] == side]
         df = df.sort_values("_fusion", ascending=False, na_position="last")
 
     # 分数趋势：最近 3 个信号日的 fusion 比较判定（每股 s0<-s1<-s2）
@@ -1256,6 +1259,22 @@ async def list_stocks(
                 option_counts["model"] = model_counts
         except Exception as exc:  # noqa: BLE001
             logger.warning("option counts failed: %s", exc)
+
+    # 列表表头筛选的取值集合（facets）：基于 base_df（其余已选条件已生效），始终附带
+    facets: dict[str, list[str]] = {}
+    try:
+        _codes = base_df["Symbol"].str.split(".").str[0]
+        facets["board"] = sorted(x for x in base_df["board"].dropna().unique().tolist() if x)
+        facets["industry"] = sorted(x for x in base_df["rs_hyname"].dropna().unique().tolist() if x)
+        facets["cap_tier"] = [
+            t for t in ("微盘", "小盘", "中盘", "大盘", "超大盘")
+            if int((_cap_mask(pd.to_numeric(base_df["Zsz"], errors="coerce"), t)).sum()) > 0
+        ]
+        facets["trend"] = sorted({t for t in trend_map.values() if t})
+        # 信号方向固定三个（近 90 天可能只有 HOLD 有数据，但选项要完整）
+        facets["side"] = ["BUY", "SELL", "HOLD"]
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("facets failed: %s", exc)
 
     # 推理模型选项（供筛选下拉）：最近 90 天内有信号的全部模型（真实 model_id + display_name）。
     # engine_signal_scores.model_version 恒为 'inference_script'（历史遗留无意义），
@@ -1347,6 +1366,7 @@ async def list_stocks(
             "items": [_item(r) for _, r in rows.iterrows()],
             "models": model_options,
             "option_counts": option_counts,
+            "facets": facets,
         },
     }
 

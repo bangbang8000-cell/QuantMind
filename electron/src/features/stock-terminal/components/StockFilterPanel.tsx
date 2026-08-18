@@ -19,6 +19,7 @@ export interface ListFilters {
   scoreMin?: number;
   tagId?: string;
   tagName?: string;
+  side?: string;       // 信号方向 BUY/SELL/HOLD（列表表头筛选）
 }
 
 export const BOARD_OPTIONS = ['沪市主板', '深市主板', '科创板', '创业板', '北交所'];
@@ -63,9 +64,11 @@ interface Props {
   compact?: boolean;
   /** 各条件下拉选项命中数（由父级统计），如 { board: {沪市主板: 1500}, capTier: {中盘: 800} } */
   optionCounts?: Record<string, Record<string, number>>;
+  /** 表头列筛选模式：面板只留「推理模型 + 概念板块」两列（板块/行业/市值/趋势/得分/信号移到列表表头） */
+  columnOnly?: boolean;
 }
 
-export function StockFilterPanel({ filters, onChange, total, fullTotal, models: modelOptions = [], compact = false, optionCounts = {} }: Props) {
+export function StockFilterPanel({ filters, onChange, total, fullTotal, models: modelOptions = [], compact = false, optionCounts = {}, columnOnly = false }: Props) {
   const [industries, setIndustries] = useState<string[]>([]);
   const [concepts, setConcepts] = useState<string[]>([]);
 
@@ -83,12 +86,15 @@ export function StockFilterPanel({ filters, onChange, total, fullTotal, models: 
   };
 
   const activeChips: { key: string; label: string; clear: () => void }[] = [];
-  if (filters.board) activeChips.push({ key: 'board', label: `板块 ${filters.board}`, clear: () => set({ board: undefined }) });
-  if (filters.capTier) activeChips.push({ key: 'cap', label: `市值 ${filters.capTier}`, clear: () => set({ capTier: undefined }) });
-  const bd = BUCKET_OPTIONS.find(b => b.value === filters.bucket);
-  if (bd) activeChips.push({ key: 'bucket', label: `分数 ${bd.label}`, clear: () => set({ bucket: undefined, scoreMin: undefined }) });
-  if (filters.trend) activeChips.push({ key: 'trend', label: `趋势 ${filters.trend}`, clear: () => set({ trend: undefined }) });
-  if (filters.industry) activeChips.push({ key: 'industry', label: `行业 ${filters.industry}`, clear: () => set({ industry: undefined }) });
+  if (!columnOnly) {
+    if (filters.board) activeChips.push({ key: 'board', label: `板块 ${filters.board}`, clear: () => set({ board: undefined }) });
+    if (filters.capTier) activeChips.push({ key: 'cap', label: `市值 ${filters.capTier}`, clear: () => set({ capTier: undefined }) });
+    const bd = BUCKET_OPTIONS.find(b => b.value === filters.bucket);
+    if (bd) activeChips.push({ key: 'bucket', label: `分数 ${bd.label}`, clear: () => set({ bucket: undefined, scoreMin: undefined }) });
+    if (filters.trend) activeChips.push({ key: 'trend', label: `趋势 ${filters.trend}`, clear: () => set({ trend: undefined }) });
+    if (filters.industry) activeChips.push({ key: 'industry', label: `行业 ${filters.industry}`, clear: () => set({ industry: undefined }) });
+    if (filters.side) activeChips.push({ key: 'side', label: `信号 ${filters.side}`, clear: () => set({ side: undefined }) });
+  }
   if (filters.concept) activeChips.push({ key: 'concept', label: `概念 ${filters.concept}`, clear: () => set({ concept: undefined }) });
   if (filters.indexCode) activeChips.push({ key: 'index', label: `宽基 ${filters.indexName ?? filters.indexCode}`, clear: () => set({ indexCode: undefined, indexName: undefined }) });
   if (filters.model) {
@@ -117,20 +123,24 @@ export function StockFilterPanel({ filters, onChange, total, fullTotal, models: 
         )}
       </div>
 
-      {/* 筛选下拉网格：左侧内嵌 2 列，右侧看板 4 列（日期筛选已移除） */}
+      {/* 筛选下拉网格：columnOnly 只留 模型+概念 两列，其余维度在列表表头筛选 */}
       <div className={`grid gap-1.5 ${compact ? 'grid-cols-2' : 'grid-cols-4'}`}>
-        <Select allowClear size="small" placeholder="板块" value={filters.board || undefined}
-          onChange={v => set({ board: v })} options={BOARD_OPTIONS.map(b => ({ label: opt('board', b), value: b }))} />
-        <Select allowClear size="small" placeholder="市值档" value={filters.capTier || undefined}
-          onChange={v => set({ capTier: v })} options={CAP_TIER_OPTIONS.map(c => ({ label: opt('capTier', c.value), value: c.value }))} />
-        <Select allowClear size="small" placeholder="分数档" value={filters.bucket || undefined}
-          onChange={v => set({ bucket: v, scoreMin: undefined })}
-          options={BUCKET_OPTIONS.map(b => ({ label: opt('bucket', b.value), value: b.value }))} />
-        <Select allowClear size="small" placeholder="趋势" value={filters.trend || undefined}
-          onChange={v => set({ trend: v })} options={TREND_OPTIONS.map(t => ({ label: opt('trend', t.value), value: t.value }))} />
-        <Select allowClear showSearch size="small" placeholder="行业" value={filters.industry || undefined}
-          optionFilterProp="label" onChange={v => set({ industry: v })}
-          options={industries.map(i => ({ label: i, value: i }))} />
+        {!columnOnly && (
+          <>
+            <Select allowClear size="small" placeholder="板块" value={filters.board || undefined}
+              onChange={v => set({ board: v })} options={BOARD_OPTIONS.map(b => ({ label: opt('board', b), value: b }))} />
+            <Select allowClear size="small" placeholder="市值档" value={filters.capTier || undefined}
+              onChange={v => set({ capTier: v })} options={CAP_TIER_OPTIONS.map(c => ({ label: opt('capTier', c.value), value: c.value }))} />
+            <Select allowClear size="small" placeholder="分数档" value={filters.bucket || undefined}
+              onChange={v => set({ bucket: v, scoreMin: undefined })}
+              options={BUCKET_OPTIONS.map(b => ({ label: opt('bucket', b.value), value: b.value }))} />
+            <Select allowClear size="small" placeholder="趋势" value={filters.trend || undefined}
+              onChange={v => set({ trend: v })} options={TREND_OPTIONS.map(t => ({ label: opt('trend', t.value), value: t.value }))} />
+            <Select allowClear showSearch size="small" placeholder="行业" value={filters.industry || undefined}
+              optionFilterProp="label" onChange={v => set({ industry: v })}
+              options={industries.map(i => ({ label: i, value: i }))} />
+          </>
+        )}
         <Select allowClear showSearch size="small" placeholder="概念板块" value={filters.concept || undefined}
           optionFilterProp="label" onChange={v => set({ concept: v })}
           options={concepts.map(c => ({ label: c, value: c }))} />
