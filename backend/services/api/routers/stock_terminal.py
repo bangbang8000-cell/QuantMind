@@ -92,6 +92,23 @@ def _latest_partition(base: Path) -> Path | None:
     return parts[-1] / "data.parquet"
 
 
+def _partition_on(base: Path, asof: str) -> Path | None:
+    """取 asof 当日或之前最近的分区文件（历史日快照，dt=YYYYMMDD）。
+
+    asof 为 YYYY-MM-DD 字符串；超出范围时回退最新分区。
+    """
+    if not base.exists():
+        return None
+    day = asof.replace("-", "")
+    parts = sorted(p for p in base.glob("dt=*") if (p / "data.parquet").exists())
+    if not parts:
+        return None
+    for p in reversed(parts):
+        if p.name.split("=")[1] <= day:
+            return p / "data.parquet"
+    return parts[0] / "data.parquet"
+
+
 def _safe_f(v: Any) -> float | None:
     """NaN/inf -> None，保证 JSON 可序列化。"""
     try:
@@ -103,11 +120,15 @@ def _safe_f(v: Any) -> float | None:
     return f
 
 
-def _load_universe() -> tuple[pd.DataFrame, str]:
-    """全市场快照：instrument_detail + 最新 technical_indicators(close/pct_change)。"""
+def _load_universe(asof: str | None = None) -> tuple[pd.DataFrame, str]:
+    """全市场快照：instrument_detail + technical_indicators(close/pct_change)。
+
+    asof=YYYY-MM-DD 时读该日或之前最近的分区（历史日联动，日历点选日）；
+    缺省读最新分区。static 列（名称/行业/市值等）取自 instrument_detail 最新快照。
+    """
     now = time.time()
     cached = _universe_cache["df"]
-    if cached is not None and now - _universe_cache["ts"] < _UNIVERSE_TTL:
+    if cached is not None and now - _universe_cache["ts"] < _UNIVERSE_TTL and not asof:
         return cached, _universe_cache["trade_date"]
 
     d = _quantdb_dir()
@@ -125,8 +146,8 @@ def _load_universe() -> tuple[pd.DataFrame, str]:
     keep = [c for c in detail_cols if c in raw.columns]
     df = raw[keep].copy()
 
-    # 最新收盘/涨跌幅（technical_indicators 最新分区，全市场一次读三列）
-    ti_file = _latest_partition(d / "5_technical_derived" / "technical_indicators")
+    # 收盘/涨跌幅（technical_indicators 分区：最新或 asof 当日/之前最近日，全市场一次读三列）
+    ti_file = _partition_on(d / "5_technical_derived" / "technical_indicators", asof) if asof else _latest_partition(d / "5_technical_derived" / "technical_indicators")
     trade_date = ""
     if ti_file is not None:
         ti = pd.read_parquet(ti_file, columns=["symbol", "close", "pct_change"])
@@ -141,7 +162,8 @@ def _load_universe() -> tuple[pd.DataFrame, str]:
     df["board"] = df["Symbol"].map(_classify_board)
     df["exchange"] = df["Symbol"].map(_exchange_of)
 
-    _universe_cache.update({"df": df, "ts": now, "trade_date": trade_date})
+    if not asof:
+        _universe_cache.update({"df": df, "ts": now, "trade_date": trade_date})
     return df, trade_date
 
 
@@ -318,6 +340,7 @@ def _fin_records(df: pd.DataFrame, cols: dict[str, str], limit: int, yi: bool) -
 @router.get("/dividends")
 async def stock_dividends(
     symbol: str = Query(...),
+    date: str | None = Query(None, description="只看该日及之前的分红 YYYY-MM-DD（缺省=全部）"),
     current_user: dict = Depends(get_current_user),
 ):
     _ = current_user
@@ -327,7 +350,10 @@ async def stock_dividends(
     df = _read_symbol_parquet("dividend_factors", sym)
     if df.empty:
         return {"success": True, "data": {"items": []}}
-    df = df.sort_values("time", ascending=False).head(40)
+    df = df.sort_values("time", ascending=False)
+    if date:
+        df = df[df["time"].astype(str).str[:10] <= date]
+    df = df.head(40)
     items = [
         {
             "date": str(r.get("time"))[:10],
@@ -801,6 +827,7 @@ async def stock_minute_kline(
 async def stock_financials(
     symbol: str = Query(..., description="600519.SH"),
     limit: int = Query(8, ge=2, le=20),
+    date: str | None = Query(None, description="只看该日之前披露的报告期 YYYY-MM-DD（缺省=全部）"),
     current_user: dict = Depends(get_current_user),
 ):
     _ = current_user
@@ -812,6 +839,18 @@ async def stock_financials(
     balance = _read_symbol_parquet("balance", sym)
     cashflow = _read_symbol_parquet("cashflow", sym)
     pershare = _read_symbol_parquet("pershare_index", sym)
+
+    if date:
+        # 只看该日之前披露的报告期（日历点选历史日时财报不出现未来数据）
+        cutoff = date.replace("-", "")
+
+        def _until_disclosed(df: pd.DataFrame) -> pd.DataFrame:
+            return df if df.empty else df[df["m_timetag"].astype(str).str[:8] <= cutoff]
+
+        income = _until_disclosed(income)
+        balance = _until_disclosed(balance)
+        cashflow = _until_disclosed(cashflow)
+        pershare = _until_disclosed(pershare)
 
     periods = (
         sorted(
@@ -840,6 +879,7 @@ async def stock_series(
     symbol: str = Query(...),
     group: str = Query(..., description="valuation/margin/chip/flow/sentiment/technical/holders"),
     years: int = Query(3, ge=1, le=10),
+    end_date: str | None = Query(None, description="截止日 YYYY-MM-DD，只看该日及之前（日历点选日联动）"),
     current_user: dict = Depends(get_current_user),
 ):
     _ = current_user
@@ -853,6 +893,8 @@ async def stock_series(
         if hn.empty:
             return {"success": True, "data": {"dates": [], "columns": {}}}
         hn = hn.sort_values("endDate")
+        if end_date:
+            hn = hn[hn["endDate"].astype(str).str[:10] <= end_date]
         return {
             "success": True,
             "data": {
@@ -867,10 +909,13 @@ async def stock_series(
     view, cols = spec
     # dt 为整数 YYYYMMDD
     start_dt = (_date.today() - _timedelta(days=years * 366)).strftime("%Y%m%d")
+    end_dt = end_date.replace("-", "") if end_date else ""
     col_list = ", ".join(cols)
     sql = (
         f"SELECT dt, {col_list} FROM {view} "
-        f"WHERE symbol = '{sym}' AND dt >= {start_dt} ORDER BY dt"
+        f"WHERE symbol = '{sym}' AND dt >= {start_dt}"
+        + (f" AND dt <= {end_dt}" if end_dt else "")
+        + " ORDER BY dt"
     )
 
     def _run() -> pd.DataFrame:
@@ -1053,10 +1098,12 @@ async def list_stocks(
     with_counts: bool = Query(False, description="附带筛选下拉的选项命中数（option_counts）"),
     page: int = Query(1, ge=1),
     page_size: int = Query(100, ge=10, le=6000),
+    find_symbol: str | None = Query(None, description="定位股票（600519.SH 或纯代码），返回当前排序中的名次与页数"),
     current_user: dict = Depends(get_current_user),
 ):
     _ = current_user
-    df, trade_date = _load_universe()
+    # 日历点选历史日时 close/pct_change 也读该日快照（左右整页随日期联动）
+    df, trade_date = _load_universe(asof=date)
 
     m = market.upper()
     if m in ("SH", "SZ", "BJ"):
@@ -1211,6 +1258,16 @@ async def list_stocks(
         df = df.iloc[0:0]
 
     total = len(df)
+
+    # 定位选中股票在当前排序中的名次（列表自动跳转：切日期后名次可能掉到几千名）
+    find_rank: int | None = None
+    if find_symbol and total:
+        code = find_symbol.split(".")[0]
+        # df 过滤后 index 是非连续标签，必须用位置索引（0-based）而非 index 标签
+        pos = (df["Symbol"].str.split(".").str[0] == code).to_numpy().nonzero()[0]
+        if len(pos):
+            find_rank = int(pos[0]) + 1  # 0-based 位置 -> 1-based 名次
+
     start = (page - 1) * page_size
     rows = df.iloc[start : start + page_size]
 
@@ -1370,6 +1427,7 @@ async def list_stocks(
             "page_size": page_size,
             "trade_date": trade_date,
             "signal_date": _signal_date,
+            "find_rank": find_rank,
             "items": [_item(r) for _, r in rows.iterrows()],
             "models": model_options,
             "option_counts": option_counts,
@@ -1435,11 +1493,12 @@ async def list_industries(current_user: dict = Depends(get_current_user)):
 @router.get("/profile")
 async def stock_profile(
     symbol: str = Query(..., description="600519.SH"),
+    date: str | None = Query(None, description="历史快照日 YYYY-MM-DD（缺省=最新）"),
     current_user: dict = Depends(get_current_user),
 ):
     _ = current_user
     sym = symbol.upper().strip()
-    df, trade_date = _load_universe()
+    df, trade_date = _load_universe(asof=date)
     hits = df[df["Symbol"] == sym]
     if hits.empty:
         raise HTTPException(status_code=404, detail=f"未找到 {sym}")
@@ -1451,11 +1510,12 @@ async def stock_profile(
             return None
         return v
 
-    # 估值最新快照（pe_ttm/pb/ps/dividend_rate/float_mv 口径与列表的 DynaPE 互补）
+    # 估值快照（pe_ttm/pb/ps/dividend_rate/float_mv 口径与列表的 DynaPE 互补）；
+    # 指定 date 时读该日或之前最近分区，随日历联动
     valuation: dict[str, Any] = {}
     dividend_yield: float | None = None
     d = _quantdb_dir()
-    v_file = _latest_partition(d / "5_technical_derived" / "valuation")
+    v_file = _partition_on(d / "5_technical_derived" / "valuation", date) if date else _latest_partition(d / "5_technical_derived" / "valuation")
     if v_file is not None:
         try:
             vdf = pd.read_parquet(v_file)

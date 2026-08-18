@@ -1,4 +1,4 @@
-/** P2 Tab 集合：财务/估值/筹码资金/两融/情绪/股东分红 */
+/** P2 Tab 集合：财务/估值/筹码资金/两融/情绪/股东分红（asof=日历点选日，随日期联动） */
 
 import { useEffect, useState } from 'react';
 import { message } from 'antd';
@@ -6,7 +6,7 @@ import { BarChart3, Coins, Landmark, BrainCircuit, Users2, PieChart } from 'luci
 import { stockTerminalService, FinancialsResponse, SeriesResponse, DividendItem } from '../../services/stockTerminalService';
 import { SeriesChart, buildSeries } from './SeriesChart';
 
-export interface TabProps { symbol: string; }
+export interface TabProps { symbol: string; asof?: string; }
 
 const _divFmt = (v: number | null, digits = 3): string => v == null ? '--' : Number(v).toFixed(digits);
 const _f2 = (v: number | null): string => v == null ? '--' : Number(v).toFixed(2);
@@ -59,15 +59,15 @@ function FinTable({ records, periods }: { records: { period: string; items: Reco
 }
 
 // ---------- 财务报表 ----------
-export function FinancialsTab({ symbol }: TabProps) {
+export function FinancialsTab({ symbol, asof }: TabProps) {
   const [data, setData] = useState<FinancialsResponse | null>(null);
   const [loading, setLoading] = useState(false);
   useEffect(() => {
     let c = false;
     setLoading(true);
-    stockTerminalService.getFinancials(symbol).then(d => { if (!c) setData(d); }).catch(() => message.error('财务数据加载失败')).finally(() => { if (!c) setLoading(false); });
+    stockTerminalService.getFinancials(symbol, 8, asof).then(d => { if (!c) setData(d); }).catch(() => message.error('财务数据加载失败')).finally(() => { if (!c) setLoading(false); });
     return () => { c = true; };
-  }, [symbol]);
+  }, [symbol, asof]);
   if (!data) return <TabShell title="财务报表" icon={BarChart3} loading={loading}><div /></TabShell>;
   return (
     <TabShell title="财务报表" icon={BarChart3} loading={loading}>
@@ -118,15 +118,15 @@ export function FinancialsTab({ symbol }: TabProps) {
 }
 
 // ---------- 估值走势 ----------
-export function ValuationTab({ symbol }: TabProps) {
+export function ValuationTab({ symbol, asof }: TabProps) {
   const [resp, setResp] = useState<SeriesResponse>({ dates: [], columns: {} });
   const [loading, setLoading] = useState(false);
   useEffect(() => {
     let c = false;
     setLoading(true);
-    stockTerminalService.getSeries(symbol, 'valuation').then(r => { if (!c) setResp(r); }).catch(() => message.error('估值加载失败')).finally(() => { if (!c) setLoading(false); });
+    stockTerminalService.getSeries(symbol, 'valuation', 3, asof).then(r => { if (!c) setResp(r); }).catch(() => message.error('估值加载失败')).finally(() => { if (!c) setLoading(false); });
     return () => { c = true; };
-  }, [symbol]);
+  }, [symbol, asof]);
   const series = buildSeries(resp, [
     { key: 'pe_ttm', name: 'PE(TTM)', color: '#3b82f6' },
     { key: 'pb', name: 'PB', color: '#f59e0b' },
@@ -152,7 +152,7 @@ export function ValuationTab({ symbol }: TabProps) {
 }
 
 // ---------- 筹码资金 ----------
-export function ChipFlowTab({ symbol }: TabProps) {
+export function ChipFlowTab({ symbol, asof }: TabProps) {
   const [chip, setChip] = useState<SeriesResponse>({ dates: [], columns: {} });
   const [flow, setFlow] = useState<SeriesResponse>({ dates: [], columns: {} });
   const [loading, setLoading] = useState(false);
@@ -160,11 +160,11 @@ export function ChipFlowTab({ symbol }: TabProps) {
     let c = false;
     setLoading(true);
     Promise.all([
-      stockTerminalService.getSeries(symbol, 'chip', 2),
-      stockTerminalService.getSeries(symbol, 'flow', 1),
+      stockTerminalService.getSeries(symbol, 'chip', 2, asof),
+      stockTerminalService.getSeries(symbol, 'flow', 1, asof),
     ]).then(([ch, fl]) => { if (!c) { setChip(ch); setFlow(fl); } }).catch(() => message.error('筹码/资金加载失败')).finally(() => { if (!c) setLoading(false); });
     return () => { c = true; };
-  }, [symbol]);
+  }, [symbol, asof]);
   const chipS = buildSeries(chip, [
     { key: 'chip_profit_ratio_20', name: '20日获利盘(%)', color: '#f59e0b' },
     { key: 'chip_profit_ratio_60', name: '60日获利盘(%)', color: '#8b5cf6' },
@@ -191,15 +191,15 @@ export function ChipFlowTab({ symbol }: TabProps) {
 }
 
 // ---------- 融资融券 ----------
-export function MarginTab({ symbol }: TabProps) {
+export function MarginTab({ symbol, asof }: TabProps) {
   const [resp, setResp] = useState<SeriesResponse>({ dates: [], columns: {} });
   const [loading, setLoading] = useState(false);
   useEffect(() => {
     let c = false;
     setLoading(true);
-    stockTerminalService.getSeries(symbol, 'margin').then(r => { if (!c) setResp(r); }).catch(() => message.error('两融加载失败')).finally(() => { if (!c) setLoading(false); });
+    stockTerminalService.getSeries(symbol, 'margin', 3, asof).then(r => { if (!c) setResp(r); }).catch(() => message.error('两融加载失败')).finally(() => { if (!c) setLoading(false); });
     return () => { c = true; };
-  }, [symbol]);
+  }, [symbol, asof]);
   const series = buildSeries(resp, [
     { key: 'finance_balance', name: '融资余额(元)', color: '#3b82f6' },
     { key: 'finance_net', name: '融资净买入(元)', color: '#f59e0b' },
@@ -214,22 +214,22 @@ export function MarginTab({ symbol }: TabProps) {
 }
 
 // ---------- 技术形态 / 市场情绪 ----------
-export function SentimentTab({ symbol }: TabProps) {
+export function SentimentTab({ symbol, asof }: TabProps) {
   const [resp, setResp] = useState<SeriesResponse>({ dates: [], columns: {} });
   const [loading, setLoading] = useState(false);
   useEffect(() => {
     let c = false;
     setLoading(true);
     Promise.all([
-      stockTerminalService.getSeries(symbol, 'technical'),
-      stockTerminalService.getSeries(symbol, 'sentiment', 2),
+      stockTerminalService.getSeries(symbol, 'technical', 3, asof),
+      stockTerminalService.getSeries(symbol, 'sentiment', 2, asof),
     ]).then(([t, s]) => {
       if (!c) {
         setResp({ dates: t.dates, columns: { ...t.columns, ...s.columns } });
       }
     }).catch(() => message.error('情绪加载失败')).finally(() => { if (!c) setLoading(false); });
     return () => { c = true; };
-  }, [symbol]);
+  }, [symbol, asof]);
   const tech = buildSeries(resp, [
     { key: 'rsi_14', name: 'RSI14', color: '#6366f1' },
     { key: 'macd_hist', name: 'MACD柱', color: '#e11d48' },
@@ -256,7 +256,7 @@ export function SentimentTab({ symbol }: TabProps) {
 }
 
 // ---------- 股东户数 / 分红 ----------
-export function HoldersTab({ symbol }: TabProps) {
+export function HoldersTab({ symbol, asof }: TabProps) {
   const [hn, setHn] = useState<SeriesResponse>({ dates: [], columns: {} });
   const [divs, setDivs] = useState<DividendItem[]>([]);
   const [loading, setLoading] = useState(false);
@@ -264,11 +264,11 @@ export function HoldersTab({ symbol }: TabProps) {
     let c = false;
     setLoading(true);
     Promise.all([
-      stockTerminalService.getSeries(symbol, 'holders'),
-      stockTerminalService.getDividends(symbol),
+      stockTerminalService.getSeries(symbol, 'holders', 3, asof),
+      stockTerminalService.getDividends(symbol, asof),
     ]).then(([h, d]) => { if (!c) { setHn(h); setDivs(d); } }).catch(() => message.error('股东/分红加载失败')).finally(() => { if (!c) setLoading(false); });
     return () => { c = true; };
-  }, [symbol]);
+  }, [symbol, asof]);
   const hS = buildSeries(hn, [{ key: 'holder_num', name: '股东户数', color: '#3b82f6' }]);
   return (
     <TabShell title="股东户数与分红" icon={Users2} loading={loading}>

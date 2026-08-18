@@ -44,13 +44,15 @@ export default function StockTerminalPage() {
   const [listModels, setListModels] = useState<{ model_id: string; display_name?: string }[]>([]);
   const [quotes, setQuotes] = useState<IndexQuote[]>([]);
   const [signalDate, setSignalDate] = useState<string | undefined>();
+  const [calRefresh, setCalRefresh] = useState(0);
 
+  // 概况随日历日期联动：历史日读该日 technical_indicators/valuation 快照
   useEffect(() => {
     if (!selected) { setProfile(null); return; }
     let cancelled = false;
-    stockTerminalService.getProfile(selected.symbol).then(p => { if (!cancelled) setProfile(p); });
+    stockTerminalService.getProfile(selected.symbol, signalDate).then(p => { if (!cancelled) setProfile(p); });
     return () => { cancelled = true; };
-  }, [selected]);
+  }, [selected, signalDate]);
 
   useEffect(() => {
     let cancelled = false;
@@ -62,12 +64,12 @@ export default function StockTerminalPage() {
     return () => { cancelled = true; };
   }, []);
 
-  // 当日指数快照（/market/quotes，本地 parquet 毫秒级）
+  // 指数快照（/market/quotes，本地 parquet 毫秒级）；signalDate 为历史日时返回该日行情
   useEffect(() => {
     let cancelled = false;
-    stockTerminalService.getIndexQuotes().then(qs => { if (!cancelled) setQuotes(qs); });
+    stockTerminalService.getIndexQuotes(signalDate).then(qs => { if (!cancelled) setQuotes(qs); });
     return () => { cancelled = true; };
-  }, []);
+  }, [signalDate]);
 
   // 稳定引用：sideFilters 每次渲染都新建对象会触发侧栏 fetchList 无限重建（表格打架根源）
   const sideFilters = useMemo(() => ({
@@ -101,7 +103,7 @@ export default function StockTerminalPage() {
         >
           <div className="flex items-center gap-1.5">
             <Activity className="w-3 h-3 text-blue-500" />
-            <span className="text-[11px] font-black text-slate-700">今日指数</span>
+            <span className="text-[11px] font-black text-slate-700">{signalDate ? '当日指数（历史）' : '今日指数'}</span>
             <span className="text-[9px] text-slate-400 font-bold">· 股票列表 分数降序</span>
             {quotes.length > 0 && <span className="text-[9px] text-slate-400 font-mono ml-auto">{quotes[0]?.trade_date ?? ''}</span>}
           </div>
@@ -280,6 +282,9 @@ export default function StockTerminalPage() {
                 <ScoreCalendar
                   symbol={selected?.symbol ?? ''}
                   selectedDate={signalDate}
+                  modelId={listFilters.model}
+                  refreshKey={calRefresh}
+                  onInferred={() => setCalRefresh(calRefresh + 1)}
                   onBarClick={(d) => {
                     setSignalDate(d);  // 乐观高亮：立刻圈选点击日
                     setListFilters({ ...listFilters, date: d });
@@ -319,12 +324,12 @@ export default function StockTerminalPage() {
           </div>
           <div className="flex-1 min-h-0 overflow-y-auto p-3">
             {infoTab === 'overview' && <OverviewTab profile={profile} />}
-            {infoTab === 'financials' && selected && <FinancialsTab symbol={selected.symbol} />}
-            {infoTab === 'valuation' && selected && <ValuationTab symbol={selected.symbol} />}
-            {infoTab === 'chipflow' && selected && <ChipFlowTab symbol={selected.symbol} />}
-            {infoTab === 'margin' && selected && <MarginTab symbol={selected.symbol} />}
-            {infoTab === 'sentiment' && selected && <SentimentTab symbol={selected.symbol} />}
-            {infoTab === 'holders' && selected && <HoldersTab symbol={selected.symbol} />}
+            {infoTab === 'financials' && selected && <FinancialsTab symbol={selected.symbol} asof={signalDate} />}
+            {infoTab === 'valuation' && selected && <ValuationTab symbol={selected.symbol} asof={signalDate} />}
+            {infoTab === 'chipflow' && selected && <ChipFlowTab symbol={selected.symbol} asof={signalDate} />}
+            {infoTab === 'margin' && selected && <MarginTab symbol={selected.symbol} asof={signalDate} />}
+            {infoTab === 'sentiment' && selected && <SentimentTab symbol={selected.symbol} asof={signalDate} />}
+            {infoTab === 'holders' && selected && <HoldersTab symbol={selected.symbol} asof={signalDate} />}
             {infoTab === 'news' && selected && <NewsTab symbol={selected.symbol} />}
           </div>
         </motion.div>

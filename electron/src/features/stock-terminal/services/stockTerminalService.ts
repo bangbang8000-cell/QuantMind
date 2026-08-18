@@ -42,6 +42,8 @@ class StockTerminalService {
     page_size?: number;
     /** 附带各筛选下拉选项的命中数（option_counts） */
     with_counts?: boolean;
+    /** 定位股票（600519.SH），返回当前排序中的名次（find_rank）供列表跳转 */
+    find_symbol?: string;
   }): Promise<StockListResponse> {
     const resp = await this.client.get('/stock-terminal/list', { params });
     return resp.data?.data ?? { total: 0, page: 1, page_size: 100, trade_date: '', items: [] };
@@ -61,9 +63,9 @@ class StockTerminalService {
     return resp.data?.data?.industries ?? [];
   }
 
-  async getProfile(symbol: string): Promise<StockProfile | null> {
+  async getProfile(symbol: string, date?: string): Promise<StockProfile | null> {
     try {
-      const resp = await this.client.get('/stock-terminal/profile', { params: { symbol } });
+      const resp = await this.client.get('/stock-terminal/profile', { params: { symbol, ...(date ? { date } : {}) } });
       return resp.data?.data ?? null;
     } catch {
       return null;
@@ -105,10 +107,10 @@ class StockTerminalService {
     }
   }
 
-  /** 当日指数快照（上证/深成/沪深300/中证500/创业板/科创50/上证50/北证50） */
-  async getIndexQuotes(): Promise<IndexQuote[]> {
+  /** 指数快照（上证/深成/沪深300/中证500/创业板/科创50/上证50/北证50）；asof 取历史日及之前最近行情 */
+  async getIndexQuotes(asof?: string): Promise<IndexQuote[]> {
     try {
-      const resp = await this.client.get('/market/quotes', { params: { market: 'CN' } });
+      const resp = await this.client.get('/market/quotes', { params: { market: 'CN', ...(asof ? { asof } : {}) } });
       return resp.data?.data?.quotes ?? [];
     } catch {
       return [];
@@ -146,18 +148,18 @@ class StockTerminalService {
     }
   }
 
-  async getFinancials(symbol: string, limit = 8): Promise<FinancialsResponse> {
+  async getFinancials(symbol: string, limit = 8, date?: string): Promise<FinancialsResponse> {
     try {
-      const resp = await this.client.get('/stock-terminal/financials', { params: { symbol, limit } });
+      const resp = await this.client.get('/stock-terminal/financials', { params: { symbol, limit, ...(date ? { date } : {}) } });
       return resp.data?.data ?? { symbol, periods: [], income: [], balance: [], cashflow: [], per_share: [] };
     } catch {
       return { symbol, periods: [], income: [], balance: [], cashflow: [], per_share: [] };
     }
   }
 
-  async getSeries(symbol: string, group: string, years = 3): Promise<SeriesResponse> {
+  async getSeries(symbol: string, group: string, years = 3, endDate?: string): Promise<SeriesResponse> {
     try {
-      const resp = await this.client.get('/stock-terminal/series', { params: { symbol, group, years } });
+      const resp = await this.client.get('/stock-terminal/series', { params: { symbol, group, years, ...(endDate ? { end_date: endDate } : {}) } });
       return resp.data?.data ?? { dates: [], columns: {} };
     } catch {
       return { dates: [], columns: {} };
@@ -213,9 +215,9 @@ class StockTerminalService {
     }
   }
 
-  async getDividends(symbol: string): Promise<DividendItem[]> {
+  async getDividends(symbol: string, date?: string): Promise<DividendItem[]> {
     try {
-      const resp = await this.client.get('/stock-terminal/dividends', { params: { symbol } });
+      const resp = await this.client.get('/stock-terminal/dividends', { params: { symbol, ...(date ? { date } : {}) } });
       return resp.data?.data?.items ?? [];
     } catch {
       return [];
