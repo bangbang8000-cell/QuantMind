@@ -384,6 +384,43 @@ export function KlineWorkspace({ stock, profile, height = 460 }: Props) {
               </span>
             )}
           </div>
+          {/* 名称后的空白区：信号 / 模型选择 / 模拟交易 / 参考线 / 回测 / 回放 */}
+          <div className="flex items-center gap-1.5 shrink-0">
+            <button onClick={() => setSignalOn(!signalOn)} disabled={!signals.length}
+              className={`flex items-center gap-1 text-[10px] font-bold px-2 py-1 rounded-lg transition-colors ${signalOn && signals.length ? 'bg-rose-50 text-rose-600 border border-rose-100' : 'text-slate-400 hover:text-slate-600 border border-transparent'}`}
+              title={signals.length ? '模型推理分数信号' : '无推理信号'}>
+              <TrendingUp className="w-3 h-3" /> 信号{signals.length > 0 && <span className="text-[9px] bg-rose-100 rounded px-0.5">{signals.length}</span>}
+            </button>
+            {scoreModels.length > 1 && (
+              <Select
+                value={selectedModel}
+                onChange={setSelectedModel}
+                size="small"
+                style={{ width: 120 }}
+                popupMatchSelectWidth={false}
+                options={[
+                  { value: 'all', label: '全部模型' },
+                  ...scoreModels.map(m => ({ value: m.model_id, label: m.display_name || m.model_id })),
+                ]}
+              />
+            )}
+            <Tooltip title="点击 K 线日期模拟买卖">
+              <Button size="small" onClick={() => message.info('点击 K 线图任意日期即可买入/卖出')}
+                className="rounded-lg text-[10px] font-bold h-6 px-2 text-amber-600 border-amber-200">
+                模拟交易
+              </Button>
+            </Tooltip>
+            <Tooltip title="分数参考线管理">
+              <Button size="small" onClick={() => setRefLineModal(true)}
+                className="rounded-lg text-[10px] font-bold h-6 px-2 text-violet-600 border-violet-200">
+                参考线
+              </Button>
+            </Tooltip>
+            <ChartBacktestPanel symbol={stock.symbol} onResult={setBtData} />
+            <KlineReplay active={replayActive} onToggle={() => { setReplayActive(!replayActive); setReplayCursor(0.5); setReplayPlaying(false); }}
+              cursor={replayCursor} onCursor={setReplayCursor} playing={replayPlaying} onPlaying={setReplayPlaying}
+              speed={replaySpeed} onSpeed={setReplaySpeed} totalBars={bars.length} cursorIndex={visibleBars.length} />
+          </div>
         </div>
         <div className="flex items-center gap-1.5">
           <div className="grid grid-cols-5 gap-0.5 p-0.5 bg-slate-100/70 rounded-lg shrink-0">
@@ -413,41 +450,7 @@ export function KlineWorkspace({ stock, profile, height = 460 }: Props) {
             ))}
           </div>
           <Select mode="multiple" allowClear maxCount={4} placeholder="叠加指数" value={overlayCodes}
-            onChange={setOverlayCodes} options={INDEX_OPTIONS} size="small" style={{ minWidth: 140 }} maxTagTextLength={4} popupMatchSelectWidth={false} />
-          <button onClick={() => setSignalOn(!signalOn)} disabled={!signals.length}
-            className={`flex items-center gap-1 text-[10px] font-bold px-2 py-1 rounded-lg transition-colors ${signalOn && signals.length ? 'bg-rose-50 text-rose-600 border border-rose-100' : 'text-slate-400 hover:text-slate-600 border border-transparent'}`}
-            title={signals.length ? '模型推理分数信号' : '无推理信号'}>
-            <TrendingUp className="w-3 h-3" /> 信号{signals.length > 0 && <span className="text-[9px] bg-rose-100 rounded px-0.5">{signals.length}</span>}
-          </button>
-          {scoreModels.length > 1 && (
-            <Select
-              value={selectedModel}
-              onChange={setSelectedModel}
-              size="small"
-              style={{ width: 130 }}
-              popupMatchSelectWidth={false}
-              options={[
-                { value: 'all', label: '全部模型' },
-                ...scoreModels.map(m => ({ value: m.model_id, label: m.display_name || m.model_id })),
-              ]}
-            />
-          )}
-          <Tooltip title="点击 K 线日期模拟买卖">
-            <Button size="small" onClick={() => message.info('点击 K 线图任意日期即可买入/卖出')}
-              className="rounded-lg text-[10px] font-bold h-6 px-2 text-amber-600 border-amber-200">
-              模拟交易
-            </Button>
-          </Tooltip>
-          <Tooltip title="分数参考线管理">
-            <Button size="small" onClick={() => setRefLineModal(true)}
-              className="rounded-lg text-[10px] font-bold h-6 px-2 text-violet-600 border-violet-200">
-              参考线
-            </Button>
-          </Tooltip>
-          <ChartBacktestPanel symbol={stock.symbol} onResult={setBtData} />
-          <KlineReplay active={replayActive} onToggle={() => { setReplayActive(!replayActive); setReplayCursor(0.5); setReplayPlaying(false); }}
-            cursor={replayCursor} onCursor={setReplayCursor} playing={replayPlaying} onPlaying={setReplayPlaying}
-            speed={replaySpeed} onSpeed={setReplaySpeed} totalBars={bars.length} cursorIndex={visibleBars.length} />
+            onChange={setOverlayCodes} options={INDEX_OPTIONS} size="small" style={{ minWidth: 100 }} maxTagTextLength={4} popupMatchSelectWidth={false} />
           <Tooltip title={isWatched ? '移出自选' : '加入自选'}>
             <Button size="small" type="text" onClick={toggleWatch}
               icon={<Star className={`w-3.5 h-3.5 ${isWatched ? 'fill-amber-400 text-amber-400' : 'text-slate-400'}`} />} />
