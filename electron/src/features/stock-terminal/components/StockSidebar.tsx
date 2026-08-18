@@ -219,7 +219,7 @@ export function StockSidebar({ selected, onSelect, watchlistSymbols, onlyWatchli
   };
 
   return (
-    <div className="w-[37rem] shrink-0 flex flex-col bg-white/80 backdrop-blur-xl rounded-3xl border border-white/90 shadow-xs p-4 overflow-hidden">
+    <div className="w-[37rem] flex-1 min-h-0 flex flex-col bg-white/80 backdrop-blur-xl rounded-3xl border border-white/90 shadow-xs p-4 overflow-hidden">
       {/* 搜索框 + 市场分段 + 自选（自选放北交后面，省空间） */}
       <div className="flex items-center gap-1.5 mb-2">
         <div className="flex-1 flex items-center bg-white border border-slate-200 hover:border-blue-400 focus-within:border-blue-500 focus-within:ring-2 focus-within:ring-blue-100 rounded-xl px-3 py-1 transition-all shadow-2xs">
