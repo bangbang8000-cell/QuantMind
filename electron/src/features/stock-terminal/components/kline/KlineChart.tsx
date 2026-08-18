@@ -88,8 +88,8 @@ const SEVERITY_COLOR: Record<AlertPoint['severity'], string> = {
 const AXIS_LABEL = { fontSize: 10, color: '#64748b' };
 const AXIS_LINE = { lineStyle: { color: '#e2e8f0' } };
 const SPLIT_LINE = { lineStyle: { color: '#f1f5f9' } };
-const SUB_HEIGHT = 100; // 每个副图高度 px
-const SCORE_HEIGHT = 90; // 分数副图高度 px
+const SUB_HEIGHT = 84;  // 每个副图高度 px
+const SCORE_HEIGHT = 72; // 分数副图高度 px
 /** 默认黄金线（策略 v2.0 主板黄金买入区间 0.10-0.12 的下沿） */
 const DEFAULT_REF_LINE: RefLine = { id: 'default-golden', value: 0.10, label: '黄金线', color: '#10b981' };
 
@@ -141,13 +141,13 @@ export function KlineChart({
     // ── grid 布局：主图 + 副图依次下排 + 分数副图（最底） ──
     // axes 下标与 grid 下标独立：用 gridAxes 记录每个 grid 的 x/y 轴在 xAxis/yAxis 数组中的下标
     const GRID_L = 64, GRID_R = 16;
-    const GAP = 34;                    // 主图与第一个副图间距
-    const SUB_GAP = 30;                // 副图之间间距
-    const TOP = 18;
+    const GAP = 28;                    // 主图与第一个副图间距
+    const SUB_GAP = 24;                // 副图之间间距
+    const TOP = 24;                    // 顶部留出图例行
     const subCount = config.subplots.length;
     const subTotal = subCount > 0 ? (subCount * SUB_HEIGHT + (subCount - 1) * SUB_GAP) : 0;
     const scoreTotal = scoreSeries.length ? SCORE_HEIGHT + GAP : 0;
-    const mainH = Math.max(160, height - TOP - GAP - subTotal - scoreTotal - 20);
+    const mainH = Math.max(120, height - TOP - GAP - subTotal - scoreTotal - 18);
     const grids: any[] = [];
     const xAxes: any[] = [];
     const yAxes: any[] = [];
@@ -176,7 +176,7 @@ export function KlineChart({
       itemStyle: { color: COLORS.up, color0: COLORS.down, borderColor: COLORS.up, borderColor0: COLORS.down },
     });
 
-    const line = (name: string, data: Series, color: string, yAxisIdx = 0, width = 1) =>
+    const line = (name: string, data: Series, color: string, yAxisIdx = 0, width = 1.2) =>
       series.push({
         name, type: 'line', xAxisIndex: 0, yAxisIndex: yAxisIdx, data,
         symbol: 'none', lineStyle: { width, color }, itemStyle: { color }, emphasis: { disabled: true }, z: 3,
@@ -310,7 +310,7 @@ export function KlineChart({
       scoreSeries.forEach(sr => {
         const scoreMap = new Map(sr.points.map(p => [p.date, p.fusion]));
         series.push({
-          name: `分数·${sr.model}`, type: 'line', xAxisIndex: xi, yAxisIndex: yi,
+          name: `分数·${sr.model.slice(0, 10)}`, type: 'line', xAxisIndex: xi, yAxisIndex: yi,
           data: bars.map(b => {
             const f = scoreMap.get(b.date);
             return f != null ? Number(f) : null;
@@ -371,9 +371,18 @@ export function KlineChart({
       }
     }
 
+    const legendData: string[] = [];
+    if (ma5) legendData.push('MA5', 'MA10', 'MA20', 'MA60');
+    scoreSeries.forEach(sr => legendData.push(`分数·${sr.model.slice(0, 10)}`));
+
     return {
       animation: false,
       backgroundColor: 'transparent',
+      legend: legendData.length ? {
+        show: true, top: 2, left: 68, itemWidth: 12, itemHeight: 8, itemGap: 8,
+        textStyle: { fontSize: 9, color: '#64748b' },
+        data: legendData,
+      } : undefined,
       tooltip: {
         trigger: 'axis',
         axisPointer: { type: 'cross', label: { backgroundColor: '#475569', fontSize: 10 } },
@@ -386,7 +395,7 @@ export function KlineChart({
       xAxis: xAxes,
       yAxis: yAxes,
       dataZoom: [
-        { type: 'inside', xAxisIndex: xAxes.map((_, i) => i), start: 60, end: 100 },
+        { type: 'inside', xAxisIndex: xAxes.map((_, i) => i), start: 0, end: 100 },
         { type: 'slider', xAxisIndex: xAxes.map((_, i) => i), bottom: 2, height: 16, borderColor: '#e2e8f0', fillerColor: 'rgba(59,130,246,0.08)' },
       ],
       series,

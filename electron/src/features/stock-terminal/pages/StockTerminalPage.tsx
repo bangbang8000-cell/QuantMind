@@ -158,24 +158,20 @@ export default function StockTerminalPage() {
         open={klineOpen}
         onCancel={() => setKlineOpen(false)}
         footer={null}
-        width={1260}
+        width={1160}
         destroyOnClose
-        title={
-          <span className="text-sm font-black text-slate-800 flex items-center gap-2">
-            <CandlestickChart className="w-4 h-4 text-blue-600" />
-            {selected?.name} · {selected?.symbol} 完整 K 线
-          </span>
-        }
-        styles={{ body: { height: 640, padding: 0 } }}
+        title={null}
+        style={{ top: 16 }}
+        styles={{ body: { height: 560, padding: 0 } }}
       >
         {selected && klineOpen && (
           <div className="h-full flex">
             {/* 左：K 线主体（周期/指标/指数/回放/信号/回测/多模型分数/模拟交易/参考线） */}
             <div className="flex-1 min-w-0">
-              <KlineWorkspace stock={selected} profile={profile} height={610} />
+              <KlineWorkspace stock={selected} profile={profile} height={500} />
             </div>
             {/* 右：竖排智能标签 */}
-            <div className="w-60 shrink-0 border-l border-slate-100 overflow-y-auto">
+            <div className="w-44 shrink-0 border-l border-slate-100 overflow-y-auto">
               <TagStrip symbol={selected.symbol} onSelectStock={setSelected} vertical />
             </div>
           </div>

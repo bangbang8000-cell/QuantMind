@@ -144,7 +144,7 @@ export function KlineWorkspace({ stock, profile, height = 460 }: Props) {
           }
           return;
         }
-        let items = await stockTerminalService.getDailyKline(sym, 250);
+        let items = await stockTerminalService.getDailyKline(sym, 100);
         if ((period === 'weekly' || period === 'monthly') && items.length) items = resampleBars(items, period);
         if (!cancelled) setBars(items);
       } finally {
@@ -187,7 +187,7 @@ export function KlineWorkspace({ stock, profile, height = 460 }: Props) {
   useEffect(() => {
     overlayCodes.forEach(async code => {
       if (overlayCache[code]) return;
-      const closes = await stockTerminalService.getIndexKline(code, 250);
+      const closes = await stockTerminalService.getIndexKline(code, 100);
       setOverlayCache({ ...overlayCache, [code]: closes });
     });
   }, [overlayCodes, overlayCache]);
