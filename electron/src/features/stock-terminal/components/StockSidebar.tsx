@@ -270,6 +270,31 @@ export function StockSidebar({ selected, onSelect, watchlistSymbols, onlyWatchli
         optionCounts={optionCounts}
       />
 
+      {/* 当前信号日 chip：随日历切换显示该日期（琥珀底色），点击回到最新 */}
+      {(() => {
+        // 切了历史日优先显示 filters.date；否则显示最近信号日 signal_date
+        const shownDate = filters.date || data?.signal_date;
+        if (!shownDate) return null;
+        const isHistorical = !!filters.date;
+        return (
+          <div className="flex items-center gap-1.5 shrink-0">
+            <span className="text-[9px] font-bold text-slate-400">信号日</span>
+            <button
+              onClick={() => onFiltersChange({ ...filters, date: undefined })}
+              title={isHistorical ? '当前列表基准日，点击回到最新' : '当前列表基准信号日'}
+              className={`shrink-0 text-[10px] font-mono font-bold rounded-md px-1.5 py-0.5 border transition-colors ${
+                isHistorical
+                  ? 'bg-amber-50 text-amber-700 border-amber-200 hover:bg-amber-100'
+                  : 'bg-slate-50 text-slate-500 border-slate-200 hover:bg-slate-100'
+              }`}
+            >
+              {shownDate}
+              {isHistorical && <span className="ml-0.5 opacity-70">✕</span>}
+            </button>
+          </div>
+        );
+      })()}
+
       {/* 列表头：板块/行业/市值/趋势/得分/信号 直接点表头筛选 */}
       <div className={`${GRID} px-1 pb-1 pt-2 text-[10px] font-bold text-slate-400 border-b border-slate-100 shrink-0`}>
         <span className="text-center">排名</span>
