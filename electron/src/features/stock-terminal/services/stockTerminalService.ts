@@ -102,6 +102,16 @@ class StockTerminalService {
     }
   }
 
+  /** 当日指数快照（上证/深成/沪深300/中证500/创业板/科创50/上证50/北证50） */
+  async getIndexQuotes(): Promise<IndexQuote[]> {
+    try {
+      const resp = await this.client.get('/market/quotes', { params: { market: 'CN' } });
+      return resp.data?.data?.quotes ?? [];
+    } catch {
+      return [];
+    }
+  }
+
   async getMinuteKline(symbol: string, freq: 'min5' | 'min1', days = 10): Promise<{ items: KlineBar[]; available: boolean }> {
     try {
       const resp = await this.client.get('/stock-terminal/minute', { params: { symbol, freq, days } });
@@ -199,6 +209,14 @@ class StockTerminalService {
 }
 
 export interface FinRecord { period: string; items: Record<string, number | null>; }
+export interface IndexQuote {
+  symbol: string;
+  name: string;
+  price: number;
+  change: number;
+  change_percent: number;
+  trade_date?: string;
+}
 export interface FinancialsResponse {
   symbol: string;
   periods: string[];

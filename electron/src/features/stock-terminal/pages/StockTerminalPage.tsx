@@ -1,16 +1,16 @@
-/** 个股终端主页：左栏检索列表(推理分数/筛选) + 右侧信息 Tab；点股票名弹整合 K 线窗 */
+/** 个股终端主页：左栏检索+筛选+列表；右侧 指数条/智能标签/分数日历 + 信息 Tab；点股票名弹整合 K 线窗 */
 
 import { useEffect, useState } from 'react';
 import { motion } from 'framer-motion';
-import { CandlestickChart, Layers } from 'lucide-react';
-import { Modal } from 'antd';
+import { CandlestickChart, Layers, CalendarDays, Activity } from 'lucide-react';
+import { Modal, Tooltip } from 'antd';
 import { StockListItem, StockProfile } from '../types';
-import { stockTerminalService } from '../services/stockTerminalService';
+import { stockTerminalService, IndexQuote } from '../services/stockTerminalService';
 import { StockSidebar } from '../components/StockSidebar';
 import { TagStrip } from '../components/TagStrip';
-import { StockFilterPanel, ListFilters } from '../components/StockFilterPanel';
+import { ListFilters } from '../components/StockFilterPanel';
+import { ScoreCalendar } from '../components/ScoreCalendar';
 import { KlineWorkspace } from '../components/kline/KlineWorkspace';
-import { RankingPanel } from '../components/RankingPanel';
 import { OverviewTab } from '../components/OverviewTab';
 import { FinancialsTab, ValuationTab, ChipFlowTab, MarginTab, SentimentTab, HoldersTab } from '../components/tabs/P2Tabs';
 import { NewsTab } from '../components/tabs/NewsTab';
@@ -37,9 +37,9 @@ export default function StockTerminalPage() {
   const [onlyWatchlist, setOnlyWatchlist] = useState(false);
   const [tagFilter, setTagFilter] = useState<{ id: string; name: string } | null>(null);
   const [listFilters, setListFilters] = useState<ListFilters>({});
-  const [listModels, setListModels] = useState<string[]>([]);
   const [listTotal, setListTotal] = useState(0);
   const [fullTotal, setFullTotal] = useState(0);
+  const [quotes, setQuotes] = useState<IndexQuote[]>([]);
 
   useEffect(() => {
     if (!selected) { setProfile(null); return; }
@@ -58,13 +58,20 @@ export default function StockTerminalPage() {
     return () => { cancelled = true; };
   }, []);
 
+  // 当日指数快照（/market/quotes，本地 parquet 毫秒级）
+  useEffect(() => {
+    let cancelled = false;
+    stockTerminalService.getIndexQuotes().then(qs => { if (!cancelled) setQuotes(qs); });
+    return () => { cancelled = true; };
+  }, []);
+
   const up = (profile?.pct_change ?? 0) >= 0;
 
   return (
     <div className="w-full h-full relative overflow-hidden flex gap-4 p-5 pt-3 pb-5 select-none"
       style={{ background: 'linear-gradient(135deg, #f8fafc 0%, #eff6ff 50%, #f8fafc 100%)' }}>
 
-      {/* 左栏：检索 + 筛选 + 分数列表 */}
+      {/* 左栏：检索 + 看板筛选 + 信息丰富的分数列表 */}
       <StockSidebar
         selected={selected?.symbol ?? null}
         onSelect={setSelected}
@@ -76,22 +83,57 @@ export default function StockTerminalPage() {
           tagId: tagFilter?.id,
           tagName: tagFilter?.name,
         }}
-        onModels={setListModels}
+        onFiltersChange={setListFilters}
         onTotals={(total) => {
           setListTotal(total);
           const hasActive = Object.values(listFilters).some(v => v != null && v !== '') || !!tagFilter;
           if (!hasActive) setFullTotal(total);
         }}
+        fullTotal={fullTotal}
       />
 
-      {/* 右侧：推理排名 + 信息 Tabs（默认不显示 K 线，点股票弹整合 K 线窗） */}
-      <div className="flex-1 min-w-0 flex flex-col gap-4">
+      {/* 右侧：当日指数条 + 股票信息 + 智能标签 + 分数日历 + 信息 Tabs */}
+      <div className="flex-1 min-w-0 flex flex-col gap-4 min-h-0">
 
-        {/* 顶部标头：股票名（点击弹整合 K 线） */}
+        {/* 当日指数条：A股核心指数快照（红色涨绿色跌） */}
         <motion.div
           initial={{ opacity: 0, y: 8 }}
           animate={{ opacity: 1, y: 0 }}
           transition={{ duration: 0.3 }}
+          className="bg-white/80 backdrop-blur-xl rounded-3xl border border-white/90 shadow-xs px-4 py-2 flex items-center gap-2 shrink-0"
+        >
+          <div className="flex items-center gap-1.5 shrink-0 pr-2 border-r border-slate-100">
+            <Activity className="w-3.5 h-3.5 text-blue-500" />
+            <span className="text-xs font-black text-slate-700">今日指数</span>
+            {quotes.length > 0 && <span className="text-[9px] text-slate-400 font-mono">{quotes[0]?.trade_date ?? ''}</span>}
+          </div>
+          {quotes.length ? (
+            <div className="flex items-center gap-3 flex-wrap min-w-0">
+              {quotes.map(q => {
+                const qup = q.change_percent >= 0;
+                return (
+                  <Tooltip key={q.symbol} title={`${q.name} ${q.price} · ${q.trade_date ?? ''}`}>
+                    <span className="flex items-center gap-1.5 text-[11px] font-mono">
+                      <span className="font-bold text-slate-600">{q.name}</span>
+                      <span className="font-bold text-slate-800">{Number(q.price).toFixed(2)}</span>
+                      <span className={`font-bold ${qup ? 'text-rose-600' : 'text-emerald-600'}`}>
+                        {qup ? '+' : ''}{Number(q.change_percent).toFixed(2)}%
+                      </span>
+                    </span>
+                  </Tooltip>
+                );
+              })}
+            </div>
+          ) : (
+            <span className="text-[10px] text-slate-400">本地指数行情加载中…</span>
+          )}
+        </motion.div>
+
+        {/* 顶部标头：股票名（点击弹整合 K 线）+ 宽基/概念 chips（点击筛选左侧列表） */}
+        <motion.div
+          initial={{ opacity: 0, y: 8 }}
+          animate={{ opacity: 1, y: 0 }}
+          transition={{ duration: 0.3, delay: 0.02 }}
           className="bg-white/80 backdrop-blur-xl rounded-3xl border border-white/90 shadow-xs px-4 py-3 flex items-start justify-between gap-3 shrink-0"
         >
           <div className="flex items-start gap-2.5 min-w-0 flex-1">
@@ -166,12 +208,12 @@ export default function StockTerminalPage() {
           </div>
         </motion.div>
 
-        {/* 智能标签条：点击筛选按钮 -> 左侧列表按标签过滤 */}
+        {/* 智能标签条：点击筛选按钮 -> 左侧列表按标签过滤；命中组合单独一行 */}
         {selected && (
           <motion.div
             initial={{ opacity: 0, y: 8 }}
             animate={{ opacity: 1, y: 0 }}
-            transition={{ duration: 0.3, delay: 0.02 }}
+            transition={{ duration: 0.3, delay: 0.04 }}
             className="bg-white/80 backdrop-blur-xl rounded-3xl border border-white/90 shadow-xs shrink-0"
           >
             <TagStrip
@@ -183,31 +225,35 @@ export default function StockTerminalPage() {
           </motion.div>
         )}
 
-        {/* 条件筛选面板（驱动左侧列表，看板风格） */}
-        <StockFilterPanel
-          filters={listFilters}
-          onChange={setListFilters}
-          total={listTotal}
-          fullTotal={fullTotal}
-          models={listModels}
-        />
-
-        {/* 推理排名（推理研究内容，右侧上方） */}
+        {/* 分数日历：个股历史推理分数（推理排名区域替换） */}
         <motion.div
           initial={{ opacity: 0, y: 8 }}
           animate={{ opacity: 1, y: 0 }}
-          transition={{ duration: 0.3, delay: 0.04 }}
+          transition={{ duration: 0.3, delay: 0.06 }}
           className="bg-white/80 backdrop-blur-xl rounded-3xl border border-white/90 shadow-xs flex flex-col overflow-hidden shrink-0"
           style={{ height: 260 }}
         >
-          <RankingPanel signalDate={profile?.trade_date} onSelectStock={setSelected} onOpenKline={() => setKlineOpen(true)} />
+          <div className="flex items-center justify-between px-4 py-2 border-b border-slate-100 shrink-0">
+            <div className="flex items-center gap-1.5">
+              <CalendarDays className="w-3.5 h-3.5 text-indigo-500" />
+              <span className="text-xs font-black text-slate-700">推理分数日历</span>
+            </div>
+            {selected && (
+              <span className="text-[10px] text-slate-400 font-mono truncate ml-2">
+                {selected.name} · 历史推理分数（红正绿负）
+              </span>
+            )}
+          </div>
+          <div className="flex-1 min-h-0 overflow-y-auto px-4 py-2">
+            <ScoreCalendar symbol={selected?.symbol ?? ''} />
+          </div>
         </motion.div>
 
         {/* 信息 Tab 区 */}
         <motion.div
           initial={{ opacity: 0, y: 8 }}
           animate={{ opacity: 1, y: 0 }}
-          transition={{ duration: 0.3, delay: 0.06 }}
+          transition={{ duration: 0.3, delay: 0.08 }}
           className="bg-white/80 backdrop-blur-xl rounded-3xl border border-white/90 shadow-xs flex flex-col overflow-hidden flex-1 min-h-0"
         >
           <div className="flex items-center justify-between px-4 py-2 border-b border-slate-100">

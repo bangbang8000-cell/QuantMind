@@ -1,4 +1,4 @@
-/** 看板风格筛选面板：置于推理排行上方，驱动左侧股票列表（状态由页面持有） */
+/** 看板风格筛选面板：驱动左侧股票列表（状态由页面持有，compact=左侧列内嵌模式） */
 
 import { useEffect, useState } from 'react';
 import { SlidersHorizontal, X, RotateCcw } from 'lucide-react';
@@ -59,10 +59,11 @@ interface Props {
   total: number;        // 筛选后数量
   fullTotal: number;    // 全市场数量
   models?: string[];    // 可选推理模型（由列表数据回填）
-
+  /** 左侧列内嵌模式：筛选网格 2 列紧凑排布 */
+  compact?: boolean;
 }
 
-export function StockFilterPanel({ filters, onChange, total, fullTotal, models: modelOptions = [] }: Props) {
+export function StockFilterPanel({ filters, onChange, total, fullTotal, models: modelOptions = [], compact = false }: Props) {
   const [industries, setIndustries] = useState<string[]>([]);
   const [concepts, setConcepts] = useState<string[]>([]);
 
@@ -88,9 +89,9 @@ export function StockFilterPanel({ filters, onChange, total, fullTotal, models: 
   if (filters.tagId) activeChips.push({ key: 'tag', label: `标签 ${filters.tagName}`, clear: () => set({ tagId: undefined, tagName: undefined }) });
 
   return (
-    <div className="bg-white/80 backdrop-blur-xl rounded-3xl border border-white/90 shadow-xs px-4 py-2.5 flex flex-col gap-2 shrink-0">
+    <div className="flex flex-col gap-1.5 shrink-0">
       {/* 标题行 */}
-      <div className="flex items-center justify-between">
+      <div className="flex items-center justify-between px-1">
         <div className="flex items-center gap-1.5">
           <SlidersHorizontal className="w-3.5 h-3.5 text-blue-500" />
           <span className="text-xs font-black text-slate-700">条件筛选</span>
@@ -105,8 +106,8 @@ export function StockFilterPanel({ filters, onChange, total, fullTotal, models: 
         )}
       </div>
 
-      {/* 筛选下拉网格 */}
-      <div className="grid grid-cols-4 gap-1.5">
+      {/* 筛选下拉网格：左侧内嵌 2 列，右侧看板 4 列 */}
+      <div className={`grid gap-1.5 ${compact ? 'grid-cols-2' : 'grid-cols-4'}`}>
         <Select allowClear size="small" placeholder="板块" value={filters.board || undefined}
           onChange={v => set({ board: v })} options={BOARD_OPTIONS.map(b => ({ label: b, value: b }))} />
         <Select allowClear size="small" placeholder="市值档" value={filters.capTier || undefined}
@@ -129,14 +130,16 @@ export function StockFilterPanel({ filters, onChange, total, fullTotal, models: 
           onChange={e => set({ date: e.target.value || undefined })} />
       </div>
 
-      {/* 已选条件 chips */}
+      {/* 已选条件：每个条件单独一行（命中组合排版） */}
       {activeChips.length > 0 && (
-        <div className="flex flex-wrap gap-1">
+        <div className="flex flex-col gap-1 px-1">
           {activeChips.map(c => (
-            <button key={c.key} onClick={c.clear}
-              className="flex items-center gap-1 px-1.5 py-0.5 rounded-md bg-blue-50 text-blue-600 border border-blue-100 text-[10px] font-bold hover:bg-rose-50 hover:text-rose-500 hover:border-rose-100 transition-colors">
-              {c.label} <X className="w-2.5 h-2.5" />
-            </button>
+            <div key={c.key} className="flex items-center gap-1.5 min-w-0">
+              <button onClick={c.clear}
+                className="flex items-center gap-1 px-2 py-0.5 rounded-md bg-blue-50 text-blue-600 border border-blue-100 text-[10px] font-bold hover:bg-rose-50 hover:text-rose-500 hover:border-rose-100 transition-colors max-w-full min-w-0">
+                <span className="truncate">{c.label}</span> <X className="w-2.5 h-2.5 shrink-0" />
+              </button>
+            </div>
           ))}
         </div>
       )}

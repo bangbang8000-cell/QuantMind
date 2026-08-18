@@ -27,7 +27,7 @@ GET /api/v1/market/kline/{symbol}?market=A&days=120
 from __future__ import annotations
 
 import logging
-import time as _time
+import time
 from datetime import date, datetime, timedelta
 from typing import Any, Optional
 
@@ -55,14 +55,14 @@ def _kline_cache_get(key: str) -> list[dict[str, Any]] | None:
     if not entry:
         return None
     ts, items = entry
-    if _time.time() - ts > _KLINE_CACHE_TTL:
+    if time.time() - ts > _KLINE_CACHE_TTL:
         _KLINE_CACHE.pop(key, None)
         return None
     return items
 
 
 def _kline_cache_set(key: str, items: list[dict[str, Any]]) -> None:
-    _KLINE_CACHE[key] = (_time.time(), items)
+    _KLINE_CACHE[key] = (time.time(), items)
     if len(_KLINE_CACHE) > _KLINE_CACHE_MAX:
         oldest = min(_KLINE_CACHE, key=lambda k: _KLINE_CACHE[k][0])
         _KLINE_CACHE.pop(oldest, None)
@@ -435,6 +435,42 @@ async def get_index_kline(
     except Exception as exc:  # noqa: BLE001
         logger.warning("index kline failed: %s", exc)
         return {"success": True, "data": {"dates": [], "close": [], "ma20": [], "below_ma20": None, "source_used": "none", "error": str(exc)}}
+
+
+# 指数快照缓存：hub 的 DuckDB 连接是 thread-local，新请求线程需重新挂载视图（~2.6s）。
+# 指数行情为日频本地数据，短 TTL 快照缓存即可让后续请求毫秒级返回。
+_QUOTES_CACHE: dict[str, tuple[float, list[dict[str, Any]]]] = {}
+_QUOTES_TTL = 60.0
+
+
+@router.get("/quotes")
+async def get_index_quotes(
+    market: str = Query("CN", description="CN / HK / US / CRYPTO / FUTURES"),
+    current_user: dict = Depends(get_current_user),
+):
+    """多市场指数/品种最新行情快照（轻量版 /overview，用于页面指数条）。
+
+    一次返回 {quotes: [{symbol, name, price, change, change_percent, trade_date}]}，
+    各市场本地 parquet 读取，带 60s 快照缓存。
+    """
+    _ = current_user
+    market_upper = str(market or "CN").upper()
+    metas = _MARKET_INDEX_META.get(market_upper, _MARKET_INDEX_META["CN"])
+
+    cached = _QUOTES_CACHE.get(market_upper)
+    if cached is not None and time.monotonic() - cached[0] < _QUOTES_TTL:
+        quotes = cached[1]
+    else:
+        quotes = []
+        for meta in metas:
+            q = _hub_latest_quote(market_upper, meta["symbol"])
+            if q is not None:
+                quotes.append(q)
+        _QUOTES_CACHE[market_upper] = (time.monotonic(), quotes)
+
+    if not quotes:
+        return {"success": False, "data": {"market": market_upper, "quotes": []}, "error": f"market {market_upper} 无可用行情数据"}
+    return {"success": True, "data": {"market": market_upper, "quotes": quotes}}
 
 
 # ── 多市场指数概览 ─────────────────────────────────────────────────────────────

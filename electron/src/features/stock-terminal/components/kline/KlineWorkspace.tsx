@@ -416,8 +416,6 @@ export function KlineWorkspace({ stock, profile, height = 460, onSelectStock }: 
     message.success(`卖出 ${tradeShares} 股 @ ${bar.close.toFixed(2)}`);
   };
 
-  const up = (profile?.pct_change ?? stock.pct_change ?? 0) >= 0;
-
   return (
     <div className="flex flex-col h-full overflow-hidden">
       {/* 工具条 */}
@@ -453,16 +451,7 @@ export function KlineWorkspace({ stock, profile, height = 460, onSelectStock }: 
           <div className="w-6 h-6 rounded-lg bg-blue-50 border border-blue-100 flex items-center justify-center text-blue-600 shrink-0">
             <CandlestickChart className="w-3.5 h-3.5" />
           </div>
-          <div className="flex items-baseline gap-2 min-w-0">
-            <span className="text-xs font-black text-slate-800 truncate">{stock.name}</span>
-            <span className="text-[10px] font-mono text-slate-400">{stock.symbol}</span>
-            {profile && (
-              <span className={`text-[11px] font-mono font-bold ${up ? 'text-rose-500' : 'text-emerald-500'}`}>
-                {profile.close?.toFixed(2) ?? '--'} {up ? '+' : ''}{(profile.pct_change ?? 0).toFixed(2)}%
-              </span>
-            )}
-          </div>
-          {/* 名称后的空白区：信号 / 模型选择 / 模拟交易 / 参考线 / 回测 / 回放 */}
+          {/* 名称后的空白区：信号 / 模型选择 / 模拟交易 / 参考线（弹窗已无标题，名称不重复显示） */}
           <div className="flex items-center gap-1.5 shrink-0">
             <button onClick={() => setSignalOn(!signalOn)} disabled={!signals.length}
               className={`flex items-center gap-1 text-[10px] font-bold px-2 py-1 rounded-lg transition-colors ${signalOn && signals.length ? 'bg-rose-50 text-rose-600 border border-rose-100' : 'text-slate-400 hover:text-slate-600 border border-transparent'}`}

@@ -1,11 +1,11 @@
-/** 个股终端左侧栏：搜索 + 市场分段 + 信息丰富的股票列表（筛选条件由页面持有，面板在右侧） */
+/** 个股终端左侧栏：搜索 + 市场分段 + 看板筛选（页面持有条件）+ 信息丰富的股票列表 */
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Search, RefreshCw, Star } from 'lucide-react';
 import { Input, Spin, message } from 'antd';
 import { StockListItem, StockListResponse } from '../types';
 import { stockTerminalService } from '../services/stockTerminalService';
-import { ListFilters, bucketScoreRange } from './StockFilterPanel';
+import { ListFilters, bucketScoreRange, StockFilterPanel } from './StockFilterPanel';
 
 interface Props {
   selected: string | null;
@@ -13,11 +13,14 @@ interface Props {
   watchlistSymbols: Set<string>;   // prefix 格式（SH600519）
   onlyWatchlist: boolean;
   onOnlyWatchlist: (v: boolean) => void;
-  /** 筛选条件（页面持有，面板在右侧推理排行上方） */
+  /** 筛选条件（页面持有，看板面板在左侧列表上方） */
   filters: ListFilters;
+  onFiltersChange: (f: ListFilters) => void;
   onModels?: (models: string[]) => void;
   /** 列表数量回传（供筛选面板计数） */
   onTotals?: (filtered: number) => void;
+  /** 全市场总量（筛选面板命中统计） */
+  fullTotal?: number;
 }
 
 const PAGE_SIZE = 100;
@@ -53,7 +56,22 @@ const TREND_COLOR: Record<string, string> = {
   '下降': 'text-emerald-500',
 };
 
-export function StockSidebar({ selected, onSelect, watchlistSymbols, onlyWatchlist, onOnlyWatchlist, filters, onModels, onTotals }: Props) {
+/** 板块按市场着色（板块/行业两列共用） */
+export const BOARD_TONE: Record<string, string> = {
+  '沪市主板': 'bg-rose-50 text-rose-600 border-rose-200',
+  '深市主板': 'bg-blue-50 text-blue-600 border-blue-200',
+  '科创板': 'bg-violet-50 text-violet-600 border-violet-200',
+  '创业板': 'bg-amber-50 text-amber-600 border-amber-200',
+  '北交所': 'bg-emerald-50 text-emerald-600 border-emerald-200',
+};
+
+export function boardToneOf(board?: string): string {
+  return board ? (BOARD_TONE[board] ?? 'bg-slate-50 text-slate-500 border-slate-200') : 'bg-slate-50 text-slate-400 border-slate-200';
+}
+
+const MARKETS: [string, string][] = [['ALL', '全部'], ['SH', '沪市'], ['SZ', '深市'], ['BJ', '北交']];
+
+export function StockSidebar({ selected, onSelect, watchlistSymbols, onlyWatchlist, onOnlyWatchlist, filters, onFiltersChange, onModels, onTotals, fullTotal = 0 }: Props) {
   const [market, setMarket] = useState('ALL');
   const [q, setQ] = useState('');
   const [data, setData] = useState<StockListResponse | null>(null);
@@ -115,12 +133,12 @@ export function StockSidebar({ selected, onSelect, watchlistSymbols, onlyWatchli
     [data, onlyWatchlist, watchlistSymbols],
   );
 
-  const GRID = 'grid grid-cols-[34px_1fr_52px_84px_38px_58px_52px_34px] gap-1';
+  const GRID = 'grid grid-cols-[34px_1.5fr_82px_100px_62px_62px_62px_42px] gap-1.5';
 
   return (
-    <div className="w-[30rem] shrink-0 flex flex-col bg-white/80 backdrop-blur-xl rounded-3xl border border-white/90 shadow-xs p-4 overflow-hidden">
+    <div className="w-[37rem] shrink-0 flex flex-col bg-white/80 backdrop-blur-xl rounded-3xl border border-white/90 shadow-xs p-4 overflow-hidden">
       {/* 检索 */}
-      <div className="flex items-center justify-between pb-3 border-b border-slate-100 mb-3 px-1">
+      <div className="flex items-center justify-between pb-3 border-b border-slate-100 mb-2 px-1">
         <div>
           <h3 className="text-sm font-black text-slate-800 m-0">股票列表</h3>
           <p className="text-[10px] text-slate-400 m-0">A股 · QuantDB 本地数据 · 分数降序</p>
@@ -136,36 +154,46 @@ export function StockSidebar({ selected, onSelect, watchlistSymbols, onlyWatchli
         </button>
       </div>
 
-      {/* 搜索框 + 市场分段 */}
-      <div className="flex items-center bg-white border border-slate-200 hover:border-blue-400 focus-within:border-blue-500 focus-within:ring-2 focus-within:ring-blue-100 rounded-xl px-3 py-1 transition-all shadow-2xs mb-2">
-        <Search className="w-3.5 h-3.5 text-blue-500 shrink-0" />
-        <Input
-          variant="borderless"
-          placeholder="输入代码 / 名称"
-          value={q}
-          onChange={e => setQ(e.target.value)}
-          allowClear
-          className="p-0 font-mono font-bold text-sm text-blue-600"
-          style={{ padding: 0 }}
-        />
-      </div>
-      <div className="grid grid-cols-4 gap-1 p-0.5 bg-slate-100/70 rounded-lg mb-2">
-        {[['ALL', '全部'], ['SH', '沪市'], ['SZ', '深市'], ['BJ', '北交']].map(([v, label]) => (
-          <button
-            key={v}
-            onClick={() => setMarket(v)}
-            className={`py-1 rounded-md text-[11px] font-bold transition-all ${
-              market === v ? 'bg-white text-blue-600 shadow-2xs' : 'text-slate-500 hover:text-slate-700'
-            }`}
-          >
-            {label}
-          </button>
-        ))}
+      {/* 搜索框 + 市场分段（exchange 列过滤，与后端一致） */}
+      <div className="flex items-center gap-1.5 mb-2">
+        <div className="flex-1 flex items-center bg-white border border-slate-200 hover:border-blue-400 focus-within:border-blue-500 focus-within:ring-2 focus-within:ring-blue-100 rounded-xl px-3 py-1 transition-all shadow-2xs">
+          <Search className="w-3.5 h-3.5 text-blue-500 shrink-0" />
+          <Input
+            variant="borderless"
+            placeholder="输入代码 / 名称"
+            value={q}
+            onChange={e => setQ(e.target.value)}
+            allowClear
+            className="p-0 font-mono font-bold text-sm text-blue-600"
+            style={{ padding: 0 }}
+          />
+        </div>
+        <div className="grid grid-cols-4 gap-0.5 p-0.5 bg-slate-100/70 rounded-lg shrink-0">
+          {MARKETS.map(([v, label]) => (
+            <button
+              key={v}
+              onClick={() => setMarket(v)}
+              className={`px-2.5 py-1 rounded-md text-[11px] font-bold transition-all ${
+                market === v ? 'bg-white text-blue-600 shadow-2xs' : 'text-slate-500 hover:text-slate-700'
+              }`}
+            >
+              {label}
+            </button>
+          ))}
+        </div>
       </div>
 
+      {/* 看板筛选（条件由页面持有，命中组合每条件单独一行） */}
+      <StockFilterPanel
+        filters={filters}
+        onChange={onFiltersChange}
+        total={data?.total ?? 0}
+        fullTotal={fullTotal}
+      />
+
       {/* 列表头 */}
-      <div className={`${GRID} px-1 pb-1 text-[10px] font-bold text-slate-400 border-b border-slate-100`}>
-        <span className="text-center">排名</span><span>股票</span><span>板块</span><span className="text-center">行业</span>
+      <div className={`${GRID} px-1 pb-1 pt-2 text-[10px] font-bold text-slate-400 border-b border-slate-100 shrink-0`}>
+        <span className="text-center">排名</span><span>股票</span><span className="text-center">板块</span><span className="text-center">行业</span>
         <span className="text-center">市值</span><span className="text-center">趋势</span><span className="text-right">得分</span><span className="text-center">信号</span>
       </div>
 
@@ -196,7 +224,11 @@ export function StockSidebar({ selected, onSelect, watchlistSymbols, onlyWatchli
                   </span>
                   <span className="text-[10px] text-slate-500 font-mono">{it.close?.toFixed(2) ?? '--'} · {fmtMv(it.total_mv)}</span>
                 </span>
-                <span className="text-[10px] text-slate-500 text-center truncate" title={it.board}>{it.board?.replace('市主板', '主板') ?? '--'}</span>
+                <span className="text-center">
+                  <span className={`inline-block text-[9px] font-bold rounded px-1 py-0.5 border ${boardToneOf(it.board)}`} title={it.board}>
+                    {it.board?.replace('市主板', '主板') ?? '--'}
+                  </span>
+                </span>
                 <span className="text-[10px] text-slate-500 text-center truncate" title={it.industry ?? ''}>{it.industry ?? '--'}</span>
                 <span className="text-[10px] text-slate-500 text-center">{it.cap_tier || '--'}</span>
                 <span className={`text-[10px] text-center truncate ${TREND_COLOR[it.trend ?? ''] ?? 'text-slate-400'}`}>{it.trend ?? '-'}</span>
