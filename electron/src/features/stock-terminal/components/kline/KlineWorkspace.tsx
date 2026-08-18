@@ -2,9 +2,9 @@
 
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import {
-  CandlestickChart, Star, Activity, TrendingUp, ArrowLeftRight,
+  CandlestickChart, Star, Activity, TrendingUp, ArrowLeftRight, ChevronLeft, ChevronRight, Search,
 } from 'lucide-react';
-import { Button, Select, Tooltip, message, Modal, InputNumber, Input, Switch, Tag } from 'antd';
+import { Button, Select, Tooltip, message, Modal, InputNumber, Input, Switch, Tag, AutoComplete } from 'antd';
 import { useNavigate } from 'react-router-dom';
 import { StockListItem, StockProfile, KlineBar } from '../../types';
 import { stockTerminalService } from '../../services/stockTerminalService';
@@ -35,9 +35,11 @@ interface Props {
   stock: StockListItem;
   profile?: StockProfile | null;
   height?: number;
+  /** 切换股票（上一股/下一股/搜索选择）时通知父级同步 */
+  onSelectStock?: (item: StockListItem) => void;
 }
 
-export function KlineWorkspace({ stock, profile, height = 460 }: Props) {
+export function KlineWorkspace({ stock, profile, height = 460, onSelectStock }: Props) {
   const navigate = useNavigate();
   const [bars, setBars] = useState<KlineBar[]>([]);
   const [loadingKline, setLoadingKline] = useState(false);
@@ -67,10 +69,25 @@ export function KlineWorkspace({ stock, profile, height = 460 }: Props) {
   const [refLines, setRefLines] = useState<RefLine[]>([]);
   const [refLineModal, setRefLineModal] = useState(false);
   const [newRefLine, setNewRefLine] = useState({ value: 0.1, label: '可买', color: '#10b981' });
+  // 股票导航：上一股/下一股（分数降序列表）+ 搜索
+  const [navList, setNavList] = useState<StockListItem[]>([]);
+  const [searchText, setSearchText] = useState('');
+  const [searchOptions, setSearchOptions] = useState<{ value: string; label: React.ReactNode }[]>([]);
   // 大盘状态（上证指数 vs MA20）
   const [indexStatus, setIndexStatus] = useState<{ latestClose: number; ma20: number | null; below: boolean } | null>(null);
   // 当前排名（按最近推理日 + 所选模型在全市场中的分数排名）
   const [scoreRank, setScoreRank] = useState<number | null>(null);
+
+  // 导航列表：默认最近交易日的全市场分数降序（同左栏列表）
+  useEffect(() => {
+    let cancelled = false;
+    stockTerminalService.getStockList({ page_size: 5000 }).then(resp => {
+      if (!cancelled) setNavList(resp.items);
+    }).catch(() => { /* ignore */ });
+    return () => { cancelled = true; };
+  }, []);
+
+  const navIndex = navList.findIndex(it => it.symbol === stock.symbol);
 
   // 大盘状态：上证指数收盘 vs MA20（QuantDB index_daily）
   useEffect(() => {
@@ -109,6 +126,40 @@ export function KlineWorkspace({ stock, profile, height = 460 }: Props) {
     setRefLines(lines);
     try { localStorage.setItem(refLineKey, JSON.stringify(lines)); } catch { /* ignore */ }
   };
+
+  const gotoStock = useCallback((item: StockListItem) => {
+    onSelectStock?.(item);
+  }, [onSelectStock]);
+
+  const prevStock = useCallback(() => {
+    if (navIndex > 0) gotoStock(navList[navIndex - 1]);
+  }, [navIndex, navList, gotoStock]);
+  const nextStock = useCallback(() => {
+    if (navIndex >= 0 && navIndex < navList.length - 1) gotoStock(navList[navIndex + 1]);
+  }, [navIndex, navList, gotoStock]);
+
+  // 股票搜索：防抖查询 /stock-terminal/list?q=
+  useEffect(() => {
+    const kw = searchText.trim();
+    if (!kw) { setSearchOptions([]); return; }
+    let cancelled = false;
+    const t = setTimeout(() => {
+      stockTerminalService.getStockList({ q: kw, page_size: 15 }).then(resp => {
+        if (cancelled) return;
+        setSearchOptions(resp.items.map(it => ({
+          value: it.symbol,
+          label: (
+            <div className="flex items-center justify-between text-[11px]">
+              <span className="font-bold text-slate-700">{it.name}</span>
+              <span className="font-mono text-slate-400">{it.symbol}</span>
+              <span className="font-mono text-indigo-600">{it.fusion != null ? Number(it.fusion).toFixed(4) : '--'}</span>
+            </div>
+          ),
+        })));
+      }).catch(() => { if (!cancelled) setSearchOptions([]); });
+    }, 300);
+    return () => { cancelled = true; clearTimeout(t); };
+  }, [searchText]);
 
   const toggleWatch = useCallback(async () => {
     const prefix = toPrefix(stock.symbol);
@@ -372,6 +423,33 @@ export function KlineWorkspace({ stock, profile, height = 460 }: Props) {
       {/* 工具条 */}
       <div className="flex items-center justify-between gap-2 px-3 py-2 border-b border-slate-100 flex-wrap">
         <div className="flex items-center gap-2 min-w-0">
+          {/* 上一股 / 下一股 / 搜索 */}
+          <div className="flex items-center gap-0.5 shrink-0">
+            <Tooltip title={navIndex > 0 ? `上一股：${navList[navIndex - 1]?.name ?? ''}` : '已是第一只'}>
+              <Button size="small" type="text" disabled={navIndex <= 0} onClick={prevStock}
+                icon={<ChevronLeft className="w-3.5 h-3.5" />} className="h-6 w-6 p-0" />
+            </Tooltip>
+            <Tooltip title={navIndex >= 0 && navIndex < navList.length - 1 ? `下一股：${navList[navIndex + 1]?.name ?? ''}` : '已是最后一只'}>
+              <Button size="small" type="text" disabled={navIndex < 0 || navIndex >= navList.length - 1} onClick={nextStock}
+                icon={<ChevronRight className="w-3.5 h-3.5" />} className="h-6 w-6 p-0" />
+            </Tooltip>
+          </div>
+          <AutoComplete
+            value={searchText}
+            onChange={setSearchText}
+            onSelect={(sym) => {
+              const item = navList.find(it => it.symbol === sym);
+              if (item) gotoStock(item);
+              setSearchText('');
+            }}
+            options={searchOptions}
+            size="small"
+            style={{ width: 180 }}
+            popupMatchSelectWidth={280}
+          >
+            <Input size="small" placeholder="搜索股票切换" prefix={<Search className="w-3 h-3 text-slate-300" />}
+              className="rounded-lg text-[11px]" allowClear />
+          </AutoComplete>
           <div className="w-6 h-6 rounded-lg bg-blue-50 border border-blue-100 flex items-center justify-center text-blue-600 shrink-0">
             <CandlestickChart className="w-3.5 h-3.5" />
           </div>
@@ -391,7 +469,7 @@ export function KlineWorkspace({ stock, profile, height = 460 }: Props) {
               title={signals.length ? '模型推理分数信号' : '无推理信号'}>
               <TrendingUp className="w-3 h-3" /> 信号{signals.length > 0 && <span className="text-[9px] bg-rose-100 rounded px-0.5">{signals.length}</span>}
             </button>
-            {scoreModels.length > 1 && (
+            {scoreModels.length > 0 && (
               <Select
                 value={selectedModel}
                 onChange={setSelectedModel}

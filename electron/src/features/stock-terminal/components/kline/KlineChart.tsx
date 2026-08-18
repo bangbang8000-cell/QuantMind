@@ -89,7 +89,6 @@ const AXIS_LABEL = { fontSize: 10, color: '#64748b' };
 const AXIS_LINE = { lineStyle: { color: '#e2e8f0' } };
 const SPLIT_LINE = { lineStyle: { color: '#f1f5f9' } };
 const SUB_HEIGHT = 84;  // 每个副图高度 px
-const SCORE_HEIGHT = 72; // 分数副图高度 px
 /** 默认黄金线（策略 v2.0 主板黄金买入区间 0.10-0.12 的下沿） */
 const DEFAULT_REF_LINE: RefLine = { id: 'default-golden', value: 0.10, label: '黄金线', color: '#10b981' };
 
@@ -138,16 +137,15 @@ export function KlineChart({
       return { name: ov.name, data: aligned, color: ov.color };
     });
 
-    // ── grid 布局：主图 + 副图依次下排 + 分数副图（最底） ──
+    // ── grid 布局：主图（蜡烛+MA+指数+模型分数右轴）+ 副图依次下排 ──
     // axes 下标与 grid 下标独立：用 gridAxes 记录每个 grid 的 x/y 轴在 xAxis/yAxis 数组中的下标
-    const GRID_L = 64, GRID_R = 16;
+    const GRID_L = 64, GRID_R = scoreSeries.length ? 46 : 16;  // 右侧留出分数轴刻度
     const GAP = 28;                    // 主图与第一个副图间距
     const SUB_GAP = 24;                // 副图之间间距
     const TOP = 24;                    // 顶部留出图例行
     const subCount = config.subplots.length;
     const subTotal = subCount > 0 ? (subCount * SUB_HEIGHT + (subCount - 1) * SUB_GAP) : 0;
-    const scoreTotal = scoreSeries.length ? SCORE_HEIGHT + GAP : 0;
-    const mainH = Math.max(120, height - TOP - GAP - subTotal - scoreTotal - 18);
+    const mainH = Math.max(140, height - TOP - GAP - subTotal - 18);
     const grids: any[] = [];
     const xAxes: any[] = [];
     const yAxes: any[] = [];
@@ -159,13 +157,30 @@ export function KlineChart({
     xAxes.push({ type: 'category', gridIndex: 0, data: dates, boundaryGap: true, axisLine: AXIS_LINE, axisTick: { show: false }, axisLabel: { show: false } });
     yAxes.push({ type: 'value', gridIndex: 0, scale: true, axisLabel: AXIS_LABEL, axisLine: AXIS_LINE, splitLine: SPLIT_LINE });
     gridAxes[0] = { x: 0, y: 0 };
-    // 指数归一化百分比右轴（主图）
+    // 指数归一化百分比轴（主图左侧内沿，仅当叠加指数时不遮挡分数轴）
     if (overlaySeries.length) {
       yAxes.push({
-        type: 'value', gridIndex: 0, position: 'right', scale: true,
-        axisLabel: { show: false }, splitLine: { show: false },
+        type: 'value', gridIndex: 0, scale: true,
+        axisLabel: { show: false }, axisLine: { show: false }, splitLine: { show: false },
         min: (v: any) => -Math.max(30, Math.ceil(Math.abs(v.min) / 10) * 10),
         max: (v: any) => Math.max(30, Math.ceil(Math.abs(v.max) / 10) * 10),
+      });
+    }
+    // 模型分数轴（主图右外侧）：推理分数与参考线共用此轴
+    let scoreYI = -1;
+    if (scoreSeries.length) {
+      scoreYI = yAxes.length;
+      const allScores = scoreSeries.flatMap(sr => sr.points.map(p => p.fusion).filter((f): f is number => f != null));
+      const lo = allScores.length ? Math.min(...allScores) : -1;
+      const hi = allScores.length ? Math.max(...allScores) : 1;
+      const pad = Math.max(0.05, (hi - lo) * 0.15);
+      yAxes.push({
+        type: 'value', gridIndex: 0, position: 'right', scale: false,
+        min: lo - pad, max: hi + pad,
+        axisLabel: { ...AXIS_LABEL, formatter: (v: number) => v.toFixed(2) },
+        axisLine: { lineStyle: { color: '#6366f1' } },
+        splitLine: { show: false },
+        name: '分数', nameTextStyle: { fontSize: 9, color: '#6366f1' },
       });
     }
 
@@ -260,7 +275,7 @@ export function KlineChart({
       const xi = xAxes.length;
       const yi = yAxes.length;
       grids.push({ left: GRID_L, right: GRID_R, top: subTop, height: SUB_HEIGHT });
-      const showLabel = idx === config.subplots.length - 1 && !scoreSeries.length;
+      const showLabel = idx === config.subplots.length - 1;
       xAxes.push({
         type: 'category', gridIndex: gi, data: dates, boundaryGap: true,
         axisLine: AXIS_LINE, axisTick: { show: false },
@@ -293,24 +308,12 @@ export function KlineChart({
       subTop += SUB_HEIGHT + SUB_GAP;
     });
 
-    // ── 推理分数：独立副图（最底，grid 下标 = subCount+1）──
+    // ── 推理分数：叠加到主图，共用主图 x 轴 + 右侧分数轴（scoreYI）──
     if (scoreSeries.length) {
-      const gi = subCount + 1;
-      const xi = xAxes.length;
-      const yi = yAxes.length;
-      const scoreTop = subCount > 0 ? TOP + mainH + GAP + subCount * (SUB_HEIGHT + SUB_GAP) : TOP + mainH + GAP;
-      grids.push({ left: GRID_L, right: GRID_R, top: scoreTop, height: SCORE_HEIGHT });
-      xAxes.push({
-        type: 'category', gridIndex: gi, data: dates, boundaryGap: true,
-        axisLine: AXIS_LINE, axisTick: { show: false }, axisLabel: { ...AXIS_LABEL, color: '#94a3b8' },
-      });
-      yAxes.push({ type: 'value', gridIndex: gi, scale: true, axisLabel: AXIS_LABEL, axisLine: AXIS_LINE, splitLine: SPLIT_LINE });
-      gridAxes[gi] = { x: xi, y: yi };
-
       scoreSeries.forEach(sr => {
         const scoreMap = new Map(sr.points.map(p => [p.date, p.fusion]));
         series.push({
-          name: `分数·${sr.model.slice(0, 10)}`, type: 'line', xAxisIndex: xi, yAxisIndex: yi,
+          name: `分数·${sr.model.slice(0, 10)}`, type: 'line', xAxisIndex: 0, yAxisIndex: scoreYI,
           data: bars.map(b => {
             const f = scoreMap.get(b.date);
             return f != null ? Number(f) : null;
@@ -321,7 +324,7 @@ export function KlineChart({
         });
       });
 
-      // 策略提醒标记（菱形，按 severity 着色）
+      // 策略提醒标记（菱形，按 severity 着色，画在分数轴上）
       if (alerts.length) {
         const byDate = new Map(alerts.map(a => [a.date, a]));
         const alertData = bars
@@ -335,7 +338,7 @@ export function KlineChart({
           .filter(Boolean);
         if (alertData.length) {
           series.push({
-            name: '策略提醒', type: 'scatter', xAxisIndex: xi, yAxisIndex: yi,
+            name: '策略提醒', type: 'scatter', xAxisIndex: 0, yAxisIndex: scoreYI,
             data: alertData, symbol: 'diamond', symbolSize: 12,
             itemStyle: {
               color: (p: any) => SEVERITY_COLOR[p.data.a.severity] ?? '#6366f1',
@@ -354,7 +357,7 @@ export function KlineChart({
         }
       }
 
-      // 参考线 + 默认黄金线 0.10：分数副图 markLine
+      // 参考线 + 默认黄金线 0.10：画在右侧分数轴上（主图 markLine）
       const visRef = refLines.filter(l => l.visible !== false);
       const hasGolden = visRef.some(l => Math.abs(l.value - DEFAULT_REF_LINE.value) < 1e-6);
       const allLines = hasGolden ? visRef : [DEFAULT_REF_LINE, ...visRef];

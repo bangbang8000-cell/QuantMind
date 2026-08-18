@@ -168,7 +168,7 @@ export default function StockTerminalPage() {
           <div className="h-full flex">
             {/* 左：K 线主体（周期/指标/指数/回放/信号/回测/多模型分数/模拟交易/参考线） */}
             <div className="flex-1 min-w-0">
-              <KlineWorkspace stock={selected} profile={profile} height={500} />
+              <KlineWorkspace stock={selected} profile={profile} height={500} onSelectStock={setSelected} />
             </div>
             {/* 右：竖排智能标签 */}
             <div className="w-44 shrink-0 border-l border-slate-100 overflow-y-auto">
