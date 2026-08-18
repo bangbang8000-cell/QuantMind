@@ -9,7 +9,6 @@ import { useEffect, useRef } from 'react';
 import { useAppSelector, useAppDispatch } from '../store';
 import { selectCurrentMarket, type AppMarket } from '../store/slices/uiSlice';
 import { useBacktestCenterStore } from '../stores/backtestCenterStore';
-import { useWizardV2Store } from '../features/strategy-wizard/store/wizardV2Store';
 import { useMarketStore } from '../stores/market-store';
 
 export function useMarketReset() {
@@ -17,7 +16,6 @@ export function useMarketReset() {
   const prevMarketRef = useRef<AppMarket>(currentMarket);
 
   const resetBacktest = useBacktestCenterStore((s) => s.resetForMarket);
-  const resetWizard = useWizardV2Store((s) => s.resetForMarket);
   const clearMarketCache = useMarketStore((s) => s.clearCache);
 
   useEffect(() => {
@@ -26,8 +24,7 @@ export function useMarketReset() {
 
       // Reset all stores for the new market
       resetBacktest(currentMarket);
-      if (currentMarket !== 'FUTURES') resetWizard(currentMarket);
       clearMarketCache();
     }
-  }, [currentMarket, resetBacktest, resetWizard, clearMarketCache]);
+  }, [currentMarket, resetBacktest, clearMarketCache]);
 }

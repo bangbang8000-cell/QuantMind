@@ -1,8 +1,6 @@
 import React, { useState, useMemo } from 'react';
-import { useDispatch } from 'react-redux';
-import { TrendingUp, TrendingDown, Activity, AlertTriangle, CheckCircle, Clock, ArrowRight, RefreshCw, WifiOff, X, Wifi } from 'lucide-react';
+import { TrendingUp, TrendingDown, Activity, AlertTriangle, CheckCircle, Clock, RefreshCw, WifiOff, X, Wifi } from 'lucide-react';
 import { motion } from 'framer-motion';
-import { setCurrentTab } from '../../store/slices/aiStrategySlice';
 import { useStrategies } from '../../hooks/useStrategies';
 import { StrategyMonitorSkeleton } from '../common/CardSkeletons';
 import { formatBackendTime } from '../../utils/format';
@@ -33,7 +31,6 @@ export const StrategyMonitorCard: React.FC<StrategyMonitorCardProps> = ({
   onCloseExpand,
 }) => {
   const [isHovered, setIsHovered] = useState(false);
-  const dispatch = useDispatch();
 
   const {
     strategies,
@@ -55,20 +52,6 @@ export const StrategyMonitorCard: React.FC<StrategyMonitorCardProps> = ({
     const sign = value > 0 ? '+' : '';
     return `${sign}${formatter.format(value)}`;
   };
-
-  const handleGoToStrategy = () => {
-    dispatch(setCurrentTab('strategy'));
-  };
-
-  const handleGoToStrategyDetail = (strategyId: string) => {
-    try {
-      sessionStorage.setItem('dashboard_strategy_focus_id', strategyId);
-    } catch {
-      // ignore storage errors
-    }
-    dispatch(setCurrentTab('strategy'));
-  };
-
   const getStatusConfig = (status: string) => STATUS_CONFIG[status as keyof typeof STATUS_CONFIG] || STATUS_CONFIG.stopped;
   const getRiskConfig = (risk: string) => RISK_CONFIG[risk as keyof typeof RISK_CONFIG] || { color: 'text-[var(--neutral)]', text: '未知' };
 
@@ -234,7 +217,6 @@ export const StrategyMonitorCard: React.FC<StrategyMonitorCardProps> = ({
               return (
                 <motion.div
                   key={strategy.id}
-                  onClick={() => handleGoToStrategyDetail(strategy.id)}
                   className="flex items-center justify-between py-1.5 px-2 rounded-xl transition-colors bg-white border border-slate-100 shadow-sm cursor-pointer"
                   whileHover={{ backgroundColor: '#f1f5f9', borderColor: '#e2e8f0' }}
                   initial={{ opacity: 0, y: 10 }}
@@ -280,7 +262,7 @@ export const StrategyMonitorCard: React.FC<StrategyMonitorCardProps> = ({
 
       {!expanded && (
         <motion.button
-          onClick={onExpand || handleGoToStrategy}
+          onClick={onExpand}
           className="w-full mt-2.5 py-2 px-4 bg-slate-800 text-white rounded-xl font-bold text-sm hover:bg-slate-900 transition-colors relative z-10 shadow-lg shadow-slate-200"
           whileHover={{ scale: 1.02 }}
           whileTap={{ scale: 0.98 }}

@@ -37,13 +37,13 @@ import './styles/ai-strategy-theme.css';
 
 const UserCenterPage = lazy(() => import('./features/user-center/pages/UserCenterPage'));
 const StrategyComparisonPage = lazy(() => import('./features/strategy-comparison/pages/StrategyComparisonPage'));
-const StrategyWizardPage = lazy(() => import('./features/strategy-wizard/components/SmartStrategyStudioV2'));
 const MarketAnalysisPage = lazy(() => import('./features/market-analysis/pages/MarketAnalysisPage').then(m => ({ default: m.MarketAnalysisPage })));
 const QuantBotPage = lazy(() => import('./features/quantbot/pages/QuantBotPage'));
 const AIIDEPage = lazy(() => import('./pages/AIIDEPage'));
 const ModelTrainingPage = lazy(() => import('./pages/ModelTrainingPage'));
 const ModelRegistryPage = lazy(() => import('./pages/ModelRegistryPage'));
 const InferenceCenterPage = lazy(() => import('./pages/InferenceCenterPage'));
+const StockTerminalPage = lazy(() => import('./features/stock-terminal/pages/StockTerminalPage'));
 const ResearchPlatformPage = lazy(() => import('./pages/ResearchPlatformPage').then(m => ({ default: m.default || m.ResearchPlatformPage })));
 const RealTradingPage = lazy(() => import('./pages/trading/RealTradingPage'));
 const AdminPage = lazy(() => import('./features/admin/AdminPage'));
@@ -170,12 +170,12 @@ export default function App() {
     // 映射 ID 到路由路径
     const routeMap: Record<string, string> = {
       'agent': '/quantbot',
-      'strategy': '/strategy-wizard',
       'market-analysis': '/market-analysis',
       'ai-ide': '/ai-ide',
       'model-training': '/model-training',
       'model-registry': '/model-registry',
       'inference-center': '/inference-center',
+      'stock-terminal': '/stock-terminal',
       'research': '/research',
       'trading': '/trading',
       'rss-news': '/rss-news',
@@ -203,8 +203,6 @@ export default function App() {
   // 根据路由同步当前tab，保证导航高亮且避免闪屏
   React.useEffect(() => {
     if (location.pathname.startsWith('/user-center')) {
-      dispatch(setCurrentTab('profile' as DashboardTab));
-    } else if (location.pathname.startsWith('/strategy-wizard')) {
       dispatch(setCurrentTab('strategy' as DashboardTab));
     } else if (location.pathname.startsWith('/market-analysis')) {
       dispatch(setCurrentTab('market-analysis' as DashboardTab));
@@ -218,6 +216,8 @@ export default function App() {
       dispatch(setCurrentTab('model-registry' as DashboardTab));
     } else if (location.pathname.startsWith('/inference-center')) {
       dispatch(setCurrentTab('inference-center' as DashboardTab));
+    } else if (location.pathname.startsWith('/stock-terminal')) {
+      dispatch(setCurrentTab('stock-terminal' as DashboardTab));
     } else if (location.pathname.startsWith('/research')) {
       dispatch(setCurrentTab('research' as DashboardTab));
     } else if (location.pathname.startsWith('/trading-agents')) {
@@ -559,15 +559,6 @@ export default function App() {
                     }
                   />
 
-                  {/* 智能策略向导受保护路由 */}
-                  <Route
-                    path="/strategy-wizard"
-                    element={
-                      <ProtectedRoute>
-                        <StrategyWizardPage />
-                      </ProtectedRoute>
-                    }
-                  />
                   {/* QuantBot受保护路由 */}
                   <Route
                     path="/quantbot"
@@ -611,6 +602,14 @@ export default function App() {
                     element={
                       <ProtectedRoute>
                         <InferenceCenterPage />
+                      </ProtectedRoute>
+                    }
+                  />
+                  <Route
+                    path="/stock-terminal"
+                    element={
+                      <ProtectedRoute>
+                        <StockTerminalPage />
                       </ProtectedRoute>
                     }
                   />

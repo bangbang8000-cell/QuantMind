@@ -41,6 +41,8 @@ class SingleStockPredictionRequest(BaseModel):
     date: str | None = None
     horizon: int = 5
     market: str = "CN"
+    # 共识矩阵成员（最多4个真实模型）；空=自动取当日全部有分数的模型
+    consensus_model_ids: list[str] | None = None
 
 
 class FeatureDriverItem(BaseModel):

@@ -52,6 +52,10 @@ export interface SingleStockPredictionResponse {
   drivers: FeatureDriverItem[];
   consensus: ModelConsensusItem[];
   consensus_score: number;
+  /** 'persisted'=真实持久化模型分数 | 'fallback'=无分数中性空态 | 'mock'=离线模拟 */
+  data_source?: 'persisted' | 'fallback' | 'mock';
+  /** 'shap'=真·模型SHAP归因(树模型原生pred_contrib) | 'heuristic'=特征启发式系数 */
+  drivers_source?: 'shap' | 'heuristic';
   error?: string | null;
 }
 
@@ -61,6 +65,8 @@ export interface SingleStockPredictionRequest {
   date?: string;
   horizon?: number;
   market?: string;
+  /** 共识矩阵成员（最多4个真实模型）；空=自动取当日全部有分数模型 */
+  consensus_model_ids?: string[];
 }
 
 export interface KlineItem {
