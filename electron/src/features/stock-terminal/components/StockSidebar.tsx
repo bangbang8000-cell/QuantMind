@@ -21,6 +21,8 @@ interface Props {
   models?: { model_id: string; display_name?: string }[];
   /** 列表数量回传（供筛选面板计数） */
   onTotals?: (filtered: number) => void;
+  /** 当前列表基准信号日回传（日历高亮 + 面板日期 chip） */
+  onSignalDate?: (d?: string) => void;
   /** 全市场总量（筛选面板命中统计） */
   fullTotal?: number;
 }
@@ -73,7 +75,7 @@ export function boardToneOf(board?: string): string {
 
 const MARKETS: [string, string][] = [['ALL', '全部'], ['SH', '沪市'], ['SZ', '深市'], ['BJ', '北交']];
 
-export function StockSidebar({ selected, onSelect, watchlistSymbols, onlyWatchlist, onOnlyWatchlist, filters, onFiltersChange, onModels, models: modelOptions = [], onTotals, fullTotal = 0 }: Props) {
+export function StockSidebar({ selected, onSelect, watchlistSymbols, onlyWatchlist, onOnlyWatchlist, filters, onFiltersChange, onModels, models: modelOptions = [], onTotals, onSignalDate, fullTotal = 0 }: Props) {
   const [market, setMarket] = useState('ALL');
   const [q, setQ] = useState('');
   const [data, setData] = useState<StockListResponse | null>(null);
@@ -109,6 +111,7 @@ export function StockSidebar({ selected, onSelect, watchlistSymbols, onlyWatchli
       if (!append) {
         setOptionCounts(resp.option_counts ?? {});
         setFacets(resp.facets ?? {});
+        onSignalDate?.(resp.signal_date);
       }
       itemsRef.current = append ? [...itemsRef.current, ...resp.items] : resp.items;
       setData({ ...resp, items: itemsRef.current });
@@ -123,7 +126,7 @@ export function StockSidebar({ selected, onSelect, watchlistSymbols, onlyWatchli
     } finally {
       setLoading(false);
     }
-  }, [market, q, filters, selected, onModels, onTotals, onSelect]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [market, q, filters, selected, onModels, onTotals, onSelect, onSignalDate]); // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => {
     const t = setTimeout(() => fetchList(1, false), q ? 300 : 0);

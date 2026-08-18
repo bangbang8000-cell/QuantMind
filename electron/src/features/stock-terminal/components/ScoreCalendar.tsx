@@ -54,11 +54,12 @@ const WD = ['日', '一', '二', '三', '四', '五', '六'];  // 周天为第�
 
 interface Props {
   symbol: string;          // suffix（600519.SH）
-  onBarClick?: (date: string) => void;  // 点击日期联动 K 线（可选，暂未使用）
+  onBarClick?: (date: string) => void;  // 点击日期 -> 整表切换到该信号日分数
+  selectedDate?: string | null;  // 当前列表基准信号日（琥珀色圈高亮）
   height?: number;         // 可用高度，决定是否滚动
 }
 
-export function ScoreCalendar({ symbol, onBarClick }: Props) {
+export function ScoreCalendar({ symbol, onBarClick, selectedDate }: Props) {
   const [items, setItems] = useState<{ trade_date: string; fusion_score: number | null; signal_side: string | null }[]>([]);
   const [loading, setLoading] = useState(false);
   const [viewKey, setViewKey] = useState<string>('');  // 当前查看月份 YYYY-MM（空=最新月）
@@ -93,7 +94,7 @@ export function ScoreCalendar({ symbol, onBarClick }: Props) {
     const first = new Date(year, month - 1, 1);
     const lead = first.getDay();   // 周天(0)为第一天
     const days = new Date(year, month, 0).getDate();
-    const out: ({ kind: 'blank' } | { kind: 'day'; date: string; day: number; value: number | null; side: string | null; today: boolean })[] = [];
+    const out: ({ kind: 'blank' } | { kind: 'day'; date: string; day: number; value: number | null; side: string | null; today: boolean; active: boolean })[] = [];
     for (let i = 0; i < lead; i++) out.push({ kind: 'blank' });
     for (let d = 1; d <= days; d++) {
       const date = `${year}-${String(month).padStart(2, '0')}-${String(d).padStart(2, '0')}`;
@@ -102,10 +103,11 @@ export function ScoreCalendar({ symbol, onBarClick }: Props) {
         value: bucket.scores.get(date) ?? null,
         side: bucket.sides.get(date) ?? null,
         today: date === new Date().toISOString().slice(0, 10),
+        active: date === selectedDate,   // 当前列表基准信号日
       });
     }
     return out;
-  }, [bucket]);
+  }, [bucket, selectedDate]);
 
   const monthScoreRange = useMemo(() => {
     const vals = cells.filter((c): c is any => c.kind === 'day' && c.value != null).map((c: any) => c.value);
@@ -142,11 +144,13 @@ export function ScoreCalendar({ symbol, onBarClick }: Props) {
           {cells.map((c, i) => c.kind === 'blank' ? <span key={`b${i}`} /> : (
             <button
               key={c.date}
-              onClick={() => onBarClick?.(c.date)}
-              title={`${c.date} ${c.value != null ? `分数 ${fmtScore(c.value)}${c.side ? ` · ${c.side}` : ''}` : '无推理'}`}
-              className={`aspect-square rounded-md text-[9px] font-mono font-bold flex flex-col items-center justify-center leading-none border transition-transform hover:scale-105 ${
+              onClick={() => c.value != null && onBarClick?.(c.date)}
+              title={`${c.date} ${c.value != null ? `分数 ${fmtScore(c.value)}${c.side ? ` · ${c.side}` : ''}（点击整表切换当天）` : '无推理'}`}
+              className={`aspect-square rounded-md text-[9px] font-mono font-bold flex flex-col items-center justify-center leading-none border transition-transform ${
+                c.value != null ? 'hover:scale-105 cursor-pointer' : 'cursor-default'
+              } ${
                 c.value == null ? 'bg-slate-50 text-slate-300 border-slate-100' : `${scoreCellClass(c.value)} border-transparent`
-              } ${c.today ? 'ring-2 ring-blue-400 ring-offset-1' : ''}`}
+              } ${c.today ? 'ring-2 ring-blue-400 ring-offset-1' : ''} ${c.active ? 'ring-2 ring-amber-500 ring-offset-1' : ''}`}
             >
               {c.day}
               {c.value != null && <span className="text-[7px] opacity-80">{c.side === 'BUY' ? 'B' : c.side === 'SELL' ? 'S' : ''}</span>}

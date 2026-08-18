@@ -960,23 +960,30 @@ def _cap_tier_of(mv_yi) -> str:
     return "超大盘"
 
 
-async def _trend_map(model: str | None) -> dict[str, str]:
-    """每股最近 3 个信号日的分数趋势（symbol 纯数字 -> 趋势标签）。"""
+async def _trend_map(model: str | None, before=None) -> dict[str, str]:
+    """每股最近 3 个信号日的分数趋势（symbol 纯数字 -> 趋势标签）。
+
+    before: date 对象时，取 before 及之前的最近 3 个信号日（日历点选历史日联动）。
+    """
     from sqlalchemy import text as _txt
 
     async with get_session() as session:
         mwhere = "AND run_id IN (SELECT run_id FROM qm_model_inference_runs WHERE model_id = :m)" if model else ""
-        mparams: dict = {"m": model} if model else {}
+        params: dict = {"m": model} if model else {}
+        bwhere = ""
+        if before is not None:
+            bwhere = "AND trade_date <= :b"
+            params["b"] = before
         dates = [
             r[0]  # date 对象（asyncpg 需 date 类型绑定；显示用 str）
             for r in (
                 await session.execute(
                     _txt(
                         "SELECT DISTINCT trade_date FROM engine_signal_scores "
-                        f"WHERE tenant_id='default' {mwhere} "
+                        f"WHERE tenant_id='default' {mwhere} {bwhere} "
                         "ORDER BY trade_date DESC LIMIT 3"
                     ),
-                    mparams,
+                    params,
                 )
             ).fetchall()
         ]
@@ -987,10 +994,10 @@ async def _trend_map(model: str | None) -> dict[str, str]:
         stmt = _txt(
             "SELECT symbol, trade_date, fusion_score, created_at FROM engine_signal_scores "
             "WHERE tenant_id='default' AND trade_date IN :ds "
-            f"{mwhere} ORDER BY created_at"
+            f"{mwhere} {bwhere} ORDER BY created_at"
         ).bindparams(_bindparam("ds", expanding=True))
         rows = (
-            await session.execute(stmt, {**mparams, "ds": tuple(dates)})
+            await session.execute(stmt, {**params, "ds": tuple(dates)})
         ).fetchall()
     # 每 (symbol, date) 取 created_at 最新一条
     per: dict[tuple[str, str], float] = {}
@@ -1189,12 +1196,12 @@ async def list_stocks(
             df = df[df["_side"] == side]
         df = df.sort_values("_fusion", ascending=False, na_position="last")
 
-    # 分数趋势：最近 3 个信号日的 fusion 比较判定（每股 s0<-s1<-s2）
-    # 无论是否筛选都计算，供列表趋势列展示
+    # 分数趋势：以当前基准信号日为 s2，往前比较最近 3 个信号日（每股 s0<-s1<-s2）。
+    # 日历点选历史日时（date 参数），趋势随之按该日重算，整表联动。
     trend_map: dict[str, str] = {}
     if score_info:
         try:
-            trend_map = await _trend_map(model)
+            trend_map = await _trend_map(model, before=latest)
         except Exception as exc:  # noqa: BLE001
             logger.warning("trend map failed: %s", exc)
     if trend and trend_map:

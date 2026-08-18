@@ -42,6 +42,7 @@ export default function StockTerminalPage() {
   const [fullTotal, setFullTotal] = useState(0);
   const [listModels, setListModels] = useState<{ model_id: string; display_name?: string }[]>([]);
   const [quotes, setQuotes] = useState<IndexQuote[]>([]);
+  const [signalDate, setSignalDate] = useState<string | undefined>();
 
   useEffect(() => {
     if (!selected) { setProfile(null); return; }
@@ -131,6 +132,7 @@ export default function StockTerminalPage() {
             const hasActive = Object.values(listFilters).some(v => v != null && v !== '') || !!tagFilter;
             if (!hasActive) setFullTotal(total);
           }}
+          onSignalDate={setSignalDate}
           fullTotal={fullTotal}
         />
       </div>
@@ -247,14 +249,29 @@ export default function StockTerminalPage() {
               <ChevronUp className={`w-3 h-3 text-slate-400 transition-transform ${calendarCollapsed ? 'rotate-180' : ''}`} />
             </button>
             {!calendarCollapsed && selected && (
-              <span className="text-[10px] text-slate-400 font-mono truncate ml-2">
-                {selected.name} · 历史推理分数（红正绿负）
-              </span>
+              <div className="flex items-center gap-1.5 min-w-0 ml-2">
+                <span className="text-[10px] text-slate-400 font-mono truncate">
+                  {selected.name} · 历史推理分数（红正绿负）
+                </span>
+                {signalDate && (
+                  <button
+                    onClick={() => setListFilters({ ...listFilters, date: undefined })}
+                    title="当前列表基准信号日，点击回到最新"
+                    className="shrink-0 text-[9px] font-mono font-bold text-amber-600 bg-amber-50 border border-amber-200 rounded px-1.5 py-0.5 hover:bg-amber-100 transition-colors"
+                  >
+                    {signalDate} ✕
+                  </button>
+                )}
+              </div>
             )}
           </div>
           {!calendarCollapsed && (
             <div className="flex-1 min-h-0 overflow-y-auto px-4 py-2">
-              <ScoreCalendar symbol={selected?.symbol ?? ''} />
+              <ScoreCalendar
+                symbol={selected?.symbol ?? ''}
+                selectedDate={signalDate}
+                onBarClick={(d) => setListFilters({ ...listFilters, date: d })}
+              />
             </div>
           )}
         </motion.div>
