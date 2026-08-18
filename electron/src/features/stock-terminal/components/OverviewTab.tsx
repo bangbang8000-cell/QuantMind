@@ -80,35 +80,6 @@ export function OverviewTab({ profile }: Props) {
         <Field label="营收 TTM" value={v.revenue_ttm != null ? `${(v.revenue_ttm / 1e8).toFixed(1)}亿` : '--'} />
       </div>
 
-      {/* 宽基归属 + 概念 */}
-      <div className="bg-white/70 rounded-2xl border border-slate-100 p-3 flex flex-col min-h-0">
-        <div className="flex items-center gap-1.5 pb-2 mb-1 border-b border-slate-100">
-          <Layers className="w-3 h-3 text-violet-500" />
-          <span className="text-[11px] font-bold text-slate-600">宽基归属与标识</span>
-        </div>
-        <div className="flex flex-wrap gap-1 pb-2">
-          {profile.index_membership.map(m => (
-            <span key={m.index_code} className="text-[10px] bg-violet-50 text-violet-600 rounded px-1.5 py-0.5 font-bold">
-              {m.index_name}{m.weight != null ? ` ${m.weight.toFixed(1)}%` : ''}
-            </span>
-          ))}
-          {profile.flags.is_st && <span className="text-[10px] bg-rose-50 text-rose-500 rounded px-1.5 py-0.5 font-bold">ST</span>}
-          {profile.flags.marginable && <span className="text-[10px] bg-blue-50 text-blue-600 rounded px-1.5 py-0.5 font-bold">融资融券</span>}
-          {profile.flags.sh_hk_connect && <span className="text-[10px] bg-cyan-50 text-cyan-600 rounded px-1.5 py-0.5 font-bold">沪港通</span>}
-          {profile.flags.hs300 && <span className="text-[10px] bg-emerald-50 text-emerald-600 rounded px-1.5 py-0.5 font-bold">沪深300</span>}
-        </div>
-        <div className="flex items-center gap-1.5 pt-1 border-t border-slate-100 mt-auto">
-          <Tag className="w-3 h-3 text-amber-500 shrink-0" />
-          <span className="text-[11px] font-bold text-slate-600">概念板块</span>
-        </div>
-        <div className="flex flex-wrap gap-1 pt-1.5 max-h-28 overflow-y-auto">
-          {profile.concepts.length
-            ? profile.concepts.map(c => (
-                <span key={c} className="text-[10px] bg-amber-50/70 text-amber-700 rounded px-1.5 py-0.5">{c}</span>
-              ))
-            : <span className="text-[10px] text-slate-400">无</span>}
-        </div>
-      </div>
     </div>
   );
 }

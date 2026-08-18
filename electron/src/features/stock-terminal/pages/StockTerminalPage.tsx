@@ -34,6 +34,7 @@ export default function StockTerminalPage() {
   const [infoTab, setInfoTab] = useState<InfoTab>('overview');
   const [watchlist, setWatchlist] = useState<Set<string>>(new Set());
   const [onlyWatchlist, setOnlyWatchlist] = useState(false);
+  const [tagFilter, setTagFilter] = useState<{ id: string; name: string } | null>(null);
 
   useEffect(() => {
     if (!selected) { setProfile(null); return; }
@@ -65,6 +66,8 @@ export default function StockTerminalPage() {
         watchlistSymbols={watchlist}
         onlyWatchlist={onlyWatchlist}
         onOnlyWatchlist={setOnlyWatchlist}
+        tagFilter={tagFilter}
+        onTagFilter={setTagFilter}
       />
 
       {/* 右侧：推理排名 + 信息 Tabs（默认不显示 K 线，点股票弹整合 K 线窗） */}
@@ -75,36 +78,81 @@ export default function StockTerminalPage() {
           initial={{ opacity: 0, y: 8 }}
           animate={{ opacity: 1, y: 0 }}
           transition={{ duration: 0.3 }}
-          className="bg-white/80 backdrop-blur-xl rounded-3xl border border-white/90 shadow-xs px-4 py-3 flex items-center justify-between shrink-0"
+          className="bg-white/80 backdrop-blur-xl rounded-3xl border border-white/90 shadow-xs px-4 py-3 flex items-start justify-between gap-3 shrink-0"
         >
-          <button
-            onClick={() => selected && setKlineOpen(true)}
-            disabled={!selected}
-            className="flex items-center gap-2.5 min-w-0 hover:opacity-80 disabled:opacity-40 transition-opacity text-left"
-            title="点击查看完整 K 线"
-          >
-            <div className="w-8 h-8 rounded-lg bg-blue-50 border border-blue-100 flex items-center justify-center text-blue-600 shrink-0">
-              <CandlestickChart className="w-4 h-4" />
-            </div>
-            <div className="min-w-0">
-              <div className="flex items-baseline gap-2">
-                <span className="text-base font-black text-slate-800 truncate">{selected ? selected.name : '选择股票'}</span>
-                {selected && <span className="text-[11px] font-mono text-blue-600 bg-blue-50 px-1.5 py-0.5 rounded-lg">{selected.symbol}</span>}
+          <div className="flex items-start gap-2.5 min-w-0 flex-1">
+            <button
+              onClick={() => selected && setKlineOpen(true)}
+              disabled={!selected}
+              className="flex items-center gap-2.5 min-w-0 hover:opacity-80 disabled:opacity-40 transition-opacity text-left shrink-0"
+              title="点击查看完整 K 线"
+            >
+              <div className="w-8 h-8 rounded-lg bg-blue-50 border border-blue-100 flex items-center justify-center text-blue-600 shrink-0">
+                <CandlestickChart className="w-4 h-4" />
               </div>
-              {selected && (
-                <div className="flex items-center gap-2">
-                  <span className={`text-[11px] font-mono font-bold ${up ? 'text-rose-500' : 'text-emerald-500'}`}>
-                    {profile?.close?.toFixed(2) ?? '--'} {up ? '+' : ''}{(profile?.pct_change ?? 0).toFixed(2)}%
-                  </span>
-                  <span className="text-[10px] text-slate-400">{profile?.board} · {profile?.industry ?? '--'}</span>
-                  <span className="text-[10px] text-slate-300 flex items-center gap-0.5">
-                    <CandlestickChart className="w-2.5 h-2.5" /> 点击查看 K 线
-                  </span>
+              <div className="min-w-0">
+                <div className="flex items-baseline gap-2">
+                  <span className="text-base font-black text-slate-800 truncate">{selected ? selected.name : '选择股票'}</span>
+                  {selected && <span className="text-[11px] font-mono text-blue-600 bg-blue-50 px-1.5 py-0.5 rounded-lg">{selected.symbol}</span>}
                 </div>
-              )}
-            </div>
-          </button>
+                {selected && (
+                  <div className="flex items-center gap-2">
+                    <span className={`text-[11px] font-mono font-bold ${up ? 'text-rose-500' : 'text-emerald-500'}`}>
+                      {profile?.close?.toFixed(2) ?? '--'} {up ? '+' : ''}{(profile?.pct_change ?? 0).toFixed(2)}%
+                    </span>
+                    <span className="text-[10px] text-slate-400">{profile?.board} · {profile?.industry ?? '--'}</span>
+                    <span className="text-[10px] text-slate-300 flex items-center gap-0.5">
+                      <CandlestickChart className="w-2.5 h-2.5" /> 点击查看 K 线
+                    </span>
+                  </div>
+                )}
+              </div>
+            </button>
+            {/* 宽基归属与标识 + 概念板块（从概况移到顶部） */}
+            {selected && profile && (
+              <div className="flex-1 min-w-0 flex flex-col gap-1 pt-0.5">
+                <div className="flex flex-wrap gap-1 items-center">
+                  <span className="text-[10px] font-bold text-slate-400 shrink-0">宽基</span>
+                  {profile.index_membership.map(m => (
+                    <span key={m.index_code} className="text-[10px] bg-violet-50 text-violet-600 rounded px-1.5 py-0.5 font-bold">
+                      {m.index_name}{m.weight != null ? ` ${m.weight.toFixed(1)}%` : ''}
+                    </span>
+                  ))}
+                  {profile.flags.is_st && <span className="text-[10px] bg-rose-50 text-rose-500 rounded px-1.5 py-0.5 font-bold">ST</span>}
+                  {profile.flags.marginable && <span className="text-[10px] bg-blue-50 text-blue-600 rounded px-1.5 py-0.5 font-bold">融资融券</span>}
+                  {profile.flags.sh_hk_connect && <span className="text-[10px] bg-cyan-50 text-cyan-600 rounded px-1.5 py-0.5 font-bold">沪港通</span>}
+                  {!profile.index_membership.length && <span className="text-[10px] text-slate-300">无</span>}
+                </div>
+                <div className="flex flex-wrap gap-1 items-center">
+                  <span className="text-[10px] font-bold text-slate-400 shrink-0">概念</span>
+                  {profile.concepts.length
+                    ? profile.concepts.slice(0, 12).map(c => (
+                        <span key={c} className="text-[10px] bg-amber-50/70 text-amber-700 rounded px-1.5 py-0.5">{c}</span>
+                      ))
+                    : <span className="text-[10px] text-slate-300">无</span>}
+                  {profile.concepts.length > 12 && <span className="text-[10px] text-slate-400">+{profile.concepts.length - 12}</span>}
+                </div>
+              </div>
+            )}
+          </div>
         </motion.div>
+
+        {/* 智能标签条：点击筛选按钮 -> 左侧列表按标签过滤 */}
+        {selected && (
+          <motion.div
+            initial={{ opacity: 0, y: 8 }}
+            animate={{ opacity: 1, y: 0 }}
+            transition={{ duration: 0.3, delay: 0.02 }}
+            className="bg-white/80 backdrop-blur-xl rounded-3xl border border-white/90 shadow-xs shrink-0"
+          >
+            <TagStrip
+              symbol={selected.symbol}
+              onSelectStock={setSelected}
+              onSelectTag={(t) => setTagFilter(tagFilter?.id === t.id ? null : t)}
+              activeTagId={tagFilter?.id ?? null}
+            />
+          </motion.div>
+        )}
 
         {/* 推理排名（推理研究内容，右侧上方） */}
         <motion.div

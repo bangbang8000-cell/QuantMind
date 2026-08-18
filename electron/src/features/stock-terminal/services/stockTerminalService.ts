@@ -30,7 +30,12 @@ class StockTerminalService {
     q?: string;
     date?: string;
     score_min?: number;
+    score_max?: number;
     model?: string;
+    board?: string;
+    cap_tier?: string;
+    trend?: string;
+    tag?: string;
     page?: number;
     page_size?: number;
   }): Promise<StockListResponse> {

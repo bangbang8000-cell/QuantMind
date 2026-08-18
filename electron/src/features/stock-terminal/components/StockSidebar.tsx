@@ -1,7 +1,7 @@
 /** 个股终端左侧栏：检索 + SH/SZ/BJ 分类 + 行业过滤 + 股票列表（虚拟滚动简化版：分页加载） */
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { Search, RefreshCw, Star, Filter, Cpu, CalendarDays } from 'lucide-react';
+import { Search, RefreshCw, Star, Filter, Cpu, CalendarDays, X, TrendingUp } from 'lucide-react';
 import { Input, Select, Spin, message } from 'antd';
 import { StockListItem, StockListResponse } from '../types';
 import { stockTerminalService } from '../services/stockTerminalService';
@@ -12,7 +12,38 @@ interface Props {
   watchlistSymbols: Set<string>;   // prefix 格式（SH600519）
   onlyWatchlist: boolean;
   onOnlyWatchlist: (v: boolean) => void;
+  /** 智能标签筛选（顶部标签条点击设置） */
+  tagFilter?: { id: string; name: string } | null;
+  onTagFilter?: (t: { id: string; name: string } | null) => void;
 }
+
+const BOARD_OPTIONS = ['沪市主板', '深市主板', '科创板', '创业板', '北交所'];
+const CAP_TIER_OPTIONS = [
+  { value: '微盘', label: '微盘 <30亿' },
+  { value: '小盘', label: '小盘 30-100亿' },
+  { value: '中盘', label: '中盘 100-300亿' },
+  { value: '大盘', label: '大盘 300-1000亿' },
+  { value: '超大盘', label: '超大盘 >1000亿' },
+];
+const TREND_OPTIONS = [
+  { value: '连续上升', label: '连续上升' },
+  { value: '连续下降', label: '连续下降' },
+  { value: '先升后降', label: '先升后降 · 最佳买点' },
+  { value: '上升', label: '单日上升' },
+  { value: '下降', label: '单日下降' },
+  { value: '持平', label: '持平' },
+];
+/** 分数档 -> score_min/max 映射（同推理研究策略区间） */
+const BUCKET_OPTIONS: { value: string; label: string; min?: number; max?: number }[] = [
+  { value: 'golden', label: '黄金区间 0.10-0.12', min: 0.10, max: 0.12 },
+  { value: 'optional', label: '可选 0.12-0.15', min: 0.12, max: 0.15 },
+  { value: 'caution', label: '谨慎 0.15-0.20', min: 0.15, max: 0.20 },
+  { value: 'extreme', label: '极端高分 ≥0.20', min: 0.20 },
+  { value: 'neg_extreme', label: '极端负分 ≤-0.20', max: -0.20 },
+  { value: 'neg_short', label: '做空候选 ≤-0.15', max: -0.15 },
+  { value: 'pos', label: '全部正分 ≥0', min: 0 },
+  { value: 'neg', label: '全部负分 <0', max: 0 },
+];
 
 const PAGE_SIZE = 100;
 
@@ -33,7 +64,7 @@ export function toPrefix(symbol: string): string {
   return ex && code ? `${ex}${code}` : symbol;
 }
 
-export function StockSidebar({ selected, onSelect, watchlistSymbols, onlyWatchlist, onOnlyWatchlist }: Props) {
+export function StockSidebar({ selected, onSelect, watchlistSymbols, onlyWatchlist, onOnlyWatchlist, tagFilter, onTagFilter }: Props) {
   const [market, setMarket] = useState('ALL');
   const [industry, setIndustry] = useState<string | undefined>();
   const [industries, setIndustries] = useState<string[]>([]);
@@ -44,7 +75,12 @@ export function StockSidebar({ selected, onSelect, watchlistSymbols, onlyWatchli
   const [model, setModel] = useState<string | undefined>();
   const [models, setModels] = useState<string[]>([]);
   const [q, setQ] = useState('');
+  const [board, setBoard] = useState<string | undefined>();
+  const [capTier, setCapTier] = useState<string | undefined>();
+  const [trend, setTrend] = useState<string | undefined>();
+  const [bucket, setBucket] = useState<string | undefined>();
   const [data, setData] = useState<StockListResponse | null>(null);
+  const initialAutoSelected = useRef(false);
   const [loading, setLoading] = useState(false);
   const listRef = useRef<HTMLDivElement>(null);
   const itemsRef = useRef<StockListItem[]>([]);
@@ -57,21 +93,31 @@ export function StockSidebar({ selected, onSelect, watchlistSymbols, onlyWatchli
   const fetchList = useCallback(async (page = 1, append = false) => {
     setLoading(true);
     try {
+      const bucketDef = BUCKET_OPTIONS.find(b => b.value === bucket);
       const resp = await stockTerminalService.getStockList({
         market, industry, concept, q: q || undefined, page, page_size: PAGE_SIZE,
-        date: signalDate, score_min: scoreMin, model,
+        date: signalDate,
+        score_min: bucketDef?.min ?? scoreMin,
+        score_max: bucketDef?.max,
+        model, board, cap_tier: capTier, trend,
+        tag: tagFilter?.id,
       });
       if (!models.length && resp.items.some(it => it.model)) {
         setModels(Array.from(new Set(resp.items.map(it => it.model).filter(Boolean)) as any));
       }
       itemsRef.current = append ? [...itemsRef.current, ...resp.items] : resp.items;
       setData({ ...resp, items: itemsRef.current });
+      // 默认选中排名第一（仅首次加载且未选中）
+      if (!append && !initialAutoSelected.current && !selected && itemsRef.current.length) {
+        initialAutoSelected.current = true;
+        onSelect(itemsRef.current[0]);
+      }
     } catch {
       if (!append) message.error('股票列表加载失败');
     } finally {
       setLoading(false);
     }
-  }, [market, industry, concept, q, signalDate, scoreMin, model, models.length]);
+  }, [market, industry, concept, q, signalDate, scoreMin, model, models.length, board, capTier, trend, bucket, tagFilter]);
 
   useEffect(() => {
     const t = setTimeout(() => fetchList(1, false), q ? 300 : 0);
@@ -92,7 +138,7 @@ export function StockSidebar({ selected, onSelect, watchlistSymbols, onlyWatchli
   );
 
   return (
-    <div className="w-80 shrink-0 flex flex-col bg-white/80 backdrop-blur-xl rounded-3xl border border-white/90 shadow-xs p-4 overflow-hidden">
+    <div className="w-96 shrink-0 flex flex-col bg-white/80 backdrop-blur-xl rounded-3xl border border-white/90 shadow-xs p-4 overflow-hidden">
       {/* 检索 */}
       <div className="flex items-center justify-between pb-3 border-b border-slate-100 mb-3 px-1">
         <div>
@@ -170,6 +216,36 @@ export function StockSidebar({ selected, onSelect, watchlistSymbols, onlyWatchli
           style={{ width: '100%' }}
         />
       </div>
+
+      {/* 板块 / 市值档 */}
+      <div className="flex items-center gap-1 mb-1">
+        <Filter className="w-3 h-3 text-emerald-400 shrink-0" />
+        <Select allowClear showSearch placeholder="板块" value={board} onChange={setBoard}
+          options={BOARD_OPTIONS.map(b => ({ label: b, value: b }))} optionFilterProp="label"
+          size="small" style={{ width: '100%' }} />
+        <Select allowClear placeholder="市值" value={capTier} onChange={setCapTier}
+          options={CAP_TIER_OPTIONS} size="small" style={{ width: 112 }} />
+      </div>
+      {/* 分数档 + 趋势 */}
+      <div className="flex items-center gap-1 mb-1">
+        <TrendingUp className="w-3 h-3 text-rose-400 shrink-0" />
+        <Select allowClear placeholder="分数档" value={bucket} onChange={setBucket}
+          options={BUCKET_OPTIONS.map(b => ({ label: b.label, value: b.value }))} size="small"
+          style={{ width: '100%' }} />
+        <Select allowClear placeholder="趋势" value={trend} onChange={setTrend}
+          options={TREND_OPTIONS} size="small" style={{ width: 112 }} />
+      </div>
+      {/* 标签筛选 chip（顶部标签条点选） */}
+      {tagFilter && (
+        <div className="flex items-center gap-1 mb-1 bg-violet-50 border border-violet-200 rounded-lg px-2 py-1">
+          <Filter className="w-3 h-3 text-violet-500 shrink-0" />
+          <span className="text-[11px] font-bold text-violet-700 truncate">标签：{tagFilter.name}</span>
+          <button onClick={() => onTagFilter?.(null)} className="ml-auto text-violet-400 hover:text-violet-600"
+            title="清除标签筛选">
+            <X className="w-3.5 h-3.5" />
+          </button>
+        </div>
+      )}
 
       {/* 推理模型 + 日期 + 分数筛选 */}
       <div className="flex items-center gap-1 mb-1">

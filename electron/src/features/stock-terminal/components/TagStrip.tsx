@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from 'react';
 import { motion } from 'framer-motion';
-import { Tag as TagIcon, Sparkles, ChevronRight, X } from 'lucide-react';
+import { Tag as TagIcon, Sparkles, ChevronRight, X, Filter } from 'lucide-react';
 import { Modal, Table, Spin, message } from 'antd';
 import { stockTerminalService } from '../services/stockTerminalService';
 import { StockListItem } from '../types';
@@ -15,6 +15,10 @@ interface Props {
   onSelectStock?: (item: StockListItem) => void;
   /** 竖排模式：右侧栏用 */
   vertical?: boolean;
+  /** 点击标签的筛选按钮 -> 父级筛左侧列表 */
+  onSelectTag?: (tag: { id: string; name: string }) => void;
+  /** 当前筛选中的标签 id（高亮） */
+  activeTagId?: string | null;
 }
 
 const CATEGORY_COLORS: Record<string, string> = {
@@ -32,7 +36,7 @@ const CATEGORY_COLORS: Record<string, string> = {
 };
 const FALLBACK = 'bg-slate-50 text-slate-600 border-slate-100';
 
-export function TagStrip({ symbol, onSelectStock, vertical = false }: Props) {
+export function TagStrip({ symbol, onSelectStock, vertical = false, onSelectTag, activeTagId }: Props) {
   const [tags, setTags] = useState<MatchedTag[]>([]);
   const [presets, setPresets] = useState<MatchedPreset[]>([]);
   const [openTag, setOpenTag] = useState<{ id: string; name: string } | null>(null);
@@ -70,18 +74,32 @@ export function TagStrip({ symbol, onSelectStock, vertical = false }: Props) {
       </div>
       <div className="flex flex-col gap-1.5 overflow-y-auto">
         {tags.map(t => (
-          <button
-            key={t.id}
-            onClick={() => openSimilar(t.id, t.name)}
-            title={t.desc + (t.value != null ? `（值=${t.value?.toFixed(2)}）` : '')}
-            className={`flex items-center justify-between gap-1 px-2 py-1.5 rounded-lg border text-[10px] font-bold text-left transition-colors hover:scale-[1.02] ${CATEGORY_COLORS[t.category] ?? FALLBACK}`}
-          >
-            <span className="flex items-center gap-1 min-w-0">
-              <TagIcon className="w-2.5 h-2.5 shrink-0" />
-              <span className="truncate">{t.name}</span>
-            </span>
-            <ChevronRight className="w-2.5 h-2.5 opacity-50 shrink-0" />
-          </button>
+          <div key={t.id} className="flex items-center gap-1">
+            <button
+              onClick={() => openSimilar(t.id, t.name)}
+              title={t.desc + (t.value != null ? `（值=${t.value?.toFixed(2)}）` : '')}
+              className={`flex-1 flex items-center justify-between gap-1 px-2 py-1.5 rounded-lg border text-[10px] font-bold text-left transition-colors hover:scale-[1.02] ${CATEGORY_COLORS[t.category] ?? FALLBACK}`}
+            >
+              <span className="flex items-center gap-1 min-w-0">
+                <TagIcon className="w-2.5 h-2.5 shrink-0" />
+                <span className="truncate">{t.name}</span>
+              </span>
+              <ChevronRight className="w-2.5 h-2.5 opacity-50 shrink-0" />
+            </button>
+            {onSelectTag && (
+              <button
+                onClick={() => onSelectTag({ id: t.id, name: t.name })}
+                title="按此标签筛选左侧列表"
+                className={`w-5 h-5 rounded-md flex items-center justify-center border transition-colors ${
+                  activeTagId === t.id
+                    ? 'bg-violet-500 text-white border-violet-500'
+                    : 'bg-white text-violet-400 border-slate-200 hover:bg-violet-50'
+                }`}
+              >
+                <Filter className="w-3 h-3" />
+              </button>
+            )}
+          </div>
         ))}
         {!tags.length && <span className="text-[10px] text-slate-400">选择股票后自动匹配智能标签</span>}
       </div>
@@ -132,16 +150,30 @@ export function TagStrip({ symbol, onSelectStock, vertical = false }: Props) {
       <Sparkles className="w-3 h-3 text-violet-400 shrink-0" />
       <div className="flex flex-wrap gap-1 items-center flex-1 min-w-0">
         {tags.map(t => (
-          <button
-            key={t.id}
-            onClick={() => openSimilar(t.id, t.name)}
-            title={t.desc + (t.value != null ? `（值=${t.value?.toFixed(2)}）` : '')}
-            className={`flex items-center gap-1 px-1.5 py-0.5 rounded-md border text-[10px] font-bold transition-transform hover:scale-105 ${CATEGORY_COLORS[t.category] ?? FALLBACK}`}
-          >
-            <TagIcon className="w-2.5 h-2.5" />
-            {t.name}
-            <ChevronRight className="w-2.5 h-2.5 opacity-50" />
-          </button>
+          <span key={t.id} className="flex items-center gap-0.5">
+            <button
+              onClick={() => openSimilar(t.id, t.name)}
+              title={t.desc + (t.value != null ? `（值=${t.value?.toFixed(2)}）` : '')}
+              className={`flex items-center gap-1 px-1.5 py-0.5 rounded-md border text-[10px] font-bold transition-transform hover:scale-105 ${CATEGORY_COLORS[t.category] ?? FALLBACK}`}
+            >
+              <TagIcon className="w-2.5 h-2.5" />
+              {t.name}
+              <ChevronRight className="w-2.5 h-2.5 opacity-50" />
+            </button>
+            {onSelectTag && (
+              <button
+                onClick={() => onSelectTag({ id: t.id, name: t.name })}
+                title="按此标签筛选左侧列表"
+                className={`w-4 h-4 rounded flex items-center justify-center border transition-colors ${
+                  activeTagId === t.id
+                    ? 'bg-violet-500 text-white border-violet-500'
+                    : 'bg-white text-violet-400 border-slate-200 hover:bg-violet-50'
+                }`}
+              >
+                <Filter className="w-2.5 h-2.5" />
+              </button>
+            )}
+          </span>
         ))}
         {!tags.length && <span className="text-[10px] text-slate-400">选择股票后自动匹配智能标签</span>}
       </div>

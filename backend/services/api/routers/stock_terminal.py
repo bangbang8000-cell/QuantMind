@@ -897,6 +897,71 @@ async def stock_series(
 # ---------------------------------------------------------------------------
 
 
+async def _trend_map(model: str | None) -> dict[str, str]:
+    """每股最近 3 个信号日的分数趋势（symbol 纯数字 -> 趋势标签）。"""
+    from sqlalchemy import text as _txt
+
+    async with get_session() as session:
+        mwhere = "AND model_version = :m" if model else ""
+        mparams: dict = {"m": model} if model else {}
+        dates = [
+            str(r[0])
+            for r in (
+                await session.execute(
+                    _txt(
+                        "SELECT DISTINCT trade_date FROM engine_signal_scores "
+                        f"WHERE tenant_id='default' {mwhere} "
+                        "ORDER BY trade_date DESC LIMIT 3"
+                    ),
+                    mparams,
+                )
+            ).fetchall()
+        ]
+        if len(dates) < 2:
+            return {}
+        rows = (
+            await session.execute(
+                _txt(
+                    "SELECT symbol, trade_date, fusion_score, created_at FROM engine_signal_scores "
+                    "WHERE tenant_id='default' AND trade_date IN :ds "
+                    f"{mwhere} ORDER BY created_at"
+                ),
+                {**mparams, "ds": tuple(dates)},
+            )
+        ).fetchall()
+    # 每 (symbol, date) 取 created_at 最新一条
+    per: dict[tuple[str, str], float] = {}
+    for sym, d, fusion, _created in rows:
+        if fusion is not None:
+            per[(str(sym), str(d))] = float(fusion)
+    out: dict[str, str] = {}
+    for (sym, d), fusion in per.items():
+        idx = dates.index(d)
+        if idx == 0:  # 最新日
+            s2 = fusion
+            s1 = per.get((sym, dates[1])) if len(dates) > 1 else None
+            s0 = per.get((sym, dates[2])) if len(dates) > 2 else None
+            if s1 is None:
+                continue
+            if s0 is not None:
+                if s2 > s1 > s0:
+                    t = "连续上升"
+                elif s2 < s1 < s0:
+                    t = "连续下降"
+                elif s1 > s0 and s2 < s1:
+                    t = "先升后降"
+                elif s2 > s1:
+                    t = "上升"
+                elif s2 < s1:
+                    t = "下降"
+                else:
+                    t = "持平"
+            else:
+                t = "上升" if s2 > s1 else ("下降" if s2 < s1 else "持平")
+            out[sym] = t
+    return out
+
+
 @router.get("/list")
 async def list_stocks(
     market: str = Query("ALL", description="SH / SZ / BJ / ALL"),
@@ -909,6 +974,10 @@ async def list_stocks(
     score_max: float | None = Query(None, description="推理分数上限"),
     only_signaled: bool = Query(False, description="仅 BUY/SELL（排除 HOLD）"),
     concept: str | None = Query(None, description="概念板块（sector_members 板块名）"),
+    board: str | None = Query(None, description="板块：沪市主板/深市主板/科创板/创业板/北交所"),
+    cap_tier: str | None = Query(None, description="市值档：微盘/小盘/中盘/大盘/超大盘"),
+    trend: str | None = Query(None, description="分数趋势：连续上升/连续下降/先升后降/上升/下降/持平"),
+    tag: str | None = Query(None, description="智能标签 id（tag_rules）"),
     page: int = Query(1, ge=1),
     page_size: int = Query(100, ge=10, le=6000),
     current_user: dict = Depends(get_current_user),
@@ -930,6 +999,32 @@ async def list_stocks(
         members = _concept_members(concept)
         if members:
             df = df[df["Symbol"].isin(members)]
+    if board:
+        df = df[df["board"] == board]
+    if cap_tier:
+        mv = pd.to_numeric(df["Zsz"], errors="coerce")
+        if cap_tier == "微盘":
+            df = df[mv < 30]
+        elif cap_tier == "小盘":
+            df = df[(mv >= 30) & (mv < 100)]
+        elif cap_tier == "中盘":
+            df = df[(mv >= 100) & (mv < 300)]
+        elif cap_tier == "大盘":
+            df = df[(mv >= 300) & (mv < 1000)]
+        elif cap_tier == "超大盘":
+            df = df[mv >= 1000]
+    if tag:
+        try:
+            from backend.services.engine.data_platform.tag_rules import stocks_for_tag
+
+            tag_syms = {str(it.get("symbol") or it.get("code") or "") for it in stocks_for_tag(tag, limit=6000)}
+            tag_codes = {x.split(".")[0] for x in tag_syms if x}
+            if tag_codes:
+                df = df[df["Symbol"].str.split(".").str[0].isin(tag_codes)]
+            else:
+                df = df.iloc[0:0]
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("tag filter %s failed: %s", tag, exc)
 
     # 推理分数叠加（engine_signal_scores）：默认最近有分数交易日单日，分数降序
     score_info: dict[str, dict] = {}
@@ -1002,6 +1097,17 @@ async def list_stocks(
         if only_signaled:
             df = df[df["_side"].isin(["BUY", "SELL"])]
         df = df.sort_values("_fusion", ascending=False, na_position="last")
+
+    # 分数趋势：最近 3 个信号日的 fusion 比较判定（每股 s0<-s1<-s2）
+    if trend and score_info:
+        try:
+            trend_map = await _trend_map(model)
+            if trend_map:
+                df = df[df["_code"].isin(
+                    [sym for sym, t in trend_map.items() if t == trend]
+                )]
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("trend filter failed: %s", exc)
 
     total = len(df)
     start = (page - 1) * page_size
