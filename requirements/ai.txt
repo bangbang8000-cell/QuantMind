@@ -8,6 +8,8 @@ anthropic>=0.18.1
 zhipuai>=2.0.0
 dashscope>=1.14.0
 google-generativeai>=0.3.0
+# FinBERT 新闻情绪识别（news.sentiment 惰性 import，CPU 推理；torch 已由 Dockerfile 按 TORCH_DEVICE 装）
+transformers>=4.44.0
 
 # Data Science
 numpy==1.26.4

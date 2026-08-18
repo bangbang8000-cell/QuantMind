@@ -913,13 +913,20 @@ export const NewsPanel: React.FC = () => {
           {stats?.sentiment_counts && (() => {
             const total = (stats.sentiment_counts.bullish || 0) + (stats.sentiment_counts.bearish || 0) + (stats.sentiment_counts.neutral || 0);
             if (total === 0) return null;
+            const pct = (n: number) => `${(n / total * 100).toFixed(0)}%`;
             return (
-              <div style={{ padding: '6px 16px', borderBottom: '1px solid rgba(226, 232, 240, 0.8)', background: 'rgba(255, 255, 255, 0.85)', fontSize: 12, display: 'flex', gap: 14, color: '#64748b', alignItems: 'center' }}>
+              <div style={{ padding: '6px 16px', borderBottom: '1px solid rgba(226, 232, 240, 0.8)', background: 'rgba(255, 255, 255, 0.85)', fontSize: 12, display: 'flex', gap: 14, color: '#64748b', alignItems: 'center', flexWrap: 'wrap' }}>
                 {activeFilterCount > 0 && <Tag color="processing" style={{ fontSize: 11, margin: 0 }}>已筛选</Tag>}
                 <span>共 <b style={{ color: '#6366f1' }}>{total.toLocaleString()}</b> 篇</span>
                 <span style={{ color: COLOR_BULLISH }}>利好 {stats.sentiment_counts.bullish || 0}</span>
                 <span style={{ color: COLOR_BEARISH }}>利空 {stats.sentiment_counts.bearish || 0}</span>
                 <span style={{ color: COLOR_NEUTRAL }}>中性 {stats.sentiment_counts.neutral || 0}</span>
+                {/* 情绪分布横条 */}
+                <span style={{ flex: 1, maxWidth: 160, display: 'inline-flex', height: 6, borderRadius: 3, overflow: 'hidden', background: '#e2e8f0', minWidth: 90 }}>
+                  <span style={{ width: pct(stats.sentiment_counts.bullish || 0), background: COLOR_BULLISH, height: '100%' }} />
+                  <span style={{ width: pct(stats.sentiment_counts.bearish || 0), background: COLOR_BEARISH, height: '100%' }} />
+                  <span style={{ flex: 1, background: '#cbd5e1', height: '100%' }} />
+                </span>
               </div>
             );
           })()}

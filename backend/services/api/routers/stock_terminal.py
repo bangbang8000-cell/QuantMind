@@ -677,6 +677,45 @@ async def stock_news(
         logger.warning("stock_news %s failed: %s", sym, exc)
         return {"success": True, "data": {"items": items, "total": len(items), "available": False}}
     items = items[:limit]
+
+    # 按 huntly_page_id 关联 enrichment 情绪标签（FinBERT/字典法，可能为空）
+    if items:
+        try:
+            import asyncpg  # noqa: F401
+
+            from backend.shared.database_manager_v2 import get_session
+
+            page_ids = [it["id"] for it in items]
+            async with get_session() as session:
+                from sqlalchemy import text as _txt
+                from sqlalchemy.dialects.postgresql import asyncpg as _apg
+
+                rows = (
+                    await session.execute(
+                        _txt(
+                            "SELECT huntly_page_id, sentiment_label, sentiment_score, tickers "
+                            "FROM news_article_enrichment WHERE huntly_page_id = ANY(:pids)"
+                        ),
+                        {"pids": page_ids},
+                    )
+                ).fetchall()
+            enrich_map = {
+                int(r[0]): {
+                    "sentiment_label": str(r[1]) if r[1] else None,
+                    "sentiment_score": float(r[2]) if r[2] is not None else None,
+                    "tickers": (r[3] or []) if isinstance(r[3], (list, tuple)) else [],
+                }
+                for r in rows
+            }
+            for it in items:
+                e = enrich_map.get(int(it["id"]))
+                if e:
+                    it["sentiment_label"] = e["sentiment_label"]
+                    it["sentiment_score"] = e["sentiment_score"]
+                    it["tickers"] = e["tickers"]
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("stock_news enrichment join %s failed: %s", sym, exc)
+
     return {"success": True, "data": {"items": items, "total": len(items), "available": True}}
 
 
