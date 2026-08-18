@@ -24,7 +24,7 @@ from psycopg2.extras import RealDictCursor
 
 logger = logging.getLogger("news.matcher")
 
-MODEL_VERSION = "ac-v4+lex-v3+ent+cn"
+MODEL_VERSION = "ac-v4+lex-v4+ent+cn"
 
 # 别名长度 ≤ 此值时要求左右两侧不能再粘中文/字母，
 # 防止 "中"、"国"、"茅台" 之类的二字别名乱命中；
