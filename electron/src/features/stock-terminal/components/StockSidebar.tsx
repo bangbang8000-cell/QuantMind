@@ -85,6 +85,9 @@ export function StockSidebar({ selected, onSelect, watchlistSymbols, onlyWatchli
   const listRef = useRef<HTMLDivElement>(null);
   const itemsRef = useRef<StockListItem[]>([]);
   const initialAutoSelected = useRef(false);
+  // selected 只影响「首次自动选中」逻辑，不触发列表重新请求（否则点股票整表刷新，表格打架）
+  const selectedRef = useRef<string | null>(selected);
+  selectedRef.current = selected;
 
   const fetchList = useCallback(async (page = 1, append = false) => {
     setLoading(true);
@@ -117,7 +120,7 @@ export function StockSidebar({ selected, onSelect, watchlistSymbols, onlyWatchli
       setData({ ...resp, items: itemsRef.current });
       onTotals?.(resp.total);
       // 默认选中排名第一（仅首次加载且未选中）
-      if (!append && !initialAutoSelected.current && !selected && itemsRef.current.length) {
+      if (!append && !initialAutoSelected.current && !selectedRef.current && itemsRef.current.length) {
         initialAutoSelected.current = true;
         onSelect(itemsRef.current[0]);
       }
@@ -126,7 +129,7 @@ export function StockSidebar({ selected, onSelect, watchlistSymbols, onlyWatchli
     } finally {
       setLoading(false);
     }
-  }, [market, q, filters, selected, onModels, onTotals, onSelect, onSignalDate]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [market, q, filters, onModels, onTotals, onSelect, onSignalDate]); // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => {
     const t = setTimeout(() => fetchList(1, false), q ? 300 : 0);
@@ -156,7 +159,7 @@ export function StockSidebar({ selected, onSelect, watchlistSymbols, onlyWatchli
     neg_extreme: '极端低', neg_short: '做空', pos: '正分', neg: '负分',
   };
 
-  /** 表头列筛选下拉（板块/行业/市值/趋势/得分/信号） */
+  /** 表头列筛选下拉（板块/行业/市值/趋势/得分/信号），长菜单限高滚动避免盖住整个列表 */
   const headerDropdown = (items: { value: string; label: string }[], current: string | undefined, onPick: (v?: string) => void, placeholder: string) => (
     <Dropdown
       trigger={['click']}
@@ -169,6 +172,7 @@ export function StockSidebar({ selected, onSelect, watchlistSymbols, onlyWatchli
         selectable: true,
         selectedKeys: current ? [current] : ['__all'],
         onClick: ({ key }) => onPick(key === '__all' ? undefined : key),
+        style: { maxHeight: 260, overflowY: 'auto' },
       }}
     >
       <button className={`flex items-center justify-center gap-0.5 px-0.5 rounded transition-colors ${current ? 'text-blue-600 font-black' : 'hover:text-blue-500'}`}>

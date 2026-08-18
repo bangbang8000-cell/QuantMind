@@ -143,14 +143,15 @@ export function StockFilterPanel({ filters, onChange, total, fullTotal, models: 
         )}
         <Select allowClear showSearch size="small" placeholder="概念板块" value={filters.concept || undefined}
           optionFilterProp="label" onChange={v => set({ concept: v })}
-          options={concepts.map(c => ({ label: c, value: c }))} />
+          options={concepts.map(c => ({ label: c, value: c }))}
+          maxTagCount={1} listHeight={200} />
         <Select allowClear showSearch size="small" placeholder="推理模型" value={filters.model || undefined}
           optionFilterProp="label" onChange={v => set({ model: v })}
           options={modelOptions.map(m => ({ label: m.display_name || m.model_id, value: m.model_id }))} />
       </div>
 
-      {/* 已选条件：每个条件单独一行（命中组合排版） */}
-      {activeChips.length > 0 && (
+      {/* 已选条件：每条件单独一行；columnOnly 模式不渲染（状态已在列表表头高亮） */}
+      {!columnOnly && activeChips.length > 0 && (
         <div className="flex flex-col gap-1 px-1">
           {activeChips.map(c => (
             <div key={c.key} className="flex items-center gap-1.5 min-w-0">

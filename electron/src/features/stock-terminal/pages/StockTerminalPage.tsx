@@ -1,6 +1,6 @@
 /** 个股终端主页：左栏检索+筛选+列表；右侧 指数条/智能标签/分数日历 + 信息 Tab；点股票名弹整合 K 线窗 */
 
-import { useEffect, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import { motion } from 'framer-motion';
 import { CandlestickChart, Layers, CalendarDays, Activity, ChevronUp } from 'lucide-react';
 import { Modal, Tooltip } from 'antd';
@@ -10,6 +10,7 @@ import { StockSidebar } from '../components/StockSidebar';
 import { TagStrip } from '../components/TagStrip';
 import { ListFilters } from '../components/StockFilterPanel';
 import { ScoreCalendar } from '../components/ScoreCalendar';
+import { IndexMaCard } from '../components/IndexMaCard';
 import { KlineWorkspace } from '../components/kline/KlineWorkspace';
 import { OverviewTab } from '../components/OverviewTab';
 import { FinancialsTab, ValuationTab, ChipFlowTab, MarginTab, SentimentTab, HoldersTab } from '../components/tabs/P2Tabs';
@@ -68,6 +69,21 @@ export default function StockTerminalPage() {
     return () => { cancelled = true; };
   }, []);
 
+  // 稳定引用：sideFilters 每次渲染都新建对象会触发侧栏 fetchList 无限重建（表格打架根源）
+  const sideFilters = useMemo(() => ({
+    ...listFilters,
+    tagId: tagFilter?.id,
+    tagName: tagFilter?.name,
+  }), [listFilters, tagFilter]);
+
+  const handleTotals = useCallback((total: number) => {
+    setListTotal(total);
+    // date 只影响基准日，不改变股票集合——不计入筛选激活判断
+    const { date: _dateIgnored, ...rest } = listFilters;
+    const hasActive = Object.values(rest).some(v => v != null && v !== '') || !!tagFilter;
+    if (!hasActive) setFullTotal(total);
+  }, [listFilters, tagFilter]);
+
   const up = (profile?.pct_change ?? 0) >= 0;
 
   return (
@@ -119,19 +135,11 @@ export default function StockTerminalPage() {
           watchlistSymbols={watchlist}
           onlyWatchlist={onlyWatchlist}
           onOnlyWatchlist={setOnlyWatchlist}
-          filters={{
-            ...listFilters,
-            tagId: tagFilter?.id,
-            tagName: tagFilter?.name,
-          }}
+          filters={sideFilters}
           onFiltersChange={setListFilters}
           onModels={setListModels}
           models={listModels}
-          onTotals={(total) => {
-            setListTotal(total);
-            const hasActive = Object.values(listFilters).some(v => v != null && v !== '') || !!tagFilter;
-            if (!hasActive) setFullTotal(total);
-          }}
+          onTotals={handleTotals}
           onSignalDate={setSignalDate}
           fullTotal={fullTotal}
         />
@@ -266,12 +274,22 @@ export default function StockTerminalPage() {
             )}
           </div>
           {!calendarCollapsed && (
-            <div className="flex-1 min-h-0 overflow-y-auto px-4 py-2">
-              <ScoreCalendar
-                symbol={selected?.symbol ?? ''}
-                selectedDate={signalDate}
-                onBarClick={(d) => setListFilters({ ...listFilters, date: d })}
-              />
+            <div className="flex-1 min-h-0 flex">
+              {/* 日历：压缩到一半宽度 */}
+              <div className="w-1/2 min-w-0 overflow-y-auto px-4 py-2 border-r border-slate-100">
+                <ScoreCalendar
+                  symbol={selected?.symbol ?? ''}
+                  selectedDate={signalDate}
+                  onBarClick={(d) => {
+                    setSignalDate(d);  // 乐观高亮：立刻圈选点击日
+                    setListFilters({ ...listFilters, date: d });
+                  }}
+                />
+              </div>
+              {/* 大盘均线过滤：日历右侧 */}
+              <div className="w-1/2 min-w-0 px-3 py-2">
+                <IndexMaCard date={signalDate} />
+              </div>
             </div>
           )}
         </motion.div>

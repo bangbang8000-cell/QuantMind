@@ -115,6 +115,18 @@ class StockTerminalService {
     }
   }
 
+  /** 大盘均线过滤（上证指数 MA5/10/20/30/60 + 可持仓判断） */
+  async getIndexMa(asof?: string): Promise<IndexMa | null> {
+    try {
+      const resp = await this.client.get('/market/index-ma', {
+        params: { symbol: '000001.SH', ...(asof ? { asof } : {}) },
+      });
+      return resp.data?.data ?? null;
+    } catch {
+      return null;
+    }
+  }
+
   async getMinuteKline(symbol: string, freq: 'min5' | 'min1', days = 10): Promise<{ items: KlineBar[]; available: boolean }> {
     try {
       const resp = await this.client.get('/stock-terminal/minute', { params: { symbol, freq, days } });
@@ -219,6 +231,19 @@ export interface IndexQuote {
   change: number;
   change_percent: number;
   trade_date?: string;
+}
+export interface IndexMa {
+  symbol: string;
+  name: string;
+  trade_date: string;
+  close: number | null;
+  ma5: number | null;
+  ma10: number | null;
+  ma20: number | null;
+  ma30: number | null;
+  ma60: number | null;
+  above_ma20: boolean;
+  status: string;
 }
 export interface FinancialsResponse {
   symbol: string;
