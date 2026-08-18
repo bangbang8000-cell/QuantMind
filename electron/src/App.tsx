@@ -37,7 +37,6 @@ import './styles/ai-strategy-theme.css';
 
 const UserCenterPage = lazy(() => import('./features/user-center/pages/UserCenterPage'));
 const StrategyComparisonPage = lazy(() => import('./features/strategy-comparison/pages/StrategyComparisonPage'));
-const StrategyWizardPage = lazy(() => import('./features/strategy-wizard/components/SmartStrategyStudioV2'));
 const MarketAnalysisPage = lazy(() => import('./features/market-analysis/pages/MarketAnalysisPage').then(m => ({ default: m.MarketAnalysisPage })));
 const QuantBotPage = lazy(() => import('./features/quantbot/pages/QuantBotPage'));
 const AIIDEPage = lazy(() => import('./pages/AIIDEPage'));
@@ -170,7 +169,6 @@ export default function App() {
     // 映射 ID 到路由路径
     const routeMap: Record<string, string> = {
       'agent': '/quantbot',
-      'strategy': '/strategy-wizard',
       'market-analysis': '/market-analysis',
       'ai-ide': '/ai-ide',
       'model-training': '/model-training',
@@ -204,8 +202,6 @@ export default function App() {
   // 根据路由同步当前tab，保证导航高亮且避免闪屏
   React.useEffect(() => {
     if (location.pathname.startsWith('/user-center')) {
-      dispatch(setCurrentTab('profile' as DashboardTab));
-    } else if (location.pathname.startsWith('/strategy-wizard')) {
       dispatch(setCurrentTab('strategy' as DashboardTab));
     } else if (location.pathname.startsWith('/market-analysis')) {
       dispatch(setCurrentTab('market-analysis' as DashboardTab));
@@ -562,15 +558,6 @@ export default function App() {
                     }
                   />
 
-                  {/* 智能策略向导受保护路由 */}
-                  <Route
-                    path="/strategy-wizard"
-                    element={
-                      <ProtectedRoute>
-                        <StrategyWizardPage />
-                      </ProtectedRoute>
-                    }
-                  />
                   {/* QuantBot受保护路由 */}
                   <Route
                     path="/quantbot"

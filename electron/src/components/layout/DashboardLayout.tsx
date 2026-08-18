@@ -25,9 +25,6 @@ export const DashboardLayout: React.FC<DashboardLayoutProps> = ({ modules, onLay
     switch (activeTab as any) {
       case 'dashboard':
         return <ModuleGrid modules={modules} onLayoutChange={onLayoutChange} />;
-      case 'strategy':
-        console.log('DashboardLayout: 策略页已切换至策略向导路由');
-        return <ModuleGrid modules={modules} onLayoutChange={onLayoutChange} />;
       case 'backtest':
         console.log('DashboardLayout: 渲染回测中心组件');
         return (
@@ -64,7 +61,7 @@ export const DashboardLayout: React.FC<DashboardLayoutProps> = ({ modules, onLay
     }
   };
 
-  const showWeatherBackground = activeTab === 'dashboard' || activeTab === 'strategy';
+  const showWeatherBackground = activeTab === 'dashboard';
 
   return (
     <div
