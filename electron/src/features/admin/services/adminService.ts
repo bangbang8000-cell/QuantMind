@@ -77,7 +77,12 @@ class AdminService {
                         error._adminReauthHint = '管理员权限验证失败，请退出并重新登录以刷新权限令牌';
                     }
                 }
-                return authService.handle401Error(error, this.axiosInstance);
+                // 只有 401 才属于令牌刷新流程。将普通业务错误交给调用方，
+                // 避免 404/校验错误被错误标记为 Auth Error。
+                if (error?.response?.status === 401) {
+                    return authService.handle401Error(error, this.axiosInstance);
+                }
+                return Promise.reject(error);
             }
         );
     }
@@ -207,11 +212,12 @@ class AdminService {
         return resp.data;
     }
 
-    async getQuantDBFactorCatalog(sourceDataset: string, versionId?: string): Promise<any> {
+    async getQuantDBFactorCatalog(sourceDataset: string, versionId?: string): Promise<any | null> {
         const resp = await this.axiosInstance.get('/admin/training-data/catalog', {
             params: { source_dataset: sourceDataset, version_id: versionId },
         });
-        return resp.data;
+        // 未发布目录是正常的初始状态，后端以 catalog: null 表示。
+        return resp.data?.catalog === null ? null : resp.data;
     }
 
     async createQuantDBFactorDraft(versionName: string, sourceDataset: string): Promise<any> {

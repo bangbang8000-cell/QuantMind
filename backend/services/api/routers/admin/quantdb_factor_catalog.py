@@ -412,8 +412,17 @@ async def get_factor_catalog(
             version = dict(row) if row else None
         else:
             version = await _active_version(session, source_dataset)
+        # 没有活动发布版本是管理员首次配置时的正常状态，而不是资源路由
+        # 不存在或权限异常。返回 200 可以让前端安静地显示“未发布”，避免被
+        # 全局鉴权拦截器误报为 Auth Error。
+        if not version and not version_id:
+            return {
+                "catalog": None,
+                "source_dataset": source_dataset,
+                "message": "No published factor catalog for this source",
+            }
         if not version:
-            raise HTTPException(status_code=404, detail="No published factor catalog for this source")
+            raise HTTPException(status_code=404, detail="Catalog version not found")
         if version["source_dataset"] != source_dataset:
             raise HTTPException(status_code=400, detail="Catalog version belongs to a different factor source")
         return await _catalog_payload(session, version, source_dataset)
