@@ -250,13 +250,25 @@ class NewsMatcher:
 
         # 词典匹配（情感 + 事件 + 行业板块名 + 国家/地区/产业/省份/城市/领导人/调研）
         _KEY_TERM_TAGS = ("产业", "政策", "地缘", "外汇", "加密", "财报", "市场", "宏观", "期货", "监管")
+        # 地理/实体类 event_tag：明确实体名（美国/广东/北京），2字词也允许粘 CJK，
+        # 否则"美国对""广东省"被边界检查挡掉，匹配不到
+        _ENTITY_TAGS = ("国家", "地区", "省份", "城市", "领导人", "调研", "部门")
         visit_positions: list[int] = []  # 调研词位置, 后面用于同句加权 ticker
         for end_idx, term in lex_aut.iter(text):
             start = end_idx - len(term) + 1
             end = end_idx + 1
-            if not self._boundary_ok(text, start, end, term):
+            entries = lex_idx.get(term, [])
+            is_entity = any(e.kind == "event" and e.event_tag in _ENTITY_TAGS for e in entries)
+            if is_entity:
+                left = text[start - 1] if start > 0 else ""
+                if left and _CJK_OR_ALNUM.match(left):
+                    continue
+                right = text[end] if end < len(text) else ""
+                if right and re.match(r"[A-Za-z0-9]", right):
+                    continue
+            elif not self._boundary_ok(text, start, end, term):
                 continue
-            for entry in lex_idx.get(term, []):
+            for entry in entries:
                 if entry.kind == "sentiment_pos":
                     pos_weight += entry.weight
                     n_sent += 1
