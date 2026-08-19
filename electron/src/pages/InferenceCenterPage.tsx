@@ -1,10 +1,6 @@
 import React, { useState, useEffect, useCallback, useMemo } from 'react';
-import { motion } from 'framer-motion';
 import {
-  Cpu, Search, Play, Calendar, Sparkles, TrendingUp, TrendingDown,
-  Shield, CheckCircle2, RefreshCw, BarChart2, Zap, Star, Activity,
-  Info, Compass, Layers, ArrowUpRight, Check, Database, Sliders,
-  Clock, ArrowRight, AlertCircle, FlaskConical
+  Search, Play, Calendar, Sparkles, RefreshCw, Layers, Database, Sliders, Clock
 } from 'lucide-react';
 import { Button, Input, Select, DatePicker, message, Spin, Tooltip, Tag } from 'antd';
 import dayjs from 'dayjs';
@@ -13,9 +9,6 @@ import {
   SingleStockPredictionResponse,
   AvailableModelOption,
   KlineItem,
-  ForecastPoint,
-  FeatureDriverItem,
-  ModelConsensusItem
 } from '../services/inferenceCenterService';
 import { StockForecastChart } from '../features/inference-center/components/StockForecastChart';
 import { FeatureDriversPanel } from '../features/inference-center/components/FeatureDriversPanel';
@@ -101,7 +94,7 @@ export const InferenceCenterPage: React.FC = () => {
     }
   }, [symbol, selectedModelId, horizon, inferenceDate, currentMarket, consensusModelIds]);
 
-  // 拉取真实模型列表（后端 /research/models）
+  // 拉取真实模型列表（后端 /api/v1/research/models）
   useEffect(() => {
     let cancelled = false;
     inferenceCenterService
@@ -335,7 +328,7 @@ export const InferenceCenterPage: React.FC = () => {
         <div className="flex-1 min-h-0 flex flex-col pt-2 border-t border-slate-100">
           <div className="flex items-center justify-between mb-2">
             <span className="text-[11px] font-bold text-slate-500 flex items-center gap-1">
-              <Compass className="w-3 h-3 text-blue-500" /> 推理架构
+              <Sparkles className="w-3 h-3 text-blue-500" /> 推理模型
             </span>
             <span className="text-[10px] text-blue-600 font-bold bg-blue-50 px-1.5 py-0.2 rounded-md">
               {models.length} 个
@@ -422,32 +415,63 @@ export const InferenceCenterPage: React.FC = () => {
 
       {/* ================= 右侧：量化研判看板与预测走势 ================= */}
       <div className="flex-1 min-w-0 flex flex-col gap-3.5 overflow-hidden">
-        {/* 顶部：当前标的综合指标概览 Bar */}
-        <div className="bg-white/80 backdrop-blur-xl rounded-3xl px-6 py-3 border border-white/90 shadow-xs flex items-center justify-between shrink-0">
-          <div className="flex items-center gap-4">
-            <div className="flex items-center gap-2">
-              <span className="text-base font-black text-slate-800">
-                {pData.stock_name}
-              </span>
-              <span className="text-xs font-mono font-bold text-blue-600 bg-blue-50 px-2 py-0.5 rounded-lg border border-blue-100">
-                {pData.symbol}
-              </span>
+        {/* 顶部：当前标的综合指标概览 Bar (清晰宽敞分栏布局) */}
+        <div className="bg-white/90 backdrop-blur-xl rounded-3xl px-5 py-3 border border-white/90 shadow-xs flex items-center justify-between shrink-0 gap-4">
+          {/* 左侧：标的资产与实时价格 */}
+          <div className="flex items-center gap-3 shrink-0">
+            <div className="flex flex-col">
+              <div className="flex items-center gap-2">
+                <span className="text-base font-black text-slate-800 tracking-tight">
+                  {pData.stock_name}
+                </span>
+                <span className="text-xs font-mono font-bold text-blue-600 bg-blue-50 px-2 py-0.5 rounded-lg border border-blue-100/80">
+                  {pData.symbol}
+                </span>
+              </div>
             </div>
-            <div className="h-4 w-[1px] bg-slate-200" />
-            <div className="flex items-center gap-4 text-xs">
-              <span className="text-slate-400">基准价格: <strong className="text-slate-700 font-mono">¥{pData.current_price ? pData.current_price.toFixed(2) : '—'}</strong></span>
-              <span className="text-slate-400">预测周期: <strong className="text-blue-600 font-mono">T+{pData.horizon}</strong></span>
-              <span className="text-slate-400">采用架构: <strong className="text-slate-700">{pData.model_name || currentSelectedModel.modelName}</strong></span>
-              <span className="text-slate-400">推理基准日: <strong className="text-slate-700 font-mono">{pData.as_of_date || '—'}</strong></span>
-              <span className="inline-flex items-center gap-1 text-[10px] font-bold text-emerald-700 bg-emerald-50 px-1.5 py-0.5 rounded-md border border-emerald-100">
-                <Database className="w-2.5 h-2.5" /> 真实模型推理
+            <div className="h-7 w-[1px] bg-slate-200/80 mx-1" />
+            <div className="flex flex-col">
+              <span className="text-[10px] text-slate-400 font-semibold leading-none mb-0.5">基准价格</span>
+              <span className="text-base font-black font-mono text-slate-900 leading-none">
+                ¥{pData.current_price ? pData.current_price.toFixed(2) : '—'}
               </span>
             </div>
           </div>
 
-          <div className="flex items-center gap-3">
+          {/* 中间：信息胶囊 (不挤压，自适应展示) */}
+          <div className="flex items-center gap-2 flex-wrap min-w-0 justify-center">
+            <div className="flex items-center gap-1.5 bg-slate-50 border border-slate-100 px-2.5 py-1 rounded-xl text-xs">
+              <Clock className="w-3.5 h-3.5 text-indigo-500 shrink-0" />
+              <span className="text-slate-500 font-medium">周期:</span>
+              <strong className="text-blue-600 font-mono">T+{pData.horizon}</strong>
+            </div>
+
+            <div className="flex items-center gap-1.5 bg-slate-50 border border-slate-100 px-2.5 py-1 rounded-xl text-xs max-w-[200px]">
+              <Sparkles className="w-3.5 h-3.5 text-amber-500 shrink-0" />
+              <span className="text-slate-500 font-medium shrink-0">架构:</span>
+              <Tooltip title={pData.model_name || currentSelectedModel.modelName}>
+                <span className="text-slate-700 font-bold truncate">
+                  {pData.model_name || currentSelectedModel.modelName}
+                </span>
+              </Tooltip>
+            </div>
+
+            <div className="flex items-center gap-1.5 bg-slate-50 border border-slate-100 px-2.5 py-1 rounded-xl text-xs">
+              <Calendar className="w-3.5 h-3.5 text-slate-400 shrink-0" />
+              <span className="text-slate-500 font-medium">基准日:</span>
+              <strong className="text-slate-700 font-mono">{pData.as_of_date || '—'}</strong>
+            </div>
+
+            <div className="flex items-center gap-1 text-[11px] font-bold text-emerald-700 bg-emerald-50 px-2 py-1 rounded-xl border border-emerald-200/60 shrink-0">
+              <Database className="w-3 h-3" />
+              <span>真实推理</span>
+            </div>
+          </div>
+
+          {/* 右侧：综合研判评级与上涨概率 */}
+          <div className="flex items-center gap-2.5 shrink-0">
             {getRatingBadge(pData.rating)}
-            <div className="flex items-center gap-1.5 bg-blue-50/80 border border-blue-100 px-3 py-1 rounded-xl">
+            <div className="flex items-center gap-1.5 bg-blue-50/90 border border-blue-100 px-3 py-1 rounded-xl">
               <span className="text-[11px] text-slate-500 font-semibold">上涨概率:</span>
               <span className="text-xs font-black font-mono text-blue-600">{(pData.confidence * 100).toFixed(1)}%</span>
             </div>
@@ -490,7 +514,7 @@ export const InferenceCenterPage: React.FC = () => {
                   <div className="flex items-center justify-between mb-2">
                     <span className="text-xs font-bold text-slate-700">10% - 50% - 90% 扩散区间</span>
                     <Tooltip title="基于分位数回归模型计算的收益概率置信边界">
-                      <Info className="w-3.5 h-3.5 text-slate-400 cursor-pointer" />
+                      <Sparkles className="w-3.5 h-3.5 text-slate-400 cursor-pointer" />
                     </Tooltip>
                   </div>
                   <div className="flex items-center justify-between text-center pt-1">

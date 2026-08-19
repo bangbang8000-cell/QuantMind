@@ -113,8 +113,7 @@ class InferenceCenterService {
     try {
       const params: Record<string, string> = {};
       if (market) params.market = market;
-      const resp = await this.client.get('/research/models', { params });
-      // 后端返回 {code:200, data:{models:[{modelId,name,framework,modelType,ic,hasInference}]}}
+      const resp = await this.client.get('/api/v1/research/models', { params });
       const body = (resp.data ?? {}) as any;
       const items =
         body?.data?.models ??
@@ -131,19 +130,14 @@ class InferenceCenterService {
         hasInference: m.hasInference ?? m.has_inference ?? false,
       }));
     } catch (e) {
-      console.warn('获取可用模型列表失败，使用默认列表:', e);
-      return [
-        { modelId: 'mdl_lightgbm_v2', modelName: 'LightGBM Alpha-158 增强模型', modelType: 'lightgbm', accuracy: 0.128 },
-        { modelId: 'mdl_tft_v1', modelName: 'NativeTFT 时序融合变换器 (分位数)', modelType: 'nativetft', accuracy: 0.145 },
-        { modelId: 'mdl_gru_ts_v1', modelName: 'Qlib GRU 循环神经网络', modelType: 'gru', accuracy: 0.115 },
-        { modelId: 'mdl_stacking_ens', modelName: 'Stacking 异构多模型集成', modelType: 'stacking', accuracy: 0.158 },
-      ];
+      console.warn('获取可用模型列表失败:', e);
+      return [];
     }
   }
 
   async getStockKline(symbol: string, days: number = 60): Promise<KlineItem[]> {
     try {
-      const resp = await this.client.get<{ code: number; data: { items: KlineItem[] } }>(`/research/kline/${encodeURIComponent(symbol)}?days=${days}`);
+      const resp = await this.client.get<{ code: number; data: { items: KlineItem[] } }>(`/api/v1/research/kline/${encodeURIComponent(symbol)}?days=${days}`);
       return resp.data?.data?.items || [];
     } catch (e) {
       console.warn('获取股票K线失败:', e);
@@ -152,7 +146,7 @@ class InferenceCenterService {
   }
 
   async predictSingleStock(req: SingleStockPredictionRequest): Promise<SingleStockPredictionResponse> {
-    const resp = await this.client.post<{ code?: number; data?: SingleStockPredictionResponse } | SingleStockPredictionResponse>('/research/predict-stock', req);
+    const resp = await this.client.post<{ code?: number; data?: SingleStockPredictionResponse } | SingleStockPredictionResponse>('/api/v1/research/predict-stock', req);
     if ((resp.data as any)?.data) {
       return (resp.data as any).data;
     }
