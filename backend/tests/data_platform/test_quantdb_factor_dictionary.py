@@ -17,3 +17,10 @@ def test_unknown_factor_stays_reviewable():
 
     assert definition["category_id"] == "other"
     assert definition["confidence"] == "needs_review"
+
+
+def test_microstructure_names_are_compact_and_readable():
+    definition = definition_for("micro_aesp")
+
+    assert definition["display_name"] == "AESP 有效价差"
+    assert "价差与微观结构因子" not in str(definition["display_name"])

@@ -81,6 +81,8 @@ _EXACT = {
     "vol_skew": ("成交量偏度", "分钟成交量分布的偏斜程度"),
     "vol_tick_density": ("成交密度", "单位时间内的成交笔数"),
     "vol_weighted_price": ("VWAP 偏离", "收盘价相对成交量加权平均价的偏离"),
+    "micro_aesp": ("AESP 有效价差", "调整后的有效价差指标"),
+    "micro_aqsp": ("AQSP 报价价差", "调整后的报价价差指标"),
 }
 
 _WORDS = {
@@ -100,6 +102,12 @@ _WORDS = {
     "large": "大单", "small": "小单", "super": "特大单", "medium": "中单",
     "time": "时间加权", "equal": "等权", "weighted": "加权", "mean": "均值", "median": "中位数",
     "skew": "偏度", "kurtosis": "峰度", "persistence": "持续性", "price": "价格",
+    "bid": "买方", "ask": "卖方", "call": "集合", "auction": "竞价", "impact": "冲击",
+    "cost": "成本", "recovery": "恢复", "effective": "有效", "extreme": "极端", "mid": "中间价",
+    "slope": "斜率", "volatility": "波动率", "information": "信息", "share": "份额", "count": "次数",
+    "flag": "标记", "size": "规模", "max": "最大", "illiquidity": "非流动性", "amihud": "Amihud",
+    "kyle": "Kyle", "holden": "Holden", "roll": "Roll", "twa": "时间加权", "adverse": "逆向",
+    "selection": "选择", "informed": "知情", "toxicity": "毒性", "asymmetry": "非对称性", "pin": "PIN",
 }
 
 
@@ -141,6 +149,10 @@ def _render_name(column: str) -> str:
         if match:
             return template.format(*match.groups())
     parts = column.split("_")
+    # 分类已经由 UI 分组展示，名称中不再重复“微观结构”前缀；卡片可直接
+    # 显示“有效价差”“订单簿深度”等可辨识的短名称。
+    if parts and parts[0] == "micro":
+        parts = parts[1:]
     rendered = [_WORDS.get(part.lower(), part.upper() if part.isupper() else part) for part in parts]
     return " ".join(rendered)
 
