@@ -82,7 +82,9 @@ def _build_metrics() -> pd.DataFrame:
 
     # instrument_detail 静态列（行业/板块/标识）
     d = hub.data_dir
-    detail_file = d / "2_base_sector" / "instrument_detail" / "instrument_detail.parquet"
+    detail_file = d / "2_base_sector" / "instrument_detail" / "instrument_list.parquet"
+    if not detail_file.exists():
+        detail_file = d / "2_base_sector" / "instrument_detail" / "instrument_detail.parquet"
     if detail_file.exists():
         try:
             det_cols = ["Symbol", "Name", "rs_hyname", "BelongHS300", "Zsz", "Ltsz", "DynaPE", "PB_MRQ"]

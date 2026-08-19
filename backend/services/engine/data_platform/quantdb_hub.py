@@ -375,10 +375,19 @@ class QuantDBDataHub:
     # ------------------------------------------------------------------
     # 基础/板块数据
     # ------------------------------------------------------------------
+    def _instrument_detail_path(self) -> Path | None:
+        """股票基础信息文件路径（SDK 新版 instrument_list.parquet，旧版 instrument_detail.parquet）。"""
+        d = self._data_dir / "2_base_sector" / "instrument_detail"
+        for name in ("instrument_list.parquet", "instrument_detail.parquet"):
+            p = d / name
+            if p.exists():
+                return p
+        return None
+
     def fetch_stock_list(self) -> pd.DataFrame:
         """读取股票列表。"""
-        file_path = self._data_dir / "2_base_sector" / "instrument_detail" / "instrument_detail.parquet"
-        if not file_path.exists():
+        file_path = self._instrument_detail_path()
+        if file_path is None:
             return pd.DataFrame()
         return pd.read_parquet(file_path)
 
@@ -387,8 +396,8 @@ class QuantDBDataHub:
 
         返回 DataFrame 包含: symbol, ind_name_l1, ind_code_l1
         """
-        file_path = self._data_dir / "2_base_sector" / "instrument_detail" / "instrument_detail.parquet"
-        if not file_path.exists():
+        file_path = self._instrument_detail_path()
+        if file_path is None:
             return pd.DataFrame()
         df = pd.read_parquet(file_path)
         # QuantDB instrument_detail 包含 rs_hyname(行业名称) 和 rs_hycode_sim(行业代码)

@@ -813,9 +813,12 @@ def load_data(
                 ]
                 ind_detail_path = None
                 for _d in _sector_dirs:
-                    _p = _d / "instrument_detail" / "instrument_detail.parquet"
-                    if _p.exists():
-                        ind_detail_path = _p
+                    for _name in ("instrument_list.parquet", "instrument_detail.parquet"):
+                        _p = _d / "instrument_detail" / _name
+                        if _p.exists():
+                            ind_detail_path = _p
+                            break
+                    if ind_detail_path is not None:
                         break
                 if ind_detail_path is not None:
                     ind_df = pd.read_parquet(ind_detail_path, engine="pyarrow")

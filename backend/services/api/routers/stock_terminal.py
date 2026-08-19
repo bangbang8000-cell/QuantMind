@@ -132,7 +132,11 @@ def _load_universe(asof: str | None = None) -> tuple[pd.DataFrame, str]:
         return cached, _universe_cache["trade_date"]
 
     d = _quantdb_dir()
-    detail_file = d / "2_base_sector" / "instrument_detail" / "instrument_detail.parquet"
+    # QuantDB SDK 新版落盘为 instrument_list.parquet，旧版为 instrument_detail.parquet
+    detail_dir = d / "2_base_sector" / "instrument_detail"
+    detail_file = detail_dir / "instrument_list.parquet"
+    if not detail_file.exists():
+        detail_file = detail_dir / "instrument_detail.parquet"
     if not detail_file.exists():
         raise HTTPException(status_code=503, detail="本地 instrument_detail 数据缺失")
 
@@ -640,8 +644,11 @@ async def stock_news(
     code = sym.split(".")[0]
     name = ""
     try:
-        detail = pd.read_parquet(_quantdb_dir() / "2_base_sector" / "instrument_detail" / "instrument_detail.parquet",
-                                 columns=["Symbol", "Name"])
+        detail_dir = _quantdb_dir() / "2_base_sector" / "instrument_detail"
+        detail_file = detail_dir / "instrument_list.parquet"
+        if not detail_file.exists():
+            detail_file = detail_dir / "instrument_detail.parquet"
+        detail = pd.read_parquet(detail_file, columns=["Symbol", "Name"])
         hit = detail[detail["Symbol"] == sym]
         if not hit.empty:
             name = str(hit.iloc[0]["Name"] or "").strip()

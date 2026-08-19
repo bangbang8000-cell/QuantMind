@@ -76,7 +76,9 @@ def _load_industry_map() -> pd.DataFrame | None:
         DATA_DIR / "2_base_sector",
     ]
     for base in candidates:
-        path = base / "instrument_detail" / "instrument_detail.parquet"
+        path = base / "instrument_detail" / "instrument_list.parquet"
+        if not path.exists():
+            path = base / "instrument_detail" / "instrument_detail.parquet"
         if not path.exists():
             continue
         detail = pd.read_parquet(path)

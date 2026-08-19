@@ -239,7 +239,9 @@ def _read_instrument_detail() -> pd.DataFrame:
 
     返回: DataFrame[symbol, is_st, industry, adj_factor, ind_code_l1, listing_market]
     """
-    ind_path = QDB_SECTOR_DIR / "instrument_detail" / "instrument_detail.parquet"
+    ind_path = QDB_SECTOR_DIR / "instrument_detail" / "instrument_list.parquet"
+    if not ind_path.exists():
+        ind_path = QDB_SECTOR_DIR / "instrument_detail" / "instrument_detail.parquet"
     if not ind_path.exists():
         _log(f"  instrument_detail.parquet 不存在: {ind_path}")
         return pd.DataFrame()
@@ -1185,7 +1187,9 @@ def _compute_industry_codes(df: pd.DataFrame) -> pd.DataFrame:
     """
     from pathlib import Path as _Path
 
-    ind_path = QDB_SECTOR_DIR / "instrument_detail" / "instrument_detail.parquet"
+    ind_path = QDB_SECTOR_DIR / "instrument_detail" / "instrument_list.parquet"
+    if not ind_path.exists():
+        ind_path = QDB_SECTOR_DIR / "instrument_detail" / "instrument_detail.parquet"
     if not ind_path.exists():
         _log("    instrument_detail.parquet 不存在，行业编码填充为 -1")
         df["ind_code_l1"] = -1.0

@@ -83,6 +83,7 @@ def _hsgt_stock_list() -> list[dict]:
     """
     inst_dir = _quantdb_root() / "2_base_sector" / "instrument_detail"
     candidates = [
+        inst_dir / "instrument_list.parquet",
         inst_dir / "instrument_detail.parquet",
         inst_dir / "instrument.parquet",
     ]
