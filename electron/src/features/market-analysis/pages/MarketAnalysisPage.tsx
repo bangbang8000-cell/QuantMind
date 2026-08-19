@@ -174,7 +174,9 @@ export const MarketAnalysisPage: React.FC = () => {
         </div>
 
         <span className="text-[11px] text-slate-400 font-mono hidden sm:inline-block">
-          数据实时更新于: 16:22:28
+          {indices.length > 0 && indices[0].trade_date
+            ? `数据截至 ${formatTradeDate(indices[0].trade_date)}`
+            : ''}
         </span>
       </div>
 
