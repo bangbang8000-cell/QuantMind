@@ -1,4 +1,5 @@
 import React, { useCallback, useEffect, useState } from 'react';
+import { useNavigate } from 'react-router-dom';
 import {
     Alert, Button, Card, Checkbox, Col, Descriptions, Input, Progress, Row, Select, Space,
     Statistic, Table, Tabs, Tag, Typography, message,
@@ -6,11 +7,10 @@ import {
 import {
     ApiOutlined, CalendarOutlined, CheckCircleFilled, CloseCircleFilled,
     CloudServerOutlined, DatabaseOutlined, FieldTimeOutlined, FileSearchOutlined,
-    ReloadOutlined, SearchOutlined, StockOutlined,
+    KeyOutlined, ReloadOutlined, SearchOutlined, StockOutlined,
 } from '@ant-design/icons';
 import { dataPlatformService, QuantDBDataset } from '../services/dataPlatformService';
 import { QuantDBCatalogPanel } from './quantdb/QuantDBCatalogPanel';
-import { QuantDBConfigCard } from './quantdb/QuantDBConfigCard';
 import { QuantDBPreviewDrawer } from './quantdb/QuantDBPreviewDrawer';
 import { describeError } from './quantdb/utils';
 import { SyncSchedulePanel } from './data-management/SyncSchedulePanel';
@@ -38,6 +38,7 @@ interface QuantDBInfo {
 }
 
 export const AdminQuantDBPanel: React.FC = () => {
+    const navigate = useNavigate();
     const [loading, setLoading] = useState(false);
     const [info, setInfo] = useState<QuantDBInfo | null>(null);
     const [previewDataset, setPreviewDataset] = useState<QuantDBDataset | null>(null);
@@ -216,7 +217,33 @@ export const AdminQuantDBPanel: React.FC = () => {
                 </Space>
             </div>
 
-            <QuantDBConfigCard onSaved={loadInfo} />
+            {/* API Key 状态与个人中心设置入口 */}
+            <div className="flex items-center justify-between bg-white border border-slate-200 rounded-xl px-4 py-2.5 shadow-2xs">
+                <Space size="middle">
+                    <KeyOutlined className="text-blue-500" />
+                    <Text className="text-xs font-semibold">API Key 授权状态:</Text>
+                    <Tag
+                        color={info?.api_key_configured ? 'green' : 'red'}
+                        icon={<ApiOutlined />}
+                        className="m-0"
+                    >
+                        {info?.api_key_configured ? '已授权配置' : '未配置密钥'}
+                    </Tag>
+                    {info?.account?.username && (
+                        <Text type="secondary" className="text-xs">
+                            账户: <Text code>{info.account.username}</Text>
+                        </Text>
+                    )}
+                </Space>
+                <Button
+                    type="link"
+                    size="small"
+                    className="text-xs text-blue-600 hover:text-blue-700 p-0 font-medium"
+                    onClick={() => navigate('/user-center?tab=quantdb-key')}
+                >
+                    前往「个人中心」绑定或更新密钥 →
+                </Button>
+            </div>
 
             <SyncSchedulePanel market="A" defaultDays={5} />
 

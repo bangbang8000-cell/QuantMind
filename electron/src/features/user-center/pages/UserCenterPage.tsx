@@ -1,6 +1,6 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { useNavigate, useLocation } from 'react-router-dom';
-import { User, UserCircle, Mail, MapPin, Calendar, LogOut, Shield, Laptop, Settings2, Server } from 'lucide-react';
+import { User, UserCircle, Mail, MapPin, Calendar, LogOut, Shield, Laptop, Settings2, Server, Database } from 'lucide-react';
 import { Tabs } from 'antd';
 import { useAuth } from '../../auth/hooks';
 import { useProfile } from '../hooks';
@@ -12,6 +12,7 @@ import { ProfileInfo } from '../components/ProfileInfo';
 import { SecuritySettings } from '../components/SecuritySettings';
 import CloudStrategyManagement from '../components/CloudStrategyManagement';
 import CloudNodeSettings from '../components/CloudNodeSettings';
+import QuantDBSettings from '../components/QuantDBSettings';
 import OtherSettings from '../components/OtherSettings';
 import defaultLogo from '../../../assets/logo.png';
 
@@ -23,6 +24,15 @@ const UserCenterPage: React.FC = () => {
   const [syncTimeout, setSyncTimeout] = useState(false);
   const [avatarLoadError, setAvatarLoadError] = useState(false);
   const contentScrollRef = useRef<HTMLDivElement>(null);
+
+  // 支持通过 URL search 参数（如 /user-center?tab=quantdb-key）直接切换 Tab
+  useEffect(() => {
+    const params = new URLSearchParams(location.search);
+    const tabParam = params.get('tab');
+    if (tabParam) {
+      setActiveTab(tabParam);
+    }
+  }, [location.search]);
 
   // 获取认证用户信息（已由ProtectedRoute保证认证）
   const { user, isAuthenticated, isLoading: authLoading, isInitialized } = useAuth();
@@ -185,16 +195,28 @@ const UserCenterPage: React.FC = () => {
       children: wrapTabContent(<CloudStrategyManagement />),
     },
     ...(effectiveUser?.is_admin
-      ? [{
-          key: 'cloud-nodes',
-          label: (
-            <span className="flex items-center gap-2">
-              <Server className="w-4 h-4" />
-              云端节点
-            </span>
-          ),
-          children: wrapTabContent(<CloudNodeSettings />),
-        }]
+      ? [
+          {
+            key: 'cloud-nodes',
+            label: (
+              <span className="flex items-center gap-2">
+                <Server className="w-4 h-4" />
+                云端节点
+              </span>
+            ),
+            children: wrapTabContent(<CloudNodeSettings />),
+          },
+          {
+            key: 'quantdb-key',
+            label: (
+              <span className="flex items-center gap-2">
+                <Database className="w-4 h-4" />
+                QuantDB 密钥
+              </span>
+            ),
+            children: wrapTabContent(<QuantDBSettings />),
+          },
+        ]
       : []),
     {
       key: 'other-settings',

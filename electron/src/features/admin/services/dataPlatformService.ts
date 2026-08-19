@@ -99,6 +99,28 @@ export interface QuantDBConfig {
     timestamp: string;
 }
 
+export interface QuantDBInfo {
+    installed: boolean;
+    api_key_configured: boolean;
+    connected: boolean;
+    version?: string;
+    account?: { username: string; email: string };
+    usage?: {
+        used_gb: number;
+        limit_gb: number;
+        remaining_gb: number;
+        credit_gb?: number;
+        subscription?: { status: string };
+    };
+    used_bytes_human?: string;
+    remaining_bytes_human?: string;
+    used_traffic?: string | number;
+    remaining_traffic?: string | number;
+    traffic_reset_date?: string;
+    tier_name?: string;
+    error?: string;
+}
+
 export interface QuantDBGroup {
     id: string;
     name: string;
