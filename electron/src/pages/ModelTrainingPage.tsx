@@ -24,7 +24,7 @@ import { ParameterConfig } from './training/ParameterConfig';
 import { TrainingConsole } from './training/TrainingConsole';
 import { TrainingResultView } from './training/TrainingResultView';
 
-const { Title, Paragraph } = Typography;
+const { Title } = Typography;
 
 const TRAINING_MODULES = [
   { title: '特征选择', description: '筛选输入因子', icon: Database, hint: '第一步' },
@@ -602,25 +602,15 @@ export const ModelTrainingPage: React.FC = () => {
 
             <div className={`flex-1 overflow-y-auto overflow-x-hidden p-6 ${TRAINING_PAGE_BOTTOM_SAFE_CLASS}`}>
               <div className="max-w-6xl mx-auto space-y-4">
-                <Card className="rounded-2xl border-gray-200 shadow-sm" styles={{ body: { padding: 20 } }}>
-                  <div className="flex items-start justify-between">
-                    <div>
-                        <div className="flex items-center gap-2">
-                          <CurrentIcon size={18} className="text-blue-500" />
-                          <Title level={4} className="!mb-0">{currentModule.title}</Title>
-                        </div>
-                        <Paragraph className="!mb-0 !mt-2 text-gray-500 text-xs">{currentModule.description}</Paragraph>
+                <Card className="rounded-2xl border-gray-200 shadow-sm" styles={{ body: { padding: '12px 20px' } }}>
+                  <div className="flex flex-wrap items-center gap-x-5 gap-y-2">
+                    <div className="flex items-center gap-2 shrink-0">
+                      <CurrentIcon size={18} className="text-blue-500" />
+                      <Title level={5} className="!mb-0">{currentModule.title}</Title>
                     </div>
-                    <Space>
-                      <Button icon={<RefreshCcw size={14}/>} className="rounded-xl h-9" onClick={handleResetAll} disabled={isTrainingInProgress}>清空</Button>
-                      <Button type="primary" icon={<ChevronRight size={14}/>} className="rounded-xl h-9 bg-blue-600" onClick={stepAction} disabled={disableStartTraining}>
-                        {stepActionLabel}
-                      </Button>
-                    </Space>
-                  </div>
-                  {currentMarket === 'CN' && (
-                    <div className="mt-4 flex items-center gap-3 text-xs">
-                      <span className="font-medium text-slate-600">QuantDB 因子源</span>
+                    {currentMarket === 'CN' && (
+                      <div className="flex items-center gap-2 text-xs min-w-0">
+                      <span className="font-medium text-slate-600 shrink-0">数据源</span>
                       <Select
                         value={factorSource}
                         onChange={setFactorSource}
@@ -637,8 +627,15 @@ export const ModelTrainingPage: React.FC = () => {
                         : <Tag color={dataCoverage?.ready ? 'default' : 'warning'}>
                             {factorSources.find((item) => item.id === factorSource)?.reason || '尚未发布 QuantDB 因子目录'}
                           </Tag>}
-                    </div>
-                  )}
+                      </div>
+                    )}
+                    <Space className="ml-auto shrink-0">
+                      <Button size="small" icon={<RefreshCcw size={14}/>} className="rounded-lg h-8" onClick={handleResetAll} disabled={isTrainingInProgress}>清空</Button>
+                      <Button size="small" type="primary" icon={<ChevronRight size={14}/>} className="rounded-lg h-8 bg-blue-600" onClick={stepAction} disabled={disableStartTraining}>
+                        {stepActionLabel}
+                      </Button>
+                    </Space>
+                  </div>
                 </Card>
 
                 <div className="grid grid-cols-2 lg:grid-cols-5 gap-3">
