@@ -216,11 +216,14 @@ def _query_enrichment_page_ids(
         want_departments=want_departments,
     )
     if keyword:
-        # 在 enrichment 标签里也做关键词匹配 — array_to_string + ILIKE 简单粗暴够用
+        # 关键词匹配：PG title 列（trigram 索引，毫秒级）+ enrichment 标签数组。
+        # title 优先——用户搜"茅台"应命中标题含茅台的新闻，而不是只在标签里碰运气。
         where.append(
-            "(array_to_string(tickers || industries || event_tags || countries || regions "
-            "|| key_terms || provinces || cities || politicians || visits || departments, ',') ILIKE %s)"
+            "(title ILIKE %s OR array_to_string(tickers || industries || event_tags "
+            "|| countries || regions || key_terms || provinces || cities || "
+            "politicians || visits || departments, ',') ILIKE %s)"
         )
+        params.append(f"%{keyword}%")
         params.append(f"%{keyword}%")
     if restrict_to_ids is not None:
         if not restrict_to_ids:
@@ -385,8 +388,9 @@ def _huntly_sqlite_available() -> bool:
 
 
 def _huntly_sqlite() -> sqlite3.Connection:
-    # uri+immutable 让 sqlite 不抢写锁, 与 huntly 容器并发安全
-    uri = f"file:{HUNTLY_SQLITE_PATH}?mode=ro"
+    # uri+immutable 让 sqlite 完全跳过锁协商（mode=ro 会抢共享锁，被 Huntly
+    # 写锁阻塞导致搜索卡死十几秒；immutable 直接读快照，毫秒级返回）
+    uri = f"file:{HUNTLY_SQLITE_PATH}?immutable=1"
     conn = sqlite3.connect(uri, uri=True, timeout=5.0, check_same_thread=False)
     conn.row_factory = sqlite3.Row
     return conn

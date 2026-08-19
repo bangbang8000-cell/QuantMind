@@ -155,7 +155,7 @@ def enrich_article(
     )
 
 
-def _upsert_enrichment(conn, r: EnrichmentResult, title_hash: int):
+def _upsert_enrichment(conn, r: EnrichmentResult, title_hash: int, title: str | None = None):
     import json as _json
     sql = """
         INSERT INTO news_article_enrichment (
@@ -163,11 +163,12 @@ def _upsert_enrichment(conn, r: EnrichmentResult, title_hash: int):
             sentiment_score, sentiment_label, sentiment_confidence,
             enriched_at, model_version, title_hash, error,
             countries, regions, key_terms, date_entities, entity_sentiments,
-            provinces, cities, politicians, visits, departments
+            provinces, cities, politicians, visits, departments,
+            title
         )
         VALUES (%s, %s, %s, %s, %s, %s, %s, NOW(), %s, %s, %s,
                 %s, %s, %s, %s, %s::jsonb,
-                %s, %s, %s, %s, %s)
+                %s, %s, %s, %s, %s, %s)
         ON CONFLICT (huntly_page_id) DO UPDATE
         SET tickers = EXCLUDED.tickers,
             industries = EXCLUDED.industries,
@@ -188,7 +189,8 @@ def _upsert_enrichment(conn, r: EnrichmentResult, title_hash: int):
             cities = EXCLUDED.cities,
             politicians = EXCLUDED.politicians,
             visits = EXCLUDED.visits,
-            departments = EXCLUDED.departments;
+            departments = EXCLUDED.departments,
+            title = EXCLUDED.title;
     """
     with conn.cursor() as cur:
         cur.execute(sql, (
@@ -212,6 +214,7 @@ def _upsert_enrichment(conn, r: EnrichmentResult, title_hash: int):
             r.politicians,
             r.visits,
             r.departments,
+            title,
         ))
 
 
@@ -364,7 +367,7 @@ def run_enrichment_batch(limit: int = 200) -> int:
                         short_text = long_text
                 try:
                     result = enrich_article(pid, title, short_text)
-                    _upsert_enrichment(conn, result, _title_hash(title))
+                    _upsert_enrichment(conn, result, _title_hash(title), title)
                     n_ok += 1
                 except Exception as e:
                     logger.warning("enrich page=%d 失败: %s", pid, e)
@@ -379,7 +382,7 @@ def run_enrichment_batch(limit: int = 200) -> int:
                             sentiment_confidence=None,
                             model_version=MODEL_VERSION,
                             error=str(e)[:500],
-                        ), _title_hash(title))
+                        ), _title_hash(title), title)
                     except Exception:
                         pass
         conn.commit()
@@ -533,7 +536,7 @@ def run_full_rebuild(force: bool = False) -> int:
                 text = _pick_text(row)
                 try:
                     result = enrich_article(pid, title, text)
-                    _upsert_enrichment(pg, result, _title_hash(title))
+                    _upsert_enrichment(pg, result, _title_hash(title), title)
                     n_ok += 1
                 except Exception as e:
                     n_fail += 1
@@ -549,7 +552,7 @@ def run_full_rebuild(force: bool = False) -> int:
                             sentiment_confidence=None,
                             model_version=MODEL_VERSION,
                             error=str(e)[:500],
-                        ), _title_hash(title))
+                        ), _title_hash(title), title)
                     except Exception:
                         pass
 
