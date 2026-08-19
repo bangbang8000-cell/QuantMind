@@ -585,8 +585,8 @@ export const ModelTrainingPage: React.FC = () => {
                   <div className="mt-1.5 text-[10px] text-slate-400">超时后任务会自动停止。</div>
                </div>
                <div className="flex gap-2">
-                 <Button size="small" block className="rounded-lg" onClick={() => message.success('草稿已保存')}>保存草稿</Button>
-                 <Button size="small" block className="rounded-lg" onClick={handleResetAll} disabled={isTrainingInProgress}>重置</Button>
+                 <Button size="small" block className="rounded-xl font-bold h-8" onClick={() => message.success('草稿已保存')}>保存草稿</Button>
+                 <Button size="small" block className="rounded-xl font-bold h-8" onClick={handleResetAll} disabled={isTrainingInProgress}>重置</Button>
                </div>
             </div>
           </aside>
@@ -630,8 +630,8 @@ export const ModelTrainingPage: React.FC = () => {
                       </div>
                     )}
                     <Space className="ml-auto shrink-0">
-                      <Button size="small" icon={<RefreshCcw size={14}/>} className="rounded-lg h-8" onClick={handleResetAll} disabled={isTrainingInProgress}>清空</Button>
-                      <Button size="small" type="primary" icon={<ChevronRight size={14}/>} className="rounded-lg h-8 bg-blue-600" onClick={stepAction} disabled={disableStartTraining}>
+                      <Button size="small" icon={<RefreshCcw size={14}/>} className="rounded-xl h-8 font-bold px-3" onClick={handleResetAll} disabled={isTrainingInProgress}>清空</Button>
+                      <Button size="small" type="primary" icon={<ChevronRight size={14}/>} className="rounded-xl h-8 bg-blue-600 font-bold px-4 shadow-sm" onClick={stepAction} disabled={disableStartTraining}>
                         {stepActionLabel}
                       </Button>
                     </Space>

@@ -113,7 +113,7 @@ export const TrainingTargetConfig: React.FC<TrainingTargetConfigProps> = ({
                   key={preset}
                   size="small"
                   type={target.horizonDays === preset ? 'primary' : 'default'}
-                  className={clsx('h-8 rounded-full', target.horizonDays === preset && 'bg-indigo-600')}
+                  className={clsx('h-8 rounded-xl font-bold px-3', target.horizonDays === preset && 'bg-indigo-600')}
                   onClick={() => onTargetChange({ ...target, horizonDays: preset })}
                 >
                   T+{preset}
@@ -162,7 +162,7 @@ export const TrainingTargetConfig: React.FC<TrainingTargetConfigProps> = ({
                       key={h}
                       size="small"
                       type={target.horizonDaysList?.includes(h) ? 'primary' : 'default'}
-                      className={clsx('h-8 rounded-full', target.horizonDaysList?.includes(h) && 'bg-indigo-600')}
+                      className={clsx('h-8 rounded-xl font-bold px-3', target.horizonDaysList?.includes(h) && 'bg-indigo-600')}
                       onClick={() => {
                         const cur = target.horizonDaysList ?? [];
                         const next = cur.includes(h) ? cur.filter((x) => x !== h) : [...cur, h].sort((a, b) => a - b);
