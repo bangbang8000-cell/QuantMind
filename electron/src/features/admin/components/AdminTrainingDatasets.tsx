@@ -40,6 +40,16 @@ type FactorDirectoryRow = {
   mapping?: Mapping;
 };
 
+function unavailableSourceHint(status: Record<string, any>, sourceLabel: string): string {
+  if (!status.files) {
+    return `尚未同步${sourceLabel}数据。请先在“数据下载”中按需勾选该数据集，完成同步后点击“字段发现”。`;
+  }
+  if ((status.missing_required || []).length > 0) {
+    return '数据已发现，但暂未满足训练条件。请补齐行情字段（开高低收、成交量、成交额）后重新执行字段发现。';
+  }
+  return status.reason || '该数据源暂未满足直读训练条件，请刷新字段状态后重试。';
+}
+
 export const AdminTrainingDatasets: React.FC = () => {
   const [source, setSource] = useState('l1_l2_factors');
   const [sources, setSources] = useState<Record<string, any>>({});
@@ -208,10 +218,11 @@ export const AdminTrainingDatasets: React.FC = () => {
     <Row gutter={[16, 16]}>
       {SOURCE_OPTIONS.map(option => {
         const status = sources[option.value] || {};
+        const unavailableHint = unavailableSourceHint(status, option.label.replace('（默认）', ''));
         return <Col xs={24} md={8} key={option.value}><Card size="small" title={option.label}>
-          <Statistic title={status.ready ? '可用于直读训练' : '尚不可用'} value={status.files || 0} suffix="个分区文件" valueStyle={{ color: status.ready ? '#3f8600' : '#cf1322', fontSize: 18 }} />
+          <Statistic title={status.ready ? '可用于直读训练' : '等待数据同步'} value={status.files || 0} suffix="个分区文件" valueStyle={{ color: status.ready ? '#3f8600' : '#cf1322', fontSize: 18 }} />
           <div className="mt-2 text-xs text-gray-500">覆盖：{status.min_date || '--'} ～ {status.max_date || '--'} · {status.column_count || 0} 字段</div>
-          {!status.ready && <Tag color="warning" className="mt-2">缺少：{(status.missing_required || []).join('、') || status.reason}</Tag>}
+          {!status.ready && <Alert className="mt-3" type="warning" showIcon message={unavailableHint} />}
         </Card></Col>;
       })}
     </Row>
