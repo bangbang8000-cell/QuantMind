@@ -29,6 +29,7 @@ export const StockForecastChart: React.FC<StockForecastChartProps> = ({
     // 2. 预测部分数据对齐
     const forecastDates = forecast.map(f => f.date);
     const allDates = [...historyDates, ...forecastDates];
+    const hasForecast = forecast.length > 0;
 
     const lastKlineIndex = historyDates.length - 1;
     const lastClose = kline.length > 0 ? kline[kline.length - 1].close : currentPrice;
@@ -94,7 +95,9 @@ export const StockForecastChart: React.FC<StockForecastChartProps> = ({
         },
       },
       legend: {
-        data: ['日K线', 'P50 基准中枢 (50%)', 'P90 乐观上界 (90%)', 'P10 悲观下界 (10%)'],
+        data: hasForecast
+          ? ['日K线', 'P50 基准中枢 (50%)', 'P90 乐观上界 (90%)', 'P10 悲观下界 (10%)']
+          : ['日K线'],
         bottom: 8,
         itemGap: 18,
         textStyle: { color: '#64748b', fontSize: 11, fontWeight: 500 },
@@ -162,7 +165,7 @@ export const StockForecastChart: React.FC<StockForecastChartProps> = ({
             ],
           } : undefined,
         },
-        {
+        ...(hasForecast ? [{
           name: 'P90 乐观上界 (90%)',
           type: 'line',
           data: p90SeriesData,
@@ -207,7 +210,7 @@ export const StockForecastChart: React.FC<StockForecastChartProps> = ({
           symbol: 'circle',
           symbolSize: 4,
           z: 3,
-        },
+        }] : []),
       ],
     };
   }, [kline, forecast, symbol, currentPrice]);
@@ -219,11 +222,11 @@ export const StockForecastChart: React.FC<StockForecastChartProps> = ({
         {/* 第一行：主标题 + 实时计算徽标 */}
         <div className="flex items-center justify-between">
           <span className="text-sm font-black text-slate-800 tracking-tight">
-            历史 K 线走势 + 未来 10%-50%-90% 分位数走势预测带 (Fan Chart)
+            历史 K 线走势与真实模型信号
           </span>
           <span className="inline-flex items-center gap-1 text-[11px] text-emerald-600 font-bold bg-emerald-50 px-2 py-0.5 rounded-md border border-emerald-100 shrink-0 whitespace-nowrap">
             <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse" />
-            实时计算
+            真实模型结果
           </span>
         </div>
 

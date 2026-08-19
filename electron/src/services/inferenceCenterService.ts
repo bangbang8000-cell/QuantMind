@@ -45,17 +45,17 @@ export interface SingleStockPredictionResponse {
   expected_return: number;
   confidence: number;
   rating: 'STRONG_BUY' | 'BUY' | 'HOLD' | 'SELL';
-  p10_return: number;
+  p10_return: number | null;
   p50_return: number;
-  p90_return: number;
+  p90_return: number | null;
   forecast_curve: ForecastPoint[];
   drivers: FeatureDriverItem[];
   consensus: ModelConsensusItem[];
   consensus_score: number;
-  /** 'persisted'=真实持久化模型分数 | 'fallback'=无分数中性空态 | 'mock'=离线模拟 */
-  data_source?: 'persisted' | 'fallback' | 'mock';
-  /** 'shap'=真·模型SHAP归因(树模型原生pred_contrib) | 'heuristic'=特征启发式系数 */
-  drivers_source?: 'shap' | 'heuristic';
+  /** 仅为真实持久化模型推理分数。 */
+  data_source?: 'persisted';
+  /** 仅在模型可提供时返回真实 SHAP。 */
+  drivers_source?: 'shap';
   error?: string | null;
 }
 
@@ -67,6 +67,8 @@ export interface SingleStockPredictionRequest {
   market?: string;
   /** 共识矩阵成员（最多4个真实模型）；空=自动取当日全部有分数模型 */
   consensus_model_ids?: string[];
+  /** 是否立即执行已注册模型；false 时仅读取已有真实结果。 */
+  execute?: boolean;
 }
 
 export interface KlineItem {
@@ -93,7 +95,8 @@ class InferenceCenterService {
     const baseURL = (import.meta as any).env?.VITE_USER_API_URL || SERVICE_ENDPOINTS.API_GATEWAY || SERVICE_ENDPOINTS.USER_SERVICE;
     const client = axios.create({
       baseURL,
-      timeout: 30000,
+      // 实际模型执行会跑完整个推理批次，30 秒不足以覆盖生产模型冷启动与落库。
+      timeout: 120000,
     });
     client.interceptors.request.use((config) => {
       const token = authService.getAccessToken();

@@ -10,13 +10,12 @@ import os
 import re
 import time
 from datetime import date, datetime, timedelta
+from pathlib import Path
 from typing import Any
 
+from fastapi import HTTPException
 from sqlalchemy import text
 
-from backend.services.api.routers.research_features_service import (
-    get_symbol_full_features,
-)
 from backend.shared.database_manager_v2 import get_session
 from backend.shared.inference_stats import compute_score_distribution
 from backend.shared.redis_sentinel_client import get_redis_sentinel_client
@@ -1552,6 +1551,7 @@ async def predict_single_stock(
     horizon: int = 5,
     market: str = "CN",
     consensus_model_ids: list[str] | None = None,
+    execute: bool = False,
 ) -> dict[str, Any]:
     """单只股票未来走势与区间分位数预测服务。"""
     normalized_symbol = StockCodeUtil.to_prefix(symbol)
@@ -1649,6 +1649,40 @@ async def predict_single_stock(
     )
     chosen_model_type = sel.get("modelType") or sel.get("model_type") or "lightgbm"
 
+    # “开始预测推理”必须实际执行注册模型，不能用页面侧或服务侧的公式伪造结果。
+    # 延迟导入避免 research/model_training 路由在应用启动阶段发生循环导入。
+    if execute:
+        if not selected_model:
+            raise HTTPException(status_code=404, detail="未找到可执行的已注册模型")
+        from backend.services.api.routers.model_training import (
+            _execute_single_day_inference,
+            _resolve_requested_model,
+        )
+
+        try:
+            requested_model_id, resolved = await _resolve_requested_model(
+                {"tenant_id": tid, "user_id": uid}, chosen_model_id
+            )
+            requested_date = date.fromisoformat(target_date or latest_date)
+            execution = await _execute_single_day_inference(
+                requested_model_id=requested_model_id,
+                resolved=resolved,
+                model_dir=Path(resolved.storage_path),
+                requested_date=requested_date,
+                tenant_id=tid,
+                user_id=uid,
+            )
+        except HTTPException:
+            raise
+        except Exception as exc:
+            logger.exception("[predict_single_stock] 实时模型推理失败")
+            raise HTTPException(status_code=502, detail=f"实时模型推理失败: {exc}") from exc
+        if not execution.get("success"):
+            raise HTTPException(
+                status_code=422,
+                detail=execution.get("error_message") or "模型推理未产生有效结果",
+            )
+
     # 3. 读真实推理分数：engine_signal_scores（混合A：默认读持久化真实分数）
     _sym_variants = list({
         normalized_symbol,
@@ -1716,64 +1750,8 @@ async def predict_single_stock(
             seen.add(mid)
             consensus_rows.append(r)
 
-    # 4. 真实特征 → 因子归因
-    features_res = await get_symbol_full_features(normalized_symbol)
-    if features_res.get("code") != 200:
-        features_res = {"data": {}}
-    quant_categories = features_res.get("data") or {}
-
-    def _feature_value(category: str, key: str, default: float) -> float:
-        raw = (quant_categories.get(category) or {}).get(key)
-        try:
-            return float(raw) if raw is not None else default
-        except (TypeError, ValueError):
-            return default
-
-    mom_val = _feature_value("momentum", "mom_ret_5d", 0.02)
-    fund_val = _feature_value("fundFlow", "flow_net_amount", (main_flow / 1e6) if main_flow else 0.015)
-    vol_val = _feature_value("volatility", "vol_std_20", daily_vol_pct * 100.0)
-    val_val = _feature_value("valuation", "pe_ttm", 24.5)
-
-    def _clamp(v: float, lo: float, hi: float) -> float:
-        return max(lo, min(hi, v))
-
-    drivers = [
-        {
-            "name": "5日量价动量 (mom_5d)",
-            "category": "动量因子",
-            "value": round(mom_val, 4),
-            "impact": round(_clamp(mom_val * 1.5, -0.03, 0.03), 4),
-            "direction": "positive" if mom_val >= 0 else "negative",
-        },
-        {
-            "name": "主力资金净流入",
-            "category": "资金流向",
-            "value": round(fund_val, 4),
-            "impact": round(_clamp(fund_val * 0.5, -0.03, 0.03), 4),
-            "direction": "positive" if fund_val >= 0 else "negative",
-        },
-        {
-            "name": "20日历史波动率",
-            "category": "波动风险",
-            "value": round(vol_val, 4),
-            "impact": round(-_clamp((vol_val / 100.0) * 0.6, 0.005, 0.03), 4),
-            "direction": "negative",
-        },
-        {
-            "name": "PE估值 (pe_ttm)",
-            "category": "估值因子",
-            "value": round(val_val, 2),
-            "impact": round(0.012 if val_val < 30 else -0.008, 4),
-            "direction": "positive" if val_val < 30 else "negative",
-        },
-        {
-            "name": "均线乖离 (ma_gap_20)",
-            "category": "技术指标",
-            "value": round(ma_gap_20, 2),
-            "impact": round(_clamp(ma_gap_20 * 0.004, -0.025, 0.025), 4),
-            "direction": "positive" if ma_gap_20 >= 0 else "negative",
-        },
-    ]
+    # 4. 只展示真实模型 SHAP 归因；没有 SHAP 结果就保持为空，绝不回退到启发式数据。
+    drivers: list[dict[str, Any]] = []
 
     # 5. 预测得分与置信区间
     if main_row is not None:
@@ -1798,15 +1776,13 @@ async def predict_single_stock(
                 headline_meta.get("modelType") or chosen_model_type or "lightgbm"
             )
     else:
-        # 当日尚未落库批量推理：基于真实动量与均线进行前向实时运算
-        base_alpha = 0.041 if ("ensemble" in chosen_model_type or "tft" in chosen_model_type) else 0.035
-        alpha_bias = (mom_val * 0.3) + (ma_gap_20 * 0.0008)
-        fusion_score = round(base_alpha + alpha_bias, 4)
-        rating = "STRONG_BUY" if fusion_score >= 0.035 else ("BUY" if fusion_score > 0.01 else "HOLD")
-        data_source = "persisted"
+        raise HTTPException(
+            status_code=404,
+            detail="该标的没有真实模型推理结果；请点击“开始预测推理”执行模型后重试",
+        )
 
     # SHAP 归因
-    drivers_source = "heuristic"
+    drivers_source = None
     try:
         shap_drivers = await asyncio.wait_for(
             asyncio.to_thread(
@@ -1825,39 +1801,12 @@ async def predict_single_stock(
         drivers = shap_drivers
         drivers_source = "shap"
 
+    # 当前生产模型输出的是横截面 signal score，而不是分位数回归价格。
+    # 因此不把波动率公式伪装成 P10/P50/P90，也不生成未来价格曲线。
     p50_ret = round(fusion_score, 4)
-    # 分位数锥：真实波动率推导（z=1.28 → 80% 区间 → 10/90 分位）
-    horizon_vol = daily_vol_pct * (horizon ** 0.5)
-    cone = max(0.015, 1.28 * horizon_vol)
-    p10_ret = round(p50_ret - cone, 4)
-    p90_ret = round(p50_ret + cone * 1.15, 4)
-    confidence = round(min(0.95, max(0.5, 0.5 + abs(p50_ret) * 3)), 3)
-
-    # 6. 预测曲线（基于真实分数 + 真实波动率，分步扩散）
-    forecast_curve = []
-    try:
-        base_date = datetime.strptime(resolved_date, "%Y-%m-%d")
-    except (ValueError, TypeError):
-        base_date = datetime.now()
+    confidence = 0.0
+    forecast_curve: list[dict[str, Any]] = []
     curr_p = latest_close if latest_close > 0 else 100.0
-    for step in range(1, horizon + 1):
-        step_factor = (step / horizon) ** 0.75
-        step_p50 = p50_ret * step_factor
-        step_vol = daily_vol_pct * (step ** 0.5)
-        step_cone = max(0.01, 1.28 * step_vol)
-        step_p10 = step_p50 - step_cone
-        step_p90 = step_p50 + step_cone * 1.15
-        step_date = (base_date + timedelta(days=step * 1.4)).strftime("%Y-%m-%d")
-        forecast_curve.append({
-            "step": step,
-            "date": step_date,
-            "p10": round(step_p10 * 100, 2),
-            "p50": round(step_p50 * 100, 2),
-            "p90": round(step_p90 * 100, 2),
-            "predicted_price": round(curr_p * (1 + step_p50), 2),
-            "upper_price": round(curr_p * (1 + step_p90), 2),
-            "lower_price": round(curr_p * (1 + step_p10), 2),
-        })
 
     # 7. 多模型共识（真实当日各模型分数）
     consensus = []
@@ -1875,33 +1824,16 @@ async def predict_single_stock(
             "model_name": model_name,
             "model_type": meta.get("modelType") or "",
             "score": round(fs, 4),
-            "expected_return": round(fs * 100, 2),
+            # 保留字段名兼容前端契约，值为真实模型 signal score（不是收益率）。
+            "expected_return": round(fs, 4),
             "rating": "STRONG_BUY" if (ss == "BUY" and fs >= 0.03) else ss,
             "horizon": horizon,
         })
-    if not consensus and available_models:
-        target_models = available_models[:4]
-        for idx, m in enumerate(target_models):
-            mid = m.get("modelId")
-            m_name = m.get("name") or _humanize_model_name(mid)
-            m_type = m.get("modelType") or "lightgbm"
-            m_ic = float(m.get("ic") or 0.128)
-            m_score = round(fusion_score * (1.0 + (m_ic - 0.128) * 1.5 + (idx * 0.02 - 0.03)), 4)
-            m_rating = "STRONG_BUY" if m_score >= 0.035 else ("BUY" if m_score > 0.01 else "HOLD")
-            consensus.append({
-                "model_id": mid,
-                "model_name": m_name,
-                "model_type": m_type,
-                "score": m_score,
-                "expected_return": round(m_score * 100, 2),
-                "rating": m_rating,
-                "horizon": horizon,
-            })
     if consensus:
         bullish = sum(1 for c in consensus if c["rating"] in ("BUY", "STRONG_BUY"))
         consensus_score = round(bullish / len(consensus) * 100, 1)
     else:
-        consensus_score = 80.0
+        consensus_score = 0.0
 
     payload_data = {
         "status": "success",
@@ -1914,12 +1846,13 @@ async def predict_single_stock(
         "current_price": curr_p,
         "horizon": horizon,
         "predicted_score": p50_ret,
-        "expected_return": round(p50_ret * 100, 2),
+        # 保留字段名兼容前端契约，值为真实模型 signal score（不是收益率）。
+        "expected_return": p50_ret,
         "confidence": confidence,
         "rating": rating,
-        "p10_return": round(p10_ret * 100, 2),
+        "p10_return": None,
         "p50_return": round(p50_ret * 100, 2),
-        "p90_return": round(p90_ret * 100, 2),
+        "p90_return": None,
         "forecast_curve": forecast_curve,
         "drivers": drivers,
         "consensus": consensus,
@@ -1929,4 +1862,3 @@ async def predict_single_stock(
         "error": None,
     }
     return {"code": 200, "data": payload_data}
-

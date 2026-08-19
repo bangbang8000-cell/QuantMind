@@ -43,6 +43,8 @@ class SingleStockPredictionRequest(BaseModel):
     market: str = "CN"
     # 共识矩阵成员（最多4个真实模型）；空=自动取当日全部有分数的模型
     consensus_model_ids: list[str] | None = None
+    # 点击“开始预测推理”时由服务端执行已注册模型；查询历史结果时保持 false。
+    execute: bool = False
 
 
 class FeatureDriverItem(BaseModel):
@@ -96,4 +98,3 @@ class SingleStockPredictionResponse(BaseModel):
     consensus: list[ModelConsensusItem]
     consensus_score: float
     error: str | None = None
-

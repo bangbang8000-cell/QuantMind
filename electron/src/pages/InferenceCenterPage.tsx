@@ -39,7 +39,7 @@ export const InferenceCenterPage: React.FC = () => {
   const [consensusModelIds, setConsensusModelIds] = useState<string[]>([]);
   const [loading, setLoading] = useState(false);
 
-  // 数据展示状态 (纯真实数据)
+  // 数据展示状态（仅真实数据）
   const [models, setModels] = useState<ModelCardOption[]>([]);
   const [kline, setKline] = useState<KlineItem[]>([]);
   const [prediction, setPrediction] = useState<SingleStockPredictionResponse | null>(null);
@@ -59,6 +59,8 @@ export const InferenceCenterPage: React.FC = () => {
       return;
     }
 
+    // 新的真实推理尚未完成前，不保留上一次标的或模型的结果。
+    setPrediction(null);
     setLoading(true);
     try {
       // 1. 获取真实 K 线
@@ -67,7 +69,7 @@ export const InferenceCenterPage: React.FC = () => {
         setKline(klineData);
       }
 
-      // 2. 执行真实预测推理
+      // 2. 仅按钮操作会执行真实模型；输入切换只读取已有真实结果。
       const dateStr = inferenceDate ? inferenceDate.format('YYYY-MM-DD') : undefined;
       const res = await inferenceCenterService.predictSingleStock({
         symbol: sym,
@@ -76,6 +78,7 @@ export const InferenceCenterPage: React.FC = () => {
         horizon: hor,
         market: currentMarket,
         consensus_model_ids: consensusModelIds.length ? consensusModelIds : undefined,
+        execute: Boolean(targetSymbol === undefined && targetModelId === undefined),
       });
 
       if (res && res.status === 'success') {
@@ -112,8 +115,8 @@ export const InferenceCenterPage: React.FC = () => {
             category: isEns ? 'ensemble' : isDL ? 'dl' : 'tree',
             tag: m.hasInference ? '已训练' : '生产可用',
             horizonDesc: 'T+1 ~ T+10 灵活周期',
-            sharpe: 2.15,
-            quantileSupport: true,
+            sharpe: 0,
+            quantileSupport: false,
           };
         });
         setModels(liveModels);
@@ -128,11 +131,6 @@ export const InferenceCenterPage: React.FC = () => {
       cancelled = true;
     };
   }, [currentMarket]);
-
-  // 初次进入页面自动触发真实推理
-  useEffect(() => {
-    handleRunInference('SH600519');
-  }, []);
 
   const filteredModels = useMemo(() => {
     if (modelCategoryFilter === 'all') return models;
@@ -402,15 +400,15 @@ export const InferenceCenterPage: React.FC = () => {
             {/* 右侧：多空研判评级与上涨概率 */}
             <div className="flex items-center gap-3">
               <div className="flex items-center gap-1.5 text-xs text-slate-500 bg-slate-50 px-3 py-1.5 rounded-xl border border-slate-100">
-                <span>T+{prediction.horizon} 预期收益:</span>
+                <span>模型信号分数:</span>
                 <strong className={`font-mono font-black ${prediction.expected_return >= 0 ? 'text-rose-600' : 'text-emerald-600'}`}>
-                  {prediction.expected_return >= 0 ? `+${prediction.expected_return.toFixed(2)}%` : `${prediction.expected_return.toFixed(2)}%`}
+                  {prediction.predicted_score.toFixed(4)}
                 </strong>
               </div>
               {getRatingBadge(prediction.rating)}
               <div className="flex items-center gap-1.5 bg-rose-50/70 border border-rose-100 px-3 py-1 rounded-xl">
-                <span className="text-[11px] text-slate-500 font-semibold">上涨概率:</span>
-                <span className="text-xs font-black font-mono text-rose-600">{(prediction.confidence * 100).toFixed(1)}%</span>
+                <span className="text-[11px] text-slate-500 font-semibold">数据来源:</span>
+                <span className="text-xs font-black font-mono text-rose-600">真实模型推理</span>
               </div>
             </div>
           </div>
@@ -447,54 +445,35 @@ export const InferenceCenterPage: React.FC = () => {
               <div className="bg-white/80 backdrop-blur-xl rounded-3xl p-5 border border-white/90 shadow-xs flex flex-col justify-between">
                 <div>
                   <div className="flex items-center justify-between pb-2.5 border-b border-slate-100 mb-3">
-                    <span className="text-xs font-bold text-slate-500">分位数收益预测指标</span>
-                    <Tag color="cyan" className="rounded font-mono text-[10px] m-0">Pinball Quantiles</Tag>
+                    <span className="text-xs font-bold text-slate-500">模型推理指标</span>
+                    <Tag color="blue" className="rounded font-mono text-[10px] m-0">Persisted Model Score</Tag>
                   </div>
 
                   {/* 预期回报 */}
                   <div className="p-3.5 bg-slate-50/80 rounded-2xl border border-slate-100 mb-3 text-center">
-                    <span className="text-[11px] text-slate-400 font-semibold block mb-0.5">T+{prediction.horizon} 预期基准收益率 (P50)</span>
+                    <span className="text-[11px] text-slate-400 font-semibold block mb-0.5">模型信号分数</span>
                     <span className={`text-2xl font-black font-mono ${prediction.expected_return >= 0 ? 'text-rose-600' : 'text-emerald-600'}`}>
-                      {prediction.expected_return >= 0 ? `+${prediction.expected_return.toFixed(2)}%` : `${prediction.expected_return.toFixed(2)}%`}
+                      {prediction.predicted_score.toFixed(4)}
                     </span>
                   </div>
 
-                  {/* 10-50-90% 区间卡 */}
+                  {/* 分位数模型尚未接入时不展示伪造区间 */}
                   <div className="p-3.5 bg-gradient-to-br from-slate-50 to-blue-50/30 rounded-2xl border border-slate-100">
                     <div className="flex items-center justify-between mb-2">
-                      <span className="text-xs font-bold text-slate-700">10% - 50% - 90% 扩散区间</span>
-                      <Tooltip title="基于分位数回归模型计算的收益概率置信边界">
+                      <span className="text-xs font-bold text-slate-700">分位数区间</span>
+                      <Tooltip title="当前注册模型未输出分位数回归结果，因此不展示估算区间。">
                         <Sparkles className="w-3.5 h-3.5 text-slate-400 cursor-pointer" />
                       </Tooltip>
                     </div>
-                    <div className="flex items-center justify-between text-center pt-1">
-                      <div>
-                        <span className="text-[10px] text-slate-400 font-bold block">10% 下界</span>
-                        <span className={`text-xs font-black font-mono ${prediction.p10_return >= 0 ? 'text-rose-600' : 'text-emerald-600'}`}>
-                          {prediction.p10_return > 0 ? `+${prediction.p10_return}%` : `${prediction.p10_return}%`}
-                        </span>
-                      </div>
-                      <div className="h-6 w-[1px] bg-slate-200" />
-                      <div>
-                        <span className="text-[10px] text-blue-600 font-bold block">50% 中枢</span>
-                        <span className={`text-sm font-black font-mono ${prediction.p50_return >= 0 ? 'text-rose-600' : 'text-emerald-600'}`}>
-                          {prediction.p50_return > 0 ? `+${prediction.p50_return}%` : `${prediction.p50_return}%`}
-                        </span>
-                      </div>
-                      <div className="h-6 w-[1px] bg-slate-200" />
-                      <div>
-                        <span className="text-[10px] text-rose-500 font-bold block">90% 上界</span>
-                        <span className={`text-xs font-black font-mono ${prediction.p90_return >= 0 ? 'text-rose-600' : 'text-emerald-600'}`}>
-                          {prediction.p90_return > 0 ? `+${prediction.p90_return}%` : `${prediction.p90_return}%`}
-                        </span>
-                      </div>
-                    </div>
+                    <p className="text-[11px] leading-relaxed text-slate-400 m-0">
+                      当前生产模型只输出真实信号分数；待接入原生分位数模型后再显示 P10 / P50 / P90。
+                    </p>
                   </div>
                 </div>
 
                 <div className="pt-2.5 border-t border-slate-100 text-[11px] text-slate-400 flex items-center justify-between">
                   <span>模型准确率 (IC): <strong className="text-slate-700 font-mono">{currentSelectedModel?.accuracy != null && currentSelectedModel.accuracy !== 0 ? (typeof currentSelectedModel.accuracy === 'number' ? currentSelectedModel.accuracy.toFixed(3) : currentSelectedModel.accuracy) : '—'}</strong></span>
-                  <span>夏普比率: <strong className="text-slate-700 font-mono">{currentSelectedModel?.sharpe || '—'}</strong></span>
+                  <span>绩效指标: <strong className="text-slate-700 font-mono">以模型注册信息为准</strong></span>
                 </div>
               </div>
             </div>

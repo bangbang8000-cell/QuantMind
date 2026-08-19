@@ -196,5 +196,5 @@ async def predict_single_stock(
         horizon=req.horizon,
         market=req.market,
         consensus_model_ids=req.consensus_model_ids,
+        execute=req.execute,
     )
-

@@ -96,9 +96,9 @@ export const ModelConsensusPanel: React.FC<ModelConsensusPanelProps> = ({
               </div>
 
               <div className="flex items-center justify-between pt-2 border-t border-slate-50">
-                <span className="text-[11px] text-slate-400 font-medium">预期 T+{item.horizon} 回报</span>
+                <span className="text-[11px] text-slate-400 font-medium">模型信号分数</span>
                 <span className={`text-xs font-black font-mono ${item.expected_return >= 0 ? 'text-rose-600' : 'text-emerald-600'}`}>
-                  {item.expected_return >= 0 ? `+${item.expected_return.toFixed(2)}%` : `${item.expected_return.toFixed(2)}%`}
+                  {item.expected_return.toFixed(4)}
                 </span>
               </div>
             </div>
