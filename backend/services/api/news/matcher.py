@@ -228,9 +228,21 @@ class NewsMatcher:
         for end_idx, term in alias_aut.iter(text):
             start = end_idx - len(term) + 1
             end = end_idx + 1
-            if not self._boundary_ok(text, start, end, term):
+            # 已知实体名（alias_type=name，如"苹果"→AAPL）放宽边界：允许右侧粘
+            # 金融后缀（公司/股价/控股/集团等），因为实体名非泛词，粘连不误命中。
+            entries = alias_idx.get(term, [])
+            is_named_entity = any(e.alias_type == "name" for e in entries)
+            if is_named_entity:
+                left = text[start - 1] if start > 0 else ""
+                if left and _CJK_OR_ALNUM.match(left):
+                    continue
+                # 右侧允许粘 CJK（公司/股价等），仅挡字母数字
+                right = text[end] if end < len(text) else ""
+                if right and re.match(r"[A-Za-z0-9]", right):
+                    continue
+            elif not self._boundary_ok(text, start, end, term):
                 continue
-            for entry in alias_idx.get(term, []):
+            for entry in entries:
                 ticker_hits[entry.ticker] = ticker_hits.get(entry.ticker, 0) + 1
                 if entry.industry:
                     industry_hits[entry.industry] = industry_hits.get(entry.industry, 0) + 1
