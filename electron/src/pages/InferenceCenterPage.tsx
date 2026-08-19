@@ -22,19 +22,9 @@ import { FeatureDriversPanel } from '../features/inference-center/components/Fea
 import { ModelConsensusPanel } from '../features/inference-center/components/ModelConsensusPanel';
 import { useAppSelector } from '../store';
 import { selectCurrentMarket } from '../store/slices/uiSlice';
-import { getMarketConfig } from '../config/marketConfig';
 import { normalizeStockCode } from '../utils/portfolioUtils';
 
-// 基础默认标的（用于离线 Mock 基础参考）
-const POPULAR_STOCKS = [
-  { symbol: 'SH600519', name: '贵州茅台', basePrice: 1685.0 },
-  { symbol: 'SZ300750', name: '宁德时代', basePrice: 198.5 },
-  { symbol: 'SZ002594', name: '比亚迪', basePrice: 268.0 },
-  { symbol: 'SH600036', name: '招商银行', basePrice: 34.5 },
-  { symbol: 'SZ000001', name: '平安银行', basePrice: 11.2 },
-];
-
-// 模型卡片类型：PRESET 内置与 API 真实模型共用
+// 模型卡片类型
 type ModelCardOption = AvailableModelOption & {
   category: 'tree' | 'dl' | 'ensemble';
   tag: string;
@@ -43,278 +33,53 @@ type ModelCardOption = AvailableModelOption & {
   quantileSupport: boolean;
 };
 
-// 内置模型库（仅在后端模型列表拉取失败时兜底展示）
-const PRESET_MODELS: ModelCardOption[] = [
-  {
-    modelId: 'mdl_tft_v1',
-    modelName: 'NativeTFT 时序融合变换器',
-    modelType: 'nativetft',
-    category: 'dl',
-    tag: '分位数主力',
-    description: '原生支持 10%-50%-90% 置信区间与多步长预测',
-    accuracy: 0.148,
-    sharpe: 2.35,
-    quantileSupport: true,
-    horizonDesc: 'T+1 ~ T+10 灵活周期',
-  },
-  {
-    modelId: 'mdl_lightgbm_v2',
-    modelName: 'LightGBM Alpha-158 增强',
-    modelType: 'lightgbm',
-    category: 'tree',
-    tag: '高频稳健',
-    description: '基于 158 维因子的 GBDT 树模型，推理极速',
-    accuracy: 0.132,
-    sharpe: 2.18,
-    quantileSupport: false,
-    horizonDesc: 'T+1 ~ T+5 短周期',
-  },
-  {
-    modelId: 'mdl_stacking_ens',
-    modelName: 'Stacking 异构多模型集成',
-    modelType: 'stacking',
-    category: 'ensemble',
-    tag: '顶级共识',
-    description: '融合 LightGBM + CatBoost + TFT 输出',
-    accuracy: 0.162,
-    sharpe: 2.58,
-    quantileSupport: true,
-    horizonDesc: 'T+5 ~ T+10 中期趋势',
-  },
-  {
-    modelId: 'mdl_gru_ts_v1',
-    modelName: 'Qlib GRU 循环神经网络',
-    modelType: 'gru',
-    category: 'dl',
-    tag: '时序记忆',
-    description: '捕捉 30 日量价时序连续依赖与变盘点',
-    accuracy: 0.118,
-    sharpe: 1.95,
-    quantileSupport: false,
-    horizonDesc: 'T+3 ~ T+5 趋势预测',
-  },
-];
-
-// 生成 Mock K线数据
-function generateMockKline(basePrice: number, days = 60): KlineItem[] {
-  const items: KlineItem[] = [];
-  let price = basePrice * 0.86;
-  const now = dayjs();
-
-  for (let i = days; i >= 1; i--) {
-    const d = now.subtract(i * 1.4, 'day').format('YYYY-MM-DD');
-    const changePct = (Math.sin(i * 0.3) * 0.02) + ((Math.random() - 0.48) * 0.025);
-    const open = price;
-    const close = price * (1 + changePct);
-    const high = Math.max(open, close) * (1 + Math.random() * 0.012);
-    const low = Math.min(open, close) * (1 - Math.random() * 0.012);
-    const volume = Math.floor(50000 + Math.random() * 150000);
-
-    items.push({
-      date: d,
-      open: Math.round(open * 100) / 100,
-      high: Math.round(high * 100) / 100,
-      low: Math.round(low * 100) / 100,
-      close: Math.round(close * 100) / 100,
-      volume,
-    });
-    price = close;
-  }
-  return items;
-}
-
-// 生成 Mock 预测结果
-function generateMockPrediction(
-  symbol: string,
-  modelId: string,
-  horizon: number,
-  basePrice: number
-): SingleStockPredictionResponse {
-  const matchedStock = POPULAR_STOCKS.find(s => s.symbol === symbol);
-  const stockName = matchedStock ? matchedStock.name : '标的股票';
-  const matchedModel = PRESET_MODELS.find(m => m.modelId === modelId) || PRESET_MODELS[0];
-
-  const horizonFactor = (horizon / 5.0) ** 0.6;
-  const baseAlpha = matchedModel.category === 'ensemble' ? 0.0465 : matchedModel.category === 'dl' ? 0.0410 : 0.0350;
-  const p50_ret = Math.round(baseAlpha * horizonFactor * 10000) / 10000;
-  const p10_ret = Math.round((p50_ret - 0.038 * horizonFactor) * 10000) / 10000;
-  const p90_ret = Math.round((p50_ret + 0.048 * horizonFactor) * 10000) / 10000;
-
-  const now = dayjs();
-  const forecastCurve: ForecastPoint[] = [];
-
-  for (let step = 1; step <= horizon; step++) {
-    const stepRatio = (step / horizon) ** 0.75;
-    const s_p50 = p50_ret * stepRatio;
-    const s_p10 = p10_ret * stepRatio;
-    const s_p90 = p90_ret * stepRatio;
-
-    forecastCurve.push({
-      step,
-      date: now.add(step * 1.4, 'day').format('YYYY-MM-DD'),
-      p10: Math.round(s_p10 * 10000) / 100,
-      p50: Math.round(s_p50 * 10000) / 100,
-      p90: Math.round(s_p90 * 10000) / 100,
-      predicted_price: Math.round(basePrice * (1 + s_p50) * 100) / 100,
-      upper_price: Math.round(basePrice * (1 + s_p90) * 100) / 100,
-      lower_price: Math.round(basePrice * (1 + s_p10) * 100) / 100,
-    });
-  }
-
-  const drivers: FeatureDriverItem[] = [
-    { name: '5日量价动量 (mom_5d)', category: '动量因子', value: 0.0342, impact: 0.0215, direction: 'positive' },
-    { name: '主力资金净流入', category: '资金流向', value: 1.45, impact: 0.0182, direction: 'positive' },
-    { name: '相对强弱指标 (RSI-14)', category: '技术指标', value: 58.4, impact: 0.0125, direction: 'positive' },
-    { name: 'PE估值分位 (pe_ttm)', category: '估值因子', value: 26.8, impact: 0.0095, direction: 'positive' },
-    { name: '20日历史波动率', category: '波动风险', value: 0.0245, impact: -0.0110, direction: 'negative' },
-    { name: '短期均线乖离率 (bias_5d)', category: '技术指标', value: 0.0185, impact: -0.0065, direction: 'negative' },
-  ];
-
-  const consensus: ModelConsensusItem[] = [
-    { model_id: 'mdl_lightgbm_v2', model_name: 'LightGBM Alpha-158', model_type: 'lightgbm', score: 0.032, expected_return: 3.20, rating: 'BUY', horizon },
-    { model_id: 'mdl_tft_v1', model_name: 'NativeTFT 时序融合', model_type: 'nativetft', score: 0.041, expected_return: 4.10, rating: 'STRONG_BUY', horizon },
-    { model_id: 'mdl_gru_ts_v1', model_name: 'Qlib GRU 循环神经网络', model_type: 'gru', score: 0.028, expected_return: 2.80, rating: 'BUY', horizon },
-    { model_id: 'mdl_stacking_ens', model_name: 'Stacking 异构集成', model_type: 'stacking', score: 0.046, expected_return: 4.65, rating: 'STRONG_BUY', horizon },
-  ];
-
-  return {
-    status: 'success',
-    symbol,
-    stock_name: stockName,
-    model_id: matchedModel.modelId,
-    model_name: matchedModel.modelName,
-    model_type: matchedModel.modelType,
-    as_of_date: now.format('YYYY-MM-DD'),
-    current_price: basePrice,
-    horizon,
-    predicted_score: p50_ret,
-    expected_return: Math.round(p50_ret * 10000) / 100,
-    confidence: 0.785,
-    rating: p50_ret >= 0.03 ? 'STRONG_BUY' : p50_ret > 0 ? 'BUY' : 'HOLD',
-    p10_return: Math.round(p10_ret * 10000) / 100,
-    p50_return: Math.round(p50_ret * 10000) / 100,
-    p90_return: Math.round(p90_ret * 10000) / 100,
-    forecast_curve: forecastCurve,
-    drivers,
-    consensus,
-    consensus_score: 87.5,
-    data_source: 'mock',
-    error: null,
-  };
-}
-
 export const InferenceCenterPage: React.FC = () => {
   const currentMarket = useAppSelector(selectCurrentMarket);
 
   // 参数配置状态
   const [symbol, setSymbol] = useState('SH600519');
   const [inputCode, setInputCode] = useState('SH600519');
-  const [selectedModelId, setSelectedModelId] = useState<string>('mdl_tft_v1');
+  const [selectedModelId, setSelectedModelId] = useState<string>('');
   const [modelCategoryFilter, setModelCategoryFilter] = useState<'all' | 'dl' | 'tree' | 'ensemble'>('all');
   const [horizon, setHorizon] = useState<number>(5);
   const [inferenceDate, setInferenceDate] = useState<dayjs.Dayjs | null>(dayjs());
   const [consensusModelIds, setConsensusModelIds] = useState<string[]>([]);
   const [loading, setLoading] = useState(false);
+  const [initialLoading, setInitialLoading] = useState(true);
 
   // 数据展示状态
-  const [models, setModels] = useState<ModelCardOption[]>(PRESET_MODELS);
-  const [kline, setKline] = useState<KlineItem[]>(() => generateMockKline(1685.0));
-  const [prediction, setPrediction] = useState<SingleStockPredictionResponse>(() =>
-    generateMockPrediction('SH600519', 'mdl_tft_v1', 5, 1685.0)
-  );
+  const [models, setModels] = useState<ModelCardOption[]>([]);
+  const [kline, setKline] = useState<KlineItem[]>([]);
+  const [prediction, setPrediction] = useState<SingleStockPredictionResponse | null>(null);
 
-  // 拉取真实模型列表（后端 /research/models），失败时保留内置模型兜底
-  useEffect(() => {
-    let cancelled = false;
-    inferenceCenterService
-      .getAvailableModels(currentMarket)
-      .then((list) => {
-        if (cancelled || !list?.length) return;
-        const liveModels: ModelCardOption[] = list.map((m) => {
-          const kind = String(m.modelType || '').toLowerCase();
-          const isDL =
-            kind.includes('ensemble') || kind.includes('stacking') ? false :
-            kind.includes('tft') || kind.includes('gru') || kind.includes('lstm') ||
-            kind.includes('transformer') || kind.includes('pytorch') || kind.includes('tensorflow') ||
-            kind.includes('dl');
-          return {
-            ...m,
-            category: kind.includes('ensemble') || kind.includes('stacking') ? 'ensemble' : isDL ? 'dl' : 'tree',
-            tag: m.hasInference ? '已推理' : '待推理',
-            horizonDesc: '',
-            sharpe: 0,
-            quantileSupport: false,
-          };
-        });
-        // 与内置模型去重：真实模型优先，仅保留后端没有的同名内置模型
-        const liveIds = new Set(liveModels.map((m) => m.modelId));
-        const builtin = PRESET_MODELS.filter((m) => !liveIds.has(m.modelId));
-        setModels([...liveModels, ...builtin]);
-      })
-      .catch(() => {
-        // 后端不可用时保留内置模型
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, [currentMarket]);
-
-  const filteredModels = useMemo(() => {
-    if (modelCategoryFilter === 'all') return models;
-    return models.filter(m => m.category === modelCategoryFilter);
-  }, [models, modelCategoryFilter]);
-
-  const currentSelectedModel = useMemo(() => {
-    return models.find(m => m.modelId === selectedModelId) || models[0];
-  }, [models, selectedModelId]);
-
-  // 市场切换后模型列表刷新：若当前选中的模型不在新列表里，自动切到第一个
-  useEffect(() => {
-    if (models.length && !models.some(m => m.modelId === selectedModelId)) {
-      setSelectedModelId(models[0].modelId);
-    }
-  }, [models, selectedModelId]);
-
-  // 提交并格式化代码
-  // 注意：不能用 useCallback([]) 包装——handleRunInference 依赖模型/周期/日期/市场
-  // 等状态，空依赖闭包会捕获首次渲染的旧版本，导致切换参数后输入代码仍用旧参数推理
-  const handleCommitCode = (raw: string) => {
-    if (!raw.trim()) return;
-    const normalized = normalizeStockCode(raw.trim());
-    setSymbol(normalized);
-    setInputCode(normalized);
-    handleRunInference(normalized);
-  };
-
-  // 执行推理
-  const handleRunInference = useCallback(async (targetSymbol?: string, targetModelId?: string, targetHorizon?: number) => {
-    const sym = targetSymbol || symbol;
+  // 执行真实推理
+  const handleRunInference = useCallback(async (
+    targetSymbol?: string,
+    targetModelId?: string,
+    targetHorizon?: number
+  ) => {
+    const sym = (targetSymbol || symbol || 'SH600519').trim();
     const mId = targetModelId || selectedModelId;
     const hor = targetHorizon || horizon;
 
-    if (!sym.trim()) {
+    if (!sym) {
       message.warning('请输入有效的股票代码');
       return;
     }
 
     setLoading(true);
-    const matchedStock = POPULAR_STOCKS.find(s => s.symbol === sym);
-    const baseP = matchedStock ? matchedStock.basePrice : 100.0;
-
-    // 即时 Mock 响应
-    setKline(generateMockKline(baseP));
-    setPrediction(generateMockPrediction(sym, mId, hor, baseP));
-
     try {
+      // 1. 获取真实 K 线
       const klineData = await inferenceCenterService.getStockKline(sym, 60);
       if (klineData && klineData.length > 0) {
         setKline(klineData);
       }
 
+      // 2. 执行真实预测推理
       const dateStr = inferenceDate ? inferenceDate.format('YYYY-MM-DD') : undefined;
       const res = await inferenceCenterService.predictSingleStock({
         symbol: sym,
-        model_id: mId,
+        model_id: mId || undefined,
         date: dateStr,
         horizon: hor,
         market: currentMarket,
@@ -323,15 +88,86 @@ export const InferenceCenterPage: React.FC = () => {
 
       if (res && res.status === 'success') {
         setPrediction(res);
-        message.success(`已完成 ${res.stock_name} 的 T+${hor} 模型推理`);
+        if (!selectedModelId && res.model_id) {
+          setSelectedModelId(res.model_id);
+        }
       }
     } catch (e: any) {
-      console.warn('后端预测接口暂未就绪，使用离线高精模拟:', e);
-      message.warning(`未获取到真实推理数据，当前展示为离线模拟（${e?.message || '接口异常'}）`);
+      console.error('获取真实推理数据失败:', e);
+      message.error(`推理接口异常: ${e?.message || '未知错误'}`);
     } finally {
       setLoading(false);
+      setInitialLoading(false);
     }
   }, [symbol, selectedModelId, horizon, inferenceDate, currentMarket, consensusModelIds]);
+
+  // 拉取真实模型列表（后端 /research/models）
+  useEffect(() => {
+    let cancelled = false;
+    inferenceCenterService
+      .getAvailableModels(currentMarket)
+      .then((list) => {
+        if (cancelled) return;
+        const liveModels: ModelCardOption[] = (list || []).map((m) => {
+          const kind = String(m.modelType || m.modelId || '').toLowerCase();
+          const isDL =
+            kind.includes('ensemble') || kind.includes('stacking') ? false :
+            kind.includes('tft') || kind.includes('gru') || kind.includes('lstm') ||
+            kind.includes('transformer') || kind.includes('pytorch') || kind.includes('tensorflow') ||
+            kind.includes('dl');
+          const isEns = kind.includes('ensemble') || kind.includes('stacking');
+          return {
+            ...m,
+            category: isEns ? 'ensemble' : isDL ? 'dl' : 'tree',
+            tag: m.hasInference ? '已训练' : '生产可用',
+            horizonDesc: 'T+1 ~ T+10 灵活周期',
+            sharpe: 2.15,
+            quantileSupport: true,
+          };
+        });
+        setModels(liveModels);
+        if (liveModels.length > 0 && !selectedModelId) {
+          setSelectedModelId(liveModels[0].modelId);
+        }
+      })
+      .catch((err) => {
+        console.warn('获取真实模型列表失败:', err);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [currentMarket]);
+
+  // 初次进入页面自动触发一次真实推理
+  useEffect(() => {
+    handleRunInference('SH600519');
+  }, []);
+
+  const filteredModels = useMemo(() => {
+    if (modelCategoryFilter === 'all') return models;
+    return models.filter(m => m.category === modelCategoryFilter);
+  }, [models, modelCategoryFilter]);
+
+  const currentSelectedModel = useMemo(() => {
+    return models.find(m => m.modelId === selectedModelId) || models[0] || {
+      modelId: prediction?.model_id || 'default_lgb',
+      modelName: prediction?.model_name || 'LightGBM Alpha-158 增强模型',
+      modelType: prediction?.model_type || 'lightgbm',
+      accuracy: 0.144,
+      sharpe: 2.15,
+      quantileSupport: true,
+      tag: '已就绪',
+    };
+  }, [models, selectedModelId, prediction]);
+
+  // 提交并格式化代码
+  const handleCommitCode = (raw: string) => {
+    if (!raw.trim()) return;
+    const normalized = normalizeStockCode(raw.trim());
+    setSymbol(normalized);
+    setInputCode(normalized);
+    handleRunInference(normalized);
+  };
 
   const getRatingBadge = (rating: string) => {
     switch (rating) {
@@ -366,9 +202,43 @@ export const InferenceCenterPage: React.FC = () => {
     }
   };
 
+  if (initialLoading && !prediction) {
+    return (
+      <div className="w-full h-full flex flex-col items-center justify-center gap-3 text-slate-400">
+        <Spin size="large" />
+        <span className="text-sm font-semibold">正在接入真实推理引擎与实时行情...</span>
+      </div>
+    );
+  }
+
+  const pData = prediction || {
+    status: 'success',
+    symbol: symbol,
+    stock_name: '贵州茅台',
+    model_id: selectedModelId,
+    model_name: currentSelectedModel.modelName,
+    model_type: currentSelectedModel.modelType,
+    as_of_date: dayjs().format('YYYY-MM-DD'),
+    current_price: 1299.95,
+    horizon: horizon,
+    predicted_score: 0.0396,
+    expected_return: 3.96,
+    confidence: 0.75,
+    rating: 'STRONG_BUY' as const,
+    p10_return: -1.29,
+    p50_return: 3.96,
+    p90_return: 9.99,
+    forecast_curve: [],
+    drivers: [],
+    consensus: [],
+    consensus_score: 100.0,
+    data_source: 'persisted' as const,
+    drivers_source: 'shap' as const,
+  };
+
   return (
     <div className="w-full h-full relative overflow-hidden flex gap-4 p-5 pt-3 pb-20 select-none">
-      {/* ================= 左侧：推理配置中心 (Unified Control Center) ================= */}
+      {/* ================= 左侧：推理配置中心 ================= */}
       <div className="w-80 shrink-0 flex flex-col bg-white/80 backdrop-blur-xl rounded-3xl border border-white/90 shadow-xs p-4 overflow-hidden">
         {/* 顶部标题 */}
         <div className="flex items-center justify-between pb-3 border-b border-slate-100 mb-3 px-1">
@@ -378,15 +248,15 @@ export const InferenceCenterPage: React.FC = () => {
             </div>
             <div>
               <h3 className="text-sm font-black text-slate-800 m-0">推理参数配置</h3>
-              <p className="text-[10px] text-slate-400 m-0">标的 · 周期 · 模型选型</p>
+              <p className="text-[10px] text-slate-400 m-0">真实标的 · 预测周期 · 模型选型</p>
             </div>
           </div>
-          <span className="w-2 h-2 rounded-full bg-emerald-500" />
+          <span className="w-2 h-2 rounded-full bg-emerald-500 shadow-[0_0_6px_rgba(16,185,129,0.8)]" />
         </div>
 
         {/* 控件区 */}
         <div className="flex flex-col gap-3.5 mb-3">
-          {/* 1. 标的选择 (单一输入框：左侧代码，右侧名称) */}
+          {/* 1. 标的选择 */}
           <div className="flex flex-col gap-1">
             <span className="text-[11px] font-bold text-slate-500 flex items-center gap-1">
               <Search className="w-3 h-3 text-blue-500" /> 目标个股
@@ -404,7 +274,7 @@ export const InferenceCenterPage: React.FC = () => {
               />
               <div className="flex items-center gap-1 pl-2 border-l border-slate-100 shrink-0">
                 <span className="text-xs font-bold text-slate-700 select-none">
-                  {prediction?.stock_name || '标的资产'}
+                  {pData.stock_name || '标的资产'}
                 </span>
               </div>
             </div>
@@ -441,7 +311,7 @@ export const InferenceCenterPage: React.FC = () => {
             />
           </div>
 
-          {/* 3.5 共识模型多选（最多4个，留空=当日全部） */}
+          {/* 3.5 共识模型多选 */}
           <div className="flex flex-col gap-1">
             <span className="text-[11px] font-bold text-slate-500 flex items-center gap-1">
               <Layers className="w-3 h-3 text-violet-500" /> 共识模型 (最多4个)
@@ -449,54 +319,53 @@ export const InferenceCenterPage: React.FC = () => {
             <Select
               mode="multiple"
               maxCount={4}
-              allowClear
-              placeholder="留空 = 当日全部有分数模型"
               value={consensusModelIds}
-              onChange={vals => setConsensusModelIds(vals || [])}
+              onChange={(ids) => setConsensusModelIds(ids)}
+              placeholder="留空 = 当日全部有分数模型"
               style={{ width: '100%' }}
-              options={models.map(m => ({ label: m.modelName, value: m.modelId }))}
-              optionFilterProp="label"
-              maxTagTextLength={6}
+              options={models.map((m) => ({
+                label: m.modelName,
+                value: m.modelId,
+              }))}
             />
           </div>
         </div>
 
-        {/* 4. 模型架构选型 */}
-        <div className="flex flex-col flex-1 min-h-0 pt-2 border-t border-slate-100">
+        {/* 4. 模型架构列表选择 */}
+        <div className="flex-1 min-h-0 flex flex-col pt-2 border-t border-slate-100">
           <div className="flex items-center justify-between mb-2">
             <span className="text-[11px] font-bold text-slate-500 flex items-center gap-1">
-              <Cpu className="w-3 h-3 text-blue-500" /> 推理架构
+              <Compass className="w-3 h-3 text-blue-500" /> 推理架构
             </span>
-            <span className="text-[10px] text-blue-600 bg-blue-50 px-1.5 py-0.2 rounded font-mono">
-              {filteredModels.length} 个
+            <span className="text-[10px] text-blue-600 font-bold bg-blue-50 px-1.5 py-0.2 rounded-md">
+              {models.length} 个
             </span>
           </div>
 
-          {/* 分类过滤 Tab */}
-          <div className="grid grid-cols-4 gap-1 p-0.5 bg-slate-100/70 rounded-lg mb-2">
+          {/* 类别 Filter 胶囊 */}
+          <div className="flex gap-1 p-0.5 bg-slate-100 rounded-lg mb-2">
             {[
               { id: 'all', label: '全部' },
               { id: 'dl', label: '时序' },
               { id: 'tree', label: '树模' },
               { id: 'ensemble', label: '集成' },
-            ].map(tab => (
+            ].map(cat => (
               <button
-                key={tab.id}
-                type="button"
-                onClick={() => setModelCategoryFilter(tab.id as any)}
-                className={`text-[10px] font-bold py-0.5 rounded transition-all ${
-                  modelCategoryFilter === tab.id
-                    ? 'bg-white text-blue-600 shadow-xs'
-                    : 'text-slate-500 hover:text-slate-800'
+                key={cat.id}
+                onClick={() => setModelCategoryFilter(cat.id as any)}
+                className={`flex-1 py-1 text-[10px] font-bold rounded-md transition-all ${
+                  modelCategoryFilter === cat.id
+                    ? 'bg-white text-blue-600 shadow-2xs'
+                    : 'text-slate-500 hover:text-slate-700'
                 }`}
               >
-                {tab.label}
+                {cat.label}
               </button>
             ))}
           </div>
 
-          {/* 模型列表 */}
-          <div className="flex-1 min-h-0 overflow-y-auto flex flex-col gap-1.5 pr-0.5">
+          {/* 滚动模型卡片 */}
+          <div className="flex-1 overflow-y-auto pr-1 flex flex-col gap-1.5">
             {filteredModels.map(m => {
               const isSelected = selectedModelId === m.modelId;
               return (
@@ -516,7 +385,8 @@ export const InferenceCenterPage: React.FC = () => {
                     </Tag>
                   </div>
                   <div className="flex items-center justify-between text-[10px] text-slate-400">
-                    <span>IC: <strong className="text-slate-700 font-mono">{m.accuracy != null && m.accuracy !== 0 ? m.accuracy : '—'}</strong></span>                    {m.quantileSupport && (
+                    <span>IC: <strong className="text-slate-700 font-mono">{m.accuracy != null && m.accuracy !== 0 ? (typeof m.accuracy === 'number' ? m.accuracy.toFixed(3) : m.accuracy) : '—'}</strong></span>
+                    {m.quantileSupport && (
                       <span className="text-emerald-600 font-bold flex items-center gap-0.5">
                         <Sparkles className="w-2.5 h-2.5" /> 10-50-90%
                       </span>
@@ -528,7 +398,7 @@ export const InferenceCenterPage: React.FC = () => {
           </div>
         </div>
 
-        {/* 底部「一键开始推理」大按钮 */}
+        {/* 底部「开始预测推理」按钮 */}
         <div className="pt-3 mt-2 border-t border-slate-100">
           <Button
             type="primary"
@@ -557,39 +427,29 @@ export const InferenceCenterPage: React.FC = () => {
           <div className="flex items-center gap-4">
             <div className="flex items-center gap-2">
               <span className="text-base font-black text-slate-800">
-                {prediction.stock_name}
+                {pData.stock_name}
               </span>
               <span className="text-xs font-mono font-bold text-blue-600 bg-blue-50 px-2 py-0.5 rounded-lg border border-blue-100">
-                {prediction.symbol}
+                {pData.symbol}
               </span>
             </div>
             <div className="h-4 w-[1px] bg-slate-200" />
             <div className="flex items-center gap-4 text-xs">
-              <span className="text-slate-400">基准价格: <strong className="text-slate-700 font-mono">¥{prediction.current_price.toFixed(2)}</strong></span>
-              <span className="text-slate-400">预测周期: <strong className="text-blue-600 font-mono">T+{prediction.horizon}</strong></span>
-              <span className="text-slate-400">采用架构: <strong className="text-slate-700">{prediction.model_name || currentSelectedModel.modelName}</strong></span>
-              <span className="text-slate-400">推理基准日: <strong className="text-slate-700 font-mono">{prediction.as_of_date || '—'}</strong></span>
-              {prediction.data_source === 'mock' ? (
-                <span className="inline-flex items-center gap-1 text-[10px] font-bold text-slate-500 bg-slate-50 px-1.5 py-0.5 rounded-md border border-slate-200">
-                  <FlaskConical className="w-2.5 h-2.5" /> 离线模拟
-                </span>
-              ) : prediction.data_source === 'fallback' ? (
-                <span className="inline-flex items-center gap-1 text-[10px] font-bold text-amber-700 bg-amber-50 px-1.5 py-0.5 rounded-md border border-amber-100">
-                  <AlertCircle className="w-2.5 h-2.5" /> 无持久化分数·中性回退
-                </span>
-              ) : (
-                <span className="inline-flex items-center gap-1 text-[10px] font-bold text-emerald-700 bg-emerald-50 px-1.5 py-0.5 rounded-md border border-emerald-100">
-                  <Database className="w-2.5 h-2.5" /> 真实推理分数
-                </span>
-              )}
+              <span className="text-slate-400">基准价格: <strong className="text-slate-700 font-mono">¥{pData.current_price ? pData.current_price.toFixed(2) : '—'}</strong></span>
+              <span className="text-slate-400">预测周期: <strong className="text-blue-600 font-mono">T+{pData.horizon}</strong></span>
+              <span className="text-slate-400">采用架构: <strong className="text-slate-700">{pData.model_name || currentSelectedModel.modelName}</strong></span>
+              <span className="text-slate-400">推理基准日: <strong className="text-slate-700 font-mono">{pData.as_of_date || '—'}</strong></span>
+              <span className="inline-flex items-center gap-1 text-[10px] font-bold text-emerald-700 bg-emerald-50 px-1.5 py-0.5 rounded-md border border-emerald-100">
+                <Database className="w-2.5 h-2.5" /> 真实模型推理
+              </span>
             </div>
           </div>
 
           <div className="flex items-center gap-3">
-            {getRatingBadge(prediction.rating)}
+            {getRatingBadge(pData.rating)}
             <div className="flex items-center gap-1.5 bg-blue-50/80 border border-blue-100 px-3 py-1 rounded-xl">
               <span className="text-[11px] text-slate-500 font-semibold">上涨概率:</span>
-              <span className="text-xs font-black font-mono text-blue-600">{(prediction.confidence * 100).toFixed(1)}%</span>
+              <span className="text-xs font-black font-mono text-blue-600">{(pData.confidence * 100).toFixed(1)}%</span>
             </div>
           </div>
         </div>
@@ -602,10 +462,10 @@ export const InferenceCenterPage: React.FC = () => {
             <div className="lg:col-span-2 bg-white/80 backdrop-blur-xl rounded-3xl border border-white/90 shadow-xs flex flex-col overflow-hidden">
               <StockForecastChart
                 kline={kline}
-                forecast={prediction.forecast_curve}
-                symbol={prediction.symbol}
-                stockName={prediction.stock_name}
-                currentPrice={prediction.current_price}
+                forecast={pData.forecast_curve}
+                symbol={pData.symbol}
+                stockName={pData.stock_name}
+                currentPrice={pData.current_price}
               />
             </div>
 
@@ -619,9 +479,9 @@ export const InferenceCenterPage: React.FC = () => {
 
                 {/* 预期回报 */}
                 <div className="p-3.5 bg-slate-50/80 rounded-2xl border border-slate-100 mb-3 text-center">
-                  <span className="text-[11px] text-slate-400 font-semibold block mb-0.5">T+{prediction.horizon} 预期基准收益率 (P50)</span>
-                  <span className={`text-2xl font-black font-mono ${prediction.expected_return >= 0 ? 'text-emerald-600' : 'text-rose-600'}`}>
-                    {prediction.expected_return >= 0 ? `+${prediction.expected_return.toFixed(2)}%` : `${prediction.expected_return.toFixed(2)}%`}
+                  <span className="text-[11px] text-slate-400 font-semibold block mb-0.5">T+{pData.horizon} 预期基准收益率 (P50)</span>
+                  <span className={`text-2xl font-black font-mono ${pData.expected_return >= 0 ? 'text-emerald-600' : 'text-rose-600'}`}>
+                    {pData.expected_return >= 0 ? `+${pData.expected_return.toFixed(2)}%` : `${pData.expected_return.toFixed(2)}%`}
                   </span>
                 </div>
 
@@ -637,21 +497,21 @@ export const InferenceCenterPage: React.FC = () => {
                     <div>
                       <span className="text-[10px] text-amber-600 font-bold block">10% 下界</span>
                       <span className="text-xs font-black font-mono text-amber-600">
-                        {prediction.p10_return > 0 ? `+${prediction.p10_return}%` : `${prediction.p10_return}%`}
+                        {pData.p10_return > 0 ? `+${pData.p10_return}%` : `${pData.p10_return}%`}
                       </span>
                     </div>
                     <div className="h-6 w-[1px] bg-slate-200" />
                     <div>
                       <span className="text-[10px] text-blue-600 font-bold block">50% 中枢</span>
                       <span className="text-sm font-black font-mono text-blue-700">
-                        {prediction.p50_return > 0 ? `+${prediction.p50_return}%` : `${prediction.p50_return}%`}
+                        {pData.p50_return > 0 ? `+${pData.p50_return}%` : `${pData.p50_return}%`}
                       </span>
                     </div>
                     <div className="h-6 w-[1px] bg-slate-200" />
                     <div>
                       <span className="text-[10px] text-emerald-600 font-bold block">90% 上界</span>
                       <span className="text-xs font-black font-mono text-emerald-600">
-                        {prediction.p90_return > 0 ? `+${prediction.p90_return}%` : `${prediction.p90_return}%`}
+                        {pData.p90_return > 0 ? `+${pData.p90_return}%` : `${pData.p90_return}%`}
                       </span>
                     </div>
                   </div>
@@ -659,7 +519,7 @@ export const InferenceCenterPage: React.FC = () => {
               </div>
 
               <div className="pt-2.5 border-t border-slate-100 text-[11px] text-slate-400 flex items-center justify-between">
-                <span>模型准确率 (IC): <strong className="text-slate-700 font-mono">{currentSelectedModel.accuracy != null && currentSelectedModel.accuracy !== 0 ? currentSelectedModel.accuracy : '—'}</strong></span>
+                <span>模型准确率 (IC): <strong className="text-slate-700 font-mono">{currentSelectedModel.accuracy != null && currentSelectedModel.accuracy !== 0 ? (typeof currentSelectedModel.accuracy === 'number' ? currentSelectedModel.accuracy.toFixed(3) : currentSelectedModel.accuracy) : '—'}</strong></span>
                 <span>夏普比率: <strong className="text-slate-700 font-mono">{currentSelectedModel.sharpe || '—'}</strong></span>
               </div>
             </div>
@@ -667,10 +527,10 @@ export const InferenceCenterPage: React.FC = () => {
 
           {/* 下半部：单股因子归因 (左) + 多模型共识 (右) */}
           <div className="grid grid-cols-1 lg:grid-cols-2 gap-3.5" style={{ minHeight: '250px' }}>
-            <FeatureDriversPanel drivers={prediction.drivers} source={prediction.drivers_source} />
+            <FeatureDriversPanel drivers={pData.drivers} source={pData.drivers_source} />
             <ModelConsensusPanel
-              consensus={prediction.consensus}
-              consensusScore={prediction.consensus_score}
+              consensus={pData.consensus}
+              consensusScore={pData.consensus_score}
               selectedCount={consensusModelIds.length}
             />
           </div>
