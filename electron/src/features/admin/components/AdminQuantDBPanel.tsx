@@ -239,9 +239,9 @@ export const AdminQuantDBPanel: React.FC = () => {
                     type="link"
                     size="small"
                     className="text-xs text-blue-600 hover:text-blue-700 p-0 font-medium"
-                    onClick={() => navigate('/user-center?tab=quantdb-key')}
+                    onClick={() => navigate('/user-center?tab=data-platform')}
                 >
-                    前往「个人中心」绑定或更新密钥 →
+                    前往「个人中心 - 数据平台」绑定或更新密钥 →
                 </Button>
             </div>
 

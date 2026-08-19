@@ -1,9 +1,8 @@
 import React, { useCallback, useEffect, useState } from 'react';
 import {
-  Database, Key, ShieldCheck, CheckCircle2, AlertCircle, RefreshCw,
-  HardDrive, Activity, Eye, EyeOff, Save, Check, ExternalLink, Zap
+  Database, Key, ShieldCheck, RefreshCw, HardDrive, Activity, Eye, EyeOff, Save, Zap
 } from 'lucide-react';
-import { Button, Input, Tag, message, Spin, Alert, Tooltip } from 'antd';
+import { Button, Input, Tag, message, Alert } from 'antd';
 import { dataPlatformService, QuantDBConfig, QuantDBInfo } from '../../admin/services/dataPlatformService';
 
 export const QuantDBSettings: React.FC = () => {
@@ -70,145 +69,150 @@ export const QuantDBSettings: React.FC = () => {
 
   const isConfigured = Boolean(config?.api_key_configured);
   const isInstalled = Boolean(info?.installed);
-  const isConnected = Boolean(info?.connected);
 
   return (
-    <div className="space-y-6 max-w-5xl">
-      {/* 顶部标题卡片 */}
-      <div className="bg-white rounded-2xl border border-slate-200/80 p-6 shadow-xs">
-        <div className="flex items-start justify-between">
-          <div className="flex items-center gap-3.5">
-            <div className="w-11 h-11 rounded-2xl bg-gradient-to-br from-blue-500 to-indigo-600 flex items-center justify-center text-white shadow-md shadow-blue-200">
-              <Database className="w-5 h-5" />
-            </div>
-            <div>
-              <div className="flex items-center gap-2">
-                <h3 className="text-base font-black text-slate-800 m-0">QuantDB 数据源凭据</h3>
-                <Tag color={isConfigured ? 'green' : 'default'} className="rounded-lg text-[10px] font-bold m-0 border-0">
-                  {isConfigured ? '已授权' : '未授权'}
-                </Tag>
-              </div>
-              <p className="text-xs text-slate-500 m-0 mt-0.5">
-                管理 QuantDB A股、行业、财务与机器学习因子等高频数据仓库的访问凭据
-              </p>
-            </div>
+    <div className="space-y-3 max-w-5xl">
+      {/* 顶部标题卡片 (精简单行) */}
+      <div className="bg-white rounded-2xl border border-slate-200/80 px-5 py-3.5 shadow-xs flex items-center justify-between">
+        <div className="flex items-center gap-3">
+          <div className="w-9 h-9 rounded-xl bg-gradient-to-br from-blue-500 to-indigo-600 flex items-center justify-center text-white shadow-sm">
+            <Database className="w-4 h-4" />
           </div>
-          <Button
-            icon={<RefreshCw className={`w-3.5 h-3.5 ${refreshing ? 'animate-spin' : ''}`} />}
-            onClick={loadData}
-            loading={refreshing}
-            className="rounded-xl font-bold text-xs"
-          >
-            刷新状态
-          </Button>
+          <div>
+            <div className="flex items-center gap-2">
+              <h3 className="text-sm font-black text-slate-800 m-0">数据平台 (QuantDB)</h3>
+              <Tag color={isConfigured ? 'green' : 'default'} className="rounded-md text-[10px] font-bold m-0 border-0 px-1.5 py-0">
+                {isConfigured ? '已授权' : '未授权'}
+              </Tag>
+            </div>
+            <p className="text-[11px] text-slate-400 m-0 leading-tight">
+              A股、行业、财务与机器学习因子等数据仓库的访问凭据
+            </p>
+          </div>
         </div>
+        <Button
+          size="small"
+          icon={<RefreshCw className={`w-3 h-3 ${refreshing ? 'animate-spin' : ''}`} />}
+          onClick={loadData}
+          loading={refreshing}
+          className="rounded-lg font-bold text-xs h-7 px-3"
+        >
+          刷新
+        </Button>
       </div>
 
-      {/* 状态指标条 */}
-      <div className="grid grid-cols-1 md:grid-cols-4 gap-3.5">
+      {/* 状态指标条 (4列紧凑卡片) */}
+      <div className="grid grid-cols-2 sm:grid-cols-4 gap-2.5">
         {/* 1. SDK 状态 */}
-        <div className="bg-white rounded-2xl border border-slate-200/80 p-4 shadow-xs flex flex-col justify-between">
-          <div className="flex items-center justify-between text-slate-400 text-xs font-semibold">
+        <div className="bg-white rounded-xl border border-slate-200/80 p-3 shadow-2xs">
+          <div className="flex items-center justify-between text-slate-400 text-[11px] font-semibold">
             <span>SDK 状态</span>
-            <HardDrive className="w-4 h-4 text-blue-500" />
+            <HardDrive className="w-3.5 h-3.5 text-blue-500" />
           </div>
-          <div className="mt-2 flex items-center gap-2">
-            <span className={`w-2 h-2 rounded-full ${isInstalled ? 'bg-emerald-500 animate-pulse' : 'bg-slate-300'}`} />
-            <span className="text-base font-black text-slate-800">
-              {isInstalled ? '已安装就绪' : '待检测/未安装'}
+          <div className="mt-1 flex items-center gap-1.5">
+            <span className={`w-1.5 h-1.5 rounded-full ${isInstalled ? 'bg-emerald-500 animate-pulse' : 'bg-slate-300'}`} />
+            <span className="text-sm font-black text-slate-800">
+              {isInstalled ? '已就绪' : '未就绪'}
             </span>
           </div>
-          <span className="text-[10px] text-slate-400 font-mono mt-1">
+          <span className="text-[10px] text-slate-400 font-mono block truncate">
             {info?.version ? `v${info.version}` : 'Python SDK 运行时'}
           </span>
         </div>
 
         {/* 2. API Key 状态 */}
-        <div className="bg-white rounded-2xl border border-slate-200/80 p-4 shadow-xs flex flex-col justify-between">
-          <div className="flex items-center justify-between text-slate-400 text-xs font-semibold">
+        <div className="bg-white rounded-xl border border-slate-200/80 p-3 shadow-2xs">
+          <div className="flex items-center justify-between text-slate-400 text-[11px] font-semibold">
             <span>API Key 状态</span>
-            <Key className="w-4 h-4 text-indigo-500" />
+            <Key className="w-3.5 h-3.5 text-indigo-500" />
           </div>
-          <div className="mt-2 flex items-center gap-2">
-            <span className={`w-2 h-2 rounded-full ${isConfigured ? 'bg-emerald-500' : 'bg-rose-400'}`} />
-            <span className="text-base font-black text-slate-800">
-              {isConfigured ? '已安全配置' : '未配置密钥'}
+          <div className="mt-1 flex items-center gap-1.5">
+            <span className={`w-1.5 h-1.5 rounded-full ${isConfigured ? 'bg-emerald-500' : 'bg-rose-400'}`} />
+            <span className="text-sm font-black text-slate-800">
+              {isConfigured ? '已配置' : '未配置'}
             </span>
           </div>
-          <span className="text-[10px] text-slate-400 font-mono mt-1 truncate">
-            {config?.api_key_masked || '未设置 API 密钥'}
+          <span className="text-[10px] text-slate-400 font-mono block truncate">
+            {config?.api_key_masked || '未绑定 API Key'}
           </span>
         </div>
 
         {/* 3. 已用流量 */}
-        <div className="bg-white rounded-2xl border border-slate-200/80 p-4 shadow-xs flex flex-col justify-between">
-          <div className="flex items-center justify-between text-slate-400 text-xs font-semibold">
+        <div className="bg-white rounded-xl border border-slate-200/80 p-3 shadow-2xs">
+          <div className="flex items-center justify-between text-slate-400 text-[11px] font-semibold">
             <span>已用流量</span>
-            <Activity className="w-4 h-4 text-amber-500" />
+            <Activity className="w-3.5 h-3.5 text-amber-500" />
           </div>
-          <div className="mt-2">
-            <span className="text-base font-black font-mono text-slate-800">
-              {info?.usage?.used_gb != null ? `${info.usage.used_gb} GB` : info?.used_bytes_human || (info?.used_traffic ? `${info.used_traffic}` : '—')}
+          <div className="mt-1">
+            <span className="text-sm font-black font-mono text-slate-800">
+              {info?.usage?.used_gb != null ? `${info.usage.used_gb} GB` : info?.used_bytes_human || (info?.used_traffic ? `${info.used_traffic}` : '0.0 GB')}
             </span>
           </div>
-          <span className="text-[10px] text-slate-400 mt-1">
-            {info?.traffic_reset_date ? `周期重置: ${info.traffic_reset_date}` : '本计费周期统计'}
+          <span className="text-[10px] text-slate-400 block truncate">
+            {info?.traffic_reset_date ? `重置: ${info.traffic_reset_date}` : '本计费周期统计'}
           </span>
         </div>
 
-        {/* 4. 剩余流量 / 配额 */}
-        <div className="bg-white rounded-2xl border border-slate-200/80 p-4 shadow-xs flex flex-col justify-between">
-          <div className="flex items-center justify-between text-slate-400 text-xs font-semibold">
+        {/* 4. 剩余配额 */}
+        <div className="bg-white rounded-xl border border-slate-200/80 p-3 shadow-2xs">
+          <div className="flex items-center justify-between text-slate-400 text-[11px] font-semibold">
             <span>剩余配额</span>
-            <Zap className="w-4 h-4 text-emerald-500" />
+            <Zap className="w-3.5 h-3.5 text-emerald-500" />
           </div>
-          <div className="mt-2">
-            <span className="text-base font-black font-mono text-emerald-600">
+          <div className="mt-1">
+            <span className="text-sm font-black font-mono text-emerald-600">
               {info?.usage?.remaining_gb != null ? `${info.usage.remaining_gb} GB` : info?.remaining_bytes_human || (info?.remaining_traffic ? `${info.remaining_traffic}` : '—')}
             </span>
           </div>
-          <span className="text-[10px] text-slate-400 mt-1">
-            {info?.usage?.subscription?.status ? `订阅状态: ${info.usage.subscription.status}` : info?.tier_name ? `当前套餐: ${info.tier_name}` : '高速同步配额'}
+          <span className="text-[10px] text-slate-400 block truncate">
+            {info?.tier_name ? `套餐: ${info.tier_name}` : '高速同步配额'}
           </span>
         </div>
       </div>
 
-      {/* API Key 输入与管理卡片 */}
-      <div className="bg-white rounded-2xl border border-slate-200/80 p-6 shadow-xs space-y-4">
-        <div className="border-b border-slate-100 pb-3">
-          <h4 className="text-sm font-bold text-slate-800 m-0">API Key 绑定与更新</h4>
-          <p className="text-xs text-slate-400 m-0 mt-0.5">
-            请输入您在 QuantDB 官方平台获取的 API 访问秘钥进行授权绑定
-          </p>
+      {/* API Key 输入与管理卡片 (紧凑单体) */}
+      <div className="bg-white rounded-2xl border border-slate-200/80 p-4 shadow-xs space-y-3">
+        <div className="flex items-center justify-between border-b border-slate-100 pb-2">
+          <div>
+            <h4 className="text-xs font-bold text-slate-800 m-0">API Key 授权与即时验证</h4>
+            <p className="text-[11px] text-slate-400 m-0">
+              输入 QuantDB 访问密钥，系统将自动进行热重载与远端连通性测试
+            </p>
+          </div>
+          {isConfigured && (
+            <span className="text-[10px] font-mono font-bold text-slate-500 bg-slate-100 px-2 py-0.5 rounded">
+              指纹: {config?.api_key_masked}
+            </span>
+          )}
         </div>
 
-        <div className="space-y-3">
-          <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-2.5">
+        <div className="space-y-2.5">
+          <div className="flex items-center gap-2">
             <div className="relative flex-1">
               <Input
                 type={showKey ? 'text' : 'password'}
-                placeholder={isConfigured ? `已配置: ${config?.api_key_masked} (输入新 Key 进行覆盖)` : '粘贴 QuantDB API Key (如 qk_...)'}
+                placeholder={isConfigured ? `已配置 ${config?.api_key_masked} (输入新 Key 进行覆盖)` : '粘贴 QuantDB API Key (如 qk_...)'}
                 value={apiKey}
                 onChange={(e) => setApiKey(e.target.value)}
                 onPressEnter={handleSave}
-                className="rounded-xl h-10 font-mono text-xs pr-10"
+                className="rounded-xl h-9 font-mono text-xs pr-10"
                 autoComplete="off"
               />
               <button
                 type="button"
                 onClick={() => setShowKey(!showKey)}
-                className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600 transition-colors p-1"
+                className="absolute right-2.5 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600 transition-colors p-1"
                 title={showKey ? '隐藏明文' : '显示明文'}
               >
-                {showKey ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
+                {showKey ? <EyeOff className="w-3.5 h-3.5" /> : <Eye className="w-3.5 h-3.5" />}
               </button>
             </div>
             <Button
               type="primary"
-              icon={<Save className="w-4 h-4" />}
+              icon={<Save className="w-3.5 h-3.5" />}
               onClick={handleSave}
               loading={saving}
-              className="rounded-xl h-10 px-5 font-bold bg-blue-600 shadow-sm"
+              className="rounded-xl h-9 px-4 font-bold bg-blue-600 shadow-sm text-xs shrink-0"
             >
               保存并验证
             </Button>
@@ -222,37 +226,30 @@ export const QuantDBSettings: React.FC = () => {
               description={verifyError}
               closable
               onClose={() => setVerifyError(null)}
-              className="rounded-xl text-xs"
+              className="rounded-xl text-xs py-1"
             />
           )}
 
-          <div className="p-3.5 bg-slate-50/70 border border-slate-100 rounded-xl space-y-1.5 text-xs text-slate-500">
-            <div className="flex items-center gap-1.5 font-semibold text-slate-700">
-              <ShieldCheck className="w-3.5 h-3.5 text-emerald-600" />
-              <span>安全与生效说明</span>
-            </div>
-            <ul className="list-disc list-inside space-y-1 text-[11px] text-slate-500 pl-1">
-              <li>API Key 经加密写入系统本地运行时密钥文件，服务重启仍有效，页面只展示脱敏指纹。</li>
-              <li>点击「保存并验证」后系统会向 QuantDB 网关发送轻量探测请求以确认账户配额。</li>
-              <li>若操作系统环境变量 <code className="text-slate-700 font-mono font-bold">QUANTDB_API_KEY</code> 已设定，系统将自动优先采用环境变量。</li>
-            </ul>
+          {/* 紧凑安全说明 (单行) */}
+          <div className="flex items-center gap-1.5 text-[11px] text-slate-400 bg-slate-50 px-3 py-1.5 rounded-lg border border-slate-100">
+            <ShieldCheck className="w-3.5 h-3.5 text-emerald-600 shrink-0" />
+            <span className="truncate">
+              安全说明：Key 加密落盘至本地 <code className="text-slate-600 font-mono">{config?.runtime_env_file || 'config/runtime.env'}</code>，页面仅显示脱敏指纹，环境变量 <code className="text-slate-600 font-mono">QUANTDB_API_KEY</code> 优先。
+            </span>
           </div>
         </div>
       </div>
 
-      {/* 运行时路径与存储信息 */}
+      {/* 运行时路径与存储信息 (单行胶囊) */}
       {config && (
-        <div className="bg-white rounded-2xl border border-slate-200/80 p-5 shadow-xs">
-          <h4 className="text-xs font-bold text-slate-500 uppercase tracking-wider mb-3">本地存储与运行环境</h4>
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 text-xs">
-            <div className="p-3 bg-slate-50 rounded-xl border border-slate-100 flex flex-col gap-1">
-              <span className="text-[11px] text-slate-400 font-medium">数据仓库落盘目录</span>
-              <span className="font-mono text-slate-700 font-bold break-all">{config.data_dir || '/data/quantdb'}</span>
-            </div>
-            <div className="p-3 bg-slate-50 rounded-xl border border-slate-100 flex flex-col gap-1">
-              <span className="text-[11px] text-slate-400 font-medium">运行时密钥配置文件</span>
-              <span className="font-mono text-slate-700 font-bold break-all">{config.runtime_env_file || 'config/runtime.env'}</span>
-            </div>
+        <div className="grid grid-cols-2 gap-2 text-xs">
+          <div className="px-3 py-2 bg-white rounded-xl border border-slate-200/80 shadow-2xs flex items-center justify-between">
+            <span className="text-[11px] text-slate-400 font-medium shrink-0">数据仓库目录</span>
+            <span className="font-mono text-slate-700 font-bold text-[11px] truncate ml-2">{config.data_dir || '/data/quantdb'}</span>
+          </div>
+          <div className="px-3 py-2 bg-white rounded-xl border border-slate-200/80 shadow-2xs flex items-center justify-between">
+            <span className="text-[11px] text-slate-400 font-medium shrink-0">密钥配置文件</span>
+            <span className="font-mono text-slate-700 font-bold text-[11px] truncate ml-2">{config.runtime_env_file || 'config/runtime.env'}</span>
           </div>
         </div>
       )}

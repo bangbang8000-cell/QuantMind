@@ -30,7 +30,11 @@ const UserCenterPage: React.FC = () => {
     const params = new URLSearchParams(location.search);
     const tabParam = params.get('tab');
     if (tabParam) {
-      setActiveTab(tabParam);
+      if (tabParam === 'quantdb-key' || tabParam === 'data-platform') {
+        setActiveTab('data-platform');
+      } else {
+        setActiveTab(tabParam);
+      }
     }
   }, [location.search]);
 
@@ -207,11 +211,11 @@ const UserCenterPage: React.FC = () => {
             children: wrapTabContent(<CloudNodeSettings />),
           },
           {
-            key: 'quantdb-key',
+            key: 'data-platform',
             label: (
               <span className="flex items-center gap-2">
                 <Database className="w-4 h-4" />
-                QuantDB 密钥
+                数据平台
               </span>
             ),
             children: wrapTabContent(<QuantDBSettings />),
