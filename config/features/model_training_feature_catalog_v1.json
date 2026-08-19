@@ -1258,7 +1258,7 @@
             "CN"
           ],
           "order_no": 23,
-          "default_selected": false,
+          "default_selected": true,
           "coverage_ratio": 0.99
         },
         {
@@ -1272,7 +1272,7 @@
             "CN"
           ],
           "order_no": 24,
-          "default_selected": false,
+          "default_selected": true,
           "coverage_ratio": 0.99
         },
         {
@@ -1286,7 +1286,7 @@
             "CN"
           ],
           "order_no": 25,
-          "default_selected": false,
+          "default_selected": true,
           "coverage_ratio": 0.99
         },
         {
@@ -1300,7 +1300,7 @@
             "CN"
           ],
           "order_no": 26,
-          "default_selected": false,
+          "default_selected": true,
           "coverage_ratio": 0.99
         },
         {
@@ -1314,7 +1314,7 @@
             "CN"
           ],
           "order_no": 27,
-          "default_selected": false,
+          "default_selected": true,
           "coverage_ratio": 0.99
         },
         {
@@ -1328,7 +1328,7 @@
             "CN"
           ],
           "order_no": 28,
-          "default_selected": false,
+          "default_selected": true,
           "coverage_ratio": 0.99
         },
         {
@@ -1342,7 +1342,7 @@
             "CN"
           ],
           "order_no": 29,
-          "default_selected": false,
+          "default_selected": true,
           "coverage_ratio": 0.99
         },
         {
@@ -2365,7 +2365,7 @@
             "CN"
           ],
           "order_no": 23,
-          "default_selected": false,
+          "default_selected": true,
           "coverage_ratio": 0.99,
           "coverage_note": "仅 2026 年起有数据 (l2_factors)，跨年训练前请确认覆盖范围"
         },
@@ -2380,7 +2380,7 @@
             "CN"
           ],
           "order_no": 24,
-          "default_selected": false,
+          "default_selected": true,
           "coverage_ratio": 0.99,
           "coverage_note": "仅 2026 年起有数据 (l2_factors)，跨年训练前请确认覆盖范围"
         },
@@ -2395,7 +2395,7 @@
             "CN"
           ],
           "order_no": 25,
-          "default_selected": false,
+          "default_selected": true,
           "coverage_ratio": 0.99
         },
         {
@@ -2409,7 +2409,7 @@
             "CN"
           ],
           "order_no": 26,
-          "default_selected": false,
+          "default_selected": true,
           "coverage_ratio": 0.99
         },
         {
@@ -2423,7 +2423,7 @@
             "CN"
           ],
           "order_no": 27,
-          "default_selected": false,
+          "default_selected": true,
           "coverage_ratio": 0.99
         },
         {
@@ -2437,7 +2437,7 @@
             "CN"
           ],
           "order_no": 28,
-          "default_selected": false,
+          "default_selected": true,
           "coverage_ratio": 0.99
         },
         {
@@ -2451,7 +2451,7 @@
             "CN"
           ],
           "order_no": 29,
-          "default_selected": false,
+          "default_selected": true,
           "coverage_ratio": 0.99
         },
         {
@@ -2465,7 +2465,7 @@
             "CN"
           ],
           "order_no": 30,
-          "default_selected": false,
+          "default_selected": true,
           "coverage_ratio": 0.99
         },
         {
@@ -2479,7 +2479,7 @@
             "CN"
           ],
           "order_no": 31,
-          "default_selected": false,
+          "default_selected": true,
           "coverage_ratio": 0.99,
           "coverage_note": "仅 2026 年起有数据 (l2_factors)，跨年训练前请确认覆盖范围"
         },
@@ -2494,7 +2494,7 @@
             "CN"
           ],
           "order_no": 32,
-          "default_selected": false,
+          "default_selected": true,
           "coverage_ratio": 0.99
         },
         {
@@ -2508,7 +2508,7 @@
             "CN"
           ],
           "order_no": 33,
-          "default_selected": false,
+          "default_selected": true,
           "coverage_ratio": 0.99
         },
         {
@@ -2522,7 +2522,7 @@
             "CN"
           ],
           "order_no": 34,
-          "default_selected": false,
+          "default_selected": true,
           "coverage_ratio": 0.99
         },
         {
@@ -2536,7 +2536,7 @@
             "CN"
           ],
           "order_no": 35,
-          "default_selected": false,
+          "default_selected": true,
           "coverage_ratio": 0.99
         },
         {
@@ -2550,7 +2550,7 @@
             "CN"
           ],
           "order_no": 36,
-          "default_selected": false,
+          "default_selected": true,
           "coverage_ratio": 0.99,
           "coverage_note": "仅 2026 年起有数据 (l2_factors)，跨年训练前请确认覆盖范围"
         },
@@ -2565,7 +2565,7 @@
             "CN"
           ],
           "order_no": 37,
-          "default_selected": false,
+          "default_selected": true,
           "coverage_ratio": 0.99
         },
         {
@@ -2579,7 +2579,7 @@
             "CN"
           ],
           "order_no": 38,
-          "default_selected": false,
+          "default_selected": true,
           "coverage_ratio": 0.99,
           "coverage_note": "仅 2026 年起有数据 (l2_factors)，跨年训练前请确认覆盖范围"
         },
@@ -2594,7 +2594,7 @@
             "CN"
           ],
           "order_no": 39,
-          "default_selected": false,
+          "default_selected": true,
           "coverage_ratio": 0.99
         },
         {
@@ -2608,7 +2608,7 @@
             "CN"
           ],
           "order_no": 40,
-          "default_selected": false,
+          "default_selected": true,
           "coverage_ratio": 0.99
         },
         {
@@ -2622,7 +2622,7 @@
             "CN"
           ],
           "order_no": 41,
-          "default_selected": false,
+          "default_selected": true,
           "coverage_ratio": 0.99
         }
       ]
@@ -3789,7 +3789,7 @@
             "CN"
           ],
           "order_no": 21,
-          "default_selected": false,
+          "default_selected": true,
           "coverage_ratio": 0.99,
           "coverage_note": "仅 2026 年起有数据 (l2_factors)，跨年训练前请确认覆盖范围"
         },
@@ -3804,7 +3804,7 @@
             "CN"
           ],
           "order_no": 22,
-          "default_selected": false,
+          "default_selected": true,
           "coverage_ratio": 0.99
         },
         {
@@ -3818,7 +3818,7 @@
             "CN"
           ],
           "order_no": 23,
-          "default_selected": false,
+          "default_selected": true,
           "coverage_ratio": 0.99
         },
         {
@@ -3832,7 +3832,7 @@
             "CN"
           ],
           "order_no": 24,
-          "default_selected": false,
+          "default_selected": true,
           "coverage_ratio": 0.99
         },
         {
@@ -3846,7 +3846,7 @@
             "CN"
           ],
           "order_no": 25,
-          "default_selected": false,
+          "default_selected": true,
           "coverage_ratio": 0.99
         },
         {
@@ -3860,7 +3860,7 @@
             "CN"
           ],
           "order_no": 26,
-          "default_selected": false,
+          "default_selected": true,
           "coverage_ratio": 0.99
         },
         {
@@ -3874,7 +3874,7 @@
             "CN"
           ],
           "order_no": 27,
-          "default_selected": false,
+          "default_selected": true,
           "coverage_ratio": 0.99
         },
         {
@@ -3888,7 +3888,7 @@
             "CN"
           ],
           "order_no": 28,
-          "default_selected": false,
+          "default_selected": true,
           "coverage_ratio": 0.99
         },
         {
@@ -3902,7 +3902,7 @@
             "CN"
           ],
           "order_no": 29,
-          "default_selected": false,
+          "default_selected": true,
           "coverage_ratio": 0.99
         },
         {
@@ -3916,7 +3916,7 @@
             "CN"
           ],
           "order_no": 30,
-          "default_selected": false,
+          "default_selected": true,
           "coverage_ratio": 0.99
         },
         {
@@ -3930,7 +3930,7 @@
             "CN"
           ],
           "order_no": 31,
-          "default_selected": false,
+          "default_selected": true,
           "coverage_ratio": 0.99
         },
         {
@@ -3944,7 +3944,7 @@
             "CN"
           ],
           "order_no": 32,
-          "default_selected": false,
+          "default_selected": true,
           "coverage_ratio": 0.99
         },
         {
@@ -3958,7 +3958,7 @@
             "CN"
           ],
           "order_no": 33,
-          "default_selected": false,
+          "default_selected": true,
           "coverage_ratio": 0.99,
           "coverage_note": "仅 2026 年起有数据 (l2_factors)，跨年训练前请确认覆盖范围"
         },
@@ -3973,7 +3973,7 @@
             "CN"
           ],
           "order_no": 34,
-          "default_selected": false,
+          "default_selected": true,
           "coverage_ratio": 0.99
         },
         {
@@ -3987,7 +3987,7 @@
             "CN"
           ],
           "order_no": 35,
-          "default_selected": false,
+          "default_selected": true,
           "coverage_ratio": 0.99
         },
         {
@@ -4001,7 +4001,7 @@
             "CN"
           ],
           "order_no": 36,
-          "default_selected": false,
+          "default_selected": true,
           "coverage_ratio": 0.99
         },
         {
@@ -4015,7 +4015,7 @@
             "CN"
           ],
           "order_no": 37,
-          "default_selected": false,
+          "default_selected": true,
           "coverage_ratio": 0.99
         },
         {
@@ -4029,7 +4029,7 @@
             "CN"
           ],
           "order_no": 38,
-          "default_selected": false,
+          "default_selected": true,
           "coverage_ratio": 0.99
         },
         {
@@ -4043,7 +4043,7 @@
             "CN"
           ],
           "order_no": 39,
-          "default_selected": false,
+          "default_selected": true,
           "coverage_ratio": 0.99
         },
         {
@@ -4057,7 +4057,7 @@
             "CN"
           ],
           "order_no": 40,
-          "default_selected": false,
+          "default_selected": true,
           "coverage_ratio": 0.99
         }
       ]
