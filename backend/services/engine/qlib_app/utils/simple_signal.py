@@ -1,4 +1,5 @@
 import logging
+import os
 from pathlib import Path
 from typing import Optional
 
@@ -223,8 +224,37 @@ class SimpleSignal(Signal):
                     else:
                         df = pd.read_pickle(self._pred_path)
                 except Exception as e:
-                    task_logger.warning("load_pred_file_failed", "加载预测文件失败", error=str(e))
-                    return None
+                    # pkl 读取失败（如远程 AutoDL numpy2 打包）时，回退同目录 pred.parquet
+                    if self._pred_path.endswith(".pkl"):
+                        parquet_path = self._pred_path[:-4] + ".parquet"
+                        if os.path.exists(parquet_path):
+                            task_logger.warning(
+                                "load_pred_parquet_fallback",
+                                "SimpleSignal pred.pkl 读取失败，回退同目录 pred.parquet",
+                                pkl=self._pred_path,
+                                parquet=parquet_path,
+                                error=str(e),
+                            )
+                            try:
+                                raw = pd.read_parquet(parquet_path, engine="pyarrow")
+                                score_col = "pred" if "pred" in raw.columns else raw.columns[-1]
+                                df = (
+                                    raw[["trade_date", "symbol", score_col]]
+                                    .rename(columns={"trade_date": "datetime", "symbol": "instrument", score_col: "score"})
+                                    .assign(datetime=lambda d: pd.to_datetime(d["datetime"]))
+                                    .set_index(["datetime", "instrument"])
+                                    .sort_index()
+                                )
+                                task_logger.info("parquet_loaded", "SimpleSignal: pred.parquet 回退加载成功", rows=len(df))
+                            except Exception as pe:
+                                task_logger.warning("load_pred_file_failed", "加载预测文件失败（parquet 回退也失败）", error=str(pe))
+                                return None
+                        else:
+                            task_logger.warning("load_pred_file_failed", "加载预测文件失败", error=str(e))
+                            return None
+                    else:
+                        task_logger.warning("load_pred_file_failed", "加载预测文件失败", error=str(e))
+                        return None
 
             if isinstance(df, pd.Series):
                 series = df.copy()
