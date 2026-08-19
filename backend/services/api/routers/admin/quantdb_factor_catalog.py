@@ -285,13 +285,22 @@ async def _catalog_payload(session, version: dict[str, Any], source_dataset: str
     """), {"version_id": version["version_id"], "source_dataset": source_dataset})).mappings().all()
     categories: dict[str, dict[str, Any]] = {}
     for row in rows:
+        # 兼容早期草稿：曾错误地把 dictionary.explanation 存入
+        # display_name。训练页卡片只应显示短名称，完整说明留给后台编辑。
+        stored_display_name = str(row["display_name"])
+        dictionary = definition_for(str(row["source_column"]))
+        display_name = (
+            str(dictionary["display_name"])
+            if "具体计算口径" in stored_display_name
+            else stored_display_name
+        )
         category = categories.setdefault(str(row["category_id"]), {
             "id": str(row["category_id"]), "name": str(row["category_name"]),
             "order": len(categories), "feature_count": 0, "features": [],
         })
         category["features"].append({
             "feature_id": str(row["mapping_id"]), "key": str(row["feature_key"]),
-            "feature_name": str(row["display_name"]), "source_dataset": str(row["source_dataset"]),
+            "feature_name": display_name, "source_dataset": str(row["source_dataset"]),
             "source_column": str(row["source_column"]), "enabled": bool(row["enabled"]),
             "default_selected": bool(row["default_selected"]), "required": bool(row["required"]),
             "category_id": str(row["category_id"]), "category_name": str(row["category_name"]),
@@ -675,7 +684,7 @@ async def seed_draft_mappings(version_id: str, current_user: dict = Depends(requ
                 "feature_key": column,
                 "category_name": cat_name,
                 "category_id": cat_id,
-                "display_name": str(definition["explanation"]),
+                "display_name": str(definition["display_name"]),
                 "enabled": bool(inherited.get("enabled", False)),
                 "default_selected": bool(inherited.get("default_selected", False)),
                 "sort_order": int(definition["sort_order"]) + count,
