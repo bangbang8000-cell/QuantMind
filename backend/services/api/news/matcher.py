@@ -24,7 +24,7 @@ from psycopg2.extras import RealDictCursor
 
 logger = logging.getLogger("news.matcher")
 
-MODEL_VERSION = "ac-v4+lex-v3+ent+cn"
+MODEL_VERSION = "ac-v4+lex-v4+ent+cn"
 
 # 别名长度 ≤ 此值时要求左右两侧不能再粘中文/字母，
 # 防止 "中"、"国"、"茅台" 之类的二字别名乱命中；
@@ -228,9 +228,21 @@ class NewsMatcher:
         for end_idx, term in alias_aut.iter(text):
             start = end_idx - len(term) + 1
             end = end_idx + 1
-            if not self._boundary_ok(text, start, end, term):
+            # 已知实体名（alias_type=name，如"苹果"→AAPL）放宽边界：允许右侧粘
+            # 金融后缀（公司/股价/控股/集团等），因为实体名非泛词，粘连不误命中。
+            entries = alias_idx.get(term, [])
+            is_named_entity = any(e.alias_type == "name" for e in entries)
+            if is_named_entity:
+                left = text[start - 1] if start > 0 else ""
+                if left and _CJK_OR_ALNUM.match(left):
+                    continue
+                # 右侧允许粘 CJK（公司/股价等），仅挡字母数字
+                right = text[end] if end < len(text) else ""
+                if right and re.match(r"[A-Za-z0-9]", right):
+                    continue
+            elif not self._boundary_ok(text, start, end, term):
                 continue
-            for entry in alias_idx.get(term, []):
+            for entry in entries:
                 ticker_hits[entry.ticker] = ticker_hits.get(entry.ticker, 0) + 1
                 if entry.industry:
                     industry_hits[entry.industry] = industry_hits.get(entry.industry, 0) + 1
@@ -238,13 +250,25 @@ class NewsMatcher:
 
         # 词典匹配（情感 + 事件 + 行业板块名 + 国家/地区/产业/省份/城市/领导人/调研）
         _KEY_TERM_TAGS = ("产业", "政策", "地缘", "外汇", "加密", "财报", "市场", "宏观", "期货", "监管")
+        # 地理/实体类 event_tag：明确实体名（美国/广东/北京），2字词也允许粘 CJK，
+        # 否则"美国对""广东省"被边界检查挡掉，匹配不到
+        _ENTITY_TAGS = ("国家", "地区", "省份", "城市", "领导人", "调研", "部门")
         visit_positions: list[int] = []  # 调研词位置, 后面用于同句加权 ticker
         for end_idx, term in lex_aut.iter(text):
             start = end_idx - len(term) + 1
             end = end_idx + 1
-            if not self._boundary_ok(text, start, end, term):
+            entries = lex_idx.get(term, [])
+            is_entity = any(e.kind == "event" and e.event_tag in _ENTITY_TAGS for e in entries)
+            if is_entity:
+                left = text[start - 1] if start > 0 else ""
+                if left and _CJK_OR_ALNUM.match(left):
+                    continue
+                right = text[end] if end < len(text) else ""
+                if right and re.match(r"[A-Za-z0-9]", right):
+                    continue
+            elif not self._boundary_ok(text, start, end, term):
                 continue
-            for entry in lex_idx.get(term, []):
+            for entry in entries:
                 if entry.kind == "sentiment_pos":
                     pos_weight += entry.weight
                     n_sent += 1

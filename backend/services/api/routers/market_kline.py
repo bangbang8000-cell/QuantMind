@@ -31,6 +31,7 @@ import time
 from datetime import date, datetime, timedelta
 from typing import Any, Optional
 
+import pandas as pd
 from fastapi import APIRouter, Depends, HTTPException, Query
 
 from backend.services.api.user_app.middleware.auth import get_current_user
@@ -500,27 +501,29 @@ _QUOTES_TTL = 60.0
 @router.get("/quotes")
 async def get_index_quotes(
     market: str = Query("CN", description="CN / HK / US / CRYPTO / FUTURES"),
+    asof: str | None = Query(None, description="历史快照日 YYYY-MM-DD，取该日及之前最近行情（缺省=最新）"),
     current_user: dict = Depends(get_current_user),
 ):
-    """多市场指数/品种最新行情快照（轻量版 /overview，用于页面指数条）。
+    """多市场指数/品种行情快照（轻量版 /overview，用于页面指数条）。
 
     一次返回 {quotes: [{symbol, name, price, change, change_percent, trade_date}]}，
-    各市场本地 parquet 读取，带 60s 快照缓存。
+    各市场本地 parquet 读取，带 60s 快照缓存（asof 指定历史日时不走缓存）。
     """
     _ = current_user
     market_upper = str(market or "CN").upper()
     metas = _MARKET_INDEX_META.get(market_upper, _MARKET_INDEX_META["CN"])
 
-    cached = _QUOTES_CACHE.get(market_upper)
+    cached = None if asof else _QUOTES_CACHE.get(market_upper)
     if cached is not None and time.monotonic() - cached[0] < _QUOTES_TTL:
         quotes = cached[1]
     else:
         quotes = []
         for meta in metas:
-            q = _hub_latest_quote(market_upper, meta["symbol"])
+            q = _hub_latest_quote(market_upper, meta["symbol"], asof=asof)
             if q is not None:
                 quotes.append(q)
-        _QUOTES_CACHE[market_upper] = (time.monotonic(), quotes)
+        if not asof:
+            _QUOTES_CACHE[market_upper] = (time.monotonic(), quotes)
 
     if not quotes:
         return {"success": False, "data": {"market": market_upper, "quotes": []}, "error": f"market {market_upper} 无可用行情数据"}
@@ -583,9 +586,10 @@ _MARKET_HUB_CFG: dict[str, tuple[str, str, str]] = {
 }
 
 
-def _hub_latest_quote(market: str, symbol: str) -> dict[str, Any] | None:
-    """从市场 hub 读取指定标的最近 2 个交易日的日K，计算最新行情。
+def _hub_latest_quote(market: str, symbol: str, asof: str | None = None) -> dict[str, Any] | None:
+    """从市场 hub 读取指定标的最近 2 个交易日的日K，计算行情快照。
 
+    asof=YYYY-MM-DD 时取该日及之前最近行情（历史日联动，指数条随日历变）。
     返回 {symbol, name, price, change, change_percent, open, high, low,
           pre_close, volume, amount, trade_date}，无数据返回 None。
     """
@@ -599,12 +603,22 @@ def _hub_latest_quote(market: str, symbol: str) -> dict[str, Any] | None:
         cls = getattr(mod, entry[1])
         hub = cls.get_instance()
         method = getattr(hub, entry[2])
-        end = date.today()
+        if asof:
+            try:
+                end = date.fromisoformat(asof)
+            except ValueError:
+                end = date.today()
+        else:
+            end = date.today()
         start = end - timedelta(days=14)  # 足够覆盖周末/假期
         df = method(symbol, start, end)
         if df is None or df.empty:
             return None
         df = df.sort_values("trade_date").reset_index(drop=True)
+        if asof:
+            # asof 早于数据起点（如 2016 年）时取第一行作展示（不回落最新，避免误导）
+            asof_ts = pd.Timestamp(asof)
+            df = df[df["trade_date"] <= asof_ts] if (df["trade_date"] <= asof_ts).any() else df.iloc[:1]
         latest = df.iloc[-1]
         prev = df.iloc[-2] if len(df) >= 2 else None
 

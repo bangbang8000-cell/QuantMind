@@ -88,30 +88,41 @@ export function StockSidebar({ selected, onSelect, watchlistSymbols, onlyWatchli
   // selected 只影响「首次自动选中」逻辑，不触发列表重新请求（否则点股票整表刷新，表格打架）
   const selectedRef = useRef<string | null>(selected);
   selectedRef.current = selected;
+  // 列表跳转：切日期/筛选后选中股票可能掉到几千名——按 find_rank 跳到对应页并滚动到该行。
+  // jumpKey 防重复跳转（同一日期+股票只跳一次）；pageOffsetRef 记录当前 items 的起始排名偏移。
+  const jumpKeyRef = useRef<string>('');
+  const pageOffsetRef = useRef(0);
+
+  /** 组装 /list 请求参数（首页附带 with_counts / find_symbol） */
+  const buildParams = useCallback((page: number, withCounts: boolean) => {
+    const range = bucketScoreRange(filters.bucket);
+    return {
+      market, q: q || undefined, page, page_size: PAGE_SIZE,
+      date: filters.date,
+      score_min: range.min ?? filters.scoreMin,
+      score_max: range.max,
+      model: filters.model,
+      industry: filters.industry,
+      concept: filters.concept,
+      board: filters.board,
+      cap_tier: filters.capTier,
+      trend: filters.trend,
+      tag: filters.tagId,
+      index_code: filters.indexCode,
+      side: filters.side,
+      ...(withCounts ? { with_counts: true } : {}),
+      ...(withCounts && selectedRef.current ? { find_symbol: selectedRef.current } : {}),
+    };
+  }, [market, q, filters]);
 
   const fetchList = useCallback(async (page = 1, append = false) => {
     setLoading(true);
     try {
-      const range = bucketScoreRange(filters.bucket);
-      const resp = await stockTerminalService.getStockList({
-        market, q: q || undefined, page, page_size: PAGE_SIZE,
-        date: filters.date,
-        score_min: range.min ?? filters.scoreMin,
-        score_max: range.max,
-        model: filters.model,
-        industry: filters.industry,
-        concept: filters.concept,
-        board: filters.board,
-        cap_tier: filters.capTier,
-        trend: filters.trend,
-        tag: filters.tagId,
-        index_code: filters.indexCode,
-        side: filters.side,
-        with_counts: !append,  // 下拉命中数只在首页请求附带
-      });
+      const resp = await stockTerminalService.getStockList(buildParams(page, !append));
       const models = resp.models ?? [];
       if (models.length) onModels?.(models);
       if (!append) {
+        pageOffsetRef.current = (page - 1) * PAGE_SIZE;
         setOptionCounts(resp.option_counts ?? {});
         setFacets(resp.facets ?? {});
         onSignalDate?.(resp.signal_date);
@@ -124,12 +135,31 @@ export function StockSidebar({ selected, onSelect, watchlistSymbols, onlyWatchli
         initialAutoSelected.current = true;
         onSelect(itemsRef.current[0]);
       }
+      // 列表自动跳转：选中股票不在当前页时，按 find_rank 跳到其所在页并滚动定位
+      const sel = selectedRef.current;
+      if (!append && sel && resp.find_rank != null && !resp.items.some(it => it.symbol === sel)) {
+        const targetPage = Math.ceil(resp.find_rank / PAGE_SIZE);
+        const jumpKey = `${resp.signal_date ?? ''}:${sel}:${targetPage}`;
+        if (jumpKeyRef.current !== jumpKey) {
+          jumpKeyRef.current = jumpKey;
+          const pageResp = await stockTerminalService.getStockList(buildParams(targetPage, false));
+          if (pageResp.items.some(it => it.symbol === sel)) {
+            pageOffsetRef.current = (targetPage - 1) * PAGE_SIZE;
+            itemsRef.current = pageResp.items;
+            setData({ ...resp, items: pageResp.items, page: targetPage });
+            requestAnimationFrame(() => {
+              const row = listRef.current?.querySelector<HTMLElement>(`[data-symbol="${sel}"]`);
+              row?.scrollIntoView({ block: 'center' });
+            });
+          }
+        }
+      }
     } catch {
       if (!append) message.error('股票列表加载失败');
     } finally {
       setLoading(false);
     }
-  }, [market, q, filters, onModels, onTotals, onSelect, onSignalDate]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [buildParams, onModels, onTotals, onSelect, onSignalDate]); // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => {
     const t = setTimeout(() => fetchList(1, false), q ? 300 : 0);
@@ -189,7 +219,7 @@ export function StockSidebar({ selected, onSelect, watchlistSymbols, onlyWatchli
   };
 
   return (
-    <div className="w-[37rem] shrink-0 flex flex-col bg-white/80 backdrop-blur-xl rounded-3xl border border-white/90 shadow-xs p-4 overflow-hidden">
+    <div className="w-[37rem] flex-1 min-h-0 flex flex-col bg-white/80 backdrop-blur-xl rounded-3xl border border-white/90 shadow-xs p-4 overflow-hidden">
       {/* 搜索框 + 市场分段 + 自选（自选放北交后面，省空间） */}
       <div className="flex items-center gap-1.5 mb-2">
         <div className="flex-1 flex items-center bg-white border border-slate-200 hover:border-blue-400 focus-within:border-blue-500 focus-within:ring-2 focus-within:ring-blue-100 rounded-xl px-3 py-1 transition-all shadow-2xs">
@@ -240,6 +270,31 @@ export function StockSidebar({ selected, onSelect, watchlistSymbols, onlyWatchli
         optionCounts={optionCounts}
       />
 
+      {/* 当前信号日 chip：随日历切换显示该日期（琥珀底色），点击回到最新 */}
+      {(() => {
+        // 切了历史日优先显示 filters.date；否则显示最近信号日 signal_date
+        const shownDate = filters.date || data?.signal_date;
+        if (!shownDate) return null;
+        const isHistorical = !!filters.date;
+        return (
+          <div className="flex items-center gap-1.5 shrink-0">
+            <span className="text-[9px] font-bold text-slate-400">信号日</span>
+            <button
+              onClick={() => onFiltersChange({ ...filters, date: undefined })}
+              title={isHistorical ? '当前列表基准日，点击回到最新' : '当前列表基准信号日'}
+              className={`shrink-0 text-[10px] font-mono font-bold rounded-md px-1.5 py-0.5 border transition-colors ${
+                isHistorical
+                  ? 'bg-amber-50 text-amber-700 border-amber-200 hover:bg-amber-100'
+                  : 'bg-slate-50 text-slate-500 border-slate-200 hover:bg-slate-100'
+              }`}
+            >
+              {shownDate}
+              {isHistorical && <span className="ml-0.5 opacity-70">✕</span>}
+            </button>
+          </div>
+        );
+      })()}
+
       {/* 列表头：板块/行业/市值/趋势/得分/信号 直接点表头筛选 */}
       <div className={`${GRID} px-1 pb-1 pt-2 text-[10px] font-bold text-slate-400 border-b border-slate-100 shrink-0`}>
         <span className="text-center">排名</span>
@@ -259,11 +314,12 @@ export function StockSidebar({ selected, onSelect, watchlistSymbols, onlyWatchli
           {visibleItems.map((it, i) => {
             const isSel = it.symbol === selected;
             const up = (it.pct_change ?? 0) >= 0;
-            const rank = i + 1;
+            const rank = pageOffsetRef.current + i + 1;   // 跳页后显示真实名次
             const rankMedal = rank <= 3 ? ['🥇', '🥈', '🥉'][rank - 1] : String(rank);
             return (
               <button
                 key={it.symbol}
+                data-symbol={it.symbol}
                 onClick={() => onSelect(it)}
                 className={`w-full ${GRID} items-center px-1.5 py-1.5 rounded-lg text-left transition-colors ${
                   isSel ? 'bg-blue-50 border border-blue-200' : 'hover:bg-slate-50 border border-transparent'

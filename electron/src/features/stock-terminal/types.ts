@@ -27,6 +27,8 @@ export interface StockListResponse {
   trade_date: string;
   signal_date?: string;
   items: StockListItem[];
+  /** 定位股票在当前排序中的名次（find_symbol 参数时返回，1-based；无分数为 null） */
+  find_rank?: number | null;
   /** 推理模型选项（真实 model_id + display_name，供筛选下拉） */
   models?: { model_id: string; display_name?: string }[];
   /** 筛选下拉选项命中数（with_counts=true 时返回），如 { board: {沪市主板: 1500}, model: {...} } */

@@ -7,6 +7,7 @@ import json
 import logging
 import math
 import os
+import re
 import time
 from datetime import date, datetime, timedelta
 from typing import Any
@@ -1563,7 +1564,15 @@ async def predict_single_stock(
     # 按 tenant 维度查询（不限定 user_id）：批量推理分数是租户级共享系统资产，
     # 落在系统/批量账号(如 00000001)下；推理中心展示多模型共识需取回该标的当日全部真实分数。
     # model_id 不下推 SQL 过滤——共识矩阵需当日全模型分数；仅用其在 Python 侧选定 headline 主预测。
-    score_params: dict[str, Any] = {"s": normalized_symbol, "tid": tid}
+    # symbol 兼容 4 种历史格式（600519 / 600519.SH / SH600519 / sh600519）：
+    # 新推理脚本存纯数字，老 run 存前缀/后缀——只匹配一种会漏掉新模型分数
+    # （曾导致选 CAT 模型回退到 6 月旧模型）。
+    _sym_variants = list({
+        normalized_symbol,
+        normalized_symbol.lower(),
+        re.sub(r"[^0-9]", "", normalized_symbol),
+    })
+    score_params: dict[str, Any] = {"tid": tid}
     # asyncpg 的 date 列不接受字符串，必须传 date 对象
     date_bound_str = target_date or latest_date
     try:
@@ -1582,11 +1591,11 @@ async def predict_single_stock(
                     FROM engine_signal_scores e
                     LEFT JOIN qm_model_inference_runs r ON r.run_id = e.run_id
                     WHERE e.tenant_id = :tid
-                      AND e.symbol = :s AND e.trade_date <= :d
+                      AND e.symbol = ANY(:s_variants) AND e.trade_date <= :d
                     ORDER BY e.trade_date DESC, e.created_at DESC
                     """
                 ),
-                score_params,
+                {**score_params, "s_variants": _sym_variants},
             )
         ).mappings().all()
 

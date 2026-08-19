@@ -124,8 +124,10 @@ def enrich_article(
         finbert_score = {"bullish": 1.0, "bearish": -1.0, "neutral": 0.0}.get(finbert_label, 0.0)
         # 0.6 字典 + 0.4 FinBERT
         final_score = 0.6 * dict_score + 0.4 * finbert_score * finbert_conf
-        final_label = finbert_label
-        final_conf = finbert_conf
+        # label 由融合后的分数推导，而非直接取 FinBERT label——
+        # 否则 FinBERT 高置信度判 neutral 时，字典法强信号(如"被重锤"→-0.567)会被压成中性
+        final_label = _label_from_score(final_score)
+        final_conf = max(finbert_conf, min(abs(dict_score) + 0.3, 1.0))
     else:
         final_score = dict_score
         final_label = _label_from_score(dict_score)
@@ -153,7 +155,7 @@ def enrich_article(
     )
 
 
-def _upsert_enrichment(conn, r: EnrichmentResult, title_hash: int):
+def _upsert_enrichment(conn, r: EnrichmentResult, title_hash: int, title: str | None = None):
     import json as _json
     sql = """
         INSERT INTO news_article_enrichment (
@@ -161,11 +163,12 @@ def _upsert_enrichment(conn, r: EnrichmentResult, title_hash: int):
             sentiment_score, sentiment_label, sentiment_confidence,
             enriched_at, model_version, title_hash, error,
             countries, regions, key_terms, date_entities, entity_sentiments,
-            provinces, cities, politicians, visits, departments
+            provinces, cities, politicians, visits, departments,
+            title
         )
         VALUES (%s, %s, %s, %s, %s, %s, %s, NOW(), %s, %s, %s,
                 %s, %s, %s, %s, %s::jsonb,
-                %s, %s, %s, %s, %s)
+                %s, %s, %s, %s, %s, %s)
         ON CONFLICT (huntly_page_id) DO UPDATE
         SET tickers = EXCLUDED.tickers,
             industries = EXCLUDED.industries,
@@ -186,7 +189,8 @@ def _upsert_enrichment(conn, r: EnrichmentResult, title_hash: int):
             cities = EXCLUDED.cities,
             politicians = EXCLUDED.politicians,
             visits = EXCLUDED.visits,
-            departments = EXCLUDED.departments;
+            departments = EXCLUDED.departments,
+            title = EXCLUDED.title;
     """
     with conn.cursor() as cur:
         cur.execute(sql, (
@@ -210,6 +214,7 @@ def _upsert_enrichment(conn, r: EnrichmentResult, title_hash: int):
             r.politicians,
             r.visits,
             r.departments,
+            title,
         ))
 
 
@@ -362,7 +367,7 @@ def run_enrichment_batch(limit: int = 200) -> int:
                         short_text = long_text
                 try:
                     result = enrich_article(pid, title, short_text)
-                    _upsert_enrichment(conn, result, _title_hash(title))
+                    _upsert_enrichment(conn, result, _title_hash(title), title)
                     n_ok += 1
                 except Exception as e:
                     logger.warning("enrich page=%d 失败: %s", pid, e)
@@ -377,7 +382,7 @@ def run_enrichment_batch(limit: int = 200) -> int:
                             sentiment_confidence=None,
                             model_version=MODEL_VERSION,
                             error=str(e)[:500],
-                        ), _title_hash(title))
+                        ), _title_hash(title), title)
                     except Exception:
                         pass
         conn.commit()
@@ -531,7 +536,7 @@ def run_full_rebuild(force: bool = False) -> int:
                 text = _pick_text(row)
                 try:
                     result = enrich_article(pid, title, text)
-                    _upsert_enrichment(pg, result, _title_hash(title))
+                    _upsert_enrichment(pg, result, _title_hash(title), title)
                     n_ok += 1
                 except Exception as e:
                     n_fail += 1
@@ -547,7 +552,7 @@ def run_full_rebuild(force: bool = False) -> int:
                             sentiment_confidence=None,
                             model_version=MODEL_VERSION,
                             error=str(e)[:500],
-                        ), _title_hash(title))
+                        ), _title_hash(title), title)
                     except Exception:
                         pass
 
