@@ -124,8 +124,10 @@ def enrich_article(
         finbert_score = {"bullish": 1.0, "bearish": -1.0, "neutral": 0.0}.get(finbert_label, 0.0)
         # 0.6 字典 + 0.4 FinBERT
         final_score = 0.6 * dict_score + 0.4 * finbert_score * finbert_conf
-        final_label = finbert_label
-        final_conf = finbert_conf
+        # label 由融合后的分数推导，而非直接取 FinBERT label——
+        # 否则 FinBERT 高置信度判 neutral 时，字典法强信号(如"被重锤"→-0.567)会被压成中性
+        final_label = _label_from_score(final_score)
+        final_conf = max(finbert_conf, min(abs(dict_score) + 0.3, 1.0))
     else:
         final_score = dict_score
         final_label = _label_from_score(dict_score)
