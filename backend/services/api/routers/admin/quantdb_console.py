@@ -289,6 +289,11 @@ def _pick_local_file(spec: DatasetSpec, root: Path, symbol: str | None) -> Path 
             if f.stem.upper() == target:
                 return f
         raise HTTPException(status_code=404, detail=f"{spec.dataset} 无 {symbol} 的本地文件")
+    # instrument_detail 数据集：SDK 新版落盘 instrument_list.parquet，优先新版
+    if spec.dataset == "instrument_detail":
+        for f in files:
+            if f.stem == "instrument_list":
+                return f
     return files[0]
 
 

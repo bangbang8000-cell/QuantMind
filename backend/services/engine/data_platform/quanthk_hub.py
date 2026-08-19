@@ -334,7 +334,10 @@ class QuantHKDataHub(QuantDBDataHub):
         """港股标的池（instrument_detail.parquet）。"""
         import pandas as pd
 
-        file_path = self._data_dir / "2_base_sector" / "instrument_detail" / "instrument_detail.parquet"
+        detail_dir = self._data_dir / "2_base_sector" / "instrument_detail"
+        file_path = detail_dir / "instrument_list.parquet"
+        if not file_path.exists():
+            file_path = detail_dir / "instrument_detail.parquet"
         if not file_path.exists():
             return pd.DataFrame()
         return pd.read_parquet(file_path)
