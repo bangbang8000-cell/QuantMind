@@ -9,6 +9,7 @@ export interface IndexItem {
   pct_change: number;
   turnover: number;
   trend: number[];
+  trade_date?: string;
 }
 
 interface BroadMarketHeaderProps {

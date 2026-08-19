@@ -1,7 +1,7 @@
 import React, { useState } from 'react';
 import { Table, Calendar as CalendarIcon } from 'antd';
 import type { ColumnsType } from 'antd/es/table';
-import { TrendingUp, TrendingDown, ArrowUpRight, Calendar, Sparkles } from 'lucide-react';
+import { TrendingUp, TrendingDown, ArrowUpRight, Calendar, Sparkles, Info } from 'lucide-react';
 
 export interface DailyFlowPoint {
   date: string;
@@ -458,7 +458,7 @@ export const StockMoneyFlowTable: React.FC<StockMoneyFlowTableProps> = ({
               <span>最新交易日:</span>
             </span>
             <span className="px-3 py-1 rounded-full bg-purple-100/80 text-purple-700 text-xs font-bold font-mono border border-purple-200 shadow-2xs">
-              2026-08-05 (最新数据)
+              L2 停更 2026-02-27
             </span>
           </div>
 
@@ -469,6 +469,13 @@ export const StockMoneyFlowTable: React.FC<StockMoneyFlowTableProps> = ({
         </div>
       )}
 
+
+      {!isMini && items.length === 0 && !loading && (
+        <div className="rounded-xl border border-slate-200 bg-slate-50 px-4 py-3 text-xs text-slate-500 font-medium flex items-center gap-2">
+          <Info className="w-4 h-4 text-amber-500" />
+          L2 个股资金流数据已停更（2026-02-27 起），暂无当日数据——待 QuantDB 厂商恢复后才可展示
+        </div>
+      )}
 
       <div className="w-full overflow-hidden rounded-xl border border-slate-200/80 bg-white">
         <Table

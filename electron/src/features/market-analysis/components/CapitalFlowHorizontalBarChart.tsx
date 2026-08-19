@@ -34,6 +34,8 @@ export const CapitalFlowHorizontalBarChart: React.FC<CapitalFlowHorizontalBarCha
   const instanceRef = useRef<echarts.ECharts | null>(null);
   const [data, setData] = useState<FlowItem[]>([]);
   const [loading, setLoading] = useState(false);
+  const [tradeDate, setTradeDate] = useState<string>('');
+  const [isMock, setIsMock] = useState(false);
 
   // 1. 数据请求与 Mock 保底
   useEffect(() => {
@@ -42,6 +44,9 @@ export const CapitalFlowHorizontalBarChart: React.FC<CapitalFlowHorizontalBarCha
 
   const fetchData = async () => {
     setLoading(true);
+    setData([]);
+    setTradeDate('');
+    setIsMock(false);
     try {
       const token = localStorage.getItem('access_token') || '';
       const res = await fetch(
@@ -50,6 +55,9 @@ export const CapitalFlowHorizontalBarChart: React.FC<CapitalFlowHorizontalBarCha
       );
       if (res.ok) {
         const json = await res.json();
+        if (json.trade_date) {
+          setTradeDate(json.trade_date);
+        }
         if (json.items && json.items.length > 0) {
           setData(json.items);
           setLoading(false);
@@ -145,6 +153,7 @@ export const CapitalFlowHorizontalBarChart: React.FC<CapitalFlowHorizontalBarCha
     }
 
     setData(items);
+    setIsMock(true);
     setLoading(false);
   };
 
@@ -347,6 +356,24 @@ export const CapitalFlowHorizontalBarChart: React.FC<CapitalFlowHorizontalBarCha
           <span className="text-xs text-purple-600 font-bold animate-pulse">数据加载中...</span>
         </div>
       )}
+      {!loading && tradeDate && !isMock && (
+        <div className="mt-1 text-[11px] text-slate-400 font-medium">
+          资金流数据截至 <span className="font-extrabold text-slate-500">{formatTradeDate(tradeDate)}</span>
+          （L2 资金流厂商数据已停更，仅作历史参考）
+        </div>
+      )}
+      {!loading && isMock && (
+        <div className="mt-1 text-[11px] text-amber-600 font-bold">
+          ⚠️ 后端接口异常，当前为 Mock 数据（非真实资金流）
+        </div>
+      )}
     </div>
   );
 };
+
+function formatTradeDate(d: string): string {
+  if (/^\d{8}$/.test(d)) {
+    return `${d.slice(0, 4)}-${d.slice(4, 6)}-${d.slice(6, 8)}`;
+  }
+  return d;
+}
