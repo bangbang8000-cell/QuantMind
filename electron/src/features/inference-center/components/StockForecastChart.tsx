@@ -8,6 +8,8 @@ interface StockForecastChartProps {
   symbol: string;
   stockName: string;
   currentPrice: number;
+  modelName?: string;
+  asOfDate?: string;
 }
 
 export const StockForecastChart: React.FC<StockForecastChartProps> = ({
@@ -16,6 +18,8 @@ export const StockForecastChart: React.FC<StockForecastChartProps> = ({
   symbol,
   stockName,
   currentPrice,
+  modelName,
+  asOfDate,
 }) => {
   const option = useMemo(() => {
     // 1. 历史 K 线数据
@@ -211,16 +215,25 @@ export const StockForecastChart: React.FC<StockForecastChartProps> = ({
   return (
     <div className="w-full h-full relative flex flex-col">
       <div className="flex items-center justify-between px-6 pt-4 pb-1">
-        <div className="flex items-center gap-3">
-          <span className="text-base font-black text-slate-800 tracking-tight">
-            {stockName} <span className="text-xs font-mono font-bold text-blue-600 bg-blue-50 px-2 py-0.5 rounded-lg border border-blue-100">{symbol}</span>
+        <div className="flex items-center gap-2">
+          <span className="text-sm font-black text-slate-800 tracking-tight">
+            历史 K 线走势 + 未来 10%-50%-90% 分位数走势预测带 (Fan Chart)
           </span>
-          <span className="text-xs text-slate-400 font-medium">历史 K 线走势 + 未来 10%-50%-90% 分位数走势预测带 (Fan Chart)</span>
+          {asOfDate && (
+            <span className="text-[11px] text-slate-400 font-mono">
+              · 基准日: {asOfDate}
+            </span>
+          )}
         </div>
         <div className="flex items-center gap-2">
-          <span className="inline-flex items-center gap-1.5 text-xs text-emerald-600 font-bold bg-emerald-50 px-2.5 py-1 rounded-lg border border-emerald-100">
-            <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse" />
-            实时预测就绪
+          {modelName && (
+            <span className="text-xs text-slate-500 font-medium bg-slate-50 border border-slate-100 px-2.5 py-0.5 rounded-md">
+              模型: <strong className="text-slate-700">{modelName}</strong>
+            </span>
+          )}
+          <span className="inline-flex items-center gap-1 text-[11px] text-emerald-600 font-bold bg-emerald-50 px-2 py-0.5 rounded-md border border-emerald-100">
+            <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse" />
+            实时计算
           </span>
         </div>
       </div>
