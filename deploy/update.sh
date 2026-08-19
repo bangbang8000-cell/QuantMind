@@ -22,6 +22,7 @@ PROJECT_DIR="/opt/quantmind"
 REPO_URL="https://gitee.com/qusong0627/QuantMind.git"
 FORCE_SYNC=false
 HAS_ARGS=false
+FRONTEND_CHANGED=false
 
 RED='\033[0;31m'
 GREEN='\033[0;32m'
@@ -223,6 +224,27 @@ git_sync() {
     git fetch origin "$branch"
     git pull --ff-only origin "$branch"
     log_info "代码同步完成（$branch）"
+
+    # 记录本次更新的文件变更（判断前端/可选服务是否需要重建）
+    FRONTEND_CHANGED=false
+    if [[ "$branch" != "HEAD" ]]; then
+        changed="$(git diff --name-only HEAD@{1} HEAD 2>/dev/null || true)"
+        if echo "$changed" | grep -qE '^(electron/|scripts/frontend/)'; then
+            FRONTEND_CHANGED=true
+        fi
+    fi
+}
+
+write_version_file() {
+    # 将当前代码版本写入 backend/shared/version.txt（gitignore，不入仓库）。
+    # 后端 /api/v1/system/version 读取展示；本地未部署时该文件不存在则显示 dev。
+    local ver
+    if ver="$(git -C "$PROJECT_DIR" describe --tags --always 2>/dev/null)"; then
+        echo "$ver" > "$PROJECT_DIR/backend/shared/version.txt"
+        log_info "代码版本: $ver"
+    else
+        rm -f "$PROJECT_DIR/backend/shared/version.txt"
+    fi
 }
 
 upgrade_database() {
@@ -328,9 +350,24 @@ update_backend() {
     "${COMPOSE_CMD[@]}" -f docker-compose.yml build quantmind
     "${COMPOSE_CMD[@]}" -f docker-compose.yml up -d --no-deps --force-recreate quantmind celery-worker celery-beat
 
-    # 可选服务（本地构建镜像：web / data-gateway / dashboard，失败仅警告）
-    log_info "更新可选服务容器 (web / data-gateway / dashboard)..."
-    "${COMPOSE_CMD[@]}" -f docker-compose.yml up -d --no-deps --force-recreate web data-gateway dashboard 2>&1 \
+    # 前端：仅当本次代码变更涉及前端时重建镜像（dist-react bake 进镜像，必须 build 才生效）
+    if [[ "$FRONTEND_CHANGED" == "true" ]]; then
+        log_info "检测到前端代码变更，重建 web 镜像..."
+        if "${COMPOSE_CMD[@]}" -f docker-compose.yml build web 2>&1; then
+            "${COMPOSE_CMD[@]}" -f docker-compose.yml up -d --no-deps --force-recreate web 2>&1 \
+                || log_warn "web 容器启动失败"
+        else
+            log_warn "web 镜像构建失败（前端可能仍是旧版，请检查 electron 构建日志）"
+        fi
+    else
+        log_info "本次无前端代码变更，跳过 web 镜像重建（仍重启动 web 容器以拾取配置）"
+        "${COMPOSE_CMD[@]}" -f docker-compose.yml up -d --no-deps web 2>&1 \
+            || log_warn "web 容器重启失败"
+    fi
+
+    # 可选服务（本地构建镜像：data-gateway / dashboard，失败仅警告）
+    log_info "更新可选服务容器 (data-gateway / dashboard)..."
+    "${COMPOSE_CMD[@]}" -f docker-compose.yml up -d --no-deps --force-recreate data-gateway dashboard 2>&1 \
         || log_warn "部分可选服务更新失败（不影响核心服务）"
 
     # 外部镜像服务（huntly / rsshub / qwenpaw，失败仅警告）
@@ -439,6 +476,8 @@ main() {
 
     git_sync
 
+    write_version_file
+
     upgrade_database
 
     update_backend
@@ -446,7 +485,11 @@ main() {
     health_check
 
     log_step "更新完成"
-    log_info "本次更新已自动检查并执行数据库升级脚本（如有）。"
+    if [[ "$FRONTEND_CHANGED" == "true" ]]; then
+        log_info "本次更新已自动：拉取代码、写入代码版本、检查并执行数据库升级脚本（如有）、重建后端容器、重建前端镜像。"
+    else
+        log_info "本次更新已自动：拉取代码、写入代码版本、检查并执行数据库升级脚本（如有）、重建后端容器（无前端变更，跳过前端镜像重建）。"
+    fi
 }
 
 main "$@"
