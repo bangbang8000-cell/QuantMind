@@ -814,7 +814,7 @@ export const NewsPanel: React.FC = () => {
         )}
       </div>
 
-      {/* ===== 新闻大类导航（点击按 event_tags 过滤） ===== */}
+      {/* ===== 新闻大类导航 + 当前筛选标签（同一行，分类 Tab 后紧跟筛选 chips） ===== */}
       <div style={{ display: 'flex', alignItems: 'center', gap: 2, padding: '4px 16px', borderBottom: '1px solid rgba(226,232,240,0.8)', background: 'rgba(255,255,255,0.85)', flexWrap: 'wrap' }}>
         <Text type="secondary" style={{ fontSize: 12, marginRight: 6, whiteSpace: 'nowrap' }}>分类:</Text>
         {QUICK_EVENT_CHIPS.map((chip) => {
@@ -839,19 +839,15 @@ export const NewsPanel: React.FC = () => {
             </Tag.CheckableTag>
           );
         })}
-        <div style={{ flex: 1 }} />
-        <Text type="secondary" style={{ fontSize: 11 }}>大类来自全文匹配</Text>
+        {/* 当前筛选标签：紧跟分类 Tab 之后 */}
+        {activeFilterCount > 0 && (
+          <div style={{ display: 'flex', alignItems: 'center', gap: 2, flexWrap: 'wrap', marginLeft: 4 }}>
+            <Text type="secondary" style={{ fontSize: 11, whiteSpace: 'nowrap' }}>筛选:</Text>
+            {renderChips()}
+            <Button type="link" size="small" onClick={clearAllFilters} icon={<ClearOutlined />} style={{ padding: 0, fontSize: 12 }}>清除</Button>
+          </div>
+        )}
       </div>
-
-      {/* ===== Active filter chips ===== */}
-      {activeFilterCount > 0 && (
-        <div className="news-active-chips">
-          {renderChips()}
-          <Button type="link" size="small" onClick={clearAllFilters} icon={<ClearOutlined />} style={{ padding: 0, marginLeft: 8, fontSize: 12 }}>
-            清除全部
-          </Button>
-        </div>
-      )}
 
       {/* ===== Advanced filter panel (collapsible) ===== */}
       {f.advancedOpen && (
