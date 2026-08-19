@@ -1,6 +1,6 @@
 import React, { useCallback, useEffect, useState } from 'react';
 import {
-  Database, Key, ShieldCheck, RefreshCw, HardDrive, Activity, Eye, EyeOff, Save, Zap
+  Database, Key, ShieldCheck, RefreshCw, HardDrive, Activity, Eye, EyeOff, Save, Zap, ExternalLink
 } from 'lucide-react';
 import { Button, Input, Tag, message, Alert } from 'antd';
 import { dataPlatformService, QuantDBConfig, QuantDBInfo } from '../../admin/services/dataPlatformService';
@@ -67,12 +67,16 @@ export const QuantDBSettings: React.FC = () => {
     }
   };
 
+  const openQuantDBWebsite = () => {
+    window.open('https://www.quantdb.cn/index.html', '_blank');
+  };
+
   const isConfigured = Boolean(config?.api_key_configured);
   const isInstalled = Boolean(info?.installed);
 
   return (
-    <div className="space-y-3 max-w-5xl">
-      {/* 顶部标题卡片 (精简单行) */}
+    <div className="w-full space-y-3">
+      {/* 顶部标题卡片 (精简单行，全宽铺开) */}
       <div className="bg-white rounded-2xl border border-slate-200/80 px-5 py-3.5 shadow-xs flex items-center justify-between">
         <div className="flex items-center gap-3">
           <div className="w-9 h-9 rounded-xl bg-gradient-to-br from-blue-500 to-indigo-600 flex items-center justify-center text-white shadow-sm">
@@ -90,15 +94,25 @@ export const QuantDBSettings: React.FC = () => {
             </p>
           </div>
         </div>
-        <Button
-          size="small"
-          icon={<RefreshCw className={`w-3 h-3 ${refreshing ? 'animate-spin' : ''}`} />}
-          onClick={loadData}
-          loading={refreshing}
-          className="rounded-lg font-bold text-xs h-7 px-3"
-        >
-          刷新
-        </Button>
+        <div className="flex items-center gap-2">
+          <Button
+            size="small"
+            icon={<ExternalLink className="w-3 h-3 text-blue-600" />}
+            onClick={openQuantDBWebsite}
+            className="rounded-lg font-bold text-xs h-7 px-3 bg-gradient-to-r from-blue-50 to-indigo-50 border-blue-200 text-blue-600 hover:text-blue-700 hover:border-blue-300"
+          >
+            注册 / 官网
+          </Button>
+          <Button
+            size="small"
+            icon={<RefreshCw className={`w-3 h-3 ${refreshing ? 'animate-spin' : ''}`} />}
+            onClick={loadData}
+            loading={refreshing}
+            className="rounded-lg font-bold text-xs h-7 px-3"
+          >
+            刷新
+          </Button>
+        </div>
       </div>
 
       {/* 状态指标条 (4列紧凑卡片) */}
@@ -179,11 +193,24 @@ export const QuantDBSettings: React.FC = () => {
               输入 QuantDB 访问密钥，系统将自动进行热重载与远端连通性测试
             </p>
           </div>
-          {isConfigured && (
-            <span className="text-[10px] font-mono font-bold text-slate-500 bg-slate-100 px-2 py-0.5 rounded">
-              指纹: {config?.api_key_masked}
-            </span>
-          )}
+          <div className="flex items-center gap-2">
+            {!isConfigured && (
+              <Button
+                type="link"
+                size="small"
+                icon={<ExternalLink className="w-3 h-3" />}
+                onClick={openQuantDBWebsite}
+                className="text-[11px] text-blue-600 hover:text-blue-700 p-0 font-medium h-auto"
+              >
+                没有账号？前往 QuantDB 注册获取 Key →
+              </Button>
+            )}
+            {isConfigured && (
+              <span className="text-[10px] font-mono font-bold text-slate-500 bg-slate-100 px-2 py-0.5 rounded">
+                指纹: {config?.api_key_masked}
+              </span>
+            )}
+          </div>
         </div>
 
         <div className="space-y-2.5">
