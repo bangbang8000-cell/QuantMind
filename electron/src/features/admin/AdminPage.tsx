@@ -3,21 +3,16 @@ import { Layout, Menu, Button, Badge, Avatar, Typography, Divider, Tag } from 'a
 import { 
     DashboardOutlined, 
     UserOutlined, 
-    RobotOutlined, 
-    DatabaseOutlined, 
-    FileTextOutlined,
-    ArrowLeftOutlined,
-    RocketOutlined,
-    SafetyCertificateOutlined,
-    BellOutlined,
+    RocketOutlined, 
     SettingOutlined,
     ThunderboltOutlined,
     ApiOutlined,
     SwapOutlined,
     GlobalOutlined,
-    ExperimentOutlined
+    BellOutlined
 } from '@ant-design/icons';
 import { useNavigate, useLocation, Outlet } from 'react-router-dom';
+import { AdminSystemLoadWidget } from './components/AdminSystemLoadWidget';
 
 const { Title, Text } = Typography;
 
@@ -115,17 +110,8 @@ const AdminPage: React.FC = () => {
                     />
                 </div>
 
-                <div className="p-4 border-t border-slate-100">
-                    <div className="bg-slate-50 rounded-xl p-4">
-                        <div className="flex items-center justify-between mb-2">
-                            <Text className="text-[10px] font-black text-slate-400 uppercase tracking-wider">系统评分</Text>
-                            <Text className="text-[10px] font-black text-emerald-500">94%</Text>
-                        </div>
-                        <div className="h-1 w-full bg-slate-200 rounded-full overflow-hidden">
-                            <div className="h-full bg-emerald-500 w-[94%]" />
-                        </div>
-                    </div>
-                </div>
+                {/* 侧边栏左下角：真实系统负载监控卡片 */}
+                <AdminSystemLoadWidget collapsed={collapsed} />
             </div>
 
             {/* Main Content Area */}
@@ -172,4 +158,3 @@ const AdminPage: React.FC = () => {
 };
 
 export default AdminPage;
-

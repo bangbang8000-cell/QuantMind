@@ -2,6 +2,7 @@ import axios, { AxiosInstance } from 'axios';
 import { ApiResponse } from '../../auth/types/auth.types';
 import {
     DashboardMetrics,
+    SystemLoadSummary,
     AdminUser,
     AIModel,
     ModelScanResult,
@@ -94,6 +95,15 @@ class AdminService {
         }
         const resp = await this.axiosInstance.get<ApiResponse<DashboardMetrics>>(
             '/admin/dashboard/metrics',
+            { _skipAuthRefresh: true } as any
+        );
+        return this.unwrap(resp.data);
+    }
+
+    /** 快速获取系统真实物理负载与服务健康概要（供侧边栏轻量轮询） */
+    async getSystemLoad(): Promise<SystemLoadSummary> {
+        const resp = await this.axiosInstance.get<ApiResponse<SystemLoadSummary>>(
+            '/admin/dashboard/system-load',
             { _skipAuthRefresh: true } as any
         );
         return this.unwrap(resp.data);

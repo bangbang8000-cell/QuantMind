@@ -343,12 +343,38 @@ export interface DashboardMetrics {
         uptime_days: number;
         status?: string;
         services?: DashboardServiceInfo[];
+        workload?: HostWorkload;
+        services_summary?: {
+            healthy: number;
+            total: number;
+        };
     };
     recent_events?: Array<{
         title: string;
         time: string;
         type: 'success' | 'warning' | 'info';
     }>;
+}
+
+export interface HostWorkload {
+    cpu_percent: number;
+    cpu_count: number;
+    memory_percent: number;
+    memory_used_gb: number;
+    memory_total_gb: number;
+    disk_percent: number;
+    disk_used_gb: number;
+    disk_total_gb: number;
+}
+
+export interface SystemLoadSummary {
+    workload: HostWorkload;
+    uptime_days: number | null;
+    health_score: number;
+    services_summary: {
+        healthy: number;
+        total: number;
+    };
 }
 
 /** 后端 /admin/dashboard/metrics 返回的真实服务健康信息 */

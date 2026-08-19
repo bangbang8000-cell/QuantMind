@@ -93,21 +93,77 @@ INFRA_SERVICES = [
 ]
 
 
+def _get_host_workload() -> dict[str, Any]:
+    """采集宿主机/容器真实 CPU、内存与磁盘负载。"""
+    try:
+        import psutil
+
+        cpu_percent = round(float(psutil.cpu_percent(interval=None)), 1)
+        cpu_count = int(psutil.cpu_count(logical=True) or 1)
+
+        mem = psutil.virtual_memory()
+        mem_percent = round(float(mem.percent), 1)
+        mem_used_gb = round(float((mem.total - mem.available) / (1024**3)), 2)
+        mem_total_gb = round(float(mem.total / (1024**3)), 2)
+
+        try:
+            disk = psutil.disk_usage(os.getcwd())
+            disk_percent = round(float(disk.percent), 1)
+            disk_used_gb = round(float(disk.used / (1024**3)), 2)
+            disk_total_gb = round(float(disk.total / (1024**3)), 2)
+        except Exception:
+            disk_percent = 0.0
+            disk_used_gb = 0.0
+            disk_total_gb = 0.0
+
+        return {
+            "cpu_percent": cpu_percent,
+            "cpu_count": cpu_count,
+            "memory_percent": mem_percent,
+            "memory_used_gb": mem_used_gb,
+            "memory_total_gb": mem_total_gb,
+            "disk_percent": disk_percent,
+            "disk_used_gb": disk_used_gb,
+            "disk_total_gb": disk_total_gb,
+        }
+    except Exception as exc:
+        logger.warning("Failed to collect host workload via psutil: %s", exc)
+        return {
+            "cpu_percent": 0.0,
+            "cpu_count": 1,
+            "memory_percent": 0.0,
+            "memory_used_gb": 0.0,
+            "memory_total_gb": 0.0,
+            "disk_percent": 0.0,
+            "disk_used_gb": 0.0,
+            "disk_total_gb": 0.0,
+        }
+
+
 def _build_system_metrics(
     health_score: int,
     uptime_days: int | None,
     services: list[dict[str, Any]],
 ) -> dict[str, Any]:
-    """构造系统指标，基于真实健康检查结果。"""
+    """构造系统指标，基于真实健康检查结果与物理负载。"""
     overall_status = "healthy" if services and all(service.get("status") == "healthy" for service in services) else "degraded"
     if not services:
         overall_status = "degraded"
+
+    workload = _get_host_workload()
+    healthy_count = sum(1 for s in services if s.get("healthy"))
+    total_count = len(services)
 
     return {
         "health_score": health_score,
         "uptime_days": uptime_days,
         "status": overall_status,
         "services": services,
+        "workload": workload,
+        "services_summary": {
+            "healthy": healthy_count,
+            "total": total_count,
+        },
     }
 
 
@@ -372,3 +428,34 @@ async def get_dashboard_metrics(
                 "system": _build_system_metrics(health_score, uptime_days, services),
             },
         )
+
+
+@router.get("/system-load", response_model=ApiResponse)
+async def get_system_load(
+    request: Request,
+    current_user: dict = Depends(require_admin),
+):
+    """获取轻量级系统实时物理负载与服务概要（供侧边栏等低延迟高频轮询）"""
+    _ = current_user
+    workload = _get_host_workload()
+    uptime_days = _get_uptime_days(request)
+
+    health_score, services = await _collect_system_health()
+    healthy_count = sum(1 for s in services if s.get("healthy"))
+    total_count = len(services)
+
+    return ApiResponse(
+        success=True,
+        code=200,
+        message="获取系统负载成功",
+        data={
+            "workload": workload,
+            "uptime_days": uptime_days,
+            "health_score": health_score,
+            "services_summary": {
+                "healthy": healthy_count,
+                "total": total_count,
+            },
+        },
+    )
+
