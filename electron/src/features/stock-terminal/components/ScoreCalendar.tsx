@@ -82,16 +82,32 @@ export function ScoreCalendar({ symbol, onBarClick, selectedDate, modelId, onInf
   // 拖过有分数格子松手时抑制一次 onClick（否则推理确认+切日期同时弹）
   const suppressClickRef = useRef(false);
 
+  // 生效模型：用户筛选了模型用筛选模型，否则用模型管理里的默认模型（而非全模型融合）
+  const [resolvedModelId, setResolvedModelId] = useState<string | undefined>(modelId);
+  useEffect(() => {
+    let cancelled = false;
+    if (modelId) {
+      setResolvedModelId(modelId);
+      return;
+    }
+    // 未筛选：取默认模型
+    modelTrainingService.getDefaultModel().then((m) => {
+      const mid = (m as any)?.model_id || (m as any)?.id;
+      if (!cancelled && mid) setResolvedModelId(mid);
+    }).catch(() => { /* 无默认模型则空 */ });
+    return () => { cancelled = true; };
+  }, [modelId]);
+
   useEffect(() => {
     if (!symbol) { setItems([]); return; }
     let cancelled = false;
     setLoading(true);
     const code = symbol.split('.')[0];
-    modelTrainingService.getStockInferenceHistory(code, 500).then(resp => {
+    modelTrainingService.getStockInferenceHistory(code, 500, resolvedModelId || undefined).then(resp => {
       if (!cancelled) setItems(resp?.items ?? []);
     }).catch(() => { if (!cancelled) setItems([]); }).finally(() => { if (!cancelled) setLoading(false); });
     return () => { cancelled = true; };
-  }, [symbol, refreshKey]);
+  }, [symbol, refreshKey, resolvedModelId]);
 
   /** 单日推理：用所选日（后端会回退到最近可用交易日）补分数 */
   const inferSingle = async (date: string) => {
