@@ -3,9 +3,10 @@ import { Card, Divider, Alert, Progress, Tabs, Empty, Typography, Button } from 
 import { Play, FileText, LayoutGrid } from 'lucide-react';
 import { clsx } from 'clsx';
 import { useNavigate } from 'react-router-dom';
-import { 
-  TrainingStatus, 
-  TrainingResult, 
+import { TrainingRuntimeOptions } from './TrainingRuntimeOptions';
+import {
+  TrainingStatus,
+  TrainingResult,
   TrainingRequestPayload,
   daysBetween
 } from './trainingUtils';
@@ -23,6 +24,8 @@ interface TrainingConsoleProps {
   valDays: number;
   testDays: number;
   target: { horizonDays: number; mode: string };
+  /** 运行时选项（节点/时长/资源）—— 显示在页面右侧 */
+  runtimeOptions?: React.ReactNode;
 }
 
 const SectionHeader: React.FC<{ title: string; desc: string; icon?: React.ReactNode }> = ({ title, desc, icon }) => (
@@ -67,17 +70,19 @@ export const TrainingConsole: React.FC<TrainingConsoleProps> = ({
   valDays,
   testDays,
   target,
+  runtimeOptions,
 }) => {
   const navigate = useNavigate();
 
   return (
-    <div className="space-y-4">
-      <Card className="rounded-3xl border-slate-200 shadow-sm" styles={{ body: { padding: 20 } }}>
-        <SectionHeader
-          title="第四步：执行训练"
-          desc="顶部工具栏统一承载训练操作，这里只保留状态、进度和编排详情，避免重复按钮干扰。"
-          icon={<Play size={18} className="text-indigo-500" />}
-        />
+    <div className="grid grid-cols-1 xl:grid-cols-3 gap-4 items-start">
+      <div className="xl:col-span-2 space-y-4">
+        <Card className="rounded-3xl border-slate-200 shadow-sm" styles={{ body: { padding: 20 } }}>
+          <SectionHeader
+            title="第四步：执行训练"
+            desc="顶部工具栏统一承载训练操作，这里只保留状态、进度和编排详情，避免重复按钮干扰。"
+            icon={<Play size={18} className="text-indigo-500" />}
+          />
         <Divider className="my-4" />
         <div className="space-y-4">
           <Alert
@@ -148,53 +153,61 @@ export const TrainingConsole: React.FC<TrainingConsoleProps> = ({
         </div>
       </Card>
 
-      <Card className="rounded-3xl border-slate-200 shadow-sm" styles={{ body: { padding: 20 } }}>
-        <SectionHeader
-          title="训练编排详情"
-          desc="请求预览和运行日志分开展示，减少重复信息干扰。"
-          icon={<FileText size={18} className="text-indigo-500" />}
-        />
-        <Divider className="my-4" />
-        <Tabs
-          defaultActiveKey="request"
-          items={[
-            {
-              key: 'request',
-              label: '请求预览',
-              children: (
-                <pre className="max-h-[420px] overflow-auto rounded-2xl border border-gray-200 bg-gray-50 p-4 text-[11px] leading-5 text-gray-700">
-                  {JSON.stringify(requestPreview, null, 2)}
-                </pre>
-              ),
-            },
-            {
-              key: 'logs',
-              label: '运行日志',
-              children: (
-                <div className="min-h-56 rounded-2xl border border-gray-200 bg-white p-4 font-mono text-[12px] text-gray-700">
-                  {logs.length === 0 ? (
-                    <div className="flex h-48 items-center justify-center text-gray-500">
-                      <Empty
-                        description={<span className="text-gray-500">等待训练开始</span>}
-                        image={Empty.PRESENTED_IMAGE_SIMPLE}
-                      />
-                    </div>
-                  ) : (
-                    <div className="space-y-1">
-                      {logs.map((log, index) => (
-                        <div key={`${log}-${index}`} className="flex gap-2 break-all">
-                          <span className="text-gray-400">{log.slice(0, 10)}</span>
-                          <span>{log.slice(11)}</span>
-                        </div>
-                      ))}
-                    </div>
-                  )}
-                </div>
-              ),
-            },
-          ]}
-        />
-      </Card>
+        <Card className="rounded-3xl border-slate-200 shadow-sm" styles={{ body: { padding: 20 } }}>
+          <SectionHeader
+            title="训练编排详情"
+            desc="请求预览和运行日志分开展示，减少重复信息干扰。"
+            icon={<FileText size={18} className="text-indigo-500" />}
+          />
+          <Divider className="my-4" />
+          <Tabs
+            defaultActiveKey="request"
+            items={[
+              {
+                key: 'request',
+                label: '请求预览',
+                children: (
+                  <pre className="max-h-[420px] overflow-auto rounded-2xl border border-gray-200 bg-gray-50 p-4 text-[11px] leading-5 text-gray-700">
+                    {JSON.stringify(requestPreview, null, 2)}
+                  </pre>
+                ),
+              },
+              {
+                key: 'logs',
+                label: '运行日志',
+                children: (
+                  <div className="min-h-56 rounded-2xl border border-gray-200 bg-white p-4 font-mono text-[12px] text-gray-700">
+                    {logs.length === 0 ? (
+                      <div className="flex h-48 items-center justify-center text-gray-500">
+                        <Empty
+                          description={<span className="text-gray-500">等待训练开始</span>}
+                          image={Empty.PRESENTED_IMAGE_SIMPLE}
+                        />
+                      </div>
+                    ) : (
+                      <div className="space-y-1">
+                        {logs.map((log, index) => (
+                          <div key={`${log}-${index}`} className="flex gap-2 break-all">
+                            <span className="text-gray-400">{log.slice(0, 10)}</span>
+                            <span>{log.slice(11)}</span>
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                ),
+              },
+            ]}
+          />
+        </Card>
+      </div>
+
+      {/* 右侧：训练运行时选项（节点/时长/资源），训练前在此选择 */}
+      {runtimeOptions && (
+        <div className="xl:col-span-1 space-y-4 sticky top-4">
+          {runtimeOptions}
+        </div>
+      )}
     </div>
   );
 };

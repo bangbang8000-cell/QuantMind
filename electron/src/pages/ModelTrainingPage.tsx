@@ -6,7 +6,7 @@ import {
   Copy, Sparkles, RefreshCcw, Target
 } from 'lucide-react';
 import {
-  Button, Space, Tag, Typography, message, Card, Select, Switch
+  Button, Space, Tag, Typography, message, Card
 } from 'antd';
 import dayjs, { Dayjs } from 'dayjs';
 import { clsx } from 'clsx';
@@ -22,6 +22,7 @@ import { FeatureSelector } from './training/FeatureSelector';
 import { TrainingTargetConfig } from './training/TrainingTargetConfig';
 import { ParameterConfig } from './training/ParameterConfig';
 import { TrainingConsole } from './training/TrainingConsole';
+import { TrainingRuntimeOptions } from './training/TrainingRuntimeOptions';
 import { TrainingResultView } from './training/TrainingResultView';
 
 const { Title, Paragraph } = Typography;
@@ -490,76 +491,6 @@ export const ModelTrainingPage: React.FC = () => {
                   <div className="text-xs font-semibold text-slate-700">T+{target.horizonDays} · {target.mode === 'classification' ? '分类' : '回归'}</div>
                   <div className="text-[10px] text-slate-400 mt-1 truncate">{labelFormula}</div>
                </div>
-               <div className="rounded-xl bg-slate-50 p-3 border border-slate-100">
-                  <div className="text-[10px] uppercase font-bold text-slate-400 mb-2">训练节点</div>
-                  <div className="flex gap-2">
-                    {trainingNodes.length > 0
-                      ? trainingNodes.map((n) => (
-                          <button
-                            key={n.id}
-                            onClick={() => setSelectedNode(n.id)}
-                            className={clsx(
-                              'flex-1 rounded-lg px-2 py-1.5 text-xs font-semibold border transition-all',
-                              selectedNode === n.id
-                                ? n.type === 'remote'
-                                  ? 'bg-orange-50 border-orange-300 text-orange-700'
-                                  : 'bg-blue-50 border-blue-300 text-blue-700'
-                                : 'bg-white border-gray-200 text-gray-500 hover:border-gray-300'
-                            )}
-                          >
-                            {n.name}
-                          </button>
-                        ))
-                      : <div className="text-[11px] text-slate-400 w-full text-center py-1">仅本地训练</div>}
-                  </div>
-                  {selectedNode !== 'local' && (
-                    <div className="mt-2 text-[10px] text-orange-600 leading-relaxed">
-                      将推送特征快照到 AutoDL，远程 GPU 训练完成后模型自动回传本机。
-                    </div>
-                  )}
-               </div>
-               <div className="rounded-xl bg-slate-50 p-3 border border-slate-100">
-                  <div className="text-[10px] uppercase font-bold text-slate-400 mb-2">训练时长预算</div>
-                  <Select
-                    size="small"
-                    value={maxTimeMinutes}
-                    onChange={(v: number) => setMaxTimeMinutes(v)}
-                    style={{ width: '100%' }}
-                    options={[
-                      { value: 60, label: '1 小时（快速验证）' },
-                      { value: 120, label: '2 小时（默认）' },
-                      { value: 360, label: '6 小时' },
-                      { value: 720, label: '12 小时（DL 模型推荐）' },
-                      { value: 1440, label: '24 小时（上限）' },
-                    ]}
-                  />
-                  <div className="mt-1.5 text-[10px] text-slate-400 leading-relaxed">
-                    超过预算编排器会终止任务。GRU/LSTM 等 DL 模型在本地 CPU 训练较慢，请选择 12 小时或使用 GPU 节点。
-                  </div>
-               </div>
-               <div className="rounded-xl bg-slate-50 p-3 border border-slate-100">
-                  <div className="text-[10px] uppercase font-bold text-slate-400 mb-2">训练资源</div>
-                  <div className="flex items-center justify-between">
-                    <div className="flex flex-col">
-                      <span className="text-xs font-bold text-slate-700">训练时关闭其他 Docker 容器</span>
-                      <span className="text-[10px] text-slate-400 leading-relaxed">
-                        开启=停掉其他容器释放内存给训练（默认）；关闭=保留其他容器运行
-                      </span>
-                    </div>
-                    <Switch
-                      size="small"
-                      checked={pauseOthers}
-                      onChange={setPauseOthers}
-                      checkedChildren="关闭"
-                      unCheckedChildren="保留"
-                    />
-                  </div>
-                  {selectedNode !== 'local' && (
-                    <div className="mt-1.5 text-[10px] text-orange-600 leading-relaxed">
-                      AutoDL 远程 GPU 节点不占用本机内存，此开关对本机容器无影响。
-                    </div>
-                  )}
-               </div>
                <div className="flex gap-2">
                  <Button size="small" block className="rounded-lg" onClick={() => message.success('草稿已保存')}>保存草稿</Button>
                  <Button size="small" block className="rounded-lg" onClick={handleResetAll} disabled={isTrainingInProgress}>重置</Button>
@@ -609,7 +540,18 @@ export const ModelTrainingPage: React.FC = () => {
                     {currentStep === 0 && <FeatureSelector categories={featureCategories} selectedFeatures={selectedFeatures} onChange={(f) => dispatch({ type: 'SET_FEATURES', payload: f })} loading={featureCatalogLoading} />}
                     {currentStep === 1 && <TrainingTargetConfig target={target} timePeriods={timePeriods} onTargetChange={(t) => dispatch({ type: 'SET_TARGET', payload: t })} onTimeChange={(k, v) => dispatch({ type: 'SET_TIME', key: k, value: v })} dataCoverage={dataCoverage} wfa={wfaConfig} onWfaChange={(w) => dispatch({ type: 'SET_WFA', payload: w })} />}
                     {currentStep === 2 && <ParameterConfig params={params} context={context} onParamsChange={(p) => dispatch({ type: 'SET_PARAMS', payload: p })} onContextChange={(c) => dispatch({ type: 'SET_CONTEXT', payload: c })} displayName={displayName} onDisplayNameChange={(n, m) => dispatch({ type: 'SET_DISPLAY_NAME', payload: { name: n, mode: m } })} autoDisplayName={autoDisplayName} market={currentMarket} />}
-                    {currentStep === 3 && <TrainingConsole trainingStatus={trainingStatus} executionStage={executionStage} progress={progress} logs={logs} backendRunStatus={backendRunStatus} result={result} requestPreview={requestPreview} totalDays={totalDays} trainDays={trainDays} valDays={valDays} testDays={testDays} target={target} />}
+                    {currentStep === 3 && <TrainingConsole trainingStatus={trainingStatus} executionStage={executionStage} progress={progress} logs={logs} backendRunStatus={backendRunStatus} result={result} requestPreview={requestPreview} totalDays={totalDays} trainDays={trainDays} valDays={valDays} testDays={testDays} target={target} runtimeOptions={
+                      <TrainingRuntimeOptions
+                        trainingNodes={trainingNodes}
+                        selectedNode={selectedNode}
+                        onSelectNode={setSelectedNode}
+                        maxTimeMinutes={maxTimeMinutes}
+                        onMaxTimeChange={setMaxTimeMinutes}
+                        pauseOthers={pauseOthers}
+                        onPauseOthersChange={setPauseOthers}
+                        disabled={isTrainingInProgress}
+                      />
+                    } />}
                     {currentStep === 4 && <TrainingResultView result={result} resultError={resultError} settingDefaultModel={settingDefaultModel} onSetDefaultModel={handleSetDefaultModel} trainingStatus={trainingStatus} />}
                   </motion.div>
                 </AnimatePresence>
