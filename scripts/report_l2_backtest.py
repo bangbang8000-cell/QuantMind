@@ -12,7 +12,7 @@ import pandas as pd
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from scripts.backtest_l2_top20 import (
-    load_signals, load_klines, run_backtest, INIT_CASH, TOP_N, MODEL_ID,
+    load_signals, load_klines, load_st_symbols, run_backtest, INIT_CASH, TOP_N, MODEL_ID,
     COMMISSION, STAMP_TAX, START_DATE,
 )
 from backend.shared.database_manager_v2 import get_session
@@ -57,7 +57,7 @@ def main():
             all_syms.add(s)
     print("loading kline...", file=sys.stderr)
     klines = load_klines(all_syms)
-    result = run_backtest(signals, klines)
+    result = run_backtest(signals, klines, st_symbols=load_st_symbols())
     daily = result["daily"]
     trades = result["trades"]
     dates = result["dates"]
@@ -107,7 +107,7 @@ def main():
     A("# L2 CatBoost T+5 策略回测报告")
     A("")
     A(f"> **模型**：L2 CatBoost T+5 (2023-2025训练) _CN  ·  `{MODEL_ID}`")
-    A(f"> **策略**：Top{TOP_N} 每日滚动 · 资金用满(≥60%) · 涨停/跌停等开板  ·  佣金万三 + 印花税0.1%")
+    A(f"> **策略**：Top{TOP_N} 每日滚动 · 资金用满(≥60%) · 涨停/跌停等开板 · 剔除ST · 佣金万三 + 印花税0.1%")
     A(f"> **周期**：{dates[0]} ~ {dates[-1]}  ·  **初始资金**：50 万元")
     A("")
     A("---")
@@ -149,7 +149,7 @@ def main():
     A("")
     A("## 三、策略规则")
     A("")
-    A("1. **选股**：每日取模型预测分数最高的 20 只作为目标持仓（仅正分）。")
+    A("1. **选股**：每日取模型预测分数最高的 20 只作为目标持仓（仅正分，剔除 ST/*ST）。")
     A("2. **买入**：每只按目标金额分配（= 权益×90%÷20，至少用到 60% 资金），开盘价买入，取 100 股整数倍。")
     A("3. **涨跌停处理**：涨停（一字板）买入挂单等待开板；跌停（一字板）卖出挂单等待开板，确保不追涨停、不砸跌停。")
     A("4. **换股**：持仓跌出次日前 20、或分数为负 → 次日开盘卖出；新入选补足 20 只。")
