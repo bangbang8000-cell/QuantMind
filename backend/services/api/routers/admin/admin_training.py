@@ -251,7 +251,9 @@ async def list_training_nodes(
         nodes.append({
             "id": node_id,
             "type": "remote",
-            "name": n.get("name") or node_id,
+            # 配置名称可能包含临时显卡型号或测试备注；训练界面统一以
+            # AutoDL 呈现，节点 ID 仍用于实际调度与配置定位。
+            "name": "AutoDL",
             "host": n.get("host"),
             "port": n.get("port", 22),
             "description": f"AutoDL 远程 GPU 训练节点（{n.get('host')}）",
