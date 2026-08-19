@@ -845,7 +845,7 @@ export const buildTrainingRequest = (
 export const buildBackendTrainingPayload = (
   request: TrainingRequestPayload,
   timePeriods: TimePeriodMap,
-  options?: { nodeId?: string; maxTimeMinutes?: number },
+  options?: { nodeId?: string; maxTimeMinutes?: number; pauseOthers?: boolean },
 ): any => {
   const features = Array.from(new Set(request.selectedFeatures));
   const trainStart = dayjs(request.timePeriods.train[0]).format('YYYY-MM-DD');
@@ -989,6 +989,12 @@ export const buildBackendTrainingPayload = (
   // 每 epoch ~10 分钟 × 200 epochs 远超默认值，必须由前端显式透传。
   if (options?.maxTimeMinutes) {
     payload.max_time_minutes = options.maxTimeMinutes;
+  }
+
+  // 训练时是否停掉其他 Docker 容器释放内存（前端开关透传）
+  // true=停其他容器（腾内存给训练，默认）；false=保留其他容器运行
+  if (typeof options?.pauseOthers === 'boolean') {
+    payload.pause_others = options.pauseOthers;
   }
 
   return payload;

@@ -6,7 +6,7 @@ import {
   Copy, Sparkles, RefreshCcw, Target
 } from 'lucide-react';
 import {
-  Button, Space, Tag, Typography, message, Card, Select
+  Button, Space, Tag, Typography, message, Card, Select, Switch
 } from 'antd';
 import dayjs, { Dayjs } from 'dayjs';
 import { clsx } from 'clsx';
@@ -174,6 +174,8 @@ export const ModelTrainingPage: React.FC = () => {
   // 训练时长预算（分钟）。后端编排器默认 120 分钟；DL 模型（GRU/LSTM 等）
   // 在 CPU 上每 epoch ~10 分钟，200 epochs 需要十几个小时，必须允许用户调高。
   const [maxTimeMinutes, setMaxTimeMinutes] = useState<number>(720);
+  // 训练时是否停掉其他 Docker 容器释放内存（默认 true=停其他容器）
+  const [pauseOthers, setPauseOthers] = useState<boolean>(true);
 
   const timersRef = useRef<number[]>([]);
   const pollTimerRef = useRef<number | null>(null);
@@ -352,7 +354,7 @@ export const ModelTrainingPage: React.FC = () => {
     pushLog(`正在提交训练请求：${displayName}`);
 
     try {
-      const payload = buildBackendTrainingPayload(requestPreview, timePeriods, { nodeId: selectedNode, maxTimeMinutes });
+      const payload = buildBackendTrainingPayload(requestPreview, timePeriods, { nodeId: selectedNode, maxTimeMinutes, pauseOthers });
       const { runId } = await modelTrainingService.runTraining(payload);
       pushLog(`提交成功，Run ID: ${runId}`);
 
@@ -534,6 +536,29 @@ export const ModelTrainingPage: React.FC = () => {
                   <div className="mt-1.5 text-[10px] text-slate-400 leading-relaxed">
                     超过预算编排器会终止任务。GRU/LSTM 等 DL 模型在本地 CPU 训练较慢，请选择 12 小时或使用 GPU 节点。
                   </div>
+               </div>
+               <div className="rounded-xl bg-slate-50 p-3 border border-slate-100">
+                  <div className="text-[10px] uppercase font-bold text-slate-400 mb-2">训练资源</div>
+                  <div className="flex items-center justify-between">
+                    <div className="flex flex-col">
+                      <span className="text-xs font-bold text-slate-700">训练时关闭其他 Docker 容器</span>
+                      <span className="text-[10px] text-slate-400 leading-relaxed">
+                        开启=停掉其他容器释放内存给训练（默认）；关闭=保留其他容器运行
+                      </span>
+                    </div>
+                    <Switch
+                      size="small"
+                      checked={pauseOthers}
+                      onChange={setPauseOthers}
+                      checkedChildren="关闭"
+                      unCheckedChildren="保留"
+                    />
+                  </div>
+                  {selectedNode !== 'local' && (
+                    <div className="mt-1.5 text-[10px] text-orange-600 leading-relaxed">
+                      AutoDL 远程 GPU 节点不占用本机内存，此开关对本机容器无影响。
+                    </div>
+                  )}
                </div>
                <div className="flex gap-2">
                  <Button size="small" block className="rounded-lg" onClick={() => message.success('草稿已保存')}>保存草稿</Button>

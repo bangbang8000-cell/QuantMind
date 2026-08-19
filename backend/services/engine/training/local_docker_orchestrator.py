@@ -132,13 +132,26 @@ class LocalDockerOrchestrator(TrainingOrchestrator):
         n = (name or "").lstrip("/")
         return any(n.startswith(p) for p in _PROTECTED_PREFIXES)
 
-    def _pause_others(self, work_dir: Path, run_id: str) -> list[str]:
+    def _pause_others(
+        self,
+        work_dir: Path,
+        run_id: str,
+        pause_others: bool | None = None,
+    ) -> list[str]:
         """停止所有非保护的运行中容器，把名字写到 work_dir/.paused_containers.json。
 
         返回被停止的容器名列表。失败时记录 warning 但不抛出，保证训练能继续。
+
+        pause_others 参数（前端训练开关透传）：
+        - None → 用环境变量 TRAINING_PAUSE_OTHERS 默认值（启动时决定）
+        - True/False → 显式覆盖环境变量（用户在前端选了是否停其他容器）
         """
-        if not _PAUSE_OTHERS_ENABLED:
-            logger.info("[%s] TRAINING_PAUSE_OTHERS disabled, skip", run_id)
+        if pause_others is None:
+            enabled = _PAUSE_OTHERS_ENABLED
+        else:
+            enabled = pause_others
+        if not enabled:
+            logger.info("[%s] pause-others disabled (env=%s, req=%s), skip", run_id, _PAUSE_OTHERS_ENABLED, pause_others)
             return []
 
         paused: list[str] = []
@@ -634,9 +647,15 @@ class LocalDockerOrchestrator(TrainingOrchestrator):
 
         # 启动训练容器之前：停掉其它非保护容器，把内存腾出来给训练
         # 用 to_thread 包装：避免 docker.stop（含 SIGTERM 等待）阻塞主 event loop
+        # pause_others 支持请求级覆盖：payload 里带 pause_others（前端开关）时优先
         try:
+            req_pause = payload.get("pause_others") if isinstance(payload, dict) else None
+            if req_pause is None and isinstance(payload, dict):
+                ctx = payload.get("context")
+                if isinstance(ctx, dict):
+                    req_pause = ctx.get("pause_others")
             paused = await asyncio.to_thread(
-                self._pause_others, container_work_dir, run_id
+                self._pause_others, container_work_dir, run_id, req_pause
             )
             if paused:
                 self.log_stream.append_log(
