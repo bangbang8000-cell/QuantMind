@@ -15,8 +15,8 @@ import { modelTrainingService } from '../services/modelTrainingService';
 import { useAppSelector } from '../store';
 import { selectCurrentMarket, AppMarket } from '../store/slices/uiSlice';
 import { getMarketConfig } from '../config/marketConfig';
-import { TrainingTarget, TrainingParams, TrainingContext, TrainingStatus, TrainingDraft, SplitKey, TimePeriodMap, FeatureCategory, STORAGE_KEY, DEFAULT_FEATURE_CATEGORIES, PRESET_DEFAULT_FEATURES, MARKET_DEFAULT_FEATURES, getDefaultFeaturesForMarket, resolveDefaultSelectedFeatures, DEFAULT_TIME_PERIODS, DEFAULT_TARGET, DEFAULT_PARAMS, DEFAULT_CONTEXT, buildAutoDisplayName, buildLabelFormula, buildEffectiveTradeDate, daysBetween, toISOStringRange, restoreRange, shouldMigrateLegacyDraftPeriods, buildTrainingRequest, formatRange, toDynamicCategories, TrainingResult, buildBackendTrainingPayload, parseTrainingResult, parseSuggestedTimePeriods, MODEL_DL_DEFAULTS, WfaConfig } from './training/trainingUtils';
-import { AdminModelFeatureDataCoverage } from '../features/admin/types';
+import { TrainingTarget, TrainingParams, TrainingContext, TrainingStatus, TrainingDraft, SplitKey, TimePeriodMap, FeatureCategory, STORAGE_KEY, DEFAULT_FEATURE_CATEGORIES, getDefaultFeaturesForMarket, resolveDefaultSelectedFeatures, DEFAULT_TIME_PERIODS, DEFAULT_TARGET, DEFAULT_PARAMS, DEFAULT_CONTEXT, buildAutoDisplayName, buildLabelFormula, buildEffectiveTradeDate, daysBetween, toISOStringRange, restoreRange, shouldMigrateLegacyDraftPeriods, buildTrainingRequest, formatRange, toDynamicCategories, TrainingResult, buildBackendTrainingPayload, parseTrainingResult, parseSuggestedTimePeriods, MODEL_DL_DEFAULTS, WfaConfig } from './training/trainingUtils';
+import { AdminModelFeatureDataCoverage, QuantDBTrainingSource } from '../features/admin/types';
 import { adminService } from '../features/admin/services/adminService';
 import { FeatureSelector } from './training/FeatureSelector';
 import { TrainingTargetConfig } from './training/TrainingTargetConfig';
@@ -143,22 +143,24 @@ export const ModelTrainingPage: React.FC = () => {
 
   // ── useReducer：草稿持久化的 7 字段 ──
   const [formState, dispatch] = useReducer(formReducer, {
-    selectedFeatures: getDefaultFeaturesForMarket(currentMarket),
+    selectedFeatures: currentMarket === 'CN' ? [] : getDefaultFeaturesForMarket(currentMarket),
     timePeriods: DEFAULT_TIME_PERIODS,
     wfaConfig: { enabled: false, strategy: 'rolling', nWindows: 4, trainYears: 3, valMonths: 12, stepMonths: 12 },
     target: DEFAULT_TARGET,
     params: DEFAULT_PARAMS,
     context: DEFAULT_CONTEXT,
-    displayName: buildAutoDisplayName(dayjs(), DEFAULT_TARGET, PRESET_DEFAULT_FEATURES.length),
+    displayName: buildAutoDisplayName(dayjs(), DEFAULT_TARGET, 0),
     displayNameMode: 'auto' as const,
     draftHydrated: false,
   });
 
   // ── useState: 训练运行时 state（不参与草稿持久化） ──
   const [currentStep, setCurrentStep] = useState(0);
-  const [featureCategories, setFeatureCategories] = useState<FeatureCategory[]>(DEFAULT_FEATURE_CATEGORIES);
+  // A 股 QuantDB 的字段、分类与默认勾选只来自后端已发布目录。
+  const [featureCategories, setFeatureCategories] = useState<FeatureCategory[]>([]);
   const [featureCatalogLoading, setFeatureCatalogLoading] = useState(false);
   const [factorSource, setFactorSource] = useState('l1_l2_factors');
+  const [factorSources, setFactorSources] = useState<QuantDBTrainingSource[]>([]);
   const [factorCatalogVersion, setFactorCatalogVersion] = useState<string | null>(null);
   const [dataCoverage, setDataCoverage] = useState<AdminModelFeatureDataCoverage | null>(null);
   const [trainingStatus, setTrainingStatus] = useState<TrainingStatus>('draft');
@@ -192,7 +194,7 @@ export const ModelTrainingPage: React.FC = () => {
   useEffect(() => {
     const mc = getMarketConfig(currentMarket);
     dispatch({ type: 'SET_MARKET_CONTEXT', payload: { market: currentMarket, benchmark: mc.benchmark } });
-    dispatch({ type: 'SET_FEATURES', payload: getDefaultFeaturesForMarket(currentMarket) });
+    dispatch({ type: 'SET_FEATURES', payload: currentMarket === 'CN' ? [] : getDefaultFeaturesForMarket(currentMarket) });
     catalogSuggestionAppliedRef.current = false;
   }, [currentMarket]);
 
@@ -249,37 +251,40 @@ export const ModelTrainingPage: React.FC = () => {
     loadNodes();
   }, []);
 
-  // 特征字典加载
+  // A 股训练目录完全由后端发布版本驱动；不回退到任何内置字段。
   useEffect(() => {
     let active = true;
     const loadCatalog = async () => {
       setFeatureCatalogLoading(true);
       setFactorCatalogVersion(null);
+      setDataCoverage(null);
       try {
+        if (currentMarket === 'CN') {
+          const sourceResult = await modelTrainingService.getQuantDBTrainingSources();
+          if (!active) return;
+          setFactorSources(sourceResult.sources || []);
+          const selectedSource = sourceResult.sources.find((item) => item.id === factorSource);
+          if (!selectedSource) {
+            const defaultSource = sourceResult.sources.find((item) => item.default)?.id
+              || sourceResult.default_source;
+            if (defaultSource && defaultSource !== factorSource) setFactorSource(defaultSource);
+            return;
+          }
+        }
+
         const catalog = await modelTrainingService.getFeatureCatalog(currentMarket, false, factorSource);
         if (!active) return;
         const dynamicCats = toDynamicCategories(catalog);
         setFeatureCategories(dynamicCats);
-        setFactorCatalogVersion(catalog.source === 'quantdb_factor_catalog' ? catalog.version_id : null);
+        setDataCoverage(catalog.data_coverage || null);
+        setFactorCatalogVersion(
+          catalog.source === 'quantdb_factor_catalog' && catalog.catalog_status === 'ready'
+            ? catalog.version_id
+            : null,
+        );
         dispatch({ type: 'SET_FEATURES', payload: resolveDefaultSelectedFeatures(dynamicCats, currentMarket) });
-      } catch (error) {
-        if (active && currentMarket === 'CN') {
-          setFeatureCategories([]);
-          dispatch({ type: 'SET_FEATURES', payload: [] });
-          message.warning('当前 QuantDB 因子源没有已发布映射，无法创建直读训练任务');
-        } else if (active) message.warning('特征字典加载失败，已回退到内置字段');
-      } finally {
-        if (active) setFeatureCatalogLoading(false);
-      }
-
-      try {
-        const catalogWithCoverage = await modelTrainingService.getFeatureCatalog(currentMarket, true, factorSource);
-        if (!active) return;
-        if (catalogWithCoverage.data_coverage) {
-          setDataCoverage(catalogWithCoverage.data_coverage);
-        }
-        if (catalogWithCoverage.data_coverage?.suggested_periods && !catalogSuggestionAppliedRef.current) {
-          const suggested = parseSuggestedTimePeriods(catalogWithCoverage.data_coverage.suggested_periods);
+        if (catalog.data_coverage?.suggested_periods && !catalogSuggestionAppliedRef.current) {
+          const suggested = parseSuggestedTimePeriods(catalog.data_coverage.suggested_periods);
           if (suggested) {
             dispatch({ type: 'SET_TIME', key: 'train', value: suggested.train });
             dispatch({ type: 'SET_TIME', key: 'val', value: suggested.val });
@@ -287,7 +292,18 @@ export const ModelTrainingPage: React.FC = () => {
             catalogSuggestionAppliedRef.current = true;
           }
         }
-      } catch { /* coverage failure ok */ }
+      } catch {
+        if (active && currentMarket === 'CN') {
+          setFeatureCategories([]);
+          dispatch({ type: 'SET_FEATURES', payload: [] });
+        } else if (active) {
+          setFeatureCategories(DEFAULT_FEATURE_CATEGORIES);
+          dispatch({ type: 'SET_FEATURES', payload: getDefaultFeaturesForMarket(currentMarket) });
+          message.warning('特征字典加载失败，已回退到内置字段');
+        }
+      } finally {
+        if (active) setFeatureCatalogLoading(false);
+      }
     };
     loadCatalog();
     return () => { active = false; };
@@ -688,15 +704,18 @@ export const ModelTrainingPage: React.FC = () => {
                         value={factorSource}
                         onChange={setFactorSource}
                         className="min-w-52"
-                        options={[
-                          { value: 'l1_l2_factors', label: 'L1 + L2 合并宽表（默认）' },
-                          { value: 'l1_factors', label: 'L1 因子' },
-                          { value: 'l2_factors', label: 'L2 因子' },
-                        ]}
+                        loading={featureCatalogLoading && factorSources.length === 0}
+                        options={factorSources.map((item) => ({
+                          value: item.id,
+                          label: item.default ? `${item.name}（默认）` : item.name,
+                          disabled: !item.ready,
+                        }))}
                       />
                       {factorCatalogVersion
                         ? <Tag color="blue">目录版本 {factorCatalogVersion}</Tag>
-                        : <Tag>尚未发布 QuantDB 因子目录</Tag>}
+                        : <Tag color={dataCoverage?.ready ? 'default' : 'warning'}>
+                            {factorSources.find((item) => item.id === factorSource)?.reason || '尚未发布 QuantDB 因子目录'}
+                          </Tag>}
                     </div>
                   )}
                 </Card>

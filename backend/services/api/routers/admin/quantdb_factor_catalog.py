@@ -30,6 +30,13 @@ router = APIRouter(dependencies=[Depends(require_admin)])
 _VALID_SOURCE = set(FACTOR_SOURCE_DIRS)
 _VALID_STATUS = {"draft", "published", "archived"}
 
+# 数据源元信息属于后端训练数据契约；前端不得硬编码来源或默认项。
+FACTOR_SOURCE_LABELS = {
+    "l1_factors": "L1 因子",
+    "l2_factors": "L2 因子",
+    "l1_l2_factors": "L1 + L2 合并宽表",
+}
+
 _SCHEMA_SQL = """
 CREATE TABLE IF NOT EXISTS qm_quantdb_factor_field (
     market VARCHAR(16) NOT NULL DEFAULT 'CN',
@@ -306,6 +313,96 @@ async def load_active_factor_catalog(source_dataset: str = DEFAULT_FACTOR_SOURCE
         await _ensure_schema(session)
         version = await _active_version(session, source_dataset)
         return await _catalog_payload(session, version, source_dataset) if version else None
+
+
+def _training_coverage(source: str, status: dict[str, Any]) -> dict[str, Any]:
+    """Convert the cached discovery manifest to the user training API shape."""
+    return {
+        "source": "quantdb_factors",
+        "dataset_id": source,
+        "snapshot_dir": status["path"],
+        "file_count": int(status["files"]),
+        "scanned_files": int(status["files"]),
+        "failed_files": 0,
+        "total_rows": 0,
+        "min_date": status["min_date"],
+        "max_date": status["max_date"],
+        "schema_hash": status["schema_hash"],
+        "ready": bool(status["ready"]),
+        "missing_required": list(status["missing_required"]),
+        "reason": status["reason"],
+        "refreshed_at": status["refreshed_at"],
+    }
+
+
+async def load_quantdb_training_sources() -> dict[str, Any]:
+    """Return all trainable-source choices from the cached QuantDB manifest.
+
+    This is deliberately database/manifest-only: opening the training page must
+    never scan parquet partitions.
+    """
+    async with get_session() as session:
+        await _ensure_schema(session)
+        statuses = await _cached_factor_sources(session)
+        rows = (await session.execute(text("""
+            SELECT version_id, source_dataset, published_at
+            FROM qm_training_factor_catalog_version
+            WHERE status = 'published'
+        """))).mappings().all()
+    published = {str(row["source_dataset"]): dict(row) for row in rows}
+    sources = []
+    for source in FACTOR_SOURCE_DIRS:
+        status = statuses[source]
+        version = published.get(source)
+        sources.append({
+            "id": source,
+            "name": FACTOR_SOURCE_LABELS[source],
+            "default": source == DEFAULT_FACTOR_SOURCE,
+            "ready": bool(status["ready"]),
+            "published": version is not None,
+            "trainable": bool(status["ready"]) and version is not None,
+            "feature_count": 0,
+            "catalog_version": version["version_id"] if version else None,
+            "schema_hash": status["schema_hash"],
+            "reason": status["reason"] if not status["ready"] else (
+                None if version else "尚未发布 QuantDB 因子目录"
+            ),
+        })
+    return {"default_source": DEFAULT_FACTOR_SOURCE, "sources": sources}
+
+
+async def load_quantdb_training_catalog(source_dataset: str) -> dict[str, Any]:
+    """Return the sole user-facing QuantDB training catalog for one source.
+
+    An unpublished source is a valid empty state.  It must never fall back to
+    old parquet/database feature dictionaries, because that would show fields
+    unrelated to the selected QuantDB source.
+    """
+    source_dataset = _validate_source(source_dataset)
+    async with get_session() as session:
+        await _ensure_schema(session)
+        statuses = await _cached_factor_sources(session)
+        status = statuses[source_dataset]
+        version = await _active_version(session, source_dataset)
+        coverage = _training_coverage(source_dataset, status)
+        if not version:
+            return {
+                "catalog_status": "unpublished",
+                "version_id": "",
+                "version_name": "",
+                "source_dataset": source_dataset,
+                "status": "unpublished",
+                "feature_count": 0,
+                "categories": [],
+                "source": "quantdb_factor_catalog",
+                "data_coverage": coverage,
+                "message": "尚未发布 QuantDB 因子目录",
+            }
+        catalog = await _catalog_payload(session, version, source_dataset)
+        catalog["catalog_status"] = "ready" if status["ready"] else "source_not_ready"
+        catalog["data_coverage"] = coverage
+        catalog["message"] = None if status["ready"] else status["reason"]
+        return catalog
 
 
 @router.get("/sources")

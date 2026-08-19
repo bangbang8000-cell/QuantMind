@@ -274,22 +274,22 @@ class TestAPIExtendedIntegration:
             "is_admin": False,
         }
 
-        with patch("backend.services.api.routers.model_training._load_feature_catalog_from_db", AsyncMock(return_value=None)):
-            with patch(
-                "backend.services.api.routers.model_training._load_feature_catalog_from_file",
-                MagicMock(return_value={"version_id": "v1", "version_name": "v1", "feature_count": 1, "categories": [], "source": "file"}),
-            ):
-                with patch(
-                    "backend.services.api.routers.model_training._enrich_feature_catalog_with_data_coverage",
-                    MagicMock(side_effect=lambda payload: payload),
-                ):
-                    try:
-                        response = client.get("/api/v1/models/feature-catalog")
-                        assert response.status_code == 200
-                        data = response.json()
-                        assert data["version_id"] == "v1"
-                    finally:
-                        app.dependency_overrides.clear()
+        with patch(
+            "backend.services.api.routers.model_training.load_quantdb_training_catalog",
+            AsyncMock(return_value={
+                "version_id": "v1", "version_name": "v1", "feature_count": 1,
+                "categories": [], "source": "quantdb_factor_catalog",
+                "catalog_status": "ready",
+            }),
+        ):
+            try:
+                response = client.get("/api/v1/models/feature-catalog")
+                assert response.status_code == 200
+                data = response.json()
+                assert data["version_id"] == "v1"
+                assert data["catalog_status"] == "ready"
+            finally:
+                app.dependency_overrides.clear()
 
     def test_model_training_user_run_and_status_integration(self, client):
         """验证用户态模型训练启动/状态接口可达并返回结构化数据"""

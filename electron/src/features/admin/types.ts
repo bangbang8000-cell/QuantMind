@@ -87,6 +87,10 @@ export interface AdminModelFeatureItem {
     source_table_fields: string;
     enabled: boolean;
     order_no: number;
+    default_selected?: boolean;
+    required?: boolean;
+    source_dataset?: string;
+    source_column?: string;
     markets?: string[];
 }
 
@@ -120,6 +124,7 @@ export interface AdminModelFeatureDataCoverage {
     ready?: boolean;
     missing_required?: string[];
     reason?: string | null;
+    refreshed_at?: string | null;
 }
 
 export interface AdminModelFeatureCatalog {
@@ -129,9 +134,30 @@ export interface AdminModelFeatureCatalog {
     categories: AdminModelFeatureCategory[];
     source: 'database' | 'file' | 'quantdb_factor_catalog';
     source_dataset?: string;
-    status?: 'draft' | 'published' | 'archived';
+    status?: 'draft' | 'published' | 'archived' | 'unpublished';
+    /** ready = published catalog plus a ready raw QuantDB source. */
+    catalog_status?: 'ready' | 'unpublished' | 'source_not_ready';
+    message?: string | null;
     fallback_path?: string;
     data_coverage?: AdminModelFeatureDataCoverage;
+}
+
+export interface QuantDBTrainingSource {
+    id: string;
+    name: string;
+    default: boolean;
+    ready: boolean;
+    published: boolean;
+    trainable: boolean;
+    feature_count: number;
+    catalog_version: string | null;
+    schema_hash: string;
+    reason: string | null;
+}
+
+export interface QuantDBTrainingSourcesResult {
+    default_source: string;
+    sources: QuantDBTrainingSource[];
 }
 
 export interface AdminPredictionRunSummary {

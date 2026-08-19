@@ -792,6 +792,10 @@ export const resolveDefaultSelectedFeatures = (
     return allFeatures.filter((f) => f.defaultSelected === true).map((f) => f.key);
   }
 
+  // QuantDB 目录必须完整下发默认选择；A 股直读模式禁止以旧前端预设
+  // 猜测字段，防止展示的特征与已发布数据契约不一致。
+  if (String(market).toUpperCase() === 'CN') return [];
+
   // 兜底：后端没下发 default_selected，使用 PRESET 并过滤掉 catalog 没有的 key
   const availableKeys = new Set(allFeatures.map((f) => f.key));
   const preset = getDefaultFeaturesForMarket(market);

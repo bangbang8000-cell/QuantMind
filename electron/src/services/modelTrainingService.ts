@@ -1,7 +1,10 @@
 import axios, { AxiosInstance } from 'axios';
 import { SERVICE_ENDPOINTS } from '../config/services';
 import { authService } from '../features/auth/services/authService';
-import { AdminModelFeatureCatalog } from '../features/admin/types';
+import {
+  AdminModelFeatureCatalog,
+  QuantDBTrainingSourcesResult,
+} from '../features/admin/types';
 
 export interface ModelTrainingRunResponse {
   runId: string;
@@ -538,6 +541,11 @@ class ModelTrainingService {
     if (includeCoverage) params.include_coverage = 'true';
     if (factorSource) params.factor_source = factorSource;
     const resp = await this.client.get<AdminModelFeatureCatalog>('/models/feature-catalog', { params });
+    return resp.data;
+  }
+
+  async getQuantDBTrainingSources(): Promise<QuantDBTrainingSourcesResult> {
+    const resp = await this.client.get<QuantDBTrainingSourcesResult>('/models/training-sources');
     return resp.data;
   }
 

@@ -24,7 +24,10 @@ from backend.services.api.routers.admin.model_management import (
 from backend.services.api.routers.admin.model_management_utils import (
     _enrich_feature_catalog_with_data_coverage_async,
 )
-from backend.services.api.routers.admin.quantdb_factor_catalog import load_active_factor_catalog
+from backend.services.api.routers.admin.quantdb_factor_catalog import (
+    load_quantdb_training_catalog,
+    load_quantdb_training_sources,
+)
 from backend.services.api.training_shap_summary import read_shap_summary_rows, to_int_or
 from backend.services.api.user_app.middleware.auth import get_current_user
 from backend.services.engine.inference.batch_aggregator import aggregate_batch
@@ -33,7 +36,6 @@ from backend.services.engine.inference.batch_orchestrator import (
 )
 from backend.services.engine.inference.router_service import InferenceRouterService
 from backend.services.engine.inference.script_runner import InferenceScriptRunner
-from backend.services.engine.data_platform.quantdb_factor_reader import QuantDBFactorReader
 from backend.services.engine.services.model_inference_batch_persistence import (
     model_inference_batch_persistence,
 )
@@ -507,14 +509,11 @@ async def get_model_feature_catalog(
     _ = current_user
     market_upper = str(market or "CN").upper()
     if market_upper in {"CN", "A", "A_SHARE"}:
-        try:
-            direct_catalog = await load_active_factor_catalog(factor_source)
-        except Exception:
-            direct_catalog = None
-        if direct_catalog:
-            if include_coverage:
-                direct_catalog["data_coverage"] = QuantDBFactorReader().describe(factor_source).to_dict()
-            return direct_catalog
+        # CN 训练只使用已发布的 QuantDB 目录。未发布也是一个明确的正常状态，
+        # 绝不能回退到旧 DB/文件目录，否则页面看到的字段会和实际数据源不一致。
+        # 覆盖信息来自同步时的缓存 manifest，不在请求期间扫描 parquet。
+        _ = include_coverage  # Retained for older clients; coverage is always cached.
+        return await load_quantdb_training_catalog(factor_source)
     try:
         catalog = await _load_feature_catalog_from_db(market=market)
     except Exception:
@@ -529,6 +528,15 @@ async def get_model_feature_catalog(
     if include_coverage:
         return await _enrich_feature_catalog_with_data_coverage_async(catalog, market=market)
     return catalog
+
+
+@router.get("/training-sources", summary="获取可选 QuantDB 训练数据源（用户态）")
+async def get_quantdb_training_sources(
+    current_user: dict[str, Any] = Depends(get_current_user),
+):
+    """Return backend-defined source choices and published/readiness state."""
+    _ = current_user
+    return await load_quantdb_training_sources()
 
 
 @router.get("/qlib-data-range", summary="获取 Qlib 数据日期范围")
