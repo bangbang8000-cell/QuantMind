@@ -3,19 +3,19 @@ import { useNavigate } from 'react-router-dom';
 import { AnimatePresence, motion } from 'framer-motion';
 import {
   Brain, ChevronRight, Play, Settings2, BarChart, Database,
-  Copy, Sparkles, RefreshCcw, Target
+  Copy, Sparkles, RefreshCcw, Target, Upload
 } from 'lucide-react';
 import {
-  Button, Space, Tag, Typography, message, Card, Select
+  Button, Space, Tag, Typography, message, Card, Select, Modal, Alert
 } from 'antd';
 import dayjs, { Dayjs } from 'dayjs';
 import { clsx } from 'clsx';
 import { PAGE_LAYOUT } from '../config/pageLayout';
 import { modelTrainingService } from '../services/modelTrainingService';
-import { useAppSelector } from '../store';
-import { selectCurrentMarket, AppMarket } from '../store/slices/uiSlice';
+import { useAppDispatch, useAppSelector } from '../store';
+import { selectCurrentMarket, AppMarket, setMarket } from '../store/slices/uiSlice';
 import { getMarketConfig } from '../config/marketConfig';
-import { TrainingTarget, TrainingParams, TrainingContext, TrainingStatus, TrainingDraft, SplitKey, TimePeriodMap, FeatureCategory, STORAGE_KEY, DEFAULT_FEATURE_CATEGORIES, getDefaultFeaturesForMarket, resolveDefaultSelectedFeatures, DEFAULT_TIME_PERIODS, DEFAULT_TARGET, DEFAULT_PARAMS, DEFAULT_CONTEXT, buildAutoDisplayName, buildLabelFormula, buildEffectiveTradeDate, daysBetween, toISOStringRange, restoreRange, shouldMigrateLegacyDraftPeriods, buildTrainingRequest, formatRange, toDynamicCategories, TrainingResult, buildBackendTrainingPayload, parseTrainingResult, parseSuggestedTimePeriods, MODEL_DL_DEFAULTS, WfaConfig } from './training/trainingUtils';
+import { TrainingTarget, TrainingParams, TrainingContext, TrainingStatus, TrainingDraft, SplitKey, TimePeriodMap, FeatureCategory, STORAGE_KEY, DEFAULT_FEATURE_CATEGORIES, getDefaultFeaturesForMarket, resolveDefaultSelectedFeatures, DEFAULT_TIME_PERIODS, DEFAULT_TARGET, DEFAULT_PARAMS, DEFAULT_CONTEXT, buildAutoDisplayName, buildLabelFormula, buildEffectiveTradeDate, daysBetween, toISOStringRange, restoreRange, shouldMigrateLegacyDraftPeriods, buildTrainingRequest, formatRange, toDynamicCategories, TrainingResult, buildBackendTrainingPayload, parseTrainingResult, parseSuggestedTimePeriods, MODEL_DL_DEFAULTS, WfaConfig, ImportedTrainingConfig, buildTrainingConfigFile, parseTrainingConfig, serializeTrainingConfig } from './training/trainingUtils';
 import { AdminModelFeatureDataCoverage, QuantDBTrainingSource } from '../features/admin/types';
 import { adminService } from '../features/admin/services/adminService';
 import { FeatureSelector } from './training/FeatureSelector';
@@ -66,6 +66,13 @@ interface FormState {
   draftHydrated: boolean;
 }
 
+interface ImportPreview {
+  config: ImportedTrainingConfig;
+  unavailableFeatures: string[];
+  marketChanged: boolean;
+  catalogVersionChanged: boolean;
+}
+
 type FormAction =
   | { type: 'HYDRATE'; payload: TrainingDraft | null }
   | { type: 'SET_FEATURES'; payload: string[] }
@@ -89,7 +96,11 @@ function formReducer(state: FormState, action: FormAction): FormState {
       }
       if (restoredParams.model_type && MODEL_DL_DEFAULTS[restoredParams.model_type]) {
         const defaults = MODEL_DL_DEFAULTS[restoredParams.model_type];
-        Object.assign(restoredParams, defaults);
+        Object.entries(defaults).forEach(([key, value]) => {
+          if (restoredParams[key as keyof TrainingParams] === undefined) {
+            (restoredParams as Record<string, unknown>)[key] = value;
+          }
+        });
       }
       const restoredWfa = p.wfa ?? { enabled: false, strategy: 'rolling', nWindows: 4, trainYears: 3, valMonths: 12, stepMonths: 12 };
       return {
@@ -139,6 +150,7 @@ function formReducer(state: FormState, action: FormAction): FormState {
 
 export const ModelTrainingPage: React.FC = () => {
   const navigate = useNavigate();
+  const appDispatch = useAppDispatch();
   const currentMarket = useAppSelector(selectCurrentMarket);
 
   // ── useReducer：草稿持久化的 7 字段 ──
@@ -183,6 +195,10 @@ export const ModelTrainingPage: React.FC = () => {
   const pollTimerRef = useRef<number | null>(null);
   const logsRef = useRef<string[]>([]);
   const catalogSuggestionAppliedRef = useRef(false);
+  const importInputRef = useRef<HTMLInputElement>(null);
+  const importedFeaturesRef = useRef<string[] | null>(null);
+  const [importPreview, setImportPreview] = useState<ImportPreview | null>(null);
+  const [importingConfig, setImportingConfig] = useState(false);
 
   // Derive individual fields from formState for inline use
   const { selectedFeatures, timePeriods, wfaConfig, target, params, context, displayName, displayNameMode } = formState;
@@ -288,7 +304,14 @@ export const ModelTrainingPage: React.FC = () => {
             ? catalog.version_id
             : null,
         );
-        dispatch({ type: 'SET_FEATURES', payload: resolveDefaultSelectedFeatures(dynamicCats, currentMarket) });
+        const importedFeatures = importedFeaturesRef.current;
+        if (importedFeatures) {
+          const availableKeys = new Set(dynamicCats.flatMap((category) => category.features.map((feature) => feature.key)));
+          dispatch({ type: 'SET_FEATURES', payload: importedFeatures.filter((key) => availableKeys.has(key)) });
+          importedFeaturesRef.current = null;
+        } else {
+          dispatch({ type: 'SET_FEATURES', payload: resolveDefaultSelectedFeatures(dynamicCats, currentMarket) });
+        }
         if (catalog.data_coverage?.suggested_periods && !catalogSuggestionAppliedRef.current) {
           const suggested = parseSuggestedTimePeriods(catalog.data_coverage.suggested_periods);
           if (suggested) {
@@ -476,6 +499,101 @@ export const ModelTrainingPage: React.FC = () => {
     message.info('配置已重置');
   };
 
+  const handleImportConfigFile = async (file?: File) => {
+    if (!file) return;
+    setImportingConfig(true);
+    try {
+      if (file.size > 1024 * 1024) throw new Error('配置文件不能超过 1 MB');
+      const config = parseTrainingConfig(await file.text());
+      const availableKeys = new Set(featureCategories.flatMap((category) => category.features.map((feature) => feature.key)));
+      const unavailableFeatures = config.market === currentMarket && availableKeys.size > 0
+        ? config.draft.selectedFeatures.filter((key) => !availableKeys.has(key))
+        : [];
+      setImportPreview({
+        config,
+        unavailableFeatures,
+        marketChanged: config.market !== currentMarket,
+        catalogVersionChanged: config.market === currentMarket
+          && config.market === 'CN'
+          && Boolean(config.factorCatalogVersion)
+          && config.factorCatalogVersion !== factorCatalogVersion,
+      });
+    } catch (error) {
+      message.error(error instanceof Error ? `导入失败：${error.message}` : '导入失败：文件格式错误');
+    } finally {
+      setImportingConfig(false);
+      if (importInputRef.current) importInputRef.current.value = '';
+    }
+  };
+
+  const confirmImportConfig = () => {
+    if (!importPreview) return;
+    const { config } = importPreview;
+    clearTimers();
+    importedFeaturesRef.current = config.draft.selectedFeatures;
+    // 配置中的时间切分优先级高于数据目录给出的首次打开建议值。
+    catalogSuggestionAppliedRef.current = true;
+    dispatch({ type: 'HYDRATE', payload: config.draft });
+    if (config.market !== currentMarket) appDispatch(setMarket(config.market as AppMarket));
+    if (config.market === 'CN' && config.factorSource && config.factorSource !== factorSource) {
+      setFactorSource(config.factorSource);
+    } else {
+      const availableKeys = new Set(featureCategories.flatMap((category) => category.features.map((feature) => feature.key)));
+      if (availableKeys.size > 0) {
+        dispatch({ type: 'SET_FEATURES', payload: config.draft.selectedFeatures.filter((key) => availableKeys.has(key)) });
+        importedFeaturesRef.current = null;
+      }
+    }
+    setTrainingStatus('draft');
+    setResult(null);
+    setResultError('');
+    setCurrentStep(0);
+    setImportPreview(null);
+    message.success('训练配置已导入');
+  };
+
+  const handleExportConfig = async () => {
+    const draft = {
+      displayName,
+      displayNameMode,
+      selectedFeatures,
+      timePeriods: {
+        train: toISOStringRange(timePeriods.train),
+        val: toISOStringRange(timePeriods.val),
+        test: toISOStringRange(timePeriods.test),
+      },
+      target,
+      params,
+      context,
+      wfa: wfaConfig,
+    };
+    const content = serializeTrainingConfig(buildTrainingConfigFile(draft, {
+      market: currentMarket,
+      factor_source: currentMarket === 'CN' ? factorSource : undefined,
+      factor_catalog_version: currentMarket === 'CN' ? factorCatalogVersion : undefined,
+    }));
+    const safeName = (displayName || 'model-training').replace(/[\\/:*?"<>|]/g, '_');
+    const filename = `模型训练配置_${safeName}_${dayjs().format('YYYYMMDD')}.yml`;
+    try {
+      if (window.electronAPI?.exportSaveFile) {
+        const saved = await window.electronAPI.exportSaveFile({ data: content, filename, fileType: 'yml' });
+        if (saved.success) message.success('训练配置已导出');
+        else if (!saved.canceled) message.error(saved.error || '导出失败');
+        return;
+      }
+      const blob = new Blob([content], { type: 'application/x-yaml;charset=utf-8' });
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement('a');
+      link.href = url;
+      link.download = filename;
+      link.click();
+      URL.revokeObjectURL(url);
+      message.success('训练配置已导出');
+    } catch (error) {
+      message.error(error instanceof Error ? `导出失败：${error.message}` : '导出失败');
+    }
+  };
+
   const handleSetDefaultModel = async () => {
     const id = result?.modelRegistration?.modelId || result?.modelId;
     if (!id) return;
@@ -637,6 +755,27 @@ export const ModelTrainingPage: React.FC = () => {
                       </div>
                     )}
                     <Space className="ml-auto shrink-0">
+                      {currentStep === 0 && (
+                        <>
+                          <input
+                            ref={importInputRef}
+                            type="file"
+                            accept=".yml,.yaml,.txt,text/yaml,text/plain"
+                            className="hidden"
+                            onChange={(event) => void handleImportConfigFile(event.target.files?.[0])}
+                          />
+                          <Button
+                            size="small"
+                            icon={<Upload size={14} />}
+                            className="rounded-xl h-8 font-bold px-3"
+                            loading={importingConfig}
+                            disabled={isTrainingInProgress}
+                            onClick={() => importInputRef.current?.click()}
+                          >
+                            导入配置
+                          </Button>
+                        </>
+                      )}
                       <Button size="small" icon={<RefreshCcw size={14}/>} className="rounded-xl h-8 font-bold px-3" onClick={handleResetAll} disabled={isTrainingInProgress}>清空</Button>
                       <Button size="small" type="primary" icon={<ChevronRight size={14}/>} className="rounded-xl h-8 bg-blue-600 font-bold px-4 shadow-sm" onClick={stepAction} disabled={disableStartTraining}>
                         {stepActionLabel}
@@ -659,7 +798,7 @@ export const ModelTrainingPage: React.FC = () => {
                     {currentStep === 1 && <TrainingTargetConfig target={target} timePeriods={timePeriods} onTargetChange={(t) => dispatch({ type: 'SET_TARGET', payload: t })} onTimeChange={(k, v) => dispatch({ type: 'SET_TIME', key: k, value: v })} dataCoverage={dataCoverage} wfa={wfaConfig} onWfaChange={(w) => dispatch({ type: 'SET_WFA', payload: w })} />}
                     {currentStep === 2 && <ParameterConfig params={params} context={context} onParamsChange={(p) => dispatch({ type: 'SET_PARAMS', payload: p })} onContextChange={(c) => dispatch({ type: 'SET_CONTEXT', payload: c })} displayName={displayName} onDisplayNameChange={(n, m) => dispatch({ type: 'SET_DISPLAY_NAME', payload: { name: n, mode: m } })} autoDisplayName={autoDisplayName} market={currentMarket} />}
                     {currentStep === 3 && <TrainingConsole trainingStatus={trainingStatus} executionStage={executionStage} progress={progress} logs={logs} backendRunStatus={backendRunStatus} result={result} requestPreview={requestPreview} totalDays={totalDays} trainDays={trainDays} valDays={valDays} testDays={testDays} target={target} />}
-                    {currentStep === 4 && <TrainingResultView result={result} resultError={resultError} settingDefaultModel={settingDefaultModel} onSetDefaultModel={handleSetDefaultModel} trainingStatus={trainingStatus} />}
+                    {currentStep === 4 && <TrainingResultView result={result} resultError={resultError} settingDefaultModel={settingDefaultModel} onSetDefaultModel={handleSetDefaultModel} onExportConfig={handleExportConfig} trainingStatus={trainingStatus} />}
                   </motion.div>
                 </AnimatePresence>
               </div>
@@ -667,6 +806,50 @@ export const ModelTrainingPage: React.FC = () => {
           </main>
         </div>
       </div>
+      <Modal
+        title="导入模型训练配置"
+        open={Boolean(importPreview)}
+        okText="确认覆盖当前配置"
+        cancelText="取消"
+        onOk={confirmImportConfig}
+        onCancel={() => setImportPreview(null)}
+        okButtonProps={{ danger: true }}
+      >
+        {importPreview && (
+          <div className="space-y-3">
+            <Alert
+              type="info"
+              showIcon
+              message={`将导入 ${importPreview.config.draft.selectedFeatures.length} 个特征、${importPreview.config.draft.params.model_types.length} 个模型`}
+              description="确认后会覆盖当前特征、时间切分、目标、超参数和训练上下文；训练结果与运行状态不会被导入。"
+            />
+            {importPreview.marketChanged && (
+              <Alert
+                type="warning"
+                showIcon
+                message={`市场将从 ${getMarketConfig(currentMarket).label} 切换为 ${getMarketConfig(importPreview.config.market as AppMarket).label}`}
+                description="系统会按新市场重新加载可用因子目录。"
+              />
+            )}
+            {importPreview.unavailableFeatures.length > 0 && (
+              <Alert
+                type="warning"
+                showIcon
+                message={`${importPreview.unavailableFeatures.length} 个特征在当前目录中不可用`}
+                description={importPreview.unavailableFeatures.join('、')}
+              />
+            )}
+            {importPreview.catalogVersionChanged && (
+              <Alert
+                type="warning"
+                showIcon
+                message="因子目录版本与当前环境不同"
+                description="导入后会使用当前已发布目录；不可用特征会被自动排除。"
+              />
+            )}
+          </div>
+        )}
+      </Modal>
     </div>
   );
 };

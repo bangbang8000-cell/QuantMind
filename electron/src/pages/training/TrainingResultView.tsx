@@ -1,6 +1,6 @@
 import React from 'react';
 import { Card, Divider, Alert, Descriptions, Tag, Space, Typography, Empty, Button } from 'antd';
-import { BarChart, MonitorPlay, Activity } from 'lucide-react';
+import { BarChart, MonitorPlay, Activity, Download } from 'lucide-react';
 import { 
   BarChart as ReBarChart, 
   Bar, 
@@ -37,6 +37,7 @@ interface TrainingResultViewProps {
   resultError: string;
   settingDefaultModel: boolean;
   onSetDefaultModel: () => void;
+  onExportConfig: () => void;
   trainingStatus: string;
 }
 
@@ -140,6 +141,7 @@ export const TrainingResultView: React.FC<TrainingResultViewProps> = ({
   resultError,
   settingDefaultModel,
   onSetDefaultModel,
+  onExportConfig,
   trainingStatus,
 }) => {
   if (!result && !resultError) {
@@ -218,6 +220,14 @@ export const TrainingResultView: React.FC<TrainingResultViewProps> = ({
                   onClick={onSetDefaultModel}
                 >
                   设为默认模型
+                </Button>
+                <Button
+                  size="small"
+                  icon={<Download size={14} />}
+                  className="rounded-xl"
+                  onClick={onExportConfig}
+                >
+                  导出训练配置
                 </Button>
               </div>
             </Card>

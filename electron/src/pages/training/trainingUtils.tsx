@@ -1,5 +1,6 @@
 import React from 'react';
 import dayjs, { Dayjs } from 'dayjs';
+import { parse as parseYaml, stringify as stringifyYaml } from 'yaml';
 import { 
   Zap, Activity, BarChart, Database, ListFilter, Filter, LayoutGrid, CheckCircle2, Clock, Archive, XCircle
 } from 'lucide-react';
@@ -287,6 +288,24 @@ export interface TrainingDraft {
   lastSavedAt: string;
 }
 
+/** 可分享的模型训练配置文件。运行记录、训练节点和模型产物均不写入文件。 */
+export interface TrainingConfigFile {
+  schema_version: 1;
+  kind: 'quantmind-model-training-config';
+  exported_at: string;
+  market: TrainingContext['market'];
+  factor_source?: string;
+  factor_catalog_version?: string | null;
+  configuration: Omit<TrainingDraft, 'lastSavedAt'>;
+}
+
+export interface ImportedTrainingConfig {
+  draft: TrainingDraft;
+  market: TrainingContext['market'];
+  factorSource?: string;
+  factorCatalogVersion?: string | null;
+}
+
 export interface FeatureOption {
   key: string;
   label: string;
@@ -304,6 +323,8 @@ export interface FeatureCategory {
 // ─── CONSTANTS ────────────────────────────────────────────────────────────────
 
 export const STORAGE_KEY = 'qm:model-training:draft';
+export const TRAINING_CONFIG_KIND = 'quantmind-model-training-config';
+export const TRAINING_CONFIG_SCHEMA_VERSION = 1 as const;
 export const DEFAULT_MODEL_VERSION = 'Base';
 
 export const DEFAULT_FEATURE_CATEGORIES: FeatureCategory[] = [
@@ -680,6 +701,138 @@ export const restoreRange = (range: [string, string] | undefined, fallback: [Day
   const end = dayjs(range[1]);
   if (!start.isValid() || !end.isValid()) return fallback;
   return [start, end];
+};
+
+const CONFIG_MARKETS: NonNullable<TrainingContext['market']>[] = ['CN', 'US', 'HK', 'CRYPTO', 'FUTURES'];
+
+const isRecord = (value: unknown): value is Record<string, unknown> => (
+  typeof value === 'object' && value !== null && !Array.isArray(value)
+);
+
+const readStringArray = (value: unknown, label: string): string[] => {
+  if (!Array.isArray(value) || value.some((item) => typeof item !== 'string' || !item.trim())) {
+    throw new Error(`${label} 必须是字符串数组`);
+  }
+  return Array.from(new Set(value.map((item) => item.trim())));
+};
+
+const readDateRange = (value: unknown, label: string): [string, string] => {
+  if (!Array.isArray(value) || value.length !== 2 || value.some((item) => typeof item !== 'string')) {
+    throw new Error(`${label} 必须包含起止日期`);
+  }
+  const [start, end] = value as [string, string];
+  if (!dayjs(start).isValid() || !dayjs(end).isValid() || dayjs(start).isAfter(dayjs(end), 'day')) {
+    throw new Error(`${label} 日期无效或起止顺序错误`);
+  }
+  return [start, end];
+};
+
+/** 将当前前端草稿转换为可在其他设备导入的 YAML 配置。 */
+export const buildTrainingConfigFile = (
+  draft: Omit<TrainingDraft, 'lastSavedAt'>,
+  options: Pick<TrainingConfigFile, 'market' | 'factor_source' | 'factor_catalog_version'>,
+): TrainingConfigFile => ({
+  schema_version: TRAINING_CONFIG_SCHEMA_VERSION,
+  kind: TRAINING_CONFIG_KIND,
+  exported_at: new Date().toISOString(),
+  market: options.market,
+  ...(options.factor_source ? { factor_source: options.factor_source } : {}),
+  ...(options.factor_catalog_version ? { factor_catalog_version: options.factor_catalog_version } : {}),
+  configuration: draft,
+});
+
+export const serializeTrainingConfig = (config: TrainingConfigFile): string =>
+  stringifyYaml(config, { lineWidth: 0 });
+
+/**
+ * 读取并校验 YAML / TXT 配置。未知的超参数会被忽略，缺失字段以当前默认值补齐，
+ * 以保证旧配置在升级后仍可安全导入。
+ */
+export const parseTrainingConfig = (source: string): ImportedTrainingConfig => {
+  let raw: unknown;
+  try {
+    raw = parseYaml(source);
+  } catch (error) {
+    throw new Error(`无法解析 YAML：${error instanceof Error ? error.message : '文件格式错误'}`);
+  }
+  if (!isRecord(raw) || raw.kind !== TRAINING_CONFIG_KIND || raw.schema_version !== TRAINING_CONFIG_SCHEMA_VERSION) {
+    throw new Error('不是受支持的 QuantMind 模型训练配置文件');
+  }
+  if (!CONFIG_MARKETS.includes(raw.market as TrainingContext['market'])) {
+    throw new Error('配置中的市场标识无效');
+  }
+  if (!isRecord(raw.configuration)) throw new Error('配置缺少 configuration 节点');
+  const config = raw.configuration;
+  if (!isRecord(config.timePeriods) || !isRecord(config.target) || !isRecord(config.params) || !isRecord(config.context)) {
+    throw new Error('配置缺少时间切分、训练目标、超参数或训练上下文');
+  }
+
+  const targetMode = config.target.mode;
+  const horizonDays = Number(config.target.horizonDays);
+  if ((targetMode !== 'return' && targetMode !== 'classification') || !Number.isInteger(horizonDays) || horizonDays < 1) {
+    throw new Error('训练目标无效');
+  }
+  const modelType = config.params.model_type;
+  const knownModelTypes = MODEL_TYPE_OPTIONS.map((item) => item.value);
+  if (typeof modelType !== 'string' || !knownModelTypes.includes(modelType as ModelType)) {
+    throw new Error('配置中的模型类型不受支持');
+  }
+  const requestedModelTypes = Array.isArray(config.params.model_types)
+    ? config.params.model_types.filter((item): item is ModelType => typeof item === 'string' && knownModelTypes.includes(item as ModelType))
+    : [];
+  const timePeriods = {
+    train: readDateRange(config.timePeriods.train, '训练集'),
+    val: readDateRange(config.timePeriods.val, '验证集'),
+    test: readDateRange(config.timePeriods.test, '测试集'),
+  };
+  if (dayjs(timePeriods.train[1]).isAfter(dayjs(timePeriods.val[0]), 'day') || dayjs(timePeriods.val[1]).isAfter(dayjs(timePeriods.test[0]), 'day')) {
+    throw new Error('训练、验证、测试时间段必须按先后顺序排列');
+  }
+  const rawWfa = isRecord(config.wfa) ? config.wfa : {};
+  const wfa: WfaConfig = {
+    enabled: typeof rawWfa.enabled === 'boolean' ? rawWfa.enabled : false,
+    strategy: rawWfa.strategy === 'expanding' ? 'expanding' : 'rolling',
+    nWindows: Number.isInteger(rawWfa.nWindows) && Number(rawWfa.nWindows) > 0 ? Number(rawWfa.nWindows) : 4,
+    trainYears: Number.isFinite(Number(rawWfa.trainYears)) && Number(rawWfa.trainYears) > 0 ? Number(rawWfa.trainYears) : 3,
+    valMonths: Number.isFinite(Number(rawWfa.valMonths)) && Number(rawWfa.valMonths) > 0 ? Number(rawWfa.valMonths) : 12,
+    stepMonths: Number.isFinite(Number(rawWfa.stepMonths)) && Number(rawWfa.stepMonths) > 0 ? Number(rawWfa.stepMonths) : 12,
+  };
+  const supportedParamValues = Object.fromEntries(
+    Object.entries(config.params).filter(([key]) => key in DEFAULT_PARAMS),
+  );
+  const params = {
+    ...DEFAULT_PARAMS,
+    ...supportedParamValues,
+    model_type: modelType as ModelType,
+    model_types: requestedModelTypes.length > 0 ? requestedModelTypes : [modelType as ModelType],
+  } as TrainingParams;
+  const target: TrainingTarget = {
+    mode: targetMode,
+    horizonDays,
+    ...(Array.isArray(config.target.horizonDaysList)
+      ? { horizonDaysList: config.target.horizonDaysList.filter((item): item is number => Number.isInteger(item) && item >= 1) }
+      : {}),
+  };
+  const context = { ...DEFAULT_CONTEXT, ...config.context } as TrainingContext;
+  const displayName = typeof config.displayName === 'string' ? config.displayName : '';
+  const displayNameMode = config.displayNameMode === 'manual' ? 'manual' : 'auto';
+
+  return {
+    draft: {
+      displayName,
+      displayNameMode,
+      selectedFeatures: readStringArray(config.selectedFeatures, 'selectedFeatures'),
+      timePeriods,
+      target,
+      params,
+      context,
+      wfa,
+      lastSavedAt: new Date().toISOString(),
+    },
+    market: raw.market as TrainingContext['market'],
+    factorSource: typeof raw.factor_source === 'string' ? raw.factor_source : undefined,
+    factorCatalogVersion: typeof raw.factor_catalog_version === 'string' ? raw.factor_catalog_version : null,
+  };
 };
 
 export const isSameRange = (left: [Dayjs, Dayjs], right: [Dayjs, Dayjs]) => {
