@@ -214,27 +214,31 @@ export const StockForecastChart: React.FC<StockForecastChartProps> = ({
 
   return (
     <div className="w-full h-full relative flex flex-col">
-      <div className="flex items-center justify-between px-6 pt-4 pb-1">
-        <div className="flex items-center gap-2">
+      {/* 2行结构化标题栏 */}
+      <div className="flex flex-col gap-1 px-6 pt-3 pb-1 shrink-0 border-b border-slate-50">
+        {/* 第一行：主标题 + 实时计算徽标 */}
+        <div className="flex items-center justify-between">
           <span className="text-sm font-black text-slate-800 tracking-tight">
             历史 K 线走势 + 未来 10%-50%-90% 分位数走势预测带 (Fan Chart)
           </span>
-          {asOfDate && (
-            <span className="text-[11px] text-slate-400 font-mono">
-              · 基准日: {asOfDate}
-            </span>
-          )}
-        </div>
-        <div className="flex items-center gap-2">
-          {modelName && (
-            <span className="text-xs text-slate-500 font-medium bg-slate-50 border border-slate-100 px-2.5 py-0.5 rounded-md">
-              模型: <strong className="text-slate-700">{modelName}</strong>
-            </span>
-          )}
-          <span className="inline-flex items-center gap-1 text-[11px] text-emerald-600 font-bold bg-emerald-50 px-2 py-0.5 rounded-md border border-emerald-100">
+          <span className="inline-flex items-center gap-1 text-[11px] text-emerald-600 font-bold bg-emerald-50 px-2 py-0.5 rounded-md border border-emerald-100 shrink-0 whitespace-nowrap">
             <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse" />
             实时计算
           </span>
+        </div>
+
+        {/* 第二行：基准日 + 模型信息 */}
+        <div className="flex items-center gap-3 text-[11px] text-slate-400">
+          {asOfDate && (
+            <span className="flex items-center gap-1 font-mono">
+              基准日期: <strong className="text-slate-600 font-semibold">{asOfDate}</strong>
+            </span>
+          )}
+          {modelName && (
+            <span className="flex items-center gap-1 font-mono truncate">
+              模型: <strong className="text-slate-700 font-semibold bg-slate-50 px-1.5 py-0.2 rounded border border-slate-100 truncate">{modelName}</strong>
+            </span>
+          )}
         </div>
       </div>
       <div className="flex-1 min-h-0 w-full">
