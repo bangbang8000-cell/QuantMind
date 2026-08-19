@@ -300,7 +300,7 @@ class TradingEngine:
                 .where(
                     and_(
                         Order.tenant_id == tenant_id,
-                        Order.user_id == user_id,
+                        Order.user_id == str(user_id),
                         Order.status == OrderStatus.FILLED,
                     )
                 )
@@ -495,7 +495,7 @@ class TradingEngine:
         # 统计该用户在当前租户下今天的订单总数 (排除已拒绝的，保留待成交、已成交等)
         stmt = select(func.count(Order.id)).where(
             and_(
-                Order.user_id == user_id,
+                Order.user_id == str(user_id),
                 Order.tenant_id == order.tenant_id,
                 Order.created_at >= datetime.combine(today, datetime.min.time()),
                 Order.status != OrderStatus.REJECTED,

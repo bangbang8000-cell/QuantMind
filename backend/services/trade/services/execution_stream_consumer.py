@@ -336,7 +336,7 @@ class ExecutionStreamConsumer:
                 .where(
                     and_(
                         Order.tenant_id == tenant_id,
-                        Order.user_id == user_id,
+                        Order.user_id == str(user_id),
                         Order.client_order_id == client_order_id,
                     )
                 )
@@ -355,7 +355,7 @@ class ExecutionStreamConsumer:
                 .where(
                     and_(
                         Order.tenant_id == tenant_id,
-                        Order.user_id == user_id,
+                        Order.user_id == str(user_id),
                         Order.exchange_order_id == exchange_order_id,
                     )
                 )

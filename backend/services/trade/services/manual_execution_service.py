@@ -2971,7 +2971,7 @@ class ManualExecutionService:
                             select(Order).where(
                                 and_(
                                     Order.tenant_id == tenant_id,
-                                    Order.user_id == user_id,
+                                    Order.user_id == str(user_id),
                                     Order.client_order_id.in_(buy_client_ids),
                                 )
                             )

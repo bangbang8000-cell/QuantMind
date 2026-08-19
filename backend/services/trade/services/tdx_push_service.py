@@ -335,7 +335,7 @@ class TdxPushService:
                         select(Order.exchange_order_id).where(
                             Order.exchange_order_id.is_not(None),
                             Order.tenant_id == tenant_id,
-                            Order.user_id == user_id,
+                            Order.user_id == str(user_id),
                         )
                     )
                 ).fetchall()

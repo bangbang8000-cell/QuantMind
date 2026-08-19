@@ -9,7 +9,7 @@ from decimal import Decimal
 from typing import List, Optional
 from uuid import UUID
 
-from sqlalchemy import and_, case, func, select
+from sqlalchemy import String, and_, case, cast, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.services.trade.models.order import Order, OrderStatus, TradingMode
@@ -62,7 +62,7 @@ class TradeService:
         # Build query (filters and stmt remain the same...)
         filters = [
             Trade.tenant_id == query.tenant_id,
-            Trade.user_id == query.user_id if query.user_id else True,
+            cast(Trade.user_id, String) == str(query.user_id) if query.user_id else True,
             Trade.portfolio_id == query.portfolio_id if query.portfolio_id else True,
             Trade.symbol == query.symbol if query.symbol else True,
             Trade.executed_at >= query.start_date if query.start_date else True,

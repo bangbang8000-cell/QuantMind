@@ -173,7 +173,7 @@ async def dispatch_internal_strategy_order(
                 .where(
                     and_(
                         Order.tenant_id == tenant,
-                        Order.user_id == uid,
+                        Order.user_id == str(uid),
                         Order.client_order_id == client_order_id,
                     )
                 )
@@ -221,7 +221,7 @@ async def dispatch_internal_strategy_order(
             .where(
                 and_(
                     Order.tenant_id == tenant,
-                    Order.user_id == uid,
+                    Order.user_id == str(uid),
                     Order.client_order_id == client_order_id,
                 )
             )
