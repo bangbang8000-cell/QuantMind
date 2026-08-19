@@ -51,8 +51,12 @@ def load_signals() -> dict[str, list[tuple[str, float]]]:
             res = await s.execute(text("""
                 SELECT trade_date, symbol, fusion_score
                 FROM engine_signal_scores
-                WHERE run_id IN (SELECT run_id FROM qm_model_inference_runs
-                                 WHERE model_id=:mid AND status='completed')
+                WHERE run_id IN (SELECT run_id FROM (
+                    SELECT DISTINCT ON (data_trade_date) run_id, data_trade_date
+                    FROM qm_model_inference_runs
+                    WHERE model_id=:mid AND status='completed'
+                    ORDER BY data_trade_date, created_at DESC
+                ) latest_run)
                   AND trade_date >= :start AND trade_date <= :end
                 ORDER BY trade_date, fusion_score DESC
             """), {"mid": MODEL_ID, "start": START_DATE, "end": END_DATE})
