@@ -104,6 +104,16 @@ class InferenceCenterService {
           config.headers['Authorization'] = `Bearer ${token}`;
         }
       }
+      const tenantId = authService.getTenantId?.() || 'default';
+      if (config.headers && typeof config.headers.set === 'function') {
+        if (!config.headers.has('X-Tenant-Id') && !config.headers.has('x-tenant-id')) {
+          config.headers.set('X-Tenant-Id', tenantId);
+        }
+      } else if (config.headers) {
+        if (!config.headers['X-Tenant-Id'] && !config.headers['x-tenant-id']) {
+          config.headers['X-Tenant-Id'] = tenantId;
+        }
+      }
       return config;
     });
     return client;
@@ -113,7 +123,7 @@ class InferenceCenterService {
     try {
       const params: Record<string, string> = {};
       if (market) params.market = market;
-      const resp = await this.client.get('/api/v1/research/models', { params });
+      const resp = await this.client.get('/research/models', { params });
       const body = (resp.data ?? {}) as any;
       const items =
         body?.data?.models ??
@@ -137,7 +147,7 @@ class InferenceCenterService {
 
   async getStockKline(symbol: string, days: number = 60): Promise<KlineItem[]> {
     try {
-      const resp = await this.client.get<{ code: number; data: { items: KlineItem[] } }>(`/api/v1/research/kline/${encodeURIComponent(symbol)}?days=${days}`);
+      const resp = await this.client.get<{ code: number; data: { items: KlineItem[] } }>(`/research/kline/${encodeURIComponent(symbol)}?days=${days}`);
       return resp.data?.data?.items || [];
     } catch (e) {
       console.warn('获取股票K线失败:', e);
@@ -146,7 +156,7 @@ class InferenceCenterService {
   }
 
   async predictSingleStock(req: SingleStockPredictionRequest): Promise<SingleStockPredictionResponse> {
-    const resp = await this.client.post<{ code?: number; data?: SingleStockPredictionResponse } | SingleStockPredictionResponse>('/api/v1/research/predict-stock', req);
+    const resp = await this.client.post<{ code?: number; data?: SingleStockPredictionResponse } | SingleStockPredictionResponse>('/research/predict-stock', req);
     if ((resp.data as any)?.data) {
       return (resp.data as any).data;
     }
