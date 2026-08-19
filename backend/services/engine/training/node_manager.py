@@ -267,14 +267,28 @@ cat /proc/loadavg 2>/dev/null | awk '{print $1}'
             stderr=asyncio.subprocess.PIPE,
         )
         try:
-            stdout, _ = await asyncio.wait_for(proc.communicate(), timeout=cls._SSH_TIMEOUT)
+            stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=cls._SSH_TIMEOUT)
         except asyncio.TimeoutError:
-            proc.kill()
-            result["error"] = "SSH 超时"
-            return result
+            try:
+                proc.kill()
+            except Exception:
+                pass
+            result["error"] = "SSH 连接超时"
+            return cls.assess_readiness(result)
+
         if proc.returncode not in (0, None):
-            result["error"] = f"SSH 失败 code={proc.returncode}"
-            return result
+            err_msg = (stderr.decode(errors="replace") if stderr else "").strip()
+            if "Permission denied" in err_msg:
+                result["error"] = "SSH 密码/密钥认证失败"
+            elif "Connection refused" in err_msg:
+                result["error"] = "连接被拒绝 (主机未开机或端口错误)"
+            elif "Could not resolve hostname" in err_msg or "Name or service not known" in err_msg:
+                result["error"] = "主机名无法解析"
+            elif "No route to host" in err_msg or "Host is down" in err_msg:
+                result["error"] = "主机不可达 (已关机)"
+            else:
+                result["error"] = err_msg or f"SSH 连接失败 (code={proc.returncode})"
+            return cls.assess_readiness(result)
 
         out = stdout.decode(errors="replace")
         return cls._parse(out, result)

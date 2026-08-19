@@ -210,12 +210,12 @@ async def run_training(
 
 @router.get("/training-nodes", summary="列出可用的训练节点及就绪状态")
 async def list_training_nodes(
-    include_status: bool = False,
+    include_status: bool = True,
     current_user: dict[str, Any] = Depends(require_admin),
 ):
     """列出训练节点（本地 Docker + 配置的多台 AutoDL 远程节点）。
 
-    若 include_status=True，则并发探测各节点的实时硬件与就绪状态。
+    默认 include_status=True，并发探测各节点的实时硬件与就绪状态。
     """
     from backend.services.engine.training.node_manager import NodeStatus, load_training_nodes
 
@@ -226,32 +226,42 @@ async def list_training_nodes(
         status_map = {}
 
     local_status = status_map.get("local") or {}
+    local_online = local_status.get("online", True)
+    local_readiness = local_status.get("readiness", "ready" if local_online else "offline")
+
     nodes = [{
         "id": "local",
         "type": "local",
         "name": "本地 Docker",
         "description": "本机 GPU / CPU 容器训练",
-        "available": True,
-        "readiness": local_status.get("readiness", "ready"),
+        "available": local_online,
+        "online": local_online,
+        "readiness": local_readiness,
         "readiness_label": local_status.get("readiness_label", "本地就绪"),
         "gpu_summary": local_status.get("gpu_summary", "本地设备"),
         "status_desc": local_status.get("status_desc", "本机容器环境"),
+        "error": local_status.get("error") or local_status.get("docker_error"),
         "status": local_status,
     }]
     for n in load_training_nodes():
         node_id = n["id"]
         n_status = status_map.get(node_id) or {}
+        n_online = n_status.get("online", False) if include_status else False
+        n_readiness = n_status.get("readiness", "ready" if n_online else "offline")
         nodes.append({
             "id": node_id,
             "type": "remote",
             "name": n.get("name") or node_id,
             "host": n.get("host"),
+            "port": n.get("port", 22),
             "description": f"AutoDL 远程 GPU 训练节点（{n.get('host')}）",
-            "available": n_status.get("online", True),
-            "readiness": n_status.get("readiness", "ready" if n_status.get("online") else "offline"),
-            "readiness_label": n_status.get("readiness_label", "远程节点"),
+            "available": n_online,
+            "online": n_online,
+            "readiness": n_readiness,
+            "readiness_label": n_status.get("readiness_label", "已就绪" if n_online else "未连接"),
             "gpu_summary": n_status.get("gpu_summary", n.get("gpus") or "远程 GPU"),
-            "status_desc": n_status.get("status_desc", f"主机: {n.get('host')}"),
+            "status_desc": n_status.get("status_desc", f"主机: {n.get('host')}:{n.get('port', 22)}"),
+            "error": n_status.get("error"),
             "status": n_status,
         })
     return {"nodes": nodes}

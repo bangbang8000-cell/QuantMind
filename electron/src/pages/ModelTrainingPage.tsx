@@ -524,11 +524,11 @@ export const ModelTrainingPage: React.FC = () => {
                        <span>{nodesLoading ? '检测中' : '刷新'}</span>
                      </button>
                    </div>
-                   <div className="grid grid-cols-2 gap-2">
+                   <div className="space-y-2">
                      {trainingNodes.length > 0
                        ? trainingNodes.map((n) => {
                            const isSelected = selectedNode === n.id;
-                           const readiness = n.readiness || (n.available ? 'ready' : 'offline');
+                           const readiness = n.readiness || (n.online ? 'ready' : 'offline');
                            const isReady = readiness === 'ready';
                            const isBusy = readiness === 'busy';
                            const isOffline = readiness === 'offline';
@@ -539,72 +539,77 @@ export const ModelTrainingPage: React.FC = () => {
                                type="button"
                                onClick={() => setSelectedNode(n.id)}
                                className={clsx(
-                                 'flex flex-col text-left p-2 rounded-lg border transition-all text-xs relative group',
+                                 'w-full text-left p-2.5 rounded-lg border transition-all text-xs relative group block',
                                  isSelected
                                    ? n.type === 'remote'
-                                     ? 'bg-orange-50/80 border-orange-400 shadow-sm ring-1 ring-orange-300'
-                                     : 'bg-blue-50/80 border-blue-400 shadow-sm ring-1 ring-blue-300'
-                                   : 'bg-white border-gray-200 hover:border-gray-300 hover:bg-slate-50/50'
+                                     ? 'bg-orange-50/90 border-orange-400 shadow-sm ring-1 ring-orange-300'
+                                     : 'bg-blue-50/90 border-blue-400 shadow-sm ring-1 ring-blue-300'
+                                   : 'bg-white border-gray-200 hover:border-gray-300 hover:bg-slate-50/70'
                                )}
                              >
                                <div className="flex items-center justify-between w-full mb-1">
+                                 <div className="flex items-center gap-1.5 min-w-0">
+                                   <span className="text-xs">
+                                     {n.type === 'remote' ? '☁️' : '💻'}
+                                   </span>
+                                   <span className={clsx(
+                                     "font-bold truncate text-xs",
+                                     isSelected ? (n.type === 'remote' ? 'text-orange-950' : 'text-blue-950') : 'text-slate-800'
+                                   )}>
+                                     {n.name}
+                                   </span>
+                                 </div>
                                  <span className={clsx(
-                                   "font-bold truncate max-w-[85px]",
-                                   isSelected ? (n.type === 'remote' ? 'text-orange-950' : 'text-blue-950') : 'text-slate-800'
+                                   "flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] font-medium shrink-0",
+                                   isReady && "bg-emerald-50 text-emerald-700 border border-emerald-200",
+                                   isBusy && "bg-amber-50 text-amber-700 border border-amber-200 animate-pulse",
+                                   isOffline && "bg-rose-50 text-rose-600 border border-rose-200",
+                                   !isReady && !isBusy && !isOffline && "bg-amber-50 text-amber-600 border border-amber-200"
                                  )}>
-                                   {n.name}
-                                 </span>
-                                 <span className="flex items-center gap-1 shrink-0">
                                    <span
                                      className={clsx(
                                        "w-1.5 h-1.5 rounded-full inline-block",
                                        isReady && "bg-emerald-500 shadow-[0_0_4px_rgba(16,185,129,0.7)]",
-                                       isBusy && "bg-amber-500 animate-pulse",
+                                       isBusy && "bg-amber-500",
                                        isOffline && "bg-rose-500",
                                        !isReady && !isBusy && !isOffline && "bg-amber-400"
                                      )}
                                    />
-                                   <span className={clsx(
-                                     "text-[9px] font-medium scale-90 origin-right",
-                                     isReady && "text-emerald-700",
-                                     isBusy && "text-amber-700",
-                                     isOffline && "text-rose-600",
-                                     !isReady && !isBusy && !isOffline && "text-amber-600"
-                                   )}>
-                                     {isReady ? '就绪' : isBusy ? '忙碌' : isOffline ? '离线' : '告警'}
-                                   </span>
+                                   <span>{n.readiness_label || (isReady ? '就绪' : isBusy ? '忙碌' : isOffline ? '离线' : '告警')}</span>
                                  </span>
                                </div>
 
-                               <div className="text-[10px] font-medium text-slate-500 truncate w-full">
-                                 {n.gpu_summary || (n.type === 'remote' ? 'AutoDL GPU' : '本地 Docker')}
-                               </div>
-
-                               {n.status_desc && (
-                                 <div className="text-[9px] text-slate-400 mt-1 truncate w-full">
-                                   {n.status_desc}
-                                 </div>
-                               )}
+                               <div className="text-[11px] text-slate-500 mt-0.5">
+                                 {n.status_desc || n.gpu_summary || (n.type === 'remote' ? 'AutoDL GPU 算力节点' : '本地 Docker 容器')}
+                                </div>
                              </button>
                            );
                          })
-                       : <div className="text-[11px] text-slate-400 w-full text-center py-2 col-span-2">加载节点中...</div>}
+                       : <div className="text-[11px] text-slate-400 w-full text-center py-2">加载节点中...</div>}
                    </div>
 
                    {selectedNodeObj && (
                      <div className={clsx(
                        "mt-2 text-[10px] p-2 rounded-lg leading-relaxed flex items-start gap-1.5",
-                       selectedNodeObj.type === 'remote'
+                       selectedNodeObj.readiness === 'offline'
+                         ? "bg-rose-50 text-rose-800 border border-rose-200"
+                         : selectedNodeObj.type === 'remote'
                          ? "bg-orange-50/80 text-orange-800 border border-orange-200/60"
                          : "bg-blue-50/80 text-blue-800 border border-blue-200/60"
                      )}>
-                       <span className="shrink-0 mt-0.5 font-bold">ℹ️</span>
+                       <span className="shrink-0 mt-0.5 font-bold">
+                         {selectedNodeObj.readiness === 'offline' ? '⚠️' : 'ℹ️'}
+                       </span>
                        <div>
-                         {selectedNodeObj.type === 'remote'
-                           ? `推送特征快照至 AutoDL 节点进行 GPU 训练，完成后模型产物自动回传本机。`
-                           : `使用本机 Docker 隔离训练容器，训练期间将独占分配算力。`}
-                         {selectedNodeObj.readiness === 'offline' && (
-                           <div className="text-rose-600 font-semibold mt-0.5">⚠️ 当前节点离线，请检查通信连通性或服务状态。</div>
+                         {selectedNodeObj.readiness === 'offline' ? (
+                           <div>
+                             <span className="font-semibold">{selectedNodeObj.name} 当前离线</span>
+                             <div className="text-rose-600/90 mt-0.5">{selectedNodeObj.error || selectedNodeObj.status_desc || '请先在 AutoDL 控制台开机或检查 SSH 端口配置。'}</div>
+                           </div>
+                         ) : selectedNodeObj.type === 'remote' ? (
+                           `将推送特征快照至 AutoDL 远程 GPU 进行训练，完成后模型产物自动回传本机。`
+                         ) : (
+                           `使用本机 Docker 隔离训练容器，训练期间将独占分配计算资源。`
                          )}
                        </div>
                      </div>
