@@ -4,7 +4,7 @@ import {
   Alert, Button, Card, Col, Form, Input, Modal, Row, Select, Space, Statistic,
   Switch, Table, Tag, Typography, message,
 } from 'antd';
-import { DatabaseOutlined, EditOutlined, PlusOutlined, ReloadOutlined, RocketOutlined } from '@ant-design/icons';
+import { DatabaseOutlined, EditOutlined, InfoCircleOutlined, PlusOutlined, ReloadOutlined, RocketOutlined } from '@ant-design/icons';
 import type { ColumnsType } from 'antd/es/table';
 import { adminService } from '../services/adminService';
 
@@ -42,12 +42,18 @@ type FactorDirectoryRow = {
 
 function unavailableSourceHint(status: Record<string, any>, sourceLabel: string): string {
   if (!status.files) {
-    return `尚未同步${sourceLabel}数据。请先在“数据下载”中按需勾选该数据集，完成同步后点击“字段发现”。`;
+    return `尚未同步 ${sourceLabel} 数据`;
   }
   if ((status.missing_required || []).length > 0) {
-    return '数据已发现，但暂未满足训练条件。请补齐行情字段（开高低收、成交量、成交额）后重新执行字段发现。';
+    return '数据字段尚未满足训练条件';
   }
-  return status.reason || '该数据源暂未满足直读训练条件，请刷新字段状态后重试。';
+  return '暂未满足直读训练条件';
+}
+
+function unavailableSourceAction(status: Record<string, any>): string {
+  if (!status.files) return '请在“数据下载”中勾选并同步，完成后点击“字段发现”。';
+  if ((status.missing_required || []).length > 0) return '请补齐行情字段后重新执行“字段发现”。';
+  return '请刷新字段状态后重试。';
 }
 
 export const AdminTrainingDatasets: React.FC = () => {
@@ -219,10 +225,14 @@ export const AdminTrainingDatasets: React.FC = () => {
       {SOURCE_OPTIONS.map(option => {
         const status = sources[option.value] || {};
         const unavailableHint = unavailableSourceHint(status, option.label.replace('（默认）', ''));
+        const unavailableAction = unavailableSourceAction(status);
         return <Col xs={24} md={8} key={option.value}><Card size="small" title={option.label}>
           <Statistic title={status.ready ? '可用于直读训练' : '等待数据同步'} value={status.files || 0} suffix="个分区文件" valueStyle={{ color: status.ready ? '#3f8600' : '#cf1322', fontSize: 18 }} />
           <div className="mt-2 text-xs text-gray-500">覆盖：{status.min_date || '--'} ～ {status.max_date || '--'} · {status.column_count || 0} 字段</div>
-          {!status.ready && <Alert className="mt-3" type="warning" showIcon message={unavailableHint} />}
+          {!status.ready && <div className="mt-3 flex items-start gap-1.5 text-xs leading-5 text-amber-700">
+            <InfoCircleOutlined className="mt-1 shrink-0" />
+            <span><span className="font-medium">{unavailableHint}</span> · {unavailableAction}</span>
+          </div>}
         </Card></Col>;
       })}
     </Row>
