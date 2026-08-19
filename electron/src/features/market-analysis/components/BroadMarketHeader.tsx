@@ -33,7 +33,9 @@ export const BroadMarketHeader: React.FC<BroadMarketHeaderProps> = ({
   return (
     <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-2.5 w-full">
       {indices.map((item) => {
-        const isPositive = item.pct_change >= 0;
+        const price = item.price == null ? '—' : item.price.toFixed(2);
+        const pct = item.pct_change == null ? '—' : `${item.pct_change >= 0 ? '+' : ''}${item.pct_change.toFixed(2)}%`;
+        const isPositive = (item.pct_change ?? 0) >= 0;
         const isSelected = selectedSymbol === item.symbol;
 
         return (
@@ -61,13 +63,13 @@ export const BroadMarketHeader: React.FC<BroadMarketHeaderProps> = ({
               {/* 价格与涨跌幅 */}
               <div className="flex items-baseline justify-between gap-1 mb-1">
                 <span className={`text-lg font-black font-mono tracking-tight ${isPositive ? 'text-red-500' : 'text-emerald-600'}`}>
-                  {item.price.toFixed(2)}
+                  {price}
                 </span>
                 <span className={`text-xs font-extrabold font-mono px-2 py-0.5 rounded-full flex items-center gap-0.5 border shadow-2xs ${
                   isPositive ? 'bg-red-50 text-red-600 border-red-100' : 'bg-emerald-50 text-emerald-600 border-emerald-100'
                 }`}>
                   {isPositive ? <TrendingUp className="w-3 h-3" /> : <TrendingDown className="w-3 h-3" />}
-                  {isPositive ? '+' : ''}{item.pct_change.toFixed(2)}%
+                  {pct}
                 </span>
               </div>
 

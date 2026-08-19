@@ -265,7 +265,7 @@ export const StockMoneyFlowTable: React.FC<StockMoneyFlowTableProps> = ({
       width: 85,
       render: (val) => (
         <span className="font-mono text-xs font-semibold text-slate-800 whitespace-nowrap">
-          ¥{val.toFixed(2)}
+          {val == null ? '—' : `¥${val.toFixed(2)}`}
         </span>
       ),
     },
@@ -276,6 +276,7 @@ export const StockMoneyFlowTable: React.FC<StockMoneyFlowTableProps> = ({
       align: 'right',
       width: 95,
       render: (val) => {
+        if (val == null) return <span className="font-mono text-xs text-slate-400">—</span>;
         const isPos = val >= 0;
         return (
           <span className={`font-mono text-xs font-bold flex items-center justify-end gap-0.5 whitespace-nowrap ${isPos ? 'text-red-500' : 'text-emerald-500'}`}>
@@ -387,7 +388,7 @@ export const StockMoneyFlowTable: React.FC<StockMoneyFlowTableProps> = ({
       width: 70,
       render: (val) => (
         <span className="font-mono text-[11px] font-semibold text-slate-800 whitespace-nowrap">
-          ¥{val.toFixed(2)}
+          {val == null ? '—' : `¥${val.toFixed(2)}`}
         </span>
       ),
     },
@@ -398,6 +399,7 @@ export const StockMoneyFlowTable: React.FC<StockMoneyFlowTableProps> = ({
       align: 'center',
       width: 80,
       render: (val) => {
+        if (val == null) return <span className="font-mono text-[11px] text-slate-400">—</span>;
         const isPos = val >= 0;
         return (
           <span className={`font-mono text-[11px] font-bold flex items-center justify-center gap-0.5 whitespace-nowrap ${isPos ? 'text-red-500' : 'text-emerald-500'}`}>

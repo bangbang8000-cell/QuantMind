@@ -338,23 +338,44 @@ def money_flow_period(period: str = "1d", dimension: str = "sector") -> list[dic
 
 
 def stock_money_flow(limit: int = 20) -> list[dict[str, Any]]:
-    """个股资金流向排行榜。
+    """个股资金流向排行榜（l2 真实资金流 + 当日真实收盘价/涨跌幅）。
 
-    ⚠️ l2_factors 停更 2026-02-27（超 30 天）→ 不可用，返回空列表由前端标注，
-    绝不展示半年旧的误导性资金流。
+    单位：flow_* 为元；close_price 为元（不复权）；pct_change 为 %。
     """
     df = _load_l2_flow()
     if df.empty:
         return []
     latest = str(df["dt"].max())
-    if _l2_stale_days(latest) > 30:
-        return []
-    latest = str(df["dt"].max())
     day = df[df["dt"] == latest].copy().sort_values("flow_net_amount", ascending=False)
+
     names = _read(
         f"SELECT Symbol, Name FROM read_parquet('{_data_dir()}/2_base_sector/instrument_detail/instrument_detail.parquet')"
     )
     name_map = dict(zip(names["Symbol"], names["Name"]))
+
+    # 当日真实行情：收盘价（不复权）+ 涨跌幅（%）
+    syms = day.head(limit)["symbol"].tolist()
+    sym_in = ",".join(f"'{s}'" for s in syms)
+    close_map: dict[str, float] = {}
+    pct_map: dict[str, float] = {}
+    try:
+        kline = _read(
+            f"SELECT symbol, close FROM read_parquet("
+            f"'{_data_dir()}/1_kline_data/daily_unadjusted/dt={latest}/data.parquet') WHERE symbol IN ({sym_in})"
+        )
+        close_map = dict(zip(kline["symbol"], kline["close"]))
+    except Exception:
+        pass
+    try:
+        tech = _read(
+            f"SELECT symbol, pct_change FROM read_parquet("
+            f"'{_data_dir()}/5_technical_derived/technical_indicators/dt={latest}/data.parquet')"
+            f" WHERE symbol IN ({sym_in})"
+        )
+        pct_map = dict(zip(tech["symbol"], tech["pct_change"]))
+    except Exception:
+        pass
+
     out = []
     for _, r in day.head(limit).iterrows():
         sym = str(r["symbol"])
@@ -362,8 +383,8 @@ def stock_money_flow(limit: int = 20) -> list[dict[str, Any]]:
             {
                 "symbol": sym,
                 "name": name_map.get(sym, ""),
-                "close_price": None,
-                "pct_change": None,
+                "close_price": round(float(close_map[sym]), 2) if sym in close_map else None,
+                "pct_change": round(float(pct_map[sym]), 2) if sym in pct_map else None,
                 "net_inflow": round(float(r["flow_net_amount"])),
                 "main_ratio": round(
                     (float(r["flow_super_net"]) + float(r["flow_large_net"])) / max(float(r["flow_net_amount"]), 1) * 100, 1

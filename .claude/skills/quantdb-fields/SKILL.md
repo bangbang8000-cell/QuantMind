@@ -99,7 +99,7 @@ description: "QuantDB 字段单位速查手册 — 全部数据集实测验证�
 | `flow_net_amount / flow_super_net / flow_large_net / flow_medium_net / flow_small_net` | **元** | 600519 flow_net_amount=-274109797.7 元 = -2.74 亿；flow_net_amount/(amount×1e4)=flow_net_ratio ✓ |
 | `flow_*_ratio` | 小数 | |
 | `vol_turnover_total` | **股** | 与 kline volume 完全相等 ✓ |
-| 分区 | **停滞在 dt=20260227** | 用前先查最新分区日期 |
+| 分区 | 已恢复日更（2026-08-19 实测至 20260818，flow_net 5098 distinct 有区分度） | ⚠️ 此前「停更 2026-02-27」结论过时；top 少数几只净流入会厂商同值（如 165564181），属口径非 bug |
 
 ## 六、PG 表 stock_daily_latest（API 服务数据源）
 
@@ -165,7 +165,7 @@ API 层 `_UNIT_SCALES` 把部分字段缩放后输出：
 ## 十一、已知数据缺口（2026-08 实测）
 
 1. **min1/min5** 分钟线停更（最新 2026-07-24）
-2. **l2_factors** 分区停更（dt 止于 20260227）
+2. ~~l2_factors 分区停更~~ —— **已恢复**（2026-08-19 实测至 20260818）
 3. **hsgt_north** 北向明细停更（2024-08，改季度披露所致）
 4. **instrument_detail** HqDate 滞后（20260720）
 5. **dt=20260729~20260802** 个股日线有同步缺口（非交易日+同步中断）
