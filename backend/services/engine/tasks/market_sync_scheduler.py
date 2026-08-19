@@ -30,7 +30,7 @@ MARKETS = {
 
 DEFAULT_SCHEDULE = {
     "enabled": False,
-    "time": "22:30",
+    "time": "00:30",
     "days": 5,
     "datasets": [],
     "with_qlib": False,

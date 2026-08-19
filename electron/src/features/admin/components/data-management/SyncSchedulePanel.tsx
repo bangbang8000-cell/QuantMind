@@ -32,7 +32,7 @@ export const SyncSchedulePanel: React.FC<SyncSchedulePanelProps> = ({
     const [saving, setSaving] = useState(false);
     const [running, setRunning] = useState(false);
     const [enabled, setEnabled] = useState(false);
-    const [time, setTime] = useState<Dayjs>(dayjs('22:30', 'HH:mm'));
+    const [time, setTime] = useState<Dayjs>(dayjs('00:30', 'HH:mm'));
     const [days, setDays] = useState(defaultDays);
     const [datasets, setDatasets] = useState<string[]>([]);
     const [withQlib, setWithQlib] = useState(false);
@@ -49,7 +49,7 @@ export const SyncSchedulePanel: React.FC<SyncSchedulePanelProps> = ({
             if (resp?.data) {
                 const s = resp.data;
                 setEnabled(!!s.enabled);
-                setTime(dayjs(s.time, 'HH:mm').isValid() ? dayjs(s.time, 'HH:mm') : dayjs('22:30', 'HH:mm'));
+                setTime(dayjs(s.time, 'HH:mm').isValid() ? dayjs(s.time, 'HH:mm') : dayjs('00:30', 'HH:mm'));
                 setDays(s.days ?? defaultDays);
                 setDatasets(s.datasets?.length ? s.datasets : [...selectedDatasets]);
                 setWithQlib(!!s.with_qlib);
