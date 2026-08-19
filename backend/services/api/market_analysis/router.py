@@ -215,7 +215,7 @@ async def get_stock_money_flow(
     limit: int = Query(default=20, ge=1, le=100),
     current_user: dict = Depends(get_current_user),
 ) -> list[dict]:
-    """个股资金流向排行榜（l2 真实资金流；单位：元，数据截至 2026-02-27）。"""
+    """个股资金流向排行榜（l2 真实资金流；单位：元）。"""
     return qdb.stock_money_flow(limit=limit)
 
 
@@ -223,7 +223,7 @@ async def get_stock_money_flow(
 async def get_money_flow_sankey(
     current_user: dict = Depends(get_current_user),
 ) -> dict:
-    """主力/散户资金流向桑基图（l2 真实行业资金流，单位：元，截至 2026-02-27）。"""
+    """主力/散户资金流向桑基图（l2 真实行业资金流，单位：元）。"""
     return qdb.money_flow_sankey()
 
 
@@ -258,7 +258,7 @@ async def get_money_flow_by_period(
 ) -> MoneyFlowPeriodResponse:
     """资金净流向排行榜（QuantDB l2 真实数据；单位：元）。
 
-    ⚠️ l2_factors 停更 2026-02-27 且仅存单日分区：多周期选项不伪造，
+    多周期选项（3d/5d/10d/20d）若仅存单日分区则以最新单日真实值为准并标截至日，不乘系数伪造，
     一律返回最新分区真实值，trade_date 即数据截止日。
     """
     raw = qdb.money_flow_period(period=period, dimension=dimension)

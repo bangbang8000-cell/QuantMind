@@ -13,8 +13,8 @@ export interface DailyFlowPoint {
 export interface StockMoneyFlowItem {
   symbol: string;
   name: string;
-  close_price: number;
-  pct_change: number;
+  close_price: number | null;
+  pct_change: number | null;
   net_inflow: number; // 净流入 (元)
   gross_inflow?: number; // 资金总流入 (元)
   gross_outflow?: number; // 资金总流出 (元)
@@ -25,6 +25,7 @@ export interface StockMoneyFlowItem {
   large?: number;
   medium?: number;
   small?: number;
+  trade_date?: string; // 数据所属交易日 YYYYMMDD
 }
 
 interface StockMoneyFlowTableProps {
@@ -460,7 +461,7 @@ export const StockMoneyFlowTable: React.FC<StockMoneyFlowTableProps> = ({
               <span>最新交易日:</span>
             </span>
             <span className="px-3 py-1 rounded-full bg-purple-100/80 text-purple-700 text-xs font-bold font-mono border border-purple-200 shadow-2xs">
-              L2 停更 2026-02-27
+              {items[0]?.trade_date ? formatDate(items[0].trade_date) : '—'}
             </span>
           </div>
 
@@ -475,7 +476,7 @@ export const StockMoneyFlowTable: React.FC<StockMoneyFlowTableProps> = ({
       {!isMini && items.length === 0 && !loading && (
         <div className="rounded-xl border border-slate-200 bg-slate-50 px-4 py-3 text-xs text-slate-500 font-medium flex items-center gap-2">
           <Info className="w-4 h-4 text-amber-500" />
-          L2 个股资金流数据已停更（2026-02-27 起），暂无当日数据——待 QuantDB 厂商恢复后才可展示
+          暂无个股资金流数据
         </div>
       )}
 
@@ -493,3 +494,11 @@ export const StockMoneyFlowTable: React.FC<StockMoneyFlowTableProps> = ({
     </div>
   );
 };
+
+/** YYYYMMDD → YYYY-MM-DD */
+function formatDate(d: string): string {
+  if (/^\d{8}$/.test(d)) {
+    return `${d.slice(0, 4)}-${d.slice(4, 6)}-${d.slice(6, 8)}`;
+  }
+  return d;
+}

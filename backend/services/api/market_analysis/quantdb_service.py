@@ -3,7 +3,7 @@
 把 Market Analysis 页面各接口从「硬编码假数据」切换到 QuantDB 本地数据：
 - 指数概览：index_daily（最新交易日 9 大指数点位/涨跌/成交额/量比/近5日 trend）
 - 市场广度：technical_indicators.pct_change（涨跌家数/涨停跌停/量能，复用 shared.market_breadth）
-- 资金流：l2_factors（1/3/5/10/20 日行业与个股资金净流向；⚠️ 停更 2026-02-27）
+- 资金流：l2_factors（行业与个股资金净流向，最新交易日）
 - 标签：sector_concept/sector_members + instrument_detail（真实行业/概念成分股）
 
 数据来源统一走 backend.shared.data_dir 解析，兼容容器内 /data/quantdb 与仓库 data/quantdb。
@@ -37,9 +37,6 @@ from backend.shared.market_breadth import (
 )
 
 logger = logging.getLogger(__name__)
-
-# l2_factors 厂商侧停更日期（写进响应，前端展示数据截止）
-L2_STALE_DATE = "2026-02-27"
 
 
 def _data_dir() -> Path:
@@ -238,14 +235,14 @@ def market_breadth_stats(trade_date: str | None = None) -> dict[str, Any]:
 
 
 # ---------------------------------------------------------------------------
-# 资金流（l2_factors，停更 2026-02-27）
+# 资金流（l2_factors）
 # ---------------------------------------------------------------------------
 
 _FLOW_COLS = ["flow_net_amount", "flow_super_net", "flow_large_net", "flow_medium_net", "flow_small_net"]
 
 
 def _load_l2_flow() -> pd.DataFrame:
-    """读取 l2 最新分区资金流（单位：元）。停更则返回空。"""
+    """读取 l2 最新分区资金流（单位：元）。"""
     df = _read(
         f"SELECT symbol, dt, {','.join(_FLOW_COLS)} FROM read_parquet("
         f"'{_data_dir()}/6_ml_datasets/l2_factors/dt=*/data.parquet', hive_partitioning=true)"
@@ -259,20 +256,12 @@ def _l2_latest_dt() -> str:
     return str(df["dt"].max()) if not df.empty else ""
 
 
-def _l2_stale_days(latest_dt: str) -> int:
-    """l2 最新分区距今天数。"""
-    try:
-        return (date.today() - datetime.strptime(latest_dt, "%Y%m%d").date()).days
-    except Exception:
-        return 999
-
-
 def money_flow_period(period: str = "1d", dimension: str = "sector") -> list[dict[str, Any]]:
     """指定周期资金净流向排行榜。
 
-    单位：flow_* 为元。⚠️ l2_factors 停更 2026-02-27——多周期选项无历史可累计，
-    一律返回最新分区真实值并标注截至日，绝不乘系数伪造多周期。
-    个股级（stock）数据已停更且存在厂商同值异常 → 返回空由前端标注，不展示误导排行。
+    单位：flow_* 为元。多周期选项（3d/5d/10d/20d）无历史累计时以最新单日真实值
+    为准并标注截至日，绝不乘系数伪造多周期。
+    个股级（stock）返回真实收盘价与涨跌幅。
     """
     df = _load_l2_flow()
     if df.empty:
@@ -304,9 +293,7 @@ def money_flow_period(period: str = "1d", dimension: str = "sector") -> list[dic
             for _, r in agg.head(31).iterrows()
         ]
 
-    # stock 维度：l2 已停更或个股层同值异常 → 不可用返回空，前端标注
-    if _l2_stale_days(latest) > 30:
-        return []
+    # stock 维度：真实收盘价 + 涨跌幅
     td = _latest_trade_date()
     names = _read(
         f"SELECT Symbol, Name FROM read_parquet('{_data_dir()}/2_base_sector/instrument_detail/instrument_detail.parquet')"
@@ -320,6 +307,16 @@ def money_flow_period(period: str = "1d", dimension: str = "sector") -> list[dic
         f" WHERE symbol IN ({sym_in})"
     )
     close_map = dict(zip(kline["symbol"], kline["close"]))
+    pct_map: dict[str, float] = {}
+    try:
+        tech = _read(
+            f"SELECT symbol, pct_change FROM read_parquet("
+            f"'{_data_dir()}/5_technical_derived/technical_indicators/dt={td}/data.parquet')"
+            f" WHERE symbol IN ({sym_in})"
+        )
+        pct_map = dict(zip(tech["symbol"], tech["pct_change"]))
+    except Exception:
+        pass
     day = day.sort_values("flow_net_amount", ascending=False)
     out = []
     for _, r in day.head(31).iterrows():
@@ -330,7 +327,7 @@ def money_flow_period(period: str = "1d", dimension: str = "sector") -> list[dic
                 "name": name_map.get(sym, ""),
                 "net_inflow": round(float(r["flow_net_amount"])),  # 元
                 "close_price": round(float(close_map[sym]), 2) if sym in close_map else None,
-                "pct_change": None,
+                "pct_change": round(float(pct_map[sym]), 2) if sym in pct_map else None,
                 "trade_date": latest,
             }
         )
@@ -403,7 +400,7 @@ def money_flow_sankey() -> dict[str, Any]:
     """主力/散户资金流向桑基图（l2 真实行业资金流，单位：元）。"""
     df = _load_l2_flow()
     if df.empty:
-        return {"nodes": [], "links": [], "trade_date": L2_STALE_DATE}
+        return {"nodes": [], "links": [], "trade_date": ""}
     latest = str(df["dt"].max())
     day = df[df["dt"] == latest].copy()
     members = _read(

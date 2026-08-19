@@ -359,7 +359,6 @@ export const CapitalFlowHorizontalBarChart: React.FC<CapitalFlowHorizontalBarCha
       {!loading && tradeDate && !isMock && (
         <div className="mt-1 text-[11px] text-slate-400 font-medium">
           资金流数据截至 <span className="font-extrabold text-slate-500">{formatTradeDate(tradeDate)}</span>
-          （L2 资金流厂商数据已停更，仅作历史参考）
         </div>
       )}
       {!loading && isMock && (
