@@ -419,12 +419,23 @@ cat /proc/loadavg 2>/dev/null | awk '{print $1}'
         except Exception:
             pass
 
-        # 3. 探测本地 Docker 与容器
+        # 3. 探测本地 Docker、独立训练镜像与容器
+        training_image = "quantmind-trainer:latest"
+        result["training_image"] = training_image
+        result["image_installed"] = False
+
         try:
             from docker import DockerClient
             client = await asyncio.to_thread(DockerClient.from_env)
             await asyncio.to_thread(client.ping)
             result["docker_available"] = True
+
+            # 校验是否已安装专用的独立训练容器镜像 quantmind-trainer:latest
+            try:
+                await asyncio.to_thread(client.images.get, training_image)
+                result["image_installed"] = True
+            except Exception:
+                result["image_installed"] = False
 
             # 检查是否有 qm-train-* 容器
             all_containers = await asyncio.to_thread(client.containers.list, all=True)
@@ -491,9 +502,22 @@ cat /proc/loadavg 2>/dev/null | awk '{print $1}'
         """根据采集的状态综合评估节点就绪度并生成摘要。"""
         if not status.get("online", False):
             status["readiness"] = "offline"
-            status["readiness_label"] = "离线 / 连接失败"
+            status["readiness_label"] = "离线 / 未连接"
             status["status_desc"] = status.get("error") or "无法建立通信连接"
             return status
+
+        # 本地模式：先检查 Docker 引擎与独立训练镜像
+        if status.get("is_local"):
+            if not status.get("docker_available"):
+                status["readiness"] = "offline"
+                status["readiness_label"] = "Docker 未运行"
+                status["status_desc"] = f"未连接到 Docker: {status.get('docker_error') or '服务未运行'}"
+                return status
+            if not status.get("image_installed"):
+                status["readiness"] = "warning"
+                status["readiness_label"] = "待安装训练镜像"
+                status["status_desc"] = f"未安装独立训练镜像 {status.get('training_image', 'quantmind-trainer:latest')} (需先构建/拉取)"
+                return status
 
         # 检查是否训练中
         if status.get("training_active"):
@@ -503,7 +527,7 @@ cat /proc/loadavg 2>/dev/null | awk '{print $1}'
             status["status_desc"] = f"正在执行 {running_cnt or 1} 个训练任务"
             return status
 
-        # 检查 GPU 状态
+        # 检查 GPU 与系统资源
         gpus = status.get("gpus") or []
         disk_total_kb = status.get("disk_total_kb") or 0
         disk_used_kb = status.get("disk_used_kb") or 0

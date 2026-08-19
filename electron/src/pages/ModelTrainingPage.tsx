@@ -209,14 +209,21 @@ export const ModelTrainingPage: React.FC = () => {
     () => buildTrainingRequest(selectedFeatures, featureCategories, timePeriods, target, params, context, displayName, currentMarket, wfaConfig),
     [selectedFeatures, featureCategories, timePeriods, target, params, context, displayName, currentMarket, wfaConfig]
   );
+  // 训练节点
+  const selectedNodeObj = useMemo(
+    () => trainingNodes.find((n) => n.id === selectedNode) || trainingNodes[0],
+    [trainingNodes, selectedNode]
+  );
+
   const isDirectCatalogReady = currentMarket !== 'CN' || (
     !!factorCatalogVersion && dataCoverage?.ready === true
   );
-  const isReadyToTrain = selectedFeatures.length > 0 && target.horizonDays >= 1 && totalDays > 0 && isDirectCatalogReady;
+  const isSelectedNodeReady = selectedNodeObj ? selectedNodeObj.readiness === 'ready' : true;
+  const isReadyToTrain = selectedFeatures.length > 0 && target.horizonDays >= 1 && totalDays > 0 && isDirectCatalogReady && isSelectedNodeReady;
   const isTrainingInProgress =
     trainingStatus === 'running' ||
     ['pending', 'provisioning', 'running', 'waiting_callback'].includes((backendRunStatus || '').toLowerCase());
-  const disableStartTraining = isTrainingInProgress && currentStep === 3;
+  const disableStartTraining = (isTrainingInProgress || !isSelectedNodeReady) && currentStep === 3;
 
   // 自动 displayName
   useEffect(() => {
@@ -225,12 +232,6 @@ export const ModelTrainingPage: React.FC = () => {
       dispatch({ type: 'SET_DISPLAY_NAME', payload: { name: autoDisplayName, mode: 'auto' } });
     }
   }, [autoDisplayName, displayName, displayNameMode]);
-
-  // 训练节点
-  const selectedNodeObj = useMemo(
-    () => trainingNodes.find((n) => n.id === selectedNode) || trainingNodes[0],
-    [trainingNodes, selectedNode]
-  );
 
   const loadNodes = async (silent = false) => {
     if (!silent) setNodesLoading(true);
@@ -590,21 +591,33 @@ export const ModelTrainingPage: React.FC = () => {
 
                    {selectedNodeObj && (
                      <div className={clsx(
-                       "mt-2 text-[10px] p-2 rounded-lg leading-relaxed flex items-start gap-1.5",
+                       "mt-2 text-[10px] p-2.5 rounded-lg leading-relaxed flex items-start gap-1.5",
                        selectedNodeObj.readiness === 'offline'
                          ? "bg-rose-50 text-rose-800 border border-rose-200"
+                         : selectedNodeObj.readiness === 'warning'
+                         ? "bg-amber-50 text-amber-900 border border-amber-200"
                          : selectedNodeObj.type === 'remote'
                          ? "bg-orange-50/80 text-orange-800 border border-orange-200/60"
                          : "bg-blue-50/80 text-blue-800 border border-blue-200/60"
                      )}>
                        <span className="shrink-0 mt-0.5 font-bold">
-                         {selectedNodeObj.readiness === 'offline' ? '⚠️' : 'ℹ️'}
+                         {selectedNodeObj.readiness === 'offline' ? '❌' : selectedNodeObj.readiness === 'warning' ? '⚠️' : 'ℹ️'}
                        </span>
-                       <div>
+                       <div className="w-full">
                          {selectedNodeObj.readiness === 'offline' ? (
                            <div>
-                             <span className="font-semibold">{selectedNodeObj.name} 当前离线</span>
-                             <div className="text-rose-600/90 mt-0.5">{selectedNodeObj.error || selectedNodeObj.status_desc || '请先在 AutoDL 控制台开机或检查 SSH 端口配置。'}</div>
+                             <span className="font-bold">{selectedNodeObj.name} 离线</span>
+                             <div className="text-rose-600/90 mt-0.5">{selectedNodeObj.error || selectedNodeObj.status_desc || '请先在云服务商控制台开机或检查 SSH 端口配置。'}</div>
+                           </div>
+                         ) : selectedNodeObj.readiness === 'warning' ? (
+                           <div>
+                             <span className="font-bold">{selectedNodeObj.readiness_label || '待安装训练镜像'}</span>
+                             <div className="text-amber-700 mt-0.5">
+                               本机尚未安装独立的模型训练镜像 <code className="bg-amber-100/80 px-1 py-0.5 rounded font-mono text-[9px]">quantmind-trainer:latest</code>
+                             </div>
+                             <div className="mt-1 text-[9px] text-amber-800 bg-amber-100/50 p-1.5 rounded font-mono select-all">
+                               docker build -f docker/Dockerfile.trainer -t quantmind-trainer:latest .
+                             </div>
                            </div>
                          ) : selectedNodeObj.type === 'remote' ? (
                            `将推送特征快照至 AutoDL 远程 GPU 进行训练，完成后模型产物自动回传本机。`
