@@ -22,8 +22,25 @@ from .schemas import (
     SectorResponse,
 )
 from .service import MarketAnalysisService
+from .quantdb_realtime import QuantDBRealtimeUnavailable, get_snapshots
 
 router = APIRouter(prefix="/api/v1/market-analysis", tags=["Market Analysis"])
+
+
+@router.get("/realtime/snapshots")
+async def get_realtime_snapshots(
+    symbols: list[str] = Query(..., min_length=1, max_length=100),
+    current_user: dict = Depends(get_current_user),
+) -> dict:
+    """Serve QuantDB snapshots without exposing its internal credential to clients."""
+    _ = current_user
+    try:
+        return await get_snapshots(symbols)
+    except QuantDBRealtimeUnavailable as exc:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="QuantDB 实时行情源不可用",
+        ) from exc
 
 
 def _translate_error(exc: Exception) -> HTTPException:
