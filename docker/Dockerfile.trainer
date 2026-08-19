@@ -1,0 +1,72 @@
+# QuantMind Standalone Trainer Image
+# 专用于模型训练的独立精简镜像 (支持本地 GPU / AutoDL / 远程算力节点)
+
+FROM python:3.10-slim-bookworm
+
+ARG PIP_INDEX_URL=https://mirrors.aliyun.com/pypi/simple/
+ARG PIP_TRUSTED_HOST=mirrors.aliyun.com
+ARG APT_MIRROR=mirrors.aliyun.com
+ARG TORCH_DEVICE=gpu
+ARG TORCH_CPU_INDEX_URL=https://mirrors.aliyun.com/pytorch-wheels/cpu
+
+ENV PYTHONUNBUFFERED=1 \
+    PYTHONDONTWRITEBYTECODE=1 \
+    PIP_NO_CACHE_DIR=1 \
+    PIP_DISABLE_PIP_VERSION_CHECK=1 \
+    PIP_INDEX_URL=${PIP_INDEX_URL} \
+    PIP_TRUSTED_HOST=${PIP_TRUSTED_HOST} \
+    PYTHONPATH=/app
+
+WORKDIR /app
+
+# 配置 APT 镜像源并安装编译依赖与 OpenMP 支持
+RUN set -eux; \
+    if [ -f /etc/apt/sources.list.d/debian.sources ]; then \
+      sed -i "s/deb.debian.org/${APT_MIRROR}/g" /etc/apt/sources.list.d/debian.sources; \
+      sed -i "s/security.debian.org/${APT_MIRROR}/g" /etc/apt/sources.list.d/debian.sources; \
+    else \
+      sed -i "s/deb.debian.org/${APT_MIRROR}/g" /etc/apt/sources.list; \
+      sed -i "s/security.debian.org/${APT_MIRROR}/g" /etc/apt/sources.list; \
+    fi && \
+    apt-get update && apt-get install -y --no-install-recommends \
+      build-essential \
+      ca-certificates \
+      curl \
+      git \
+      libgomp1 \
+    && rm -rf /var/lib/apt/lists/*
+
+# 安装 PyTorch 与核心训练依赖
+RUN python -m pip install --upgrade pip setuptools wheel && \
+    if [ "$TORCH_DEVICE" = "cpu" ]; then \
+      pip install --no-cache-dir torch torchvision torchaudio --index-url ${TORCH_CPU_INDEX_URL}; \
+    else \
+      pip install --no-cache-dir torch torchvision torchaudio; \
+    fi
+
+RUN pip install --no-cache-dir \
+      numpy \
+      pandas \
+      pyarrow \
+      scipy \
+      scikit-learn \
+      lightgbm \
+      xgboost \
+      catboost \
+      optuna \
+      pyyaml \
+      requests \
+      psutil \
+      shap
+
+# 拷贝训练脚本及预处理函数
+COPY docker/training/train.py /app/train.py
+COPY docker/training/preprocessing.py /app/preprocessing.py
+
+# 预创建挂载目录
+RUN mkdir -p /workspace /data/features /data/quantdb /app/models /tmp
+
+VOLUME ["/workspace", "/data/features", "/data/quantdb", "/app/models"]
+
+ENTRYPOINT ["python", "/app/train.py"]
+CMD ["--config", "/workspace/config.yaml"]

@@ -208,29 +208,51 @@ async def run_training(
     return await submit_training_job(payload, background_tasks, current_user)
 
 
-@router.get("/training-nodes", summary="列出可用的训练节点")
-async def list_training_nodes(current_user: dict[str, Any] = Depends(require_admin)):
+@router.get("/training-nodes", summary="列出可用的训练节点及就绪状态")
+async def list_training_nodes(
+    include_status: bool = False,
+    current_user: dict[str, Any] = Depends(require_admin),
+):
     """列出训练节点（本地 Docker + 配置的多台 AutoDL 远程节点）。
 
-    远程节点来自 config/training_nodes.yaml（或旧版单节点环境变量）。
+    若 include_status=True，则并发探测各节点的实时硬件与就绪状态。
     """
-    from backend.services.engine.training.node_manager import load_training_nodes
+    from backend.services.engine.training.node_manager import NodeStatus, load_training_nodes
 
+    if include_status:
+        statuses = await NodeStatus.collect_all()
+        status_map = {s["id"]: s for s in statuses}
+    else:
+        status_map = {}
+
+    local_status = status_map.get("local") or {}
     nodes = [{
         "id": "local",
         "type": "local",
         "name": "本地 Docker",
-        "description": "本机 GPU 训练（Docker-in-Docker）",
+        "description": "本机 GPU / CPU 容器训练",
         "available": True,
+        "readiness": local_status.get("readiness", "ready"),
+        "readiness_label": local_status.get("readiness_label", "本地就绪"),
+        "gpu_summary": local_status.get("gpu_summary", "本地设备"),
+        "status_desc": local_status.get("status_desc", "本机容器环境"),
+        "status": local_status,
     }]
     for n in load_training_nodes():
+        node_id = n["id"]
+        n_status = status_map.get(node_id) or {}
         nodes.append({
-            "id": n["id"],
+            "id": node_id,
             "type": "remote",
-            "name": n.get("name") or n["id"],
+            "name": n.get("name") or node_id,
             "host": n.get("host"),
             "description": f"AutoDL 远程 GPU 训练节点（{n.get('host')}）",
-            "available": True,
+            "available": n_status.get("online", True),
+            "readiness": n_status.get("readiness", "ready" if n_status.get("online") else "offline"),
+            "readiness_label": n_status.get("readiness_label", "远程节点"),
+            "gpu_summary": n_status.get("gpu_summary", n.get("gpus") or "远程 GPU"),
+            "status_desc": n_status.get("status_desc", f"主机: {n.get('host')}"),
+            "status": n_status,
         })
     return {"nodes": nodes}
 
@@ -246,7 +268,14 @@ async def test_training_node(
     """
     node_id = str((body or {}).get("node_id") or "autodl-1")
     if node_id == "local":
-        return {"success": True, "node": node_id, "ssh": True, "docker": True}
+        from backend.services.engine.training.node_manager import NodeStatus
+        status = await NodeStatus.collect_local()
+        return {
+            "success": status.get("online", True),
+            "node": node_id,
+            "docker": status.get("docker_available", True),
+            "status": status,
+        }
     try:
         from backend.services.engine.training.orchestrator_base import get_orchestrator
 
@@ -256,23 +285,23 @@ async def test_training_node(
         return {"success": False, "node": node_id, "error": str(exc)}
 
 
-@router.get("/training-nodes/{node_id}/status", summary="获取 AutoDL 节点实时状态")
+@router.get("/training-nodes/{node_id}/status", summary="获取训练节点实时状态")
 async def get_training_node_status(
     node_id: str,
     current_user: dict[str, Any] = Depends(require_admin),
 ):
-    """采集单台 AutoDL 节点的实时状态（CPU/GPU/内存/训练容器）。
+    """采集单台节点（本地或 AutoDL 远程）的实时状态（CPU/GPU/内存/训练容器）。
 
-    供后台「AutoDL 节点」状态面板展示。节点离线或采集失败时返回 offline。
+    供后台状态面板及训练配置页展示。
     """
     from backend.services.engine.training.node_manager import NodeStatus, get_node_config
 
     if node_id == "local":
-        return {"id": "local", "name": "本地 Docker", "online": True, "is_local": True}
+        return await NodeStatus.collect_local()
 
     node = get_node_config(node_id)
     if not node:
-        return {"id": node_id, "name": node_id, "online": False, "error": "节点未配置"}
+        return {"id": node_id, "name": node_id, "online": False, "readiness": "offline", "error": "节点未配置"}
     return await NodeStatus.collect(node)
 
 

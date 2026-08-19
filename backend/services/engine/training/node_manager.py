@@ -364,4 +364,178 @@ cat /proc/loadavg 2>/dev/null | awk '{print $1}'
 
         # 网络延迟：ping 一次网关（尽力而为）
         result["ping_ms"] = None
+        result = cls.assess_readiness(result)
         return result
+
+    @classmethod
+    async def collect_local(cls) -> dict[str, Any]:
+        """采集本地节点（Local Docker / 宿主机）实时状态。"""
+        import shutil
+        import subprocess
+
+        result: dict[str, Any] = {
+            "id": "local",
+            "name": "本地 Docker",
+            "type": "local",
+            "host": "localhost",
+            "online": True,
+            "is_local": True,
+            "docker_available": False,
+            "containers": [],
+            "gpus": [],
+        }
+
+        # 1. 探测 CPU 与内存
+        try:
+            import psutil
+            result["cpu_cores"] = psutil.cpu_count(logical=True)
+            mem = psutil.virtual_memory()
+            result["mem_total_mb"] = int(mem.total / (1024 * 1024))
+            result["mem_used_mb"] = int(mem.used / (1024 * 1024))
+            result["cpu_load"] = round(psutil.cpu_percent(interval=None) / 100.0, 2)
+        except Exception:
+            result["cpu_cores"] = os.cpu_count() or 1
+
+        # 2. 探测磁盘空间
+        try:
+            disk_path = "/data" if Path("/data").exists() else "."
+            usage = shutil.disk_usage(disk_path)
+            result["disk_total_kb"] = int(usage.total / 1024)
+            result["disk_used_kb"] = int(usage.used / 1024)
+        except Exception:
+            pass
+
+        # 3. 探测本地 Docker 与容器
+        try:
+            from docker import DockerClient
+            client = await asyncio.to_thread(DockerClient.from_env)
+            await asyncio.to_thread(client.ping)
+            result["docker_available"] = True
+
+            # 检查是否有 qm-train-* 容器
+            all_containers = await asyncio.to_thread(client.containers.list, all=True)
+            train_containers = []
+            for c in all_containers:
+                if c.name and c.name.startswith("qm-train-"):
+                    train_containers.append({"name": c.name, "status": c.status})
+            result["containers"] = train_containers
+            result["training_active"] = any(c["status"] == "running" for c in train_containers)
+        except Exception as docker_err:
+            result["docker_available"] = False
+            result["docker_error"] = str(docker_err)
+
+        # 4. 探测本地 GPU (nvidia-smi / torch)
+        gpus: list[dict[str, Any]] = []
+        try:
+            proc = await asyncio.create_subprocess_exec(
+                "nvidia-smi",
+                "--query-gpu=utilization.gpu,memory.used,memory.total,temperature.gpu,name",
+                "--format=csv,noheader,nounits",
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+            )
+            stdout, _ = await asyncio.wait_for(proc.communicate(), timeout=5)
+            if proc.returncode == 0 and stdout:
+                for line in stdout.decode(errors="replace").splitlines():
+                    parts = [p.strip() for p in line.split(",") if p.strip()]
+                    if len(parts) >= 5:
+                        gpus.append({
+                            "util": int(parts[0]) if parts[0].isdigit() else 0,
+                            "mem_used_mb": int(parts[1]) if parts[1].isdigit() else 0,
+                            "mem_total_mb": int(parts[2]) if parts[2].isdigit() else 0,
+                            "temp_c": int(parts[3]) if parts[3].isdigit() else 0,
+                            "name": parts[4],
+                        })
+        except Exception:
+            pass
+
+        if not gpus:
+            try:
+                import torch
+                if torch.cuda.is_available():
+                    for i in range(torch.cuda.device_count()):
+                        props = torch.cuda.get_device_properties(i)
+                        gpus.append({
+                            "util": 0,
+                            "mem_used_mb": int(torch.cuda.memory_allocated(i) / (1024 * 1024)),
+                            "mem_total_mb": int(props.total_memory / (1024 * 1024)),
+                            "temp_c": 0,
+                            "name": props.name,
+                        })
+            except Exception:
+                pass
+
+        result["gpus"] = gpus
+        if not gpus:
+            result["gpu_error"] = "未检测到独立 GPU (将使用 CPU 训练)"
+
+        result = cls.assess_readiness(result)
+        return result
+
+    @staticmethod
+    def assess_readiness(status: dict[str, Any]) -> dict[str, Any]:
+        """根据采集的状态综合评估节点就绪度并生成摘要。"""
+        if not status.get("online", False):
+            status["readiness"] = "offline"
+            status["readiness_label"] = "离线 / 连接失败"
+            status["status_desc"] = status.get("error") or "无法建立通信连接"
+            return status
+
+        # 检查是否训练中
+        if status.get("training_active"):
+            running_cnt = sum(1 for c in status.get("containers", []) if c.get("status") == "running")
+            status["readiness"] = "busy"
+            status["readiness_label"] = "训练中"
+            status["status_desc"] = f"正在执行 {running_cnt or 1} 个训练任务"
+            return status
+
+        # 检查 GPU 状态
+        gpus = status.get("gpus") or []
+        disk_total_kb = status.get("disk_total_kb") or 0
+        disk_used_kb = status.get("disk_used_kb") or 0
+        disk_free_gb = round((disk_total_kb - disk_used_kb) / (1024 * 1024), 1) if disk_total_kb > 0 else 0
+        status["disk_free_gb"] = disk_free_gb
+
+        if gpus:
+            first_gpu = gpus[0]
+            gpu_name = first_gpu.get("name") or "GPU"
+            total_vram_gb = round(first_gpu.get("mem_total_mb", 0) / 1024, 1)
+            used_vram_gb = round(first_gpu.get("mem_used_mb", 0) / 1024, 1)
+            free_vram_gb = max(0.0, round(total_vram_gb - used_vram_gb, 1))
+
+            status["gpu_summary"] = f"{gpu_name} ({total_vram_gb}GB)"
+            status["readiness"] = "ready"
+            status["readiness_label"] = "已就绪"
+            status["status_desc"] = f"{gpu_name} · 显存余 {free_vram_gb}GB · 磁盘可用 {disk_free_gb}GB"
+        else:
+            status["gpu_summary"] = "CPU (无独立 GPU)"
+            status["readiness"] = "ready"
+            status["readiness_label"] = "已就绪 (CPU)"
+            mem_mb = status.get("mem_total_mb") or 0
+            mem_str = f" · 内存 {round(mem_mb / 1024, 1)}GB" if mem_mb > 0 else ""
+            status["status_desc"] = f"CPU 训练模式{mem_str} · 磁盘可用 {disk_free_gb}GB"
+
+        # 如果磁盘不足 5GB 则 warning
+        if disk_total_kb > 0 and disk_free_gb < 5.0:
+            status["readiness"] = "warning"
+            status["readiness_label"] = "磁盘空间不足"
+            status["status_desc"] = f"磁盘剩余不足 5GB (仅剩 {disk_free_gb}GB)"
+
+        return status
+
+    @classmethod
+    async def collect_all(cls) -> list[dict[str, Any]]:
+        """并发采集所有节点（本地 + AutoDL 远程节点）状态。"""
+        nodes = load_training_nodes()
+        tasks = [cls.collect_local()]
+        for n in nodes:
+            tasks.append(cls.collect(n))
+        results = await asyncio.gather(*tasks, return_exceptions=True)
+        out: list[dict[str, Any]] = []
+        for r in results:
+            if isinstance(r, dict):
+                out.append(r)
+            elif isinstance(r, Exception):
+                logger.warning("采集节点状态异常: %s", r)
+        return out
+

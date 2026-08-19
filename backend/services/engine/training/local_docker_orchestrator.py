@@ -21,8 +21,13 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List
 
-import docker
-from docker import DockerClient
+try:
+    import docker
+    DockerClient = getattr(docker, "DockerClient", None)
+except (ImportError, AttributeError):
+    docker = None  # type: ignore
+    DockerClient = None  # type: ignore
+
 import yaml
 
 from backend.services.engine.training.training_log_stream import TrainingRunLogStream

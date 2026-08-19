@@ -227,21 +227,25 @@ export const ModelTrainingPage: React.FC = () => {
   }, [autoDisplayName, displayName, displayNameMode]);
 
   // 训练节点
-  useEffect(() => {
-    let active = true;
-    const loadNodes = async () => {
-      setNodesLoading(true);
-      try {
-        const resp = await adminService.listTrainingNodes();
-        if (active && resp?.nodes) {
-          setTrainingNodes(resp.nodes);
-        }
-      } catch { /* silent */ } finally {
-        if (active) setNodesLoading(false);
+  const selectedNodeObj = useMemo(
+    () => trainingNodes.find((n) => n.id === selectedNode) || trainingNodes[0],
+    [trainingNodes, selectedNode]
+  );
+
+  const loadNodes = async (silent = false) => {
+    if (!silent) setNodesLoading(true);
+    try {
+      const resp = await adminService.listTrainingNodes(true);
+      if (resp?.nodes) {
+        setTrainingNodes(resp.nodes);
       }
-    };
+    } catch { /* silent */ } finally {
+      if (!silent) setNodesLoading(false);
+    }
+  };
+
+  useEffect(() => {
     loadNodes();
-    return () => { active = false; };
   }, []);
 
   // 特征字典加载
@@ -506,34 +510,106 @@ export const ModelTrainingPage: React.FC = () => {
                   <div className="text-xs font-semibold text-slate-700">T+{target.horizonDays} · {target.mode === 'classification' ? '分类' : '回归'}</div>
                   <div className="text-[10px] text-slate-400 mt-1 truncate">{labelFormula}</div>
                </div>
-               <div className="rounded-xl bg-slate-50 p-3 border border-slate-100">
-                  <div className="text-[10px] uppercase font-bold text-slate-400 mb-2">训练节点</div>
-                  <div className="flex gap-2">
-                    {trainingNodes.length > 0
-                      ? trainingNodes.map((n) => (
-                          <button
-                            key={n.id}
-                            onClick={() => setSelectedNode(n.id)}
-                            className={clsx(
-                              'flex-1 rounded-lg px-2 py-1.5 text-xs font-semibold border transition-all',
-                              selectedNode === n.id
-                                ? n.type === 'remote'
-                                  ? 'bg-orange-50 border-orange-300 text-orange-700'
-                                  : 'bg-blue-50 border-blue-300 text-blue-700'
-                                : 'bg-white border-gray-200 text-gray-500 hover:border-gray-300'
-                            )}
-                          >
-                            {n.name}
-                          </button>
-                        ))
-                      : <div className="text-[11px] text-slate-400 w-full text-center py-1">仅本地训练</div>}
-                  </div>
-                  {selectedNode !== 'local' && (
-                    <div className="mt-2 text-[10px] text-orange-600 leading-relaxed">
-                      将推送特征快照到 AutoDL，远程 GPU 训练完成后模型自动回传本机。
-                    </div>
-                  )}
-               </div>
+                <div className="rounded-xl bg-slate-50 p-3 border border-slate-100">
+                   <div className="flex items-center justify-between mb-2">
+                     <div className="text-[10px] uppercase font-bold text-slate-400">训练节点</div>
+                     <button
+                       type="button"
+                       onClick={() => loadNodes()}
+                       disabled={nodesLoading}
+                       className="text-[10px] text-slate-400 hover:text-blue-600 flex items-center gap-1 transition-colors disabled:opacity-50"
+                       title="刷新节点就绪状态"
+                     >
+                       <RefreshCcw className={clsx("w-2.5 h-2.5", nodesLoading && "animate-spin")} />
+                       <span>{nodesLoading ? '检测中' : '刷新'}</span>
+                     </button>
+                   </div>
+                   <div className="grid grid-cols-2 gap-2">
+                     {trainingNodes.length > 0
+                       ? trainingNodes.map((n) => {
+                           const isSelected = selectedNode === n.id;
+                           const readiness = n.readiness || (n.available ? 'ready' : 'offline');
+                           const isReady = readiness === 'ready';
+                           const isBusy = readiness === 'busy';
+                           const isOffline = readiness === 'offline';
+
+                           return (
+                             <button
+                               key={n.id}
+                               type="button"
+                               onClick={() => setSelectedNode(n.id)}
+                               className={clsx(
+                                 'flex flex-col text-left p-2 rounded-lg border transition-all text-xs relative group',
+                                 isSelected
+                                   ? n.type === 'remote'
+                                     ? 'bg-orange-50/80 border-orange-400 shadow-sm ring-1 ring-orange-300'
+                                     : 'bg-blue-50/80 border-blue-400 shadow-sm ring-1 ring-blue-300'
+                                   : 'bg-white border-gray-200 hover:border-gray-300 hover:bg-slate-50/50'
+                               )}
+                             >
+                               <div className="flex items-center justify-between w-full mb-1">
+                                 <span className={clsx(
+                                   "font-bold truncate max-w-[85px]",
+                                   isSelected ? (n.type === 'remote' ? 'text-orange-950' : 'text-blue-950') : 'text-slate-800'
+                                 )}>
+                                   {n.name}
+                                 </span>
+                                 <span className="flex items-center gap-1 shrink-0">
+                                   <span
+                                     className={clsx(
+                                       "w-1.5 h-1.5 rounded-full inline-block",
+                                       isReady && "bg-emerald-500 shadow-[0_0_4px_rgba(16,185,129,0.7)]",
+                                       isBusy && "bg-amber-500 animate-pulse",
+                                       isOffline && "bg-rose-500",
+                                       !isReady && !isBusy && !isOffline && "bg-amber-400"
+                                     )}
+                                   />
+                                   <span className={clsx(
+                                     "text-[9px] font-medium scale-90 origin-right",
+                                     isReady && "text-emerald-700",
+                                     isBusy && "text-amber-700",
+                                     isOffline && "text-rose-600",
+                                     !isReady && !isBusy && !isOffline && "text-amber-600"
+                                   )}>
+                                     {isReady ? '就绪' : isBusy ? '忙碌' : isOffline ? '离线' : '告警'}
+                                   </span>
+                                 </span>
+                               </div>
+
+                               <div className="text-[10px] font-medium text-slate-500 truncate w-full">
+                                 {n.gpu_summary || (n.type === 'remote' ? 'AutoDL GPU' : '本地 Docker')}
+                               </div>
+
+                               {n.status_desc && (
+                                 <div className="text-[9px] text-slate-400 mt-1 truncate w-full">
+                                   {n.status_desc}
+                                 </div>
+                               )}
+                             </button>
+                           );
+                         })
+                       : <div className="text-[11px] text-slate-400 w-full text-center py-2 col-span-2">加载节点中...</div>}
+                   </div>
+
+                   {selectedNodeObj && (
+                     <div className={clsx(
+                       "mt-2 text-[10px] p-2 rounded-lg leading-relaxed flex items-start gap-1.5",
+                       selectedNodeObj.type === 'remote'
+                         ? "bg-orange-50/80 text-orange-800 border border-orange-200/60"
+                         : "bg-blue-50/80 text-blue-800 border border-blue-200/60"
+                     )}>
+                       <span className="shrink-0 mt-0.5 font-bold">ℹ️</span>
+                       <div>
+                         {selectedNodeObj.type === 'remote'
+                           ? `推送特征快照至 AutoDL 节点进行 GPU 训练，完成后模型产物自动回传本机。`
+                           : `使用本机 Docker 隔离训练容器，训练期间将独占分配算力。`}
+                         {selectedNodeObj.readiness === 'offline' && (
+                           <div className="text-rose-600 font-semibold mt-0.5">⚠️ 当前节点离线，请检查通信连通性或服务状态。</div>
+                         )}
+                       </div>
+                     </div>
+                   )}
+                </div>
                <div className="rounded-xl bg-slate-50 p-3 border border-slate-100">
                   <div className="text-[10px] uppercase font-bold text-slate-400 mb-2">训练时长预算</div>
                   <Select

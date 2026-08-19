@@ -462,8 +462,10 @@ class AdminService {
         return resp.data;
     }
 
-    public async listTrainingNodes(): Promise<any> {
-        const resp = await this.axiosInstance.get<any>('/admin/models/training-nodes');
+    public async listTrainingNodes(includeStatus: boolean = false): Promise<any> {
+        const resp = await this.axiosInstance.get<any>('/admin/models/training-nodes', {
+            params: { include_status: includeStatus },
+        });
         return resp.data;
     }
 
