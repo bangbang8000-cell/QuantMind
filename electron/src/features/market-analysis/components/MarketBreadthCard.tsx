@@ -8,6 +8,8 @@ interface MarketBreadthCardProps {
   limitUpCount?: number;
   limitDownCount?: number;
   totalTurnoverYi?: number;
+  profitEffect?: number;
+  limitUpBrokenRatio?: number;
 }
 
 export const MarketBreadthCard: React.FC<MarketBreadthCardProps> = ({
@@ -17,11 +19,13 @@ export const MarketBreadthCard: React.FC<MarketBreadthCardProps> = ({
   limitUpCount = 68,
   limitDownCount = 7,
   totalTurnoverYi = 9535.9,
+  profitEffect = 62.8,
+  limitUpBrokenRatio = 14.2,
 }) => {
   const total = advanceCount + declineCount + flatCount || 1;
   const advPct = Math.round((advanceCount / total) * 100);
   const decPct = Math.round((declineCount / total) * 100);
-  const flatPct = 100 - advPct - decPct;
+  const flatPct = Math.max(0, 100 - advPct - decPct);
 
   return (
     <div className="bg-white/90 backdrop-blur-md rounded-2xl p-4 border border-slate-200/80 shadow-sm flex flex-col gap-3">
@@ -34,7 +38,6 @@ export const MarketBreadthCard: React.FC<MarketBreadthCardProps> = ({
           全市场总成交: ¥{totalTurnoverYi.toLocaleString()} 亿
         </span>
       </div>
-
 
       {/* 涨跌家数比例条形图 */}
       <div className="space-y-2">
@@ -71,14 +74,15 @@ export const MarketBreadthCard: React.FC<MarketBreadthCardProps> = ({
 
         <div className="bg-purple-50/80 p-3 rounded-2xl border border-purple-100">
           <div className="text-[11px] text-purple-600/80 font-medium">炸板率</div>
-          <div className="text-lg font-extrabold font-mono text-purple-700">14.2%</div>
+          <div className="text-lg font-extrabold font-mono text-purple-700">{limitUpBrokenRatio}%</div>
         </div>
 
         <div className="bg-slate-50 p-3 rounded-2xl border border-slate-100">
           <div className="text-[11px] text-slate-500 font-medium">赚钱效应指数</div>
-          <div className="text-lg font-extrabold font-mono text-slate-800">62.8 <span className="text-xs font-normal">/ 100</span></div>
+          <div className="text-lg font-extrabold font-mono text-slate-800">{profitEffect} <span className="text-xs font-normal">/ 100</span></div>
         </div>
       </div>
     </div>
   );
 };
+

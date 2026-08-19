@@ -43,10 +43,11 @@ logger = logging.getLogger(__name__)
 # 环境变量：QuantDB 数据目录
 _QUANTDB_DATA_DIR_ENV = "QM_QUANTDB_DATA_DIR"
 
-# 默认数据目录（项目根相对 / 容器内绝对路径）
+# 默认数据目录（项目根相对 / 容器内绝对路径 / 本地盘符）
 _DEFAULT_DATA_DIRS = [
     "/data/quantdb",  # Docker 容器内（挂载点）
     "/app/data/quantdb",  # Docker 容器内
+    "D:/quant_data",  # Windows 本地开发常用盘符
     str(Path(__file__).resolve().parents[4] / "data" / "quantdb"),  # 项目根/data/quantdb
 ]
 
@@ -56,21 +57,19 @@ def _resolve_data_dir() -> Path:
     env_val = os.getenv(_QUANTDB_DATA_DIR_ENV, "").strip()
     if env_val:
         p = Path(env_val)
-        if p.is_dir():
+        if p.is_dir() and any(p.iterdir()):
             return p
-        logger.warning("QM_QUANTDB_DATA_DIR=%s 不存在，尝试默认路径", env_val)
+        logger.warning("QM_QUANTDB_DATA_DIR=%s 不存在或为空，尝试默认路径", env_val)
 
     for d in _DEFAULT_DATA_DIRS:
         p = Path(d)
-        if p.is_dir():
+        if p.is_dir() and any(p.iterdir()):
             return p
 
     # 从 __file__ 向上推算项目根
-    # __file__ = .../quantmind/backend/services/engine/data_platform/quantdb_hub.py
-    # 项目根 = __file__.parents[4]
     project_root = Path(__file__).resolve().parents[4]
     fallback = project_root / "data" / "quantdb"
-    if fallback.is_dir():
+    if fallback.is_dir() and any(fallback.iterdir()):
         return fallback
 
     # 最后返回默认路径（让后续方法报错更清晰）
@@ -97,6 +96,55 @@ def _dt_conditions(start: date | None, end: date | None, col: str = "dt") -> lis
     if end:
         conditions.append(f"{col} <= {end.strftime('%Y%m%d')}")
     return conditions
+
+
+class QuantDBDataHub:
+    """A 股数据中枢 — 所有数据读取的单一入口。"""
+
+    _instance: Optional[QuantDBDataHub] = None
+    _instance_lock = threading.Lock()
+
+    def __init__(self, data_dir: str | Path | None = None) -> None:
+        if data_dir is not None:
+            self._data_dir = Path(data_dir)
+        else:
+            self._data_dir = _resolve_data_dir()
+        self._local = threading.local()
+        self._views_mounted_per_conn: set[int] = set()  # track which conn ids have views mounted
+
+    @classmethod
+    def get_instance(cls) -> QuantDBDataHub:
+        """获取全局单例（懒初始化，线程安全）。"""
+        if cls._instance is None:
+            with cls._instance_lock:
+                if cls._instance is None:
+                    cls._instance = cls()
+        return cls._instance
+
+    @property
+    def data_dir(self) -> Path:
+        return self._data_dir
+
+    @property
+    def available(self) -> bool:
+        """数据目录是否存在且包含数据。"""
+        return self._data_dir.is_dir() and any(self._data_dir.iterdir())
+
+    def warm_up(self) -> None:
+        """预初始化 DuckDB 连接和视图，消除首次查询延迟。
+
+        应在服务启动时调用（在主线程中），这样后续请求无需等待视图注册。
+        """
+        if not self.available:
+            logger.info("QuantDB data not available, skipping warm-up")
+            return
+        try:
+            conn = self._get_duck_conn()
+            # Execute a lightweight query to force view materialization
+            conn.execute("SELECT COUNT(*) FROM qdb_valuation WHERE dt = (SELECT MAX(dt) FROM qdb_valuation)")
+            logger.info("QuantDB DuckDB warm-up complete")
+        except Exception as exc:
+            logger.warning("QuantDB warm-up failed (non-fatal): %s", exc)
 
 
 class QuantDBDataHub:
@@ -199,11 +247,10 @@ class QuantDBDataHub:
             full_path = dd / rel_path
             if not full_path.exists():
                 continue
-            # l1_factors has mixed format; only read partitioned dirs to avoid Hive mismatch
-            if view_name == "qdb_l1_factors":
-                parquet_glob = str(full_path / "dt=*" / "*.parquet")
-            else:
-                parquet_glob = str(full_path / "**" / "*.parquet")
+            # 分区数据集统一只读 dt=YYYYMMDD/ 目录，避免混入平铺的 per-symbol
+            parquet_glob = str(full_path / "dt=*" / "*.parquet").replace("\\", "/")
+            if next(full_path.glob("dt=*"), None) is None:
+                continue  # 无分区目录则跳过
             try:
                 conn.execute(
                     f"CREATE VIEW IF NOT EXISTS {view_name} AS "
@@ -216,9 +263,10 @@ class QuantDBDataHub:
         per_symbol_views = {
             "qdb_hsgt_north_daily": "2_base_sector/hsgt_north/daily_freq/*.parquet",
         }
-        for view_name, parquet_glob in per_symbol_views.items():
-            glob_dir = dd / parquet_glob
-            if not list(Path(str(glob_dir)).parent.glob("*.parquet")):
+        for view_name, parquet_rel in per_symbol_views.items():
+            glob_path = dd / parquet_rel
+            glob_dir = str(glob_path).replace("\\", "/")
+            if next(glob_path.parent.glob("*.parquet"), None) is None:
                 continue  # 目录为空则跳过
             try:
                 conn.execute(
@@ -229,8 +277,8 @@ class QuantDBDataHub:
                 logger.warning("创建 DuckDB 视图 %s 失败: %s", view_name, exc)
 
         # 北向资金季度快照视图（quarter=YYYYQN Hive 分区，2024-08 起季度披露）
-        north_quarter_dir = dd / "2_base_sector" / "hsgt_north" / "quarter=*" / "data.parquet"
-        if list(Path(str(dd / "2_base_sector" / "hsgt_north")).glob("quarter=*")):
+        north_quarter_dir = str(dd / "2_base_sector" / "hsgt_north" / "quarter=*" / "data.parquet").replace("\\", "/")
+        if list((dd / "2_base_sector" / "hsgt_north").glob("quarter=*")):
             try:
                 conn.execute(
                     "CREATE VIEW IF NOT EXISTS qdb_hsgt_north AS "
@@ -241,7 +289,6 @@ class QuantDBDataHub:
                 logger.warning("创建 DuckDB 视图 qdb_hsgt_north 失败: %s", exc)
 
         self._views_mounted_per_conn.add(conn_id)
-
     # ------------------------------------------------------------------
     # 通用查询
     # ------------------------------------------------------------------
@@ -379,10 +426,16 @@ class QuantDBDataHub:
     # ------------------------------------------------------------------
     def fetch_stock_list(self) -> pd.DataFrame:
         """读取股票列表。"""
-        file_path = self._data_dir / "2_base_sector" / "instrument_detail" / "instrument_detail.parquet"
-        if not file_path.exists():
-            return pd.DataFrame()
-        return pd.read_parquet(file_path)
+        base_dir = self._data_dir / "2_base_sector" / "instrument_detail"
+        for fname in ("instrument_detail.parquet", "instrument_list.parquet"):
+            file_path = base_dir / fname
+            if file_path.exists():
+                df = pd.read_parquet(file_path)
+                # 统一列名：Symbol -> symbol
+                if "Symbol" in df.columns and "symbol" not in df.columns:
+                    df = df.rename(columns={"Symbol": "symbol"})
+                return df
+        return pd.DataFrame()
 
     def fetch_instrument_industry(self) -> pd.DataFrame:
         """读取股票行业分类映射（CSRC 一级行业）。
@@ -411,13 +464,30 @@ class QuantDBDataHub:
         return result.dropna(subset=["ind_name_l1"])
 
     def fetch_sector_members(self, sector_name: str | None = None) -> pd.DataFrame:
-        """读取板块成分。"""
-        file_path = self._data_dir / "2_base_sector" / "sector_concept" / "sector_members.parquet"
-        if not file_path.exists():
+        """读取板块成分。
+
+        兼容两套列名（小写规范列 + 原始大写列）与两种文件名。
+        """
+        base_dir = self._data_dir / "2_base_sector" / "sector_concept"
+        for fname in ("sector_members.parquet", "sector_member.parquet"):
+            file_path = base_dir / fname
+            if file_path.exists():
+                df = pd.read_parquet(file_path)
+                break
+        else:
             return pd.DataFrame()
-        df = pd.read_parquet(file_path)
+        if df.empty:
+            return df
+        # 统一为小写列名
+        rename = {
+            "SectorCode": "sector_code",
+            "SectorName": "sector_name",
+            "SectorType": "sector_type",
+            "Symbol": "symbol",
+        }
+        df = df.rename(columns=rename)
         if sector_name and "sector_name" in df.columns:
-            df = df[df["sector_name"] == sector_name]
+            df = df[df["sector_name"].astype(str) == sector_name]
         return df
 
     def fetch_calendar(

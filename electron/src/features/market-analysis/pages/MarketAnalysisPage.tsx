@@ -10,12 +10,28 @@ import { TagLookupPanel } from '../components/TagLookupPanel';
 import { CapitalFlowHorizontalBarChart, FlowItem } from '../components/CapitalFlowHorizontalBarChart';
 import { Tag as TagIcon } from 'lucide-react';
 
+interface MarketBreadthData {
+  trade_date: string;
+  advance_count: number;
+  decline_count: number;
+  flat_count: number;
+  limit_up_count: number;
+  limit_down_count: number;
+  total_turnover_yi: number;
+  profit_effect: number;
+  limit_up_broken_ratio: number;
+}
+
 export const MarketAnalysisPage: React.FC = () => {
   const [loading, setLoading] = useState(false);
   const [activeTab, setActiveTab] = useState('panorama'); // 默认进入大盘全景看板
   const [searchQuery, setSearchQuery] = useState('');
   const [indices, setIndices] = useState<IndexItem[]>([]);
   const [stockFlows, setStockFlows] = useState<StockMoneyFlowItem[]>([]);
+  const [breadth, setBreadth] = useState<MarketBreadthData | null>(null);
+  const [heatmapData, setHeatmapData] = useState<any[]>([]);
+  const [sankeyData, setSankeyData] = useState<{ nodes: any[]; links: any[] } | null>(null);
+  const [updateTime, setUpdateTime] = useState<string>('');
 
   // 🎯 多周期资金流向专属状态
   const [period, setPeriod] = useState<'1d' | '3d' | '5d' | '10d' | '20d'>('5d');
@@ -30,45 +46,56 @@ export const MarketAnalysisPage: React.FC = () => {
 
   const fetchMarketData = async () => {
     setLoading(true);
+    const token = localStorage.getItem('access_token') || '';
+    const headers = token ? { Authorization: `Bearer ${token}` } : {};
+
     try {
-      const [resIdx, resStock] = await Promise.all([
-        fetch('/api/v1/market-analysis/indices/overview', {
-          headers: { 'Authorization': `Bearer ${localStorage.getItem('access_token') || ''}` },
-        }),
-        fetch('/api/v1/market-analysis/money-flow/stocks', {
-          headers: { 'Authorization': `Bearer ${localStorage.getItem('access_token') || ''}` },
-        }),
+      const [resIdx, resStock, resBreadth, resHeatmap, resSankey] = await Promise.all([
+        fetch('/api/v1/market-analysis/indices/overview', { headers }),
+        fetch('/api/v1/market-analysis/money-flow/stocks?limit=20', { headers }),
+        fetch('/api/v1/market-analysis/breadth', { headers }),
+        fetch('/api/v1/market-analysis/heatmap?category=shenwan', { headers }),
+        fetch('/api/v1/market-analysis/money-flow/sankey', { headers }),
       ]);
 
       if (resIdx.ok) {
         const idxData = await resIdx.json();
-        setIndices(idxData);
+        if (Array.isArray(idxData) && idxData.length > 0) {
+          setIndices(idxData);
+        }
       }
       if (resStock.ok) {
         const stockData = await resStock.json();
-        setStockFlows(stockData);
+        if (Array.isArray(stockData) && stockData.length > 0) {
+          setStockFlows(stockData);
+        }
       }
+      if (resBreadth.ok) {
+        const bData = await resBreadth.json();
+        if (bData && bData.total_turnover_yi > 0) {
+          setBreadth(bData);
+        }
+      }
+      if (resHeatmap.ok) {
+        const hData = await resHeatmap.json();
+        if (hData && Array.isArray(hData.items) && hData.items.length > 0) {
+          setHeatmapData(hData.items);
+        }
+      }
+      if (resSankey.ok) {
+        const sData = await resSankey.json();
+        if (sData && sData.nodes && sData.nodes.length > 0) {
+          setSankeyData(sData);
+        }
+      }
+
+      const now = new Date();
+      setUpdateTime(now.toTimeString().split(' ')[0]);
     } catch (e) {
-      console.warn('后端市场接口未完全就绪，使用全量真实感 Mock 数据');
+      console.warn('后端市场接口连接出现异常，保留现有渲染状态', e);
+    } finally {
+      setLoading(false);
     }
-
-    setIndices([
-      { symbol: '000001.SH', name: '上证指数', price: 3048.52, change: 18.24, pct_change: 0.60, turnover: 4215.8, trend: [3020, 3032, 3028, 3040, 3048.52] },
-      { symbol: '399001.SZ', name: '深证成指', price: 9482.16, change: 98.42, pct_change: 1.05, turnover: 5320.1, trend: [9380, 9410, 9400, 9450, 9482.16] },
-      { symbol: '399006.SZ', name: '创业板指', price: 1860.30, change: 26.40, pct_change: 1.44, turnover: 2180.5, trend: [1830, 1842, 1838, 1855, 1860.30] },
-      { symbol: '000300.SH', name: '沪深300', price: 3582.10, change: 24.18, pct_change: 0.68, turnover: 2890.3, trend: [3550, 3562, 3558, 3575, 3582.10] },
-      { symbol: '588000.SH', name: '科创50', price: 812.45, change: 10.35, pct_change: 1.29, turnover: 890.2, trend: [800, 804, 802, 809, 812.45] },
-    ]);
-
-    setStockFlows([
-      { symbol: 'SH600036', name: '招商银行', close_price: 35.80, pct_change: 2.45, net_inflow: 482000000, main_ratio: 12.8, super_large: 280000000, large: 202000000, medium: -110000000, small: -372000000 },
-      { symbol: 'SZ002594', name: '比亚迪', close_price: 248.50, pct_change: 3.12, net_inflow: 415000000, main_ratio: 15.4, super_large: 260000000, large: 155000000, medium: -80000000, small: -335000000 },
-      { symbol: 'SH600519', name: '贵州茅台', close_price: 1680.00, pct_change: 1.15, net_inflow: 389000000, main_ratio: 9.2, super_large: 210000000, large: 179000000, medium: -95000000, small: -294000000 },
-      { symbol: 'SH688330', name: '宏力达', close_price: 25.68, pct_change: 6.78, net_inflow: 128000000, main_ratio: 18.5, super_large: 82000000, large: 46000000, medium: -30000000, small: -98000000 },
-      { symbol: 'SZ000001', name: '平安银行', close_price: 11.45, pct_change: 1.87, net_inflow: 96000000, main_ratio: 8.4, super_large: 54000000, large: 42000000, medium: -21000000, small: -75000000 },
-    ]);
-
-    setLoading(false);
   };
 
   const navTabs = [
@@ -145,7 +172,7 @@ export const MarketAnalysisPage: React.FC = () => {
         </div>
 
         <span className="text-[11px] text-slate-400 font-mono hidden sm:inline-block">
-          数据实时更新于: 16:22:28
+          数据更新于: {updateTime || '刚刚'}
         </span>
       </div>
 
@@ -368,7 +395,16 @@ export const MarketAnalysisPage: React.FC = () => {
       {activeTab === 'panorama' && (
         <div className="grid grid-cols-1 lg:grid-cols-12 gap-4 items-stretch">
           <div className="lg:col-span-5 flex flex-col justify-between gap-4">
-            <MarketBreadthCard />
+            <MarketBreadthCard
+              advanceCount={breadth?.advance_count}
+              declineCount={breadth?.decline_count}
+              flatCount={breadth?.flat_count}
+              limitUpCount={breadth?.limit_up_count}
+              limitDownCount={breadth?.limit_down_count}
+              totalTurnoverYi={breadth?.total_turnover_yi}
+              profitEffect={breadth?.profit_effect}
+              limitUpBrokenRatio={breadth?.limit_up_broken_ratio}
+            />
             <div className="flex flex-col gap-2.5 bg-white/95 backdrop-blur-md rounded-3xl p-5 border border-purple-100/80 shadow-md shadow-purple-500/5">
               <div className="flex items-center justify-between">
                 <h3 className="text-xs font-extrabold text-slate-800 flex items-center gap-1.5">
@@ -394,7 +430,7 @@ export const MarketAnalysisPage: React.FC = () => {
               </h3>
               <span className="text-[10px] text-slate-400 font-mono">市值权重 vs 涨跌幅</span>
             </div>
-            <ShenwanHeatmapChart height={530} />
+            <ShenwanHeatmapChart data={heatmapData} height={530} />
           </div>
         </div>
       )}
@@ -408,7 +444,11 @@ export const MarketAnalysisPage: React.FC = () => {
             </h3>
             <span className="text-xs text-slate-400">资金实时划转链条</span>
           </div>
-          <CapitalFlowSankeyChart height={480} />
+          <CapitalFlowSankeyChart
+            nodes={sankeyData?.nodes}
+            links={sankeyData?.links}
+            height={480}
+          />
         </div>
       )}
 

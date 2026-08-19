@@ -97,3 +97,23 @@ class MoneyFlowPeriodResponse(BaseModel):
     dimension: str  # 'sector' | 'stock'
     items: list[MoneyFlowPeriodItem]
 
+
+class MarketBreadthResponse(BaseModel):
+    trade_date: str
+    advance_count: int = 0
+    decline_count: int = 0
+    flat_count: int = 0
+    limit_up_count: int = 0
+    limit_down_count: int = 0
+    total_turnover_yi: float = 0.0
+    exploded_ratio: float = 0.0  # 炸板率 %
+    profit_effect_score: float = 50.0  # 赚钱效应指数 0-100
+
+
+class HeatmapSectorItem(BaseModel):
+    name: str
+    value: float = 0.0  # 成交额/市值权重 (亿元)
+    pct_change: float = 0.0  # 涨跌幅 %
+    leader: str = ""  # 领涨股
+    leader_pct: float = 0.0  # 领涨股涨幅 %
+
