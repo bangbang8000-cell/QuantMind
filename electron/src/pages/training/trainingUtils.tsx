@@ -750,6 +750,18 @@ export const buildFeatureLabelMap = (categories: FeatureCategory[] = DEFAULT_FEA
   return labels;
 };
 
+/**
+ * Early published QuantDB catalogs mistakenly persisted the long dictionary
+ * explanation as a feature name.  The selector and its preview must remain
+ * compact even while an old immutable catalog is still in use.
+ */
+const compactCatalogFeatureLabel = (label: string, fallback: string): string => {
+  if (!label.includes('具体计算口径')) return label;
+  const summary = label.split(/[。．]/, 1)[0]?.trim() || '';
+  const colonIndex = Math.max(summary.lastIndexOf('：'), summary.lastIndexOf(':'));
+  return (colonIndex >= 0 ? summary.slice(colonIndex + 1) : summary) || fallback;
+};
+
 export const toDynamicCategories = (catalog: AdminModelFeatureCatalog): FeatureCategory[] => {
   return (catalog.categories || [])
     .slice()
@@ -763,7 +775,7 @@ export const toDynamicCategories = (catalog: AdminModelFeatureCatalog): FeatureC
         .sort((a, b) => (a.order_no || 0) - (b.order_no || 0))
         .map((feature) => ({
           key: feature.key,
-          label: feature.feature_name || feature.key,
+          label: compactCatalogFeatureLabel(feature.feature_name || feature.key, feature.key),
           // catalog 透传 default_selected（缺失/null 时按 undefined 处理，
           // 由调用方决定 fallback 行为）
           defaultSelected:
