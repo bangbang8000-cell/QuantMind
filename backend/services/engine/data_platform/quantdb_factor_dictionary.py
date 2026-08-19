@@ -152,7 +152,7 @@ def definition_for(column: str) -> dict[str, str | int]:
         name, explanation = _EXACT[column]
     else:
         name = _render_name(column)
-        explanation = f"{category_name}因子：{name}。具体计算口径见 {DICTIONARY_SOURCE}。"
+        explanation = f"{category_name}因子：{name}。具体计算口径请参考官方帮助文档。"
     return FactorDefinition(
         display_name=name,
         explanation=explanation,
