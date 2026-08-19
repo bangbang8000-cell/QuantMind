@@ -156,15 +156,15 @@ export const InferenceCenterPage: React.FC = () => {
     switch (rating) {
       case 'STRONG_BUY':
         return (
-          <div className="flex items-center gap-1.5 text-emerald-700 bg-emerald-100/90 border border-emerald-200 px-3 py-1 rounded-xl font-black text-xs">
-            <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse" />
+          <div className="flex items-center gap-1.5 text-rose-700 bg-rose-50/90 border border-rose-200/90 px-3 py-1 rounded-xl font-black text-xs">
+            <span className="w-2 h-2 rounded-full bg-rose-500 animate-pulse" />
             强烈看多 (STRONG BUY)
           </div>
         );
       case 'BUY':
         return (
-          <div className="flex items-center gap-1.5 text-blue-700 bg-blue-100/90 border border-blue-200 px-3 py-1 rounded-xl font-black text-xs">
-            <span className="w-2 h-2 rounded-full bg-blue-500" />
+          <div className="flex items-center gap-1.5 text-red-600 bg-red-50/90 border border-red-200 px-3 py-1 rounded-xl font-black text-xs">
+            <span className="w-2 h-2 rounded-full bg-red-500" />
             偏多研判 (BUY)
           </div>
         );
@@ -177,8 +177,8 @@ export const InferenceCenterPage: React.FC = () => {
         );
       default:
         return (
-          <div className="flex items-center gap-1.5 text-rose-700 bg-rose-100 border border-rose-200 px-3 py-1 rounded-xl font-black text-xs">
-            <span className="w-2 h-2 rounded-full bg-rose-500" />
+          <div className="flex items-center gap-1.5 text-emerald-700 bg-emerald-50 border border-emerald-200 px-3 py-1 rounded-xl font-black text-xs">
+            <span className="w-2 h-2 rounded-full bg-emerald-500" />
             看空警示 (SELL)
           </div>
         );
@@ -403,14 +403,14 @@ export const InferenceCenterPage: React.FC = () => {
             <div className="flex items-center gap-3">
               <div className="flex items-center gap-1.5 text-xs text-slate-500 bg-slate-50 px-3 py-1.5 rounded-xl border border-slate-100">
                 <span>T+{prediction.horizon} 预期收益:</span>
-                <strong className={`font-mono font-black ${prediction.expected_return >= 0 ? 'text-emerald-600' : 'text-rose-600'}`}>
+                <strong className={`font-mono font-black ${prediction.expected_return >= 0 ? 'text-rose-600' : 'text-emerald-600'}`}>
                   {prediction.expected_return >= 0 ? `+${prediction.expected_return.toFixed(2)}%` : `${prediction.expected_return.toFixed(2)}%`}
                 </strong>
               </div>
               {getRatingBadge(prediction.rating)}
-              <div className="flex items-center gap-1.5 bg-blue-50/90 border border-blue-100 px-3 py-1 rounded-xl">
+              <div className="flex items-center gap-1.5 bg-rose-50/70 border border-rose-100 px-3 py-1 rounded-xl">
                 <span className="text-[11px] text-slate-500 font-semibold">上涨概率:</span>
-                <span className="text-xs font-black font-mono text-blue-600">{(prediction.confidence * 100).toFixed(1)}%</span>
+                <span className="text-xs font-black font-mono text-rose-600">{(prediction.confidence * 100).toFixed(1)}%</span>
               </div>
             </div>
           </div>
@@ -454,13 +454,13 @@ export const InferenceCenterPage: React.FC = () => {
                   {/* 预期回报 */}
                   <div className="p-3.5 bg-slate-50/80 rounded-2xl border border-slate-100 mb-3 text-center">
                     <span className="text-[11px] text-slate-400 font-semibold block mb-0.5">T+{prediction.horizon} 预期基准收益率 (P50)</span>
-                    <span className={`text-2xl font-black font-mono ${prediction.expected_return >= 0 ? 'text-emerald-600' : 'text-rose-600'}`}>
+                    <span className={`text-2xl font-black font-mono ${prediction.expected_return >= 0 ? 'text-rose-600' : 'text-emerald-600'}`}>
                       {prediction.expected_return >= 0 ? `+${prediction.expected_return.toFixed(2)}%` : `${prediction.expected_return.toFixed(2)}%`}
                     </span>
                   </div>
 
                   {/* 10-50-90% 区间卡 */}
-                  <div className="p-3.5 bg-gradient-to-br from-blue-50/60 to-indigo-50/40 rounded-2xl border border-blue-100/60">
+                  <div className="p-3.5 bg-gradient-to-br from-slate-50 to-blue-50/30 rounded-2xl border border-slate-100">
                     <div className="flex items-center justify-between mb-2">
                       <span className="text-xs font-bold text-slate-700">10% - 50% - 90% 扩散区间</span>
                       <Tooltip title="基于分位数回归模型计算的收益概率置信边界">
@@ -469,22 +469,22 @@ export const InferenceCenterPage: React.FC = () => {
                     </div>
                     <div className="flex items-center justify-between text-center pt-1">
                       <div>
-                        <span className="text-[10px] text-amber-600 font-bold block">10% 下界</span>
-                        <span className="text-xs font-black font-mono text-amber-600">
+                        <span className="text-[10px] text-slate-400 font-bold block">10% 下界</span>
+                        <span className={`text-xs font-black font-mono ${prediction.p10_return >= 0 ? 'text-rose-600' : 'text-emerald-600'}`}>
                           {prediction.p10_return > 0 ? `+${prediction.p10_return}%` : `${prediction.p10_return}%`}
                         </span>
                       </div>
                       <div className="h-6 w-[1px] bg-slate-200" />
                       <div>
                         <span className="text-[10px] text-blue-600 font-bold block">50% 中枢</span>
-                        <span className="text-sm font-black font-mono text-blue-700">
+                        <span className={`text-sm font-black font-mono ${prediction.p50_return >= 0 ? 'text-rose-600' : 'text-emerald-600'}`}>
                           {prediction.p50_return > 0 ? `+${prediction.p50_return}%` : `${prediction.p50_return}%`}
                         </span>
                       </div>
                       <div className="h-6 w-[1px] bg-slate-200" />
                       <div>
-                        <span className="text-[10px] text-emerald-600 font-bold block">90% 上界</span>
-                        <span className="text-xs font-black font-mono text-emerald-600">
+                        <span className="text-[10px] text-rose-500 font-bold block">90% 上界</span>
+                        <span className={`text-xs font-black font-mono ${prediction.p90_return >= 0 ? 'text-rose-600' : 'text-emerald-600'}`}>
                           {prediction.p90_return > 0 ? `+${prediction.p90_return}%` : `${prediction.p90_return}%`}
                         </span>
                       </div>

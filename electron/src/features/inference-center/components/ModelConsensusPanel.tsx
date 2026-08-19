@@ -17,15 +17,15 @@ export const ModelConsensusPanel: React.FC<ModelConsensusPanelProps> = ({
   const getRatingBadge = (rating: string) => {
     switch (rating) {
       case 'STRONG_BUY':
-        return <span className="text-[10px] font-black text-emerald-700 bg-emerald-100 px-2 py-0.5 rounded-md">强烈看多</span>;
+        return <span className="text-[10px] font-black text-rose-700 bg-rose-50 border border-rose-200 px-2 py-0.5 rounded-md">强烈看多</span>;
       case 'BUY':
-        return <span className="text-[10px] font-bold text-blue-700 bg-blue-100 px-2 py-0.5 rounded-md">偏多</span>;
+        return <span className="text-[10px] font-bold text-red-600 bg-red-50 border border-red-200 px-2 py-0.5 rounded-md">偏多</span>;
       case 'HOLD':
-        return <span className="text-[10px] font-bold text-slate-600 bg-slate-100 px-2 py-0.5 rounded-md">观望</span>;
+        return <span className="text-[10px] font-bold text-slate-600 bg-slate-100 border border-slate-200 px-2 py-0.5 rounded-md">观望</span>;
       case 'SELL':
-        return <span className="text-[10px] font-bold text-rose-700 bg-rose-100 px-2 py-0.5 rounded-md">看空</span>;
+        return <span className="text-[10px] font-bold text-emerald-700 bg-emerald-50 border border-emerald-200 px-2 py-0.5 rounded-md">看空</span>;
       default:
-        return <span className="text-[10px] font-bold text-slate-600 bg-slate-100 px-2 py-0.5 rounded-md">{rating}</span>;
+        return <span className="text-[10px] font-bold text-slate-600 bg-slate-100 border border-slate-200 px-2 py-0.5 rounded-md">{rating}</span>;
     }
   };
 
@@ -97,7 +97,7 @@ export const ModelConsensusPanel: React.FC<ModelConsensusPanelProps> = ({
 
               <div className="flex items-center justify-between pt-2 border-t border-slate-50">
                 <span className="text-[11px] text-slate-400 font-medium">预期 T+{item.horizon} 回报</span>
-                <span className={`text-xs font-black font-mono ${item.expected_return >= 0 ? 'text-emerald-600' : 'text-rose-600'}`}>
+                <span className={`text-xs font-black font-mono ${item.expected_return >= 0 ? 'text-rose-600' : 'text-emerald-600'}`}>
                   {item.expected_return >= 0 ? `+${item.expected_return.toFixed(2)}%` : `${item.expected_return.toFixed(2)}%`}
                 </span>
               </div>
