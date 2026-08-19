@@ -62,6 +62,8 @@ export const MarketOverview: React.FC<MarketOverviewProps> = ({ market }) => {
         const indices = MARKET_INDICES[market] || [];
         if (!indices.length) return;
 
+        let cancelled = false;
+        const load = () => {
         setLoading(true);
         Promise.allSettled(
             indices.map((idx) =>
@@ -78,9 +80,13 @@ export const MarketOverview: React.FC<MarketOverviewProps> = ({ market }) => {
                         map[r.value.symbol] = r.value.quote;
                     }
                 }
-                setQuotes(map);
+                if (!cancelled) setQuotes(map);
             })
-            .finally(() => setLoading(false));
+            .finally(() => { if (!cancelled) setLoading(false); });
+        };
+        load();
+        const timer = window.setInterval(load, 15000);
+        return () => { cancelled = true; window.clearInterval(timer); };
     }, [market]);
 
     const indices = MARKET_INDICES[market] || [];

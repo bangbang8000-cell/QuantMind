@@ -48,6 +48,8 @@ REDIS_CONFIG = {
     "host": os.getenv("REMOTE_QUOTE_REDIS_HOST", ""),
     "port": int(os.getenv("REMOTE_QUOTE_REDIS_PORT", "6379")),
     "password": os.getenv("REMOTE_QUOTE_REDIS_PASSWORD", ""),
+    # QuantDB 实时行情专用库；不要与 QuantMind 的缓存/交易 Redis 混用。
+    "db": int(os.getenv("REMOTE_QUOTE_REDIS_DB", "3")),
 }
 
 class MarketDataToRedis:
@@ -144,17 +146,17 @@ class MarketDataToRedis:
                     host=redis_host,
                     port=redis_port,
                     password=redis_password,
-                    decode_responses=False
+                    db=REDIS_CONFIG["db"], decode_responses=False
                 )
             else:
                 self.redis_client = redis.Redis(
                     host=redis_host,
                     port=redis_port,
-                    decode_responses=False
+                    db=REDIS_CONFIG["db"], decode_responses=False
                 )
 
             self.redis_client.ping()
-            print(f"✓ Redis连接成功: {redis_host}:{redis_port}")
+            print(f"✓ Redis连接成功: {redis_host}:{redis_port} DB={REDIS_CONFIG['db']}")
         except Exception as e:
             print(f"✗ Redis连接失败: {e}")
             raise
@@ -355,20 +357,35 @@ class MarketDataToRedis:
                     # 构造符合规范的数据结构
                     try:
                         now_price = float(snapshot.get('Now', 0))
+                        source_ts = datetime.datetime.now(datetime.timezone.utc).isoformat()
+                        symbol = redis_key.removeprefix('stock:')
                         data = {
-                            'Now': now_price,
-                            'Open': float(snapshot.get('Open', 0)),
-                            'High': float(snapshot.get('High', 0)),
-                            'Low': float(snapshot.get('Low', 0)),
-                            'Close': float(snapshot.get('LastClose', 0)),
-                            'Volume': int(float(snapshot.get('Volume', 0))),
-                            'Amount': float(snapshot.get('Amount', 0)),
-                            'timestamp': int(time.time())
+                            'symbol': symbol, 'last': now_price,
+                            'open': float(snapshot.get('Open', 0)),
+                            'high': float(snapshot.get('High', 0)),
+                            'low': float(snapshot.get('Low', 0)),
+                            'prev_close': float(snapshot.get('LastClose', 0)),
+                            'volume': int(float(snapshot.get('Volume', 0))),
+                            'amount': float(snapshot.get('Amount', 0)),
+                            'source': 'tdx', 'source_ts': source_ts,
+                            'ingested_at': source_ts,
                         }
+                        previous = self.redis_client.hmget(
+                            redis_key, 'last', 'volume', 'amount', 'seq'
+                        )
+                        changed = tuple(str(data[k]) for k in ('last', 'volume', 'amount')) != tuple(
+                            v.decode('utf-8') if isinstance(v, bytes) else str(v or '') for v in previous[:3]
+                        )
+                        data['seq'] = self.redis_client.incr('qdb:rt:seq') if changed else int(previous[3] or 0)
                         
                         # 使用Pipeline批量写入
                         pipe.hset(redis_key, mapping=data)
                         pipe.expire(redis_key, 300)  # 设置5分钟过期时间
+                        if changed:
+                            pipe.publish(
+                                f"qdb:rt:quote:{symbol}",
+                                __import__('json').dumps({'type': 'quote', **data}, ensure_ascii=False),
+                            )
                         
                         success_count += 1
                         batch_success += 1
@@ -399,6 +416,13 @@ class MarketDataToRedis:
         
         end_time = time.time()
         total_time = end_time - start_time
+        now_iso = datetime.datetime.now(datetime.timezone.utc).isoformat()
+        self.redis_client.hset('qdb:rt:status', mapping={
+            'last_success_at': now_iso, 'symbols_updated': success_count,
+            'failed': fail_count, 'duration_seconds': round(total_time, 3),
+            'source': 'tdx', 'ingested_at': now_iso,
+        })
+        self.redis_client.expire('qdb:rt:status', 30)
         
         print(f"\n" + "=" * 60)
         print("数据推送完成")

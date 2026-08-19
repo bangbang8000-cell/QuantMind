@@ -21,6 +21,10 @@ from typing import Any, Optional
 from fastapi import APIRouter, Depends, HTTPException, Query
 
 from backend.services.api.user_app.middleware.auth import get_current_user
+from backend.services.api.market_analysis.quantdb_realtime import (
+    QuantDBRealtimeUnavailable,
+    get_snapshots as get_quantdb_snapshots,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -164,38 +168,21 @@ async def get_realtime(
     symbol: str = Query(..., description="股票代码"),
     current_user: dict = Depends(get_current_user),
 ):
-    """A 股实时行情已下线，改返回 stock_list 元信息。"""
-    if market.upper() != "A":
+    """A 股实时行情由 QuantDB Redis DB 3 提供；不再回退为静态元信息。"""
+    if market.upper() not in {"A", "CN"}:
         raise HTTPException(status_code=404, detail="非 A 股市场暂不支持")
 
-    agg = _get_aggregator()
     try:
-        import asyncio
-        result = await asyncio.to_thread(
-            agg.fetch,
-            market="A",
-            field="stock_list",
-            symbol=symbol.upper(),
-        )
-    except Exception as exc:
-        logger.warning("stock_list fetch failed: %s", exc)
-        raise HTTPException(status_code=503, detail=f"股票信息获取失败: {exc}")
-
-    df = result.data
-    if df.empty:
-        raise HTTPException(status_code=404, detail="无数据")
-
-    row = df.iloc[0].to_dict()
-    quote = {k: (None if _is_nan(v) else v) for k, v in row.items()}
+        payload = await get_quantdb_snapshots([symbol])
+    except QuantDBRealtimeUnavailable as exc:
+        raise HTTPException(status_code=503, detail="QuantDB 实时行情源不可用") from exc
+    if not payload["items"]:
+        raise HTTPException(status_code=404, detail="实时快照不存在或已过期")
+    quote = payload["items"][0]
     return {
-        "success": True,
-        "market": "A",
-        "symbol": symbol.upper(),
-        "source_used": result.source_used,
-        "quote": quote,
-        "note": "A 股实时行情已下线，仅返回基础元信息",
+        "success": True, "market": "CN", "symbol": quote["symbol"],
+        "source_used": "quantdb_redis_db3", "quote": quote,
     }
-
 
 def _is_nan(v: Any) -> bool:
     if v is None:
