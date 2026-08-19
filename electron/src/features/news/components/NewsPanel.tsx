@@ -147,13 +147,18 @@ function saveFilters(state: FilterState) {
   } catch { /* ignore */ }
 }
 
+// 新闻大类快捷导航（对应 finance_lexicon 事件大类，点击按 event_tags 筛选）
 const QUICK_EVENT_CHIPS = [
-  { label: 'A股', value: '市场' },
-  { label: '财报', value: '财报' },
+  { label: '全部', value: '' },
+  { label: '政策', value: '政策' },
   { label: '宏观', value: '宏观' },
-  { label: '期货/原油', value: '期货' },
-  { label: '外汇', value: '外汇' },
-  { label: '加密/区块链', value: '加密' },
+  { label: '产业', value: '产业' },
+  { label: '财报', value: '财报' },
+  { label: '市场', value: '市场' },
+  { label: '监管', value: '监管' },
+  { label: '地缘', value: '地缘' },
+  { label: '加密', value: '加密' },
+  { label: '期货', value: '期货' },
 ];
 
 const formatRelative = (iso?: string | null) => {
@@ -809,6 +814,35 @@ export const NewsPanel: React.FC = () => {
         )}
       </div>
 
+      {/* ===== 新闻大类导航（点击按 event_tags 过滤） ===== */}
+      <div style={{ display: 'flex', alignItems: 'center', gap: 2, padding: '4px 16px', borderBottom: '1px solid rgba(226,232,240,0.8)', background: 'rgba(255,255,255,0.85)', flexWrap: 'wrap' }}>
+        <Text type="secondary" style={{ fontSize: 12, marginRight: 6, whiteSpace: 'nowrap' }}>分类:</Text>
+        {QUICK_EVENT_CHIPS.map((chip) => {
+          const active = chip.value === '' ? f.selectedEventTags.length === 0 : f.selectedEventTags.includes(chip.value);
+          return (
+            <Tag.CheckableTag
+              key={chip.value || '__all'}
+              checked={active}
+              onChange={(c) => {
+                if (chip.value === '') {
+                  // 全部：清空所有事件筛选
+                  updateF({ selectedEventTags: [] });
+                } else if (c) {
+                  addFilter('selectedEventTags', chip.value);
+                } else {
+                  removeFilter('selectedEventTags', chip.value);
+                }
+              }}
+              style={{ fontSize: 12, padding: '2px 10px', borderRadius: 12, margin: 0, fontWeight: active ? 600 : 400 }}
+            >
+              {chip.label}
+            </Tag.CheckableTag>
+          );
+        })}
+        <div style={{ flex: 1 }} />
+        <Text type="secondary" style={{ fontSize: 11 }}>大类来自全文匹配</Text>
+      </div>
+
       {/* ===== Active filter chips ===== */}
       {activeFilterCount > 0 && (
         <div className="news-active-chips">
@@ -1054,17 +1088,17 @@ export const NewsPanel: React.FC = () => {
                       </Tag>
                     </div>
                   )}
-                  {articleDetail.enrichment.tickers.length > 0 && <TagRow label="股票" items={articleDetail.enrichment.tickers} color="blue" />}
-                  {articleDetail.enrichment.industries.length > 0 && <TagRow label="行业" items={articleDetail.enrichment.industries} color="geekblue" />}
-                  {articleDetail.enrichment.event_tags.length > 0 && <TagRow label="事件" items={articleDetail.enrichment.event_tags} color="orange" />}
-                  {(articleDetail.enrichment.countries?.length ?? 0) > 0 && <TagRow label="国家" items={articleDetail.enrichment.countries!} color="purple" />}
-                  {(articleDetail.enrichment.regions?.length ?? 0) > 0 && <TagRow label="地区" items={articleDetail.enrichment.regions!} color="cyan" />}
-                  {(articleDetail.enrichment.key_terms?.length ?? 0) > 0 && <TagRow label="关键词" items={articleDetail.enrichment.key_terms!} color="magenta" />}
-                  {(articleDetail.enrichment.provinces?.length ?? 0) > 0 && <TagRow label="省份" items={articleDetail.enrichment.provinces!} color="volcano" />}
-                  {(articleDetail.enrichment.cities?.length ?? 0) > 0 && <TagRow label="城市" items={articleDetail.enrichment.cities!} color="gold" />}
-                  {(articleDetail.enrichment.politicians?.length ?? 0) > 0 && <TagRow label="领导人" items={articleDetail.enrichment.politicians!} color="red" />}
-                  {(articleDetail.enrichment.visits?.length ?? 0) > 0 && <TagRow label="调研" items={articleDetail.enrichment.visits!} color="lime" />}
-                  {(articleDetail.enrichment.departments?.length ?? 0) > 0 && <TagRow label="部门" items={articleDetail.enrichment.departments!} color="geekblue" />}
+                  {articleDetail.enrichment.tickers.length > 0 && <TagRow label="股票" items={articleDetail.enrichment.tickers} color="blue" onClick={(t) => { addFilter('selectedTickers', t); }} />}
+                  {articleDetail.enrichment.industries.length > 0 && <TagRow label="行业" items={articleDetail.enrichment.industries} color="geekblue" onClick={(i) => { addFilter('selectedIndustries', i); }} />}
+                  {articleDetail.enrichment.event_tags.length > 0 && <TagRow label="事件" items={articleDetail.enrichment.event_tags} color="orange" onClick={(e) => { addFilter('selectedEventTags', e); }} />}
+                  {(articleDetail.enrichment.countries?.length ?? 0) > 0 && <TagRow label="国家" items={articleDetail.enrichment.countries!} color="purple" onClick={(c) => { addFilter('selectedCountries', c); }} />}
+                  {(articleDetail.enrichment.regions?.length ?? 0) > 0 && <TagRow label="地区" items={articleDetail.enrichment.regions!} color="cyan" onClick={(r) => { addFilter('selectedRegions', r); }} />}
+                  {(articleDetail.enrichment.key_terms?.length ?? 0) > 0 && <TagRow label="关键词" items={articleDetail.enrichment.key_terms!} color="magenta" onClick={(k) => { updateF({ keyword: k }); }} />}
+                  {(articleDetail.enrichment.provinces?.length ?? 0) > 0 && <TagRow label="省份" items={articleDetail.enrichment.provinces!} color="volcano" onClick={(p) => { addFilter('selectedProvinces', p); }} />}
+                  {(articleDetail.enrichment.cities?.length ?? 0) > 0 && <TagRow label="城市" items={articleDetail.enrichment.cities!} color="gold" onClick={(c) => { addFilter('selectedCities', c); }} />}
+                  {(articleDetail.enrichment.politicians?.length ?? 0) > 0 && <TagRow label="领导人" items={articleDetail.enrichment.politicians!} color="red" onClick={(p) => { addFilter('selectedPoliticians', p); }} />}
+                  {(articleDetail.enrichment.visits?.length ?? 0) > 0 && <TagRow label="调研" items={articleDetail.enrichment.visits!} color="lime" onClick={(v) => { addFilter('selectedVisits', v); }} />}
+                  {(articleDetail.enrichment.departments?.length ?? 0) > 0 && <TagRow label="部门" items={articleDetail.enrichment.departments!} color="geekblue" onClick={(d) => { addFilter('selectedDepartments', d); }} />}
                   {/* Entity sentiments */}
                   {articleDetail.enrichment.entity_sentiments && Object.keys(articleDetail.enrichment.entity_sentiments).length > 0 && (
                     <div style={{ marginTop: 8 }}>
@@ -1078,11 +1112,55 @@ export const NewsPanel: React.FC = () => {
                   )}
                 </div>
               )}
+              {/* 正文：对纯文本做关键词高亮（股票名/事件词标黄） */}
               {articleDetail.content_html ? (
                 <div className="news-detail-content" style={{ fontSize: 14, lineHeight: 1.8 }} dangerouslySetInnerHTML={{ __html: sanitizeHtml(articleDetail.content_html) }} />
               ) : (
-                <Paragraph style={{ fontSize: 14, lineHeight: 1.8, whiteSpace: 'pre-wrap' }}>{articleDetail.content || articleDetail.summary || '(正文为空)'}</Paragraph>
+                <Paragraph style={{ fontSize: 14, lineHeight: 1.8, whiteSpace: 'pre-wrap' }}>
+                  {highlightText(articleDetail.content || articleDetail.summary || '(正文为空)', articleDetail.enrichment)}
+                </Paragraph>
               )}
+
+              {/* 相关推荐：同股票/同事件/同行业 */}
+              {(() => {
+                const enr = articleDetail.enrichment;
+                if (!enr) return null;
+                const myTickers = new Set(enr.tickers || []);
+                const myEvents = new Set(enr.event_tags || []);
+                const myInd = new Set(enr.industries || []);
+                const related = (articles || []).filter((a) => a.id !== articleDetail.id).filter((a) => {
+                  const ae = a.enrichment;
+                  if (!ae) return false;
+                  if ((ae.tickers || []).some((t) => myTickers.has(t))) return true;
+                  if ((ae.event_tags || []).some((e) => myEvents.has(e))) return true;
+                  if ((ae.industries || []).some((i) => myInd.has(i))) return true;
+                  return false;
+                }).slice(0, 8);
+                if (related.length === 0) return null;
+                return (
+                  <div style={{ marginTop: 24, paddingTop: 16, borderTop: '1px solid #e2e8f0' }}>
+                    <Text type="secondary" style={{ fontSize: 12, fontWeight: 600, marginBottom: 8, display: 'block' }}>相关推荐</Text>
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+                      {related.map((a) => (
+                        <div
+                          key={a.id}
+                          onClick={() => setSelectedArticleId(a.id)}
+                          style={{ cursor: 'pointer', padding: '6px 8px', borderRadius: 4, fontSize: 13, color: '#334155', lineHeight: 1.4 }}
+                          onMouseEnter={(e) => { (e.currentTarget as HTMLElement).style.background = '#f1f5f9'; }}
+                          onMouseLeave={(e) => { (e.currentTarget as HTMLElement).style.background = 'transparent'; }}
+                        >
+                          <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}>
+                            {a.enrichment?.sentiment_label === 'bullish' && <Tag color="red" style={{ margin: 0, fontSize: 10 }}>利好</Tag>}
+                            {a.enrichment?.sentiment_label === 'bearish' && <Tag color="green" style={{ margin: 0, fontSize: 10 }}>利空</Tag>}
+                            <span style={{ flex: 1 }}>{a.title}</span>
+                            <span style={{ fontSize: 11, color: '#94a3b8', whiteSpace: 'nowrap' }}>{formatRelative(a.published_at)}</span>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                );
+              })()}
             </div>
           )}
         </div>
@@ -1092,6 +1170,38 @@ export const NewsPanel: React.FC = () => {
 };
 
 // —— Tiny helper components ——
+
+/** 正文关键词高亮：把 enrichment 命中的股票/事件/关键词标黄（返回 JSX，安全转义） */
+function highlightText(text: string, enrichment: any): React.ReactNode {
+  if (!text || !enrichment) return text;
+  const words: string[] = [];
+  (enrichment.tickers || []).forEach((t: string) => words.push(t.split('.')[0]));  // 600519.SH → 600519
+  (enrichment.event_tags || []).forEach((t: string) => words.push(t));
+  (enrichment.key_terms || []).forEach((t: string) => words.push(t));
+  (enrichment.industries || []).forEach((t: string) => words.push(t));
+  const uniq = Array.from(new Set(words.filter((w) => w && w.length >= 2))).sort((a, b) => b.length - a.length);
+  if (uniq.length === 0) return text;
+  // 按长度降序替换，避免短词被长词覆盖；用文本节点拼接避免 XSS
+  const parts: React.ReactNode[] = [];
+  let remaining = text;
+  let key = 0;
+  while (remaining.length > 0) {
+    let best = -1;
+    let bestWord = '';
+    for (const w of uniq) {
+      const idx = remaining.indexOf(w);
+      if (idx !== -1 && (best === -1 || idx < best)) {
+        best = idx;
+        bestWord = w;
+      }
+    }
+    if (best === -1) { parts.push(remaining); break; }
+    if (best > 0) parts.push(remaining.slice(0, best));
+    parts.push(<mark key={key++} style={{ background: '#fef08a', padding: '0 1px', borderRadius: 2 }}>{bestWord}</mark>);
+    remaining = remaining.slice(best + bestWord.length);
+  }
+  return parts;
+}
 
 const FilterSelect: React.FC<{
   label: string;
@@ -1112,10 +1222,24 @@ const FilterSelect: React.FC<{
   </div>
 );
 
-const TagRow: React.FC<{ label: string; items: string[]; color: string }> = ({ label, items, color }) => (
+const TagRow: React.FC<{
+  label: string;
+  items: string[];
+  color: string;
+  onClick?: (item: string) => void;
+}> = ({ label, items, color, onClick }) => (
   <div style={{ marginBottom: 6 }}>
     <Text type="secondary" style={{ fontSize: 12, marginRight: 8 }}>{label}:</Text>
-    {items.map((it) => <Tag key={it} color={color} style={{ marginBottom: 4, fontSize: 11 }}>{it}</Tag>)}
+    {items.map((it) => (
+      <Tag
+        key={it}
+        color={color}
+        style={{ marginBottom: 4, fontSize: 11, cursor: onClick ? 'pointer' : 'default' }}
+        onClick={onClick ? (e) => { e.stopPropagation(); onClick(it); } : undefined}
+      >
+        {it}
+      </Tag>
+    ))}
   </div>
 );
 
