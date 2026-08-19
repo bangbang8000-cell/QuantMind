@@ -207,6 +207,12 @@ export const ModelTrainingPage: React.FC = () => {
   const valDays = useMemo(() => daysBetween(timePeriods.val), [timePeriods.val]);
   const testDays = useMemo(() => daysBetween(timePeriods.test), [timePeriods.test]);
   const totalDays = trainDays + valDays + testDays;
+  const coverageDisplay = dataCoverage?.file_count
+    ? `${dataCoverage.file_count} 个交易日`
+    : '—';
+  const coverageHint = dataCoverage?.min_date && dataCoverage?.max_date
+    ? `${dataCoverage.min_date} ～ ${dataCoverage.max_date}`
+    : '等待数据源状态';
   const requestPreview = useMemo(
     () => buildTrainingRequest(selectedFeatures, featureCategories, timePeriods, target, params, context, displayName, currentMarket, wfaConfig),
     [selectedFeatures, featureCategories, timePeriods, target, params, context, displayName, currentMarket, wfaConfig]
@@ -454,9 +460,10 @@ export const ModelTrainingPage: React.FC = () => {
       ? resolveDefaultSelectedFeatures(featureCategories, currentMarket)
       : getDefaultFeaturesForMarket(currentMarket);
     dispatch({ type: 'SET_FEATURES', payload: features });
-    dispatch({ type: 'SET_TIME',  key: 'train', value: DEFAULT_TIME_PERIODS.train });
-    dispatch({ type: 'SET_TIME',  key: 'val',   value: DEFAULT_TIME_PERIODS.val });
-    dispatch({ type: 'SET_TIME',  key: 'test',  value: DEFAULT_TIME_PERIODS.test });
+    const coveragePeriods = parseSuggestedTimePeriods(dataCoverage?.suggested_periods);
+    dispatch({ type: 'SET_TIME',  key: 'train', value: coveragePeriods?.train || DEFAULT_TIME_PERIODS.train });
+    dispatch({ type: 'SET_TIME',  key: 'val',   value: coveragePeriods?.val || DEFAULT_TIME_PERIODS.val });
+    dispatch({ type: 'SET_TIME',  key: 'test',  value: coveragePeriods?.test || DEFAULT_TIME_PERIODS.test });
     dispatch({ type: 'SET_TARGET', payload: DEFAULT_TARGET });
     dispatch({ type: 'SET_PARAMS', payload: DEFAULT_PARAMS });
     dispatch({ type: 'SET_CONTEXT', payload: DEFAULT_CONTEXT });
@@ -642,7 +649,7 @@ export const ModelTrainingPage: React.FC = () => {
                     <MetricCard label="市场" value={getMarketConfig(currentMarket).label} centered />
                     <MetricCard label="特征数" value={`${featureCount}`} centered />
                     <MetricCard label="预测周期" value={`T+${target.horizonDays}`} hint={target.mode} centered />
-                    <MetricCard label="数据集天数" value={`${totalDays}`} hint={`${trainDays}/${valDays}/${testDays}`} centered />
+                    <MetricCard label="数据覆盖" value={coverageDisplay} hint={coverageHint} centered />
                     <MetricCard label="状态" value={trainingStatus === 'draft' ? '待配置' : trainingStatus === 'running' ? '训练中' : '已完成'} centered />
                 </div>
 

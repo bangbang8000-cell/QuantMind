@@ -326,6 +326,20 @@ async def load_active_factor_catalog(source_dataset: str = DEFAULT_FACTOR_SOURCE
 
 def _training_coverage(source: str, status: dict[str, Any]) -> dict[str, Any]:
     """Convert the cached discovery manifest to the user training API shape."""
+    suggested_periods = None
+    if status["min_date"] and status["max_date"]:
+        start = date.fromisoformat(str(status["min_date"]))
+        end = date.fromisoformat(str(status["max_date"]))
+        span_days = max((end - start).days, 1)
+        # 70% / 15% / 15% chronological split.  The reader filters to actual
+        # trading dates, so boundaries may fall on a non-trading day safely.
+        train_end = start.fromordinal(start.toordinal() + int(span_days * 0.70))
+        val_end = start.fromordinal(start.toordinal() + int(span_days * 0.85))
+        suggested_periods = {
+            "train": [start.isoformat(), train_end.isoformat()],
+            "val": [(train_end.fromordinal(train_end.toordinal() + 1)).isoformat(), val_end.isoformat()],
+            "test": [(val_end.fromordinal(val_end.toordinal() + 1)).isoformat(), end.isoformat()],
+        }
     return {
         "source": "quantdb_factors",
         "dataset_id": source,
@@ -341,6 +355,7 @@ def _training_coverage(source: str, status: dict[str, Any]) -> dict[str, Any]:
         "missing_required": list(status["missing_required"]),
         "reason": status["reason"],
         "refreshed_at": status["refreshed_at"],
+        "suggested_periods": suggested_periods,
     }
 
 
