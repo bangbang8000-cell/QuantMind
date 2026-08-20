@@ -55,7 +55,7 @@ MA_WINDOW = 20
 ENABLE_MA5_EXIT = _env_bool("QM_MA5_EXIT", False)          # P0 证伪: 新闻行情先洗盘再拉升，MA5 提前踢仓巨亏
 MA5_EXIT_MIN_HOLD = _env_int("QM_MA5_MIN_HOLD", 10)        # MA5 离场的最小持仓天数
 HOLD_WINNERS = _env_bool("QM_HOLD_WINNERS", True)          # P0 结论: 到期浮盈续持（胜者奔跑，败者到期照离场）
-MAX_EXTEND_DAYS = _env_int("QM_MAX_EXTEND_DAYS", 60)       # 浮盈续持上限: 60 天（hw60 双快照稳定 +105.35%/Calmar 12.76）
+MAX_EXTEND_DAYS = _env_int("QM_MAX_EXTEND_DAYS", 40)       # 续持上限: 40天（单调性实验甜点 +105.35%/Calmar 12.76）
 RESULT_FILE = os.getenv("QM_RESULT_FILE", "")              # 结果 JSON 输出路径（默认按配置自动命名）
 COMMISSION = 0.0003
 STAMP_TAX = 0.001
@@ -1012,6 +1012,7 @@ if __name__ == "__main__":
         "metrics": {k: v for k, v in metrics.items() if k not in ("nets", "daily_rets", "dates")},
         "nets": metrics["nets"],
         "dates": metrics["dates"],
+        "trades": result["trades"],
     }
     with open(output_path, "w") as f:
         json.dump(serializable, f, ensure_ascii=False, indent=2, default=str)
