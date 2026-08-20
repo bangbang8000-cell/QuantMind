@@ -17,7 +17,7 @@ import bisect
 import sqlite3
 from datetime import date, datetime, time, timedelta
 from pathlib import Path
-from collections import defaultdict
+from collections import defaultdict, deque
 from zoneinfo import ZoneInfo
 
 import pandas as pd
@@ -33,8 +33,18 @@ def _find_repo_root(start: Path) -> Path:
 sys.path.insert(0, str(_find_repo_root(Path(__file__).resolve())))
 
 # ── 配置 ──────────────────────────────────────────────────
+def _env_int(key: str, default: int) -> int:
+    v = os.getenv(key)
+    return int(v) if v is not None else default
+
+def _env_bool(key: str, default: bool) -> bool:
+    v = os.getenv(key)
+    if v is None:
+        return default
+    return v.strip().lower() in ("1", "true", "yes", "on")
+
 INIT_CASH = 500_000.0
-MAX_HOLD_DAYS = 20
+MAX_HOLD_DAYS = _env_int("QM_MAX_HOLD_DAYS", 20)
 STOP_LOSS = 0.99                  # 禁用止损（测试结论: 止损是最大亏损源）
 TRAILING_ACTIVATE = 0.15          # 动态止盈激活阈值
 TRAILING_DROP = 0.05              # 从最高点回撤/反弹比例
@@ -42,6 +52,11 @@ SIGNAL_THRESHOLD = 0.30          # 降低阈值（深度分析用了 0.25）
 MAX_POSITION_PCT = 0.10
 MAX_CONCURRENT = 10
 MA_WINDOW = 20
+ENABLE_MA5_EXIT = _env_bool("QM_MA5_EXIT", False)          # P0 证伪: 新闻行情先洗盘再拉升，MA5 提前踢仓巨亏
+MA5_EXIT_MIN_HOLD = _env_int("QM_MA5_MIN_HOLD", 10)        # MA5 离场的最小持仓天数
+HOLD_WINNERS = _env_bool("QM_HOLD_WINNERS", True)          # P0 结论: 到期浮盈续持（胜者奔跑，败者到期照离场）
+MAX_EXTEND_DAYS = _env_int("QM_MAX_EXTEND_DAYS", 60)       # 浮盈续持上限: 60 天（hw60 双快照稳定 +105.35%/Calmar 12.76）
+RESULT_FILE = os.getenv("QM_RESULT_FILE", "")              # 结果 JSON 输出路径（默认按配置自动命名）
 COMMISSION = 0.0003
 STAMP_TAX = 0.001
 SLIPPAGE = 0.002
@@ -519,6 +534,12 @@ def run_backtest(
             cost = h["cost"]
             h["hold_days"] = h.get("hold_days", 0) + 1
 
+            # 追踪收盘价序列（用于 MA5 离场）
+            if "closes" in h:
+                h["closes"].append(px_today["close"])
+            else:
+                h["closes"] = deque([px_today["close"]], maxlen=5)
+
             exit_reason = None
             exit_px = None
 
@@ -555,10 +576,31 @@ def run_backtest(
                                 exit_reason = "trailing_stop"
                                 exit_px = h["lowest"] * (1 + TRAILING_DROP)
 
-                # 到期
+                # MA5 离场（P0）: 持仓足够久且趋势恶化时提前离场
+                if exit_reason is None and ENABLE_MA5_EXIT and h["hold_days"] >= MA5_EXIT_MIN_HOLD:
+                    closes = h.get("closes")
+                    if closes is not None and len(closes) == 5:
+                        ma5 = sum(closes) / len(closes)
+                        if side == "LONG" and px_today["close"] < ma5:
+                            exit_reason = "ma5_exit"
+                            exit_px = px_today["close"]
+                        elif side == "SHORT" and px_today["close"] > ma5:
+                            exit_reason = "ma5_exit"
+                            exit_px = px_today["close"]
+
+                # 到期（P0c: 浮盈仓位可选择续持）
                 if exit_reason is None and h["hold_days"] >= MAX_HOLD_DAYS:
-                    exit_reason = "max_hold"
-                    exit_px = px_today["close"]
+                    cur_pnl = (px_today["close"] - cost) / cost
+                    if side == "SHORT":
+                        cur_pnl = -cur_pnl
+                    extended = h.get("extended", False)
+                    hard_cap = MAX_HOLD_DAYS + (MAX_EXTEND_DAYS if HOLD_WINNERS else 0)
+                    if HOLD_WINNERS and not extended and cur_pnl > 0:
+                        h["extended"] = True
+                        h["extended_from"] = tgt_day
+                    elif not (HOLD_WINNERS and extended and h["hold_days"] < hard_cap and cur_pnl > 0):
+                        exit_reason = "max_hold_ext" if h.get("extended") else "max_hold"
+                        exit_px = px_today["close"]
 
             # 情绪反转出场（优化特性）
             if ENABLE_REVERSAL_EXIT and exit_reason is None and suffix in day_signals:
@@ -669,6 +711,7 @@ def run_backtest(
                 "highest": px_today["high"] if side == "LONG" else None,
                 "lowest": px_today["low"] if side == "SHORT" else None,
                 "hold_days": 0, "boost": boost,
+                "closes": deque(maxlen=5),
             }
 
             trades.append({
@@ -940,9 +983,27 @@ if __name__ == "__main__":
     generate_report(result, metrics, names)
 
     # 保存
-    output_path = (_find_repo_root(Path(__file__).resolve()) / "data") / "backtest_news_optimized.json"
+    root = _find_repo_root(Path(__file__).resolve())
+    if RESULT_FILE:
+        output_path = Path(RESULT_FILE)
+        if not output_path.is_absolute():
+            output_path = root / output_path
+    else:
+        suffix = ""
+        if ENABLE_MA5_EXIT:
+            suffix += f"_ma5h{MA5_EXIT_MIN_HOLD}"
+        if HOLD_WINNERS:
+            suffix += f"_hw{MAX_EXTEND_DAYS}"
+        output_path = (root / "data") / f"backtest_news_optimized_mh{MAX_HOLD_DAYS}{suffix}.json"
     output_path.parent.mkdir(parents=True, exist_ok=True)
     serializable = {
+        "config": {
+            "max_hold_days": MAX_HOLD_DAYS,
+            "enable_ma5_exit": ENABLE_MA5_EXIT,
+            "ma5_exit_min_hold": MA5_EXIT_MIN_HOLD,
+            "hold_winners": HOLD_WINNERS,
+            "max_extend_days": MAX_EXTEND_DAYS,
+        },
         "optimizations": [
             "source_filtering", "time_filtering", "multi_article_confirm",
             "day0_momentum", "sentiment_reversal_exit", "consecutive_bonus",
