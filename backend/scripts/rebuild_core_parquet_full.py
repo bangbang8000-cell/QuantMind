@@ -131,6 +131,7 @@ def _build_schema(feature_cols: list[str]) -> pa.Schema:
 def main() -> None:
     parser = argparse.ArgumentParser(description="重建 core parquet")
     parser.add_argument("--dry-run", action="store_true", help="只打印列集合，不写文件")
+    parser.add_argument("--all", action="store_true", help="包含年度文件并集的全部列（解锁 catalog 之外的 L2/微观结构特征）")
     args = parser.parse_args()
 
     print("=" * 70)
@@ -146,8 +147,17 @@ def main() -> None:
     common = set.intersection(*schemas.values())
     all_cols = set.union(*schemas.values())
 
-    default_features = _load_default_features()
-    wanted = list(dict.fromkeys(default_features + LABEL_COLUMNS))
+    if args.all:
+        # 全量模式：年度文件并集即特征集（catalog 勾选与否不影响 core 内容）
+        _EXCLUDE = set(BASE_COLUMNS) | set(INDUSTRY_COLUMNS) | {
+            "trade_date", "symbol", "date",
+            # 全历史 notna=0 的死列（catalog 同步排除）
+            "concept_flow_rank", "ind_netflow_rank_20",
+        }
+        default_features, wanted = [], sorted(all_cols - _EXCLUDE)
+    else:
+        default_features = _load_default_features()
+        wanted = list(dict.fromkeys(default_features + LABEL_COLUMNS))
 
     # 因子列用并集：L2 因子 2023-01 才上线，2016-2022 年份缺列时填 NaN
     # （树模型原生处理 NaN，训练时 fill_values 兜底；交集会直接丢掉 L2）。
