@@ -840,7 +840,7 @@ const SettingsCenter: React.FC<SettingsCenterProps> = ({ userId, isActive }) => 
                     type="text"
                     value={tdxNewUrl}
                     onChange={(e) => setTdxNewUrl(e.target.value)}
-                    placeholder="http://192.168.31.39:8550"
+                    placeholder="http://192.168.31.22:8550"
                     className="w-full px-3 py-2 rounded-xl border border-gray-200 text-sm font-mono focus:outline-none focus:ring-2 focus:ring-emerald-500"
                   />
                 </div>

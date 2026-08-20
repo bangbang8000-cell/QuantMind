@@ -17,7 +17,7 @@ from backend.shared.database_manager_v2 import get_session
 
 logger = logging.getLogger(__name__)
 
-TDX_BRIDGE_URL = os.getenv("TDX_BRIDGE_URL", "http://192.168.31.39:8550")
+TDX_BRIDGE_URL = os.getenv("TDX_BRIDGE_URL", "http://192.168.31.22:8550")
 TDX_BRIDGE_TOKEN = os.getenv("TDX_BRIDGE_TOKEN", "")
 TIMEOUT = 10.0
 
