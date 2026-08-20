@@ -50,6 +50,7 @@ cat /tmp/qm-skills/.claude/skills/quantmind-deploy/SKILL.md >> AGENTS.md
 | [simulation-trading](#simulation-trading) | 模拟交易、模拟下单、查持仓、查账户 | 模拟交易：下单买卖、持仓管理、成交查询、模拟盘启动 |
 | [trading-agents](#trading-agents) | 投研分析、研究报告、多Agent分析、TradingAgents | 多 Agent 投研分析：7 分析师、辩论、风险评估、报告生成 |
 | [quantmind-deploy](#quantmind-deploy) | 部署、一键部署、部署失败、装不上 | QuantMind 部署运维：一键/快速/手动部署、数据库初始化、问题排查 |
+| [news-sentiment-research](#news-sentiment-research) | 新闻情绪、新闻规律、情绪分析、消息面、新闻回测、情绪策略 | 新闻情绪研究方法论：七维深度分析 → 融合规律优化回测 → 研报 MD+PDF |
 
 ---
 
@@ -167,6 +168,15 @@ curl -X POST $BASE/api/v1/models/run-training \
 ### quantmind-deploy
 
 **部署运维**。一键部署（`quick-deploy.sh`）、快速部署、手动部署、数据库初始化（`db_init.sql` 含 users 表）、服务健康检查、常见部署问题排查（用户表缺失/Docker Compose 版本/镜像源/torch 安装等）。11+ 容器架构总览。含：技能包安装指南（让 AI 部署）、推荐编程工具、**AutoDL 云端 GPU 训练**（`training-nodes` 配置/测试/状态）。
+
+### news-sentiment-research
+
+**新闻情绪研究方法论**。Huntly RSS 42 万篇新闻 → FinBERT+词典双引擎情绪 → 事件研究（T+0~T+20 收益曲线）+ 七维深度分析（来源预测力/时段特征/信号强度/首日动量/情绪反转/事件标签/连续信号）→ 融合规律优化策略回测（来源白名单+时段过滤+多篇确认+首日动量+反转出场+连续/标签加成+无止损+动态止盈）→ 研报级 MD+PDF 落盘。实测最优 +84.34% / Calmar 7.76。
+
+**参考文件**：
+- `scripts/backtest_news_event_study.py` — 事件研究
+- `scripts/backtest_news_deep_analysis.py` — 七维深度分析
+- `scripts/backtest_news_optimized.py` — 优化策略回测（消融开关）
 
 ### 市场分析页面（股票市场分析）
 
