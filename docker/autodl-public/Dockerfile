@@ -17,7 +17,7 @@ FROM docker.1ms.run/nvidia/cuda:12.1.0-base-ubuntu22.04
 
 # 训练依赖安装走阿里云 PyPI 镜像（国内网络）；torch GPU 版走官方 cu128 索引
 ARG PIP_INDEX_URL=https://mirrors.aliyun.com/pypi/simple/
-ARG TORCH_INDEX_URL=https://download.pytorch.org/whl/cu128
+ARG TORCH_INDEX_URL=https://mirrors.aliyun.com/pytorch-wheels/cu128
 ARG QUANTMIND_REPO=https://github.com/qusong0627/QuantMind.git
 ARG QUANTMIND_BRANCH=master
 
@@ -29,7 +29,8 @@ ENV PYTHONUNBUFFERED=1 \
     PIP_TRUSTED_HOST=mirrors.aliyun.com \
     PYTHONPATH=/root/QuantMind
 
-RUN apt-get update && apt-get install -y --no-install-recommends \
+RUN sed -i 's/archive.ubuntu.com/mirrors.aliyun.com/g; s/security.ubuntu.com/mirrors.aliyun.com/g' /etc/apt/sources.list && \
+    apt-get update && apt-get install -y --no-install-recommends \
         git \
         curl \
         python3 \

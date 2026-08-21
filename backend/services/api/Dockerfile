@@ -1,4 +1,4 @@
-FROM python:3.10-slim-bookworm
+FROM docker.1ms.run/library/python:3.10-slim-bookworm
 RUN set -x && \
     sed -i 's/deb.debian.org/mirrors.aliyun.com/g' /etc/apt/sources.list.d/debian.sources && \
     sed -i 's/security.debian.org/mirrors.aliyun.com/g' /etc/apt/sources.list.d/debian.sources || \

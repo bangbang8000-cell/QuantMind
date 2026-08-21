@@ -5,6 +5,7 @@ import {
   History, Archive, Brain, Clock, XCircle, X,
   ChevronRight, Play, Cpu, Download, ChevronDown,
   ChevronUp, Shield, Zap, Activity, ListFilter, BarChart3, TrendingUp, TrendingDown,
+  Compass, Sparkles,
 } from 'lucide-react';
 import {
   Button, Card, Tag, Typography, Empty, Spin, message,
@@ -50,6 +51,7 @@ import {
   InfoCell,
 } from './modelRegistryPanels';
 import { CreateEnsembleModal } from './CreateEnsembleModal';
+import { PublishModelModal } from './hub/PublishModelModal';
 import { InferenceBacktestModule } from '../components/backtestCenter/InferenceBacktestModule';
 import { BatchInferencePanel } from '../components/inference/BatchInferencePanel';
 import { BatchSingleDayPanel } from '../components/inference/BatchSingleDayPanel';
@@ -78,6 +80,7 @@ export const ModelRegistryPage: React.FC = () => {
   const [ensembleMode, setEnsembleMode] = useState(false);
   const [ensembleChecked, setEnsembleChecked] = useState<string[]>([]);
   const [showEnsembleModal, setShowEnsembleModal] = useState(false);
+  const [showPublishModal, setShowPublishModal] = useState(false);
   const [showArchived, setShowArchived] = useState(false);
   const [searchQuery, setSearchQuery] = useState('');
   const [settingDefault, setSettingDefault] = useState(false);
@@ -631,13 +634,23 @@ export const ModelRegistryPage: React.FC = () => {
               )}
             </div>
             {/* 底部操作 */}
-            <div className="px-4 pb-4 pt-3 border-t border-slate-50">
+            <div className="px-3 pb-3.5 pt-2.5 border-t border-slate-100 bg-slate-50/50 flex gap-2">
               <Button
-                type="primary" block
+                type="primary"
+                icon={<Compass size={14} />}
+                className="flex-1 rounded-xl h-9 bg-blue-600 hover:bg-blue-500 border-none font-bold text-xs shadow-sm flex items-center justify-center gap-1.5"
+                onClick={() => navigate('/model-hub')}
+              >
+                模型广场
+              </Button>
+              <Button
                 icon={<Brain size={14} />}
-                className="rounded-xl h-10 bg-slate-900 border-none font-black text-xs"
+                className="rounded-xl h-9 border-slate-200 text-slate-700 hover:text-blue-600 font-bold text-xs flex items-center justify-center px-3"
                 onClick={() => navigate('/model-training')}
-              >训练新模型</Button>
+                title="去训练新模型"
+              >
+                训练
+              </Button>
             </div>
           </div>
           {/* ═══ 右侧主区 ═══ */}
@@ -706,6 +719,13 @@ export const ModelRegistryPage: React.FC = () => {
                       )}
                     </div>
                     <div className="flex gap-2 flex-shrink-0">
+                      <Button
+                        icon={<Sparkles size={13} />}
+                        className="rounded-xl h-9 px-4 font-bold border-blue-200 text-blue-600 bg-blue-50/50 hover:bg-blue-100 text-xs"
+                        onClick={() => setShowPublishModal(true)}
+                      >
+                        发布到广场
+                      </Button>
                       <Button
                         icon={<Code size={13} />}
                         className="rounded-xl h-9 px-4 font-bold border-slate-200 text-xs"
@@ -1059,6 +1079,17 @@ export const ModelRegistryPage: React.FC = () => {
           void loadModels(true);
         }}
         models={userModels.filter(m => ensembleChecked.includes(m.model_id))}
+      />
+
+      {/* 发布到广场对话框 */}
+      <PublishModelModal
+        open={showPublishModal}
+        onClose={() => setShowPublishModal(false)}
+        userModels={userModels}
+        initialModelId={selectedModel?.model_id}
+        onSuccess={() => {
+          message.success('模型发布流程已完成');
+        }}
       />
     </div>
   );

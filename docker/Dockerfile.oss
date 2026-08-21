@@ -1,7 +1,7 @@
 # QuantMind OSS Edition - Single Image
 # 构建一个镜像运行所有后端服务
 
-FROM python:3.10-slim-bookworm
+FROM docker.1ms.run/library/python:3.10-slim-bookworm
 
 # 镜像源参数（构建时可传入）
 ARG PIP_INDEX_URL=https://mirrors.aliyun.com/pypi/simple/

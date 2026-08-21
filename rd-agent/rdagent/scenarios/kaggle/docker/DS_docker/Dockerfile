@@ -1,6 +1,7 @@
-FROM gcr.io/kaggle-gpu-images/python:latest
+FROM gcr.m.daocloud.io/kaggle-gpu-images/python:latest
 
-RUN apt-get clean && apt-get update && apt-get install -y \  
+RUN sed -i 's/archive.ubuntu.com/mirrors.aliyun.com/g; s/security.ubuntu.com/mirrors.aliyun.com/g' /etc/apt/sources.list \
+    && apt-get clean && apt-get update && apt-get install -y \  
     curl \  
     vim \  
     git \  

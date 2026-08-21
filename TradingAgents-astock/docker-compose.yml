@@ -9,7 +9,7 @@ services:
     stdin_open: true
 
   ollama:
-    image: ollama/ollama:latest
+    image: docker.1ms.run/ollama/ollama:latest
     volumes:
       - ollama_data:/root/.ollama
     profiles:

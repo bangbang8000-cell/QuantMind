@@ -1,5 +1,5 @@
 # 兼容旧实盘 runner 入口；建议新部署优先使用 docker/Dockerfile.ml-runtime。
-FROM python:3.10-slim
+FROM docker.1ms.run/library/python:3.10-slim
 
 ARG PIP_INDEX_URL=https://mirrors.aliyun.com/pypi/simple/
 ARG INSTALL_PYQLIB=1

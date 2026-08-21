@@ -1,5 +1,5 @@
 # QuantMind OSS Edition - Nginx Gateway
-FROM nginx:1.25-alpine
+FROM docker.1ms.run/library/nginx:1.25-alpine
 
 COPY docker/nginx/nginx.conf /etc/nginx/nginx.conf
 COPY docker/nginx/cors.conf /etc/nginx/cors.conf

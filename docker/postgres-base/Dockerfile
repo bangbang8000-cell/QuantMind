@@ -1,4 +1,4 @@
-FROM postgres:16-alpine
+FROM docker.1ms.run/library/postgres:16-alpine
 
 LABEL org.opencontainers.image.title="quantmind-postgres-base" \
       org.opencontainers.image.description="QuantMind PostgreSQL base image with core schema bootstrap" \

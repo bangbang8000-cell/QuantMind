@@ -1,7 +1,7 @@
 # QuantMind Standalone Trainer Image
 # 专用于模型训练的独立精简镜像 (支持本地 GPU / AutoDL / 远程算力节点)
 
-FROM python:3.10-slim-bookworm
+FROM docker.1ms.run/library/python:3.10-slim-bookworm
 
 ARG PIP_INDEX_URL=https://mirrors.aliyun.com/pypi/simple/
 ARG PIP_TRUSTED_HOST=mirrors.aliyun.com

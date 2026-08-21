@@ -42,6 +42,7 @@ const QuantBotPage = lazy(() => import('./features/quantbot/pages/QuantBotPage')
 const AIIDEPage = lazy(() => import('./pages/AIIDEPage'));
 const ModelTrainingPage = lazy(() => import('./pages/ModelTrainingPage'));
 const ModelRegistryPage = lazy(() => import('./pages/ModelRegistryPage'));
+const ModelHubPage = lazy(() => import('./pages/ModelHubPage'));
 const InferenceCenterPage = lazy(() => import('./pages/InferenceCenterPage'));
 const StockTerminalPage = lazy(() => import('./features/stock-terminal/pages/StockTerminalPage'));
 const ResearchPlatformPage = lazy(() => import('./pages/ResearchPlatformPage').then(m => ({ default: m.default || m.ResearchPlatformPage })));
@@ -594,6 +595,14 @@ export default function App() {
                     element={
                       <ProtectedRoute>
                         <ModelRegistryPage />
+                      </ProtectedRoute>
+                    }
+                  />
+                  <Route
+                    path="/model-hub"
+                    element={
+                      <ProtectedRoute>
+                        <ModelHubPage />
                       </ProtectedRoute>
                     }
                   />

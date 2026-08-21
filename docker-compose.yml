@@ -6,7 +6,7 @@ name: quantmind
 services:
   # 1. 数据库 (PostgreSQL)
   db:
-    image: postgres:15-alpine
+    image: docker.1ms.run/library/postgres:15-alpine
     container_name: quantmind-db
     shm_size: 256mb
     environment:
@@ -29,7 +29,7 @@ services:
 
   # 2. 缓存 (Redis) - 统一实例
   redis:
-    image: redis:7-alpine
+    image: docker.1ms.run/library/redis:7-alpine
     container_name: quantmind-redis
     ports:
       - "6379:6379"
@@ -53,7 +53,7 @@ services:
       dockerfile: docker/Dockerfile.oss
       args:
         TORCH_DEVICE: ${TORCH_DEVICE:-cpu}
-        TORCH_CPU_INDEX_URL: ${TORCH_CPU_INDEX_URL:-https://download.pytorch.org/whl/cpu}
+        TORCH_CPU_INDEX_URL: ${TORCH_CPU_INDEX_URL:-https://mirrors.aliyun.com/pytorch-wheels/cpu}
     platform: linux/amd64
     # GPU 可选：无 NVIDIA 驱动的主机请保持注释。
     # 有 GPU 加速训练需求时取消注释（需安装 nvidia-container-toolkit）。
@@ -567,7 +567,7 @@ services:
   # 提供新闻流 + 可结构化的财务事件源
   # 前端通过 QuantMind News 代理访问 (零 401 风险)
   huntly:
-    image: lcomplete/huntly:latest
+    image: docker.1ms.run/lcomplete/huntly:latest
     container_name: quantmind-huntly
     ports:
       - "${HUNTLY_PORT:-8090}:80"
@@ -591,7 +591,7 @@ services:
   # 6b. RSSHub (为 Huntly 提供 RSS 源生成 — Twitter/微博/雪球/财经站点等)
   # Huntly 端订阅地址示例：http://rsshub:1200/twitter/user/<handle>
   rsshub:
-    image: diygod/rsshub:latest
+    image: docker.1ms.run/diygod/rsshub:latest
     container_name: quantmind-rsshub
     ports:
       - "${RSSHUB_PORT:-1200}:1200"
@@ -624,10 +624,8 @@ services:
 
   # 7. QwenPaw (QuantBot 聊天机器人)
   qwenpaw:
-    # 国内拉取 Docker Hub 时常因 CloudFront IPv6 链路被重置失败，可用镜像加速源：
-    #   docker pull docker.1ms.run/agentscope/qwenpaw:latest
-    #   docker tag  docker.1ms.run/agentscope/qwenpaw:latest agentscope/qwenpaw:latest
-    image: agentscope/qwenpaw:latest
+    # 使用国内镜像加速源直接拉取，避免 Docker Hub CloudFront IPv6 链路被重置失败
+    image: docker.1ms.run/agentscope/qwenpaw:latest
     container_name: qwenpaw
     ports:
       - "0.0.0.0:8089:8088"

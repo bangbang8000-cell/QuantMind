@@ -1,4 +1,4 @@
-FROM python:3.10-slim
+FROM docker.1ms.run/library/python:3.10-slim
 RUN set -x && \
     if [ -f /etc/apt/sources.list.d/debian.sources ]; then \
         sed -i 's/deb.debian.org/mirrors.aliyun.com/g' /etc/apt/sources.list.d/debian.sources && \
