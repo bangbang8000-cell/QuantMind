@@ -508,6 +508,28 @@ export async function cancelBacktest(_taskId: string): Promise<ApiResponse> {
   return makeOk({});
 }
 
+// ========================== LLM Config ==========================
+
+export interface LlmConfigStatus {
+  configured: boolean;
+  reason?: string;
+  provider?: string;
+  model?: string;
+  base_url?: string;
+  api_key_masked?: string;
+}
+
+/** Read-only LLM config status from backend (key resolved from env vars). */
+export async function getLlmConfig(): Promise<ApiResponse<LlmConfigStatus>> {
+  try {
+    const res = await apiClient.get(`/alpha-agent/llm-config`);
+    return makeOk(res.data?.data ?? { configured: false, reason: '未知状态' });
+  } catch (error: unknown) {
+    const message = error instanceof Error ? error.message : 'LLM 配置查询失败';
+    return makeOk({ configured: false, reason: message });
+  }
+}
+
 // ========================== Health Check ==========================
 
 export async function healthCheck(): Promise<

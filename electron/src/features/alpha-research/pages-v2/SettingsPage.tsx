@@ -2,8 +2,8 @@ import React, { useState, useEffect } from 'react';
 import { Card, CardContent, CardHeader, CardTitle } from '../components-v2/ui/Card';
 import { Button } from '../components-v2/ui/Button';
 import { Badge } from '../components-v2/ui/Badge';
-import { Settings, Save, RotateCcw, Eye, EyeOff, Check, X, AlertCircle, Loader2, Database, Sliders, Box, Cpu, Compass, Shuffle } from 'lucide-react';
-import { healthCheck, getDataSummary, getUniverses } from '../services-v2/api';
+import { Settings, Save, RotateCcw, Check, X, AlertCircle, Loader2, Database, Sliders, Box, Cpu, Compass, Shuffle } from 'lucide-react';
+import { healthCheck, getDataSummary, getUniverses, getLlmConfig, type LlmConfigStatus } from '../services-v2/api';
 import { apiClient } from '../../../services/aiStrategyClients';
 import { REFERENCE_MINING_DIRECTIONS, getDirectionLabel, type MiningDirectionItem, importFeatureCatalogDirections, fetchMiningDirections } from '../utils-v2/miningDirections';
 import type { DataSummary, UniverseId, UniverseInfo } from '../types-v2';
@@ -52,7 +52,6 @@ type SettingsTab = 'api' | 'data' | 'params' | 'directions';
 export const SettingsPage: React.FC = () => {
   const [config, setConfig] = useState<SystemConfig>(DEFAULT_CONFIG);
   const [activeTab, setActiveTab] = useState<SettingsTab>('api');
-  const [showApiKey, setShowApiKey] = useState(false);
   const [isSaved, setIsSaved] = useState(false);
   const [isDirty, setIsDirty] = useState(false);
   const [isLoading, setIsLoading] = useState(true);
@@ -64,6 +63,8 @@ export const SettingsPage: React.FC = () => {
   const [dataSummary, setDataSummary] = useState<DataSummary | null>(null);
   const [universes, setUniverses] = useState<UniverseInfo[]>([]);
   const [l1Directions, setL1Directions] = useState<MiningDirectionItem[]>([]);
+  const [llmConfig, setLlmConfig] = useState<LlmConfigStatus | null>(null);
+  const [llmLoading, setLlmLoading] = useState(false);
 
   // Load config from backend on mount
   useEffect(() => {
@@ -77,7 +78,20 @@ export const SettingsPage: React.FC = () => {
     fetchMiningDirections()
       .then(setL1Directions)
       .catch(() => {});
+    refreshLlmConfig();
   }, []);
+
+  const refreshLlmConfig = async () => {
+    setLlmLoading(true);
+    try {
+      const res = await getLlmConfig();
+      setLlmConfig(res.data ?? null);
+    } catch {
+      setLlmConfig(null);
+    } finally {
+      setLlmLoading(false);
+    }
+  };
 
   const loadConfig = async () => {
     setIsLoading(true);
@@ -172,26 +186,6 @@ export const SettingsPage: React.FC = () => {
   /** L1 categories from QuantDB when available, else the static Alpha158 reference list */
   const activeDirections = l1Directions.length > 0 ? l1Directions : REFERENCE_MINING_DIRECTIONS;
 
-  const API_URL_PRESETS: Array<{ label: string; url: string }> = [
-    { label: '阿里云 DashScope (兼容)', url: 'https://dashscope.aliyuncs.com/compatible-mode/v1' },
-    { label: 'DeepSeek 官方', url: 'https://api.deepseek.com/v1' },
-    { label: 'OpenAI 官方', url: 'https://api.openai.com/v1' },
-    { label: 'OpenRouter', url: 'https://openrouter.ai/api/v1' },
-    { label: '智谱 BigModel', url: 'https://open.bigmodel.cn/api/paas/v4' },
-    { label: 'Moonshot Kimi', url: 'https://api.moonshot.cn/v1' },
-    { label: '本地 Ollama', url: 'http://localhost:11434/v1' },
-  ];
-
-  const MODEL_SUGGESTIONS = [
-    'deepseek-chat', 'deepseek-reasoner', 'deepseek-v3', 'deepseek-r1',
-    'qwen-max', 'qwen-plus', 'qwen-turbo', 'qwen3-coder-plus',
-    'gpt-4o', 'gpt-4o-mini', 'gpt-4-turbo', 'gpt-4', 'gpt-3.5-turbo',
-    'claude-3-5-sonnet-20241022', 'claude-3-opus-20240229',
-    'glm-4-plus', 'glm-4-flash',
-    'moonshot-v1-32k', 'moonshot-v1-128k',
-    'llama3.1:8b', 'qwen2.5:7b',
-  ];
-
   if (isLoading) {
     return (
       <div className="flex items-center justify-center min-h-[40vh]">
@@ -285,85 +279,90 @@ export const SettingsPage: React.FC = () => {
               </CardTitle>
             </CardHeader>
             <CardContent className="space-y-6">
-              <div>
-                <label className="block text-sm font-medium mb-2">
-                  API Key <span className="text-destructive">*</span>
-                </label>
-                <div className="flex gap-2">
-                  <input
-                    type={showApiKey ? 'text' : 'password'}
-                    value={config.apiKey}
-                    onChange={(e) => updateConfigField('apiKey', e.target.value)}
-                    placeholder="sk-..."
-                    className="flex-1 rounded-lg border border-input bg-background px-4 py-2 text-sm focus:border-primary focus:outline-none focus:ring-2 focus:ring-primary transition-all"
-                  />
+              <div className="rounded-lg border border-blue-500/30 bg-blue-500/5 p-4">
+                <div className="flex items-start gap-3">
+                  <AlertCircle className="h-5 w-5 text-blue-500 mt-0.5 shrink-0" />
+                  <div className="space-y-1 text-sm">
+                    <p className="font-medium text-foreground">LLM 凭证由后端环境变量统一管理</p>
+                    <p className="text-muted-foreground">
+                      出于安全考虑，API Key 不在前端设置。请在容器/服务器环境变量中配置，
+                      后端启动时自动加载，因子挖掘与因子解释共享同一套凭证。
+                    </p>
+                    <p className="text-xs text-muted-foreground mt-2 font-mono">
+                      支持的环境变量（按优先级）：
+                      <br />· DEEPSEEK_API_KEY / DEEPSEEK_BASE_URL / DEEPSEEK_MODEL
+                      <br />· AI_IDE_LLM_API_KEY / AI_IDE_LLM_BASE_URL / AI_IDE_LLM_MODEL
+                      <br />· OPENAI_API_KEY / OPENAI_BASE_URL / CHAT_MODEL
+                    </p>
+                  </div>
+                </div>
+              </div>
+
+              {/* Backend-resolved LLM config (read-only) */}
+              <div className="space-y-4">
+                <div className="flex items-center justify-between">
+                  <h4 className="text-sm font-semibold">后端当前生效配置</h4>
                   <Button
                     variant="outline"
-                    onClick={() => setShowApiKey(!showApiKey)}
-                    className="px-3"
+                    size="sm"
+                    onClick={refreshLlmConfig}
+                    disabled={llmLoading}
+                    className="h-7 px-2 text-xs"
                   >
-                    {showApiKey ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
+                    {llmLoading ? (
+                      <Loader2 className="h-3 w-3 animate-spin mr-1" />
+                    ) : (
+                      <RotateCcw className="h-3 w-3 mr-1" />
+                    )}
+                    重新检测
                   </Button>
                 </div>
-                <p className="text-xs text-muted-foreground mt-1">
-                  支持 OpenAI 兼容格式的 API Key（如 DashScope, DeepSeek 等）
-                </p>
-              </div>
 
-              <div>
-                <label className="block text-sm font-medium mb-2">API Base URL</label>
-                <input
-                  type="text"
-                  list="alpha-api-url-presets"
-                  value={config.apiUrl}
-                  onChange={(e) => updateConfigField('apiUrl', e.target.value)}
-                  placeholder="https://api.example.com/v1"
-                  className="w-full rounded-lg border border-input bg-background px-4 py-2 text-sm focus:border-primary focus:outline-none focus:ring-2 focus:ring-primary transition-all"
-                />
-                <datalist id="alpha-api-url-presets">
-                  {API_URL_PRESETS.map((p) => (
-                    <option key={p.url} value={p.url}>{p.label}</option>
-                  ))}
-                </datalist>
-                <div className="flex flex-wrap gap-1.5 mt-2">
-                  {API_URL_PRESETS.map((p) => (
-                    <button
-                      key={p.url}
-                      type="button"
-                      onClick={() => updateConfigField('apiUrl', p.url)}
-                      className={`px-2 py-1 rounded-md border text-xs transition-all ${
-                        config.apiUrl === p.url
-                          ? 'bg-primary/15 border-primary/40 text-primary'
-                          : 'border-border/50 text-muted-foreground hover:bg-secondary/40 hover:text-foreground'
-                      }`}
-                    >
-                      {p.label}
-                    </button>
-                  ))}
-                </div>
-                <p className="text-xs text-muted-foreground mt-2">
-                  任何 OpenAI 兼容服务均可，自由填写或从上方预设中选择
-                </p>
-              </div>
-
-              <div>
-                <label className="block text-sm font-medium mb-2">模型名称</label>
-                <input
-                  type="text"
-                  list="alpha-model-suggestions"
-                  value={config.modelName}
-                  onChange={(e) => updateConfigField('modelName', e.target.value)}
-                  placeholder="例如 deepseek-chat / gpt-4o / qwen-max"
-                  className="w-full rounded-lg border border-input bg-background px-4 py-2 text-sm focus:border-primary focus:outline-none focus:ring-2 focus:ring-primary transition-all"
-                />
-                <datalist id="alpha-model-suggestions">
-                  {MODEL_SUGGESTIONS.map((m) => (
-                    <option key={m} value={m} />
-                  ))}
-                </datalist>
-                <p className="text-xs text-muted-foreground mt-1">
-                  输入任意 OpenAI 兼容模型 ID，或从下拉建议中选择
-                </p>
+                {llmLoading && !llmConfig ? (
+                  <div className="flex items-center gap-2 text-sm text-muted-foreground py-4">
+                    <Loader2 className="h-4 w-4 animate-spin" />
+                    正在检测后端 LLM 配置...
+                  </div>
+                ) : llmConfig?.configured ? (
+                  <div className="space-y-3">
+                    <div className="flex items-center gap-2">
+                      <Check className="h-5 w-5 text-success" />
+                      <span className="text-sm font-medium text-success">已配置可用</span>
+                      <Badge variant="outline" className="ml-2">
+                        {llmConfig.provider === 'anthropic' ? 'Anthropic 协议' : 'OpenAI 兼容'}
+                      </Badge>
+                    </div>
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                      <div className="rounded-lg border border-border/60 bg-background/50 p-3">
+                        <p className="text-xs text-muted-foreground mb-1">模型</p>
+                        <p className="text-sm font-mono break-all">{llmConfig.model || '-'}</p>
+                      </div>
+                      <div className="rounded-lg border border-border/60 bg-background/50 p-3">
+                        <p className="text-xs text-muted-foreground mb-1">API Key</p>
+                        <p className="text-sm font-mono">{llmConfig.api_key_masked || '****'}</p>
+                      </div>
+                      <div className="rounded-lg border border-border/60 bg-background/50 p-3 sm:col-span-2">
+                        <p className="text-xs text-muted-foreground mb-1">Base URL</p>
+                        <p className="text-sm font-mono break-all">{llmConfig.base_url || '-'}</p>
+                      </div>
+                    </div>
+                  </div>
+                ) : (
+                  <div className="rounded-lg border border-destructive/40 bg-destructive/5 p-4">
+                    <div className="flex items-start gap-3">
+                      <X className="h-5 w-5 text-destructive mt-0.5 shrink-0" />
+                      <div className="space-y-1 text-sm">
+                        <p className="font-medium text-destructive">未检测到可用的 LLM 配置</p>
+                        <p className="text-muted-foreground">
+                          {llmConfig?.reason || '请在环境变量中配置 DEEPSEEK_API_KEY 等凭证后重启后端。'}
+                        </p>
+                        <p className="text-xs text-muted-foreground mt-2">
+                          未配置时因子挖掘会空转（factor 表 0 条），因子解释会返回错误。
+                        </p>
+                      </div>
+                    </div>
+                  </div>
+                )}
               </div>
 
               {/* Connection Status */}
@@ -380,8 +379,8 @@ export const SettingsPage: React.FC = () => {
                   />
                   <span className="text-sm">
                     后端连接状态：
-                    {backendStatus === 'online' ? <span className="text-success font-medium">已连接</span> : 
-                     backendStatus === 'offline' ? <span className="text-destructive font-medium">未连接</span> : 
+                    {backendStatus === 'online' ? <span className="text-success font-medium">已连接</span> :
+                     backendStatus === 'offline' ? <span className="text-destructive font-medium">未连接</span> :
                      '检测中...'}
                   </span>
                 </div>

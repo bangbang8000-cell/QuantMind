@@ -10,6 +10,7 @@ import sys
 from pathlib import Path
 from typing import Optional
 
+import httpx
 from fastapi import APIRouter, HTTPException, Query, Request
 
 from backend.services.engine.alpha_agent.launcher import get_launcher
@@ -110,15 +111,11 @@ async def start_evolution(
             detail=f"Unknown universe: {universe}. Available: {valid_universes}",
         )
 
-    api_key = (
-        os.getenv("AI_IDE_LLM_API_KEY")
-        or os.getenv("AI_IDE_API_KEY")
-        or os.getenv("OPENAI_API_KEY", "")
-    )
-    if not api_key or "mock-api-key" in api_key:
+    from backend.services.engine.alpha_agent.llm_client import resolve_llm_config
+    if resolve_llm_config() is None:
         raise HTTPException(
             status_code=412,
-            detail="API Key 未配置。请先在个人中心配置 API Key 后再使用因子挖掘功能。",
+            detail="API Key 未配置。请在 .env 设置 DEEPSEEK_API_KEY / AI_IDE_LLM_API_KEY / OPENAI_API_KEY 后再使用因子挖掘功能。",
         )
 
     launcher = get_launcher()
@@ -252,23 +249,10 @@ async def explain_factor(factor_id: str, request: Request):
     factor_code = factor.get("factor_code", "")
     factor_formulation = metadata.get("factor_formulation", "")
 
-    # Call LLM for explanation
-    import httpx
+    from backend.services.engine.alpha_agent.llm_client import chat as llm_chat, resolve_llm_config
 
-    api_key = (
-        os.getenv("AI_IDE_LLM_API_KEY")
-        or os.getenv("AI_IDE_API_KEY")
-        or os.getenv("OPENAI_API_KEY", "")
-    )
-    api_base = (
-        os.getenv("OPENAI_BASE_URL")
-        or os.getenv("OPENAI_API_BASE")
-        or "https://dashscope.aliyuncs.com/compatible-mode/v1"
-    )
-    model = os.getenv("CHAT_MODEL", "deepseek-v3")
-
-    if not api_key:
-        raise HTTPException(status_code=412, detail="API Key 未配置")
+    if resolve_llm_config() is None:
+        raise HTTPException(status_code=412, detail="API Key 未配置。请在 .env 或环境变量中设置 DEEPSEEK_API_KEY / AI_IDE_LLM_API_KEY / OPENAI_API_KEY")
 
     prompt = f"""请用中文简洁地解释以下量化因子。输出格式：
 1. **含义**：一句话概括
@@ -282,22 +266,15 @@ async def explain_factor(factor_id: str, request: Request):
 请直接输出解释，不要重复因子公式。"""
 
     try:
-        async with httpx.AsyncClient(timeout=30) as client:
-            resp = await client.post(
-                f"{api_base}/chat/completions",
-                headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
-                json={
-                    "model": model,
-                    "messages": [{"role": "user", "content": prompt}],
-                    "max_tokens": 500,
-                    "temperature": 0.3,
-                },
-            )
-            resp.raise_for_status()
-            explanation = resp.json()["choices"][0]["message"]["content"]
+        explanation = await llm_chat(
+            [{"role": "user", "content": prompt}],
+            max_tokens=500,
+            temperature=0.3,
+            timeout=30,
+        )
     except httpx.HTTPStatusError as e:
-        logger.error("LLM explain failed: status=%s", e.response.status_code)
-        raise HTTPException(status_code=502, detail="LLM 服务返回错误，请稍后重试") from e
+        logger.error("LLM explain failed: status=%s body=%s", e.response.status_code, e.response.text[:300])
+        raise HTTPException(status_code=502, detail=f"LLM 服务返回错误 ({e.response.status_code})，请检查 API Key 配置") from e
     except Exception as e:
         logger.error("LLM explain failed: %s", e)
         raise HTTPException(status_code=500, detail="LLM 解释失败，请稍后重试") from e
@@ -524,6 +501,28 @@ async def get_universes():
     except Exception as e:
         logger.warning("Failed to get universes: %s", e)
         return {"code": 200, "data": {"universes": {}}}
+
+
+@router.get("/llm-config")
+async def get_llm_config(request: Request):
+    """返回当前 LLM 配置状态（不回显完整 key）。"""
+    from backend.services.engine.alpha_agent.llm_client import resolve_llm_config
+    cfg = resolve_llm_config()
+    if cfg is None:
+        return {"code": 200, "data": {"configured": False, "reason": "未配置可用的 API Key"}}
+    # 仅回显 key 末 4 位，避免泄露
+    key = cfg.api_key
+    masked = f"****{key[-4:]}" if len(key) >= 4 else "****"
+    return {
+        "code": 200,
+        "data": {
+            "configured": True,
+            "provider": cfg.protocol,
+            "model": cfg.model,
+            "base_url": cfg.base_url,
+            "api_key_masked": masked,
+        },
+    }
 
 
 _MARKET_TO_QLIB: dict[str, str] = {
