@@ -229,6 +229,16 @@ curl -s -H "$AUTH" "$BASE/api/v1/admin/data-platform/sources"
 curl -s -H "$AUTH" "$BASE/api/v1/admin/data-platform/sources/{name}/health"
 ```
 
+### 3.8 万得 L2 原始数据导入（手动，不走 daily-sync）
+逐笔委托/成交/十档盘口由 `wind_l2_import.py` 从万得逐日 7z 手动导入
+（schema/单位/坑见 [[quantdb-fields]] 第三章，含深市成交量≈2×、tick_data 单位混源）：
+```bash
+python backend/scripts/wind_l2_import.py --archive /path/to/20260511.7z                  # 全市场
+python backend/scripts/wind_l2_import.py --archive /path/to/20260511.7z --symbols 000001.SZ
+```
+落盘 `1_kline_data/l2_data/order_|trade_{code}_{date}.parquet` + `tick_data/{code}_{date}.parquet`；
+**文件名即日期**（`20260511.7z` → 20260511），增量跳过已存在，`--force` 覆盖，可断点续跑。
+
 ## 4. 字段信息
 
 ### 4.1 字段覆盖矩阵（市场 × 字段 × 源）
