@@ -470,8 +470,6 @@ def reseed_state(datasets: list[dict] | None = None) -> dict:
 
             with ThreadPoolExecutor(max_workers=SYNC_WORKERS) as pool:
                 rows = [r for r in pool.map(check_v2, latest.items()) if r]
-    if progress_cb:
-        progress_cb("file", dataset=dataset, done=done, total=len(pending))
 
         if releases:
             state.execute(
