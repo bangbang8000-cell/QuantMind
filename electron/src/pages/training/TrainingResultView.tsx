@@ -463,7 +463,7 @@ export const TrainingResultView: React.FC<TrainingResultViewProps> = ({
                       { label: '重', n: r, color: 'text-rose-600', bg: 'bg-rose-50', ring: 'ring-rose-100' },
                     ].map((c) => (
                       <div key={c.label} className={clsx('rounded-xl px-3 py-2.5 text-center ring-1', c.bg, c.ring)}>
-                        <div className={clsx('text-xl font-black leading-none', c.color)}>{c.n}</div>
+                        <div className={clsx('text-sm font-bold leading-none', c.color)}>{c.n}</div>
                         <div className="mt-1 text-[9px] font-bold uppercase tracking-wider text-slate-400">{c.label} 漂移</div>
                       </div>
                     ))}

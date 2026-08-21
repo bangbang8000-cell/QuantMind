@@ -7,8 +7,9 @@
  */
 
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { ChevronLeft, ChevronRight, CalendarDays, Zap } from 'lucide-react';
+import { ChevronLeft, ChevronRight, CalendarDays, Zap, TrendingUp, Activity } from 'lucide-react';
 import { Modal, Spin, message } from 'antd';
+import type { InferenceExecutionResult } from '../../../services/modelTrainingService';
 import { modelTrainingService } from '../../../services/modelTrainingService';
 
 /** 单日分数条目：value 用于着色，score 为基准值（同 value），side 为信号方向 */
@@ -54,6 +55,75 @@ export function bucketByMonth(items: { trade_date: string; fusion_score: number 
   return [...byMonth.entries()]
     .sort((a, b) => a[0].localeCompare(b[0]))
     .map(([key, b]) => ({ key, ...b }));
+}
+
+export function showInferenceResult(date: string, res: InferenceExecutionResult | undefined): void {
+  if (!res || res.success === false) {
+    message.error(`${date} 推理未产生结果${res?.error_message ? `（${res.error_message}）` : ''}`);
+    return;
+  }
+  const sig = res.signals_count ?? 0;
+  const pred = res.prediction_trade_date || res.target_date || date;
+  const dataD = res.data_trade_date || date;
+  const dist = res.score_distribution;
+  const mkt = res.market_signal;
+  const goldZone = res.gold_zone_count;
+  const boards = (res.board_top1 ?? []).slice(0, 3);
+
+  const landedOnClicked = pred === date;
+  const hint = landedOnClicked
+    ? `信号已写入 ${pred}（与点击日一致），日历该日格将点亮。`
+    : `信号写入生效日 ${pred}（基于数据日 ${dataD} 的 T+1），点击日 ${date} 仍为空属正常——请切换到 ${pred} 查看。`;
+
+  Modal.info({
+    title: (
+      <div className="flex items-center gap-1.5">
+        <TrendingUp className="w-4 h-4 text-rose-500" />
+        <span>{date} 推理完成</span>
+      </div>
+    ),
+    width: 460,
+    okText: '知道了',
+    content: (
+      <div className="text-[12px] text-slate-700 space-y-2 pt-1">
+        <div className="flex items-center gap-1.5 text-[11px] text-blue-700 bg-blue-50 border border-blue-100 rounded px-2 py-1">
+          <Activity className="w-3 h-3 shrink-0" />
+          <span>{hint}</span>
+        </div>
+        <div className="grid grid-cols-2 gap-x-3 gap-y-1">
+          <Stat label="信号条数" value={sig.toLocaleString()} />
+          <Stat label="数据基准日" value={dataD} />
+          <Stat label="信号生效日" value={pred} accent="text-rose-600" />
+          {mkt ? <Stat label="市场信号" value={mkt.label} /> : null}
+          {dist ? <Stat label="正分占比" value={`${(dist.positive_pct * 100).toFixed(1)}%`} /> : null}
+          {dist ? <Stat label="均分/中位" value={`${fmtScore(dist.mean)} / ${fmtScore(dist.median)}`} /> : null}
+          {typeof goldZone === 'number' ? <Stat label="黄金区个股" value={goldZone.toLocaleString()} /> : null}
+        </div>
+        {boards.length > 0 && (
+          <div className="border-t border-slate-100 pt-1.5">
+            <div className="text-[11px] font-bold text-slate-500 mb-1">板块 Top1</div>
+            <div className="space-y-0.5">
+              {boards.map(b => (
+                <div key={b.board} className="flex items-center justify-between text-[11px]">
+                  <span className="text-slate-600">{b.board}</span>
+                  <span className="font-mono text-rose-600">{fmtScore(b.top1_score)} <span className="text-slate-400">{b.top1_name}</span></span>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+      </div>
+    ),
+  });
+}
+
+function Stat({ label, value, accent }: { label: string; value: string; accent?: string }): JSX.Element {
+  return (
+    <div className="flex items-center justify-between">
+      <span className="text-slate-400">{label}</span>
+      <span className={`font-mono font-bold ${accent ?? 'text-slate-700'}`}>{value}</span>
+    </div>
+  );
 }
 
 const WD = ['日', '一', '二', '三', '四', '五', '六'];  // 周天为第一天
@@ -109,27 +179,32 @@ export function ScoreCalendar({ symbol, onBarClick, selectedDate, modelId, onInf
     return () => { cancelled = true; };
   }, [symbol, refreshKey, resolvedModelId]);
 
-  /** 单日推理：用所选日（后端会回退到最近可用交易日）补分数 */
+  /** 当前生效模型（与刷新数据、模型管理推理同口径）。
+   * 优先用下拉筛选模型；未筛选时取模型管理的默认模型——绝不使用
+   * history.models[0]，因为那与刷新时按默认模型过滤不一致，会导致
+   * 「推理了但刷新后看不到分数」的错觉。 */
+  const activeModelId = modelId || resolvedModelId;
+
+  /** 单日推理：用所选日（后端会回退到最近可用交易日）补分数。
+   * 推理与刷新必须用同一个模型，否则信号落库后刷新查不到。 */
   const inferSingle = async (date: string) => {
-    const model = modelId || '';
+    const model = activeModelId;
+    if (!model) {
+      message.error('未选择模型且无默认模型，请先在「模型管理」设置默认模型或选择模型');
+      return;
+    }
     Modal.confirm({
       title: '该日期无推理分数',
-      content: `是否现在用「${model ? '当前筛选模型' : '全模型融合'}」推理 ${date}？\n（将使用该日前一交易日的股市数据）`,
+      content: `是否现在用该模型推理 ${date}？\n（将使用该日前一交易日的股市数据，与「模型管理」推理口径一致）`,
       okText: '开始推理',
       cancelText: '取消',
       onOk: async () => {
         setInferring(true);
         try {
-          if (model) {
-            await modelTrainingService.runModelInference(model, date);
-          } else {
-            // 无模型筛选时用最近有分数的模型推理（融合口径没有单模型入口）
-            const history = await modelTrainingService.getStockInferenceHistory(symbol.split('.')[0], 500);
-            const models = history?.models ?? [];
-            if (!models.length) throw new Error('暂无可用模型');
-            await modelTrainingService.runModelInference(models[0].model_id, date);
-          }
-          message.success(`${date} 推理完成，刷新日历…`);
+          const res = await modelTrainingService.runModelInference(model, date);
+          showInferenceResult(date, res as InferenceExecutionResult);
+          const pred = (res as InferenceExecutionResult)?.prediction_trade_date || date;
+          pendingNavRef.current = pred;   // 刷新数据到位后跳到生效日所在月
           onInferred?.();
         } catch {
           message.error(`${date} 推理失败，请稍后重试`);
@@ -140,29 +215,26 @@ export function ScoreCalendar({ symbol, onBarClick, selectedDate, modelId, onInf
     });
   };
 
-  /** 批量推理（range 模式）：拖动选中的日期区间 */
+  /** 批量推理（range 模式）：拖动选中的日期区间。与单日推理同口径用 activeModelId。 */
   const inferBatch = (dates: string[]) => {
     if (!dates.length) return;
+    const model = activeModelId;
+    if (!model) {
+      message.error('未选择模型且无默认模型，请先在「模型管理」设置默认模型或选择模型');
+      return;
+    }
     const sorted = [...dates].sort();
     const start = sorted[0], end = sorted[sorted.length - 1];
     Modal.confirm({
       title: `批量推理 ${sorted.length} 个交易日`,
-      content: `区间 ${start} ~ ${end}，将按交易日逐个补推理分数。是否开始？`,
+      content: `区间 ${start} ~ ${end}，将按交易日逐个补推理分数（与「模型管理」批量推理同口径）。是否开始？`,
       okText: '开始批量推理',
       cancelText: '取消',
       onOk: async () => {
         setInferring(true);
         try {
-          const model = modelId || '';
-          let targetModel = model;
-          if (!targetModel) {
-            const history = await modelTrainingService.getStockInferenceHistory(symbol.split('.')[0], 500);
-            const models = history?.models ?? [];
-            if (!models.length) throw new Error('暂无可用模型');
-            targetModel = models[0].model_id;
-          }
           const batch = await modelTrainingService.submitBatchInference({
-            model_id: targetModel,
+            model_id: model,
             mode: 'range',
             start_date: start,
             end_date: end,
@@ -199,6 +271,19 @@ export function ScoreCalendar({ symbol, onBarClick, selectedDate, modelId, onInf
   useEffect(() => {
     if (!initialized && curKey) { setViewKey(curKey); setInitialized(true); }
   }, [curKey, initialized]);
+
+  // 推理完成刚返回 prediction_trade_date 后，刷新数据到位时把视图跳到该日所在月，
+  // 让用户新点亮的格子可见（信号写的是 T+1 生效日，常落在下一个月）。
+  const pendingNavRef = useRef<string | null>(null);
+  useEffect(() => {
+    const target = pendingNavRef.current;
+    if (!target || !months.length) return;
+    const targetMonth = target.slice(0, 7);
+    if (months.some(m => m.key === targetMonth)) {
+      setViewKey(targetMonth);
+      pendingNavRef.current = null;
+    }
+  }, [months]);
 
   const monthIdx = months.findIndex(m => m.key === viewKey);
   const bucket = monthIdx >= 0 ? months[monthIdx] : null;
