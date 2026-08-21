@@ -107,8 +107,12 @@ select = ["ALL"]
 "docs/conf.py" = ["INP001"]
 "test/*" = ["S101"]
 
-[tool.setuptools]
-packages = ["rdagent"]
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["rdagent*"]
+# 用 namespace 模式打包无 __init__.py 的子目录（本 fork 的 vendored 源码
+# 大量包目录缺 __init__.py，显式 packages=["rdagent"] 会漏装导致 import 失败）
+namespaces = true
 
 [tool.setuptools.dynamic]
 dependencies = {file = ["requirements.txt"]}
