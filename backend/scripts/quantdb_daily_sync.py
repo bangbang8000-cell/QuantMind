@@ -37,6 +37,7 @@ import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import date, datetime, timedelta
 from pathlib import Path
+from collections.abc import Callable
 from typing import Optional
 
 import pandas as pd
@@ -202,7 +203,7 @@ def _download_object(client, dataset: str, cat_id: str, key: str, target: Path, 
     return h_sha.hexdigest(), h_md5.hexdigest(), size
 
 
-def _sync_v2_dataset(client, state, cat_id: str, dataset: str) -> tuple[int, int]:
+def _sync_v2_dataset(client, state, cat_id: str, dataset: str, progress_cb: Callable | None = None) -> tuple[int, int]:
     """同步 V2 分区数据集。跳过 patches，不校验服务端 size 声明。
 
     先走 releases 增量，再用 manifest 补漏——服务端可能已将新数据写入 manifest
@@ -314,6 +315,8 @@ def _sync_v2_dataset(client, state, cat_id: str, dataset: str) -> tuple[int, int
             done += 1
             if done % 200 == 0:
                 log.info("[V2] %s: %d/%d", dataset, done, len(pending))
+                if progress_cb:
+                    progress_cb("file", dataset=dataset, done=done, total=len(pending))
 
     if releases:
         state.execute(
@@ -325,7 +328,7 @@ def _sync_v2_dataset(client, state, cat_id: str, dataset: str) -> tuple[int, int
     return done, errors
 
 
-def _sync_v1_dataset(client, state, cat_id: str, dataset: str) -> tuple[int, int]:
+def _sync_v1_dataset(client, state, cat_id: str, dataset: str, progress_cb: Callable | None = None) -> tuple[int, int]:
     """同步 V1 全量数据集。用 etag(md5) 校验，跳过服务端 size 声明。"""
     manifest = client.query_manifest(category_id=cat_id, sub_category=dataset)
     if not manifest:
@@ -414,8 +417,12 @@ def _sync_v1_dataset(client, state, cat_id: str, dataset: str) -> tuple[int, int
                 (key, f'"{md5}"', sha, size, str(target), "v1_symbol", dataset),
             )
             done += 1
+            if progress_cb and done % 100 == 0:
+                progress_cb("file", dataset=dataset, done=done, total=len(pending))
 
     state.commit()
+    if progress_cb:
+        progress_cb("file", dataset=dataset, done=done, total=len(pending))
     log.info("[V1] %s: 下载 %d, 失败 %d", dataset, done, errors)
     return done, errors
 
@@ -463,11 +470,14 @@ def reseed_state(datasets: list[dict] | None = None) -> dict:
 
             with ThreadPoolExecutor(max_workers=SYNC_WORKERS) as pool:
                 rows = [r for r in pool.map(check_v2, latest.items()) if r]
-            if releases:
-                state.execute(
-                    "INSERT OR REPLACE INTO releases(dataset,release_id) VALUES(?,?)",
-                    (sub, releases[-1]["release_id"]),
-                )
+    if progress_cb:
+        progress_cb("file", dataset=dataset, done=done, total=len(pending))
+
+        if releases:
+            state.execute(
+                "INSERT OR REPLACE INTO releases(dataset,release_id) VALUES(?,?)",
+                (sub, releases[-1]["release_id"]),
+            )
         else:
             manifest = client.query_manifest(category_id=cat_id, sub_category=sub)
 
@@ -502,7 +512,7 @@ def reseed_state(datasets: list[dict] | None = None) -> dict:
     return summary
 
 
-def sync_parquet(datasets: list[dict] | None = None, *, dry_run: bool = False) -> dict:
+def sync_parquet(datasets: list[dict] | None = None, *, dry_run: bool = False, progress_cb: Callable | None = None) -> dict:
     """增量同步 QuantDB parquet 数据。
 
     不走 SDK 的 sync_dataset()：服务端 manifest 的 size 声明与实际文件不符
@@ -520,14 +530,18 @@ def sync_parquet(datasets: list[dict] | None = None, *, dry_run: bool = False) -
     state = _open_state()
     results = {"synced": 0, "up_to_date": 0, "errors": [], "total_downloaded": 0}
 
-    for ds in datasets:
+    for idx, ds in enumerate(datasets):
         sub, cat_id = ds["sub_category"], ds["category_id"]
         is_v2 = ds in V2_DATASETS
+        if progress_cb:
+            progress_cb("dataset_start", dataset=sub, index=idx, total=len(datasets))
         try:
             if is_v2:
-                done, errs = _sync_v2_dataset(client, state, cat_id, sub)
+                done, errs = _sync_v2_dataset(client, state, cat_id, sub, progress_cb=progress_cb)
             else:
-                done, errs = _sync_v1_dataset(client, state, cat_id, sub)
+                done, errs = _sync_v1_dataset(client, state, cat_id, sub, progress_cb=progress_cb)
+            if progress_cb:
+                progress_cb("dataset_done", dataset=sub, synced=done, errors=errs)
             if done:
                 results["synced"] += 1
                 results["total_downloaded"] += done
@@ -942,6 +956,7 @@ def run_daily_sync(
     skip_snapshot: bool = False,
     full: bool = False,
     dry_run: bool = False,
+    progress_cb: Callable | None = None,
 ) -> dict:
     """执行每日同步流程。"""
     result = {
@@ -959,7 +974,7 @@ def run_daily_sync(
         if datasets:
             all_ds = V2_DATASETS + V1_DATASETS
             ds_list = [ds for ds in all_ds if ds["sub_category"] in datasets]
-        result["parquet"] = sync_parquet(ds_list, dry_run=dry_run)
+        result["parquet"] = sync_parquet(ds_list, dry_run=dry_run, progress_cb=progress_cb)
 
     # Phase 1.5: 额外数据源（北向/南向，按数据源勾选控制；逐数据集路径只同步请求项）
     result["sources"] = _sync_extra_sources(dry_run=dry_run, datasets=datasets)

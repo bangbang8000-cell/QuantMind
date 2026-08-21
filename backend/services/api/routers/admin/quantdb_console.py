@@ -713,14 +713,49 @@ def _run_sync_job(job_id: str, req: SyncDatasetsRequest) -> None:
         with _jobs_lock:
             return bool(_jobs.get(job_id, {}).get("cancel_requested"))
 
+    # 进度回调：把数据集级 / 文件级进度实时写回 job 记录
+    # 注意：current 保持字符串（前端直接渲染），结构化数据放 current_detail
+    def _on_progress(event: str, **kw: Any) -> None:
+        with _jobs_lock:
+            job = _jobs.get(job_id)
+            if job is None:
+                return
+            ds = kw.get("dataset")
+            if event == "dataset_start":
+                job["current"] = f"{ds} 开始同步"
+                job["current_detail"] = {
+                    "dataset": ds,
+                    "done": 0,
+                    "total": kw.get("total"),
+                    "phase": "dataset_start",
+                }
+            elif event == "file":
+                job["current"] = f"{ds} 下载 {kw.get('done')}/{kw.get('total')}"
+                job["current_detail"] = {
+                    "dataset": ds,
+                    "done": kw.get("done"),
+                    "total": kw.get("total"),
+                    "phase": "downloading",
+                }
+            elif event == "dataset_done":
+                job["done"] = job.get("done", 0) + 1
+                job["current"] = f"{ds} 完成 (同步 {kw.get('synced', 0)})"
+                job["current_detail"] = {
+                    "dataset": ds,
+                    "done": kw.get("synced", 0),
+                    "total": kw.get("total"),
+                    "phase": "dataset_done",
+                }
+
     # Phase 1: parquet 同步（使用 quantdb_daily_sync 的统一逻辑）
     _job_update(job_id, stage="sync_parquet")
     try:
         sync_result = run_daily_sync(
             datasets=req.datasets,
             skip_pg=True,       # PG 单独处理
-            skip_qlib=True,     # Qlib 单独处理
+            skip_qlib=True,      # Qlib 单独处理
             skip_snapshot=True,  # snapshot 单独处理
+            progress_cb=_on_progress,
         )
     except Exception as exc:  # noqa: BLE001
         logger.error("quantdb sync job %s: parquet sync failed: %s", job_id, exc, exc_info=True)
@@ -809,6 +844,7 @@ async def sync_datasets(
         "total": len(payload.datasets),
         "done": 0,
         "current": None,
+        "current_detail": None,
         "results": [],
         "with_pg": payload.with_pg,
         "with_qlib": payload.with_qlib,
@@ -828,21 +864,32 @@ async def sync_datasets(
 
 @router.get("/sync-jobs")
 async def list_sync_jobs(current_user: dict = Depends(require_admin)):
-    """列出同步任务（最近优先）。"""
+    """列出同步任务（最近优先，含 Redis 中的 Celery 定时任务）。"""
     with _jobs_lock:
         jobs = [dict(j) for j in _jobs.values()]
-    jobs.sort(key=lambda j: j["started_at"], reverse=True)
+    try:
+        from backend.shared.quantdb_sync_jobs import list_jobs as _redis_list_jobs
+        jobs.extend(_redis_list_jobs())
+    except Exception:
+        pass
+    jobs.sort(key=lambda j: j.get("started_at", ""), reverse=True)
     return {"success": True, "data": {"jobs": jobs, "timestamp": _now_iso()}}
 
 
 @router.get("/sync-jobs/{job_id}")
 async def get_sync_job(job_id: str, current_user: dict = Depends(require_admin)):
-    """查询单个同步任务进度。"""
+    """查询单个同步任务进度（含 Redis 中的 Celery 定时任务）。"""
     with _jobs_lock:
         job = _jobs.get(job_id)
-        if job is None:
-            raise HTTPException(status_code=404, detail=f"任务不存在: {job_id}")
-        return {"success": True, "data": {"job": dict(job)}}
+    if job is None:
+        try:
+            from backend.shared.quantdb_sync_jobs import get_job as _redis_get_job
+            job = _redis_get_job(job_id)
+        except Exception:
+            job = None
+    if job is None:
+        raise HTTPException(status_code=404, detail=f"任务不存在: {job_id}")
+    return {"success": True, "data": {"job": dict(job)}}
 
 
 @router.post("/sync-jobs/{job_id}/cancel")

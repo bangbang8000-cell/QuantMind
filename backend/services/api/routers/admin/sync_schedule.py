@@ -23,7 +23,7 @@ router = APIRouter(dependencies=[Depends(require_admin)])
 
 class SyncScheduleRequest(BaseModel):
     enabled: bool = False
-    time: str = Field("00:30", description="每天触发时间 HH:MM（Asia/Shanghai，建议 24:00 以后如 00:30）")
+    time: str = Field("03:00", description="每天触发时间 HH:MM（Asia/Shanghai，建议凌晨执行如 03:00）")
     days: int = Field(5, ge=1, le=365, description="同步最近 N 个交易日（BC 为自然日）")
     datasets: list[str] = Field(default_factory=list, description="要同步的数据集；空=按默认全量")
     with_qlib: bool = Field(False, description="同步后重建 Qlib 缓存")

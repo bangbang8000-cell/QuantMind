@@ -764,8 +764,20 @@ def daily_data_sync_task(
 
         if market.upper() == "A":
             from backend.scripts.quantdb_daily_sync import run_daily_sync
+            from backend.shared.quantdb_sync_jobs import new_celery_job, celery_progress_cb, upsert_job, _now_iso
 
-            result = run_daily_sync(skip_pg=skip_pg)
+            job = new_celery_job(with_pg=not skip_pg)
+            job_id = job["job_id"]
+            logger.info("[DailySync] 创建 Redis 同步任务 %s", job_id)
+
+            result = run_daily_sync(skip_pg=skip_pg, progress_cb=celery_progress_cb(job_id))
+            upsert_job(job_id, status="completed", stage="done", finished_at=_now_iso())
+            logger.info(
+                "[DailySync] QuantDB 完成: parquet=%s pg_rows=%s qlib=%s",
+                (result.get("parquet") or {}).get("total_downloaded"),
+                (result.get("pg_fill") or {}).get("rows"),
+                (result.get("qlib_cache") or {}).get("status"),
+            )
             logger.info(
                 "[DailySync] QuantDB 完成: parquet=%s pg_rows=%s qlib=%s",
                 (result.get("parquet") or {}).get("total_downloaded"),

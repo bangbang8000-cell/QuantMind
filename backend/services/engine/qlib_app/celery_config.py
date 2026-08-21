@@ -118,27 +118,27 @@ if NEWS_ENRICH_ENABLED:
         "schedule": float(NEWS_MATCHER_RELOAD_SEC),
     }
 
-# 每日 22:30 自动增量同步全市场数据（QuantDB 服务端晚间才发布当日数据，
-# 22:30 能拿到当天完整数据；比 18:00 更可靠）
+# 每日 03:00 自动增量同步全市场数据（QuantDB 服务端晚间已发布当日数据，
+# 凌晨 3 点可拿到当天完整数据，且避开晚间高峰）
 DAILY_SYNC_ENABLED = os.getenv("DAILY_SYNC_ENABLED", "true").lower() == "true"
 if DAILY_SYNC_ENABLED:
     beat_schedule["daily-data-sync"] = {
         "task": "engine.tasks.daily_data_sync",
-        "schedule": crontab(minute="30", hour="22", day_of_week="1-5"),
+        "schedule": crontab(minute="0", hour="3", day_of_week="1-5"),
         # skip_pg=True：A 股主数据源是 QuantDB parquet + Qlib 缓存，PG 填充耗时长
         # 且非必要，跳过以保证任务能在超时前完成 Qlib 更新
         "kwargs": {"market": "A", "incremental": True, "calibrate": True, "skip_pg": True},
     }
-    # 22:40 独立增量更新 Qlib 缓存（即使主同步超时，Qlib 也能跟上最新交易日）
+    # 03:40 独立增量更新 Qlib 缓存（即使主同步超时，Qlib 也能跟上最新交易日）
     beat_schedule["qlib-cache-update"] = {
         "task": "engine.tasks.update_qlib_cache",
-        "schedule": crontab(minute="40", hour="22", day_of_week="1-5"),
+        "schedule": crontab(minute="40", hour="3", day_of_week="1-5"),
         "kwargs": {},
     }
-    # 22:50 触发特征快照生成（在数据同步完成后执行）
+    # 03:50 触发特征快照生成（在数据同步完成后执行）
     beat_schedule["feature-snapshot-update"] = {
         "task": "engine.tasks.feature_snapshot",
-        "schedule": crontab(minute="50", hour="22", day_of_week="1-5"),
+        "schedule": crontab(minute="50", hour="3", day_of_week="1-5"),
         "kwargs": {"year": 0},
     }
 
