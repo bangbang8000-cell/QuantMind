@@ -108,9 +108,24 @@ def main():
     A.append(f"| 末日净值 | {t5['netx'][-1]:.4f} | {t3['netx'][-1]:.4f} | — |")
     A.append("")
     A.append("**核心结论**：")
-    A.append("- **T+5 收益更优**（+33.44% vs +21.05%），多赚约 12 个百分点")
-    A.append("- **T+3 回撤更小**（8.28% vs 10.89%），更灵敏，急跌时抽身更快")
-    A.append("- 综合看 **T+5 更优**：收益高且回撤仍可控（10.89% < 15% 目标）")
+    ret_diff = (t5['total_ret'] - t3['total_ret']) * 100
+    dd_diff = (t5['max_dd'] - t3['max_dd']) * 100
+    if t5['total_ret'] > t3['total_ret']:
+        A.append(f"- **T+5 收益更优**（+{t5['total_ret']*100:.2f}% vs +{t3['total_ret']*100:.2f}%），多赚约 {ret_diff:.2f} 个百分点")
+    else:
+        A.append(f"- **T+3 收益更优**（+{t3['total_ret']*100:.2f}% vs +{t5['total_ret']*100:.2f}%），多赚约 {-ret_diff:.2f} 个百分点")
+    if t3['max_dd'] < t5['max_dd']:
+        A.append(f"- **T+3 回撤更小**（{t3['max_dd']*100:.2f}% vs {t5['max_dd']*100:.2f}%），更灵敏，急跌时抽身更快")
+    else:
+        A.append(f"- **T+5 回撤更小**（{t5['max_dd']*100:.2f}% vs {t3['max_dd']*100:.2f}%）")
+    # 收益/回撤比判断
+    rr5 = t5['total_ret'] / t5['max_dd'] if t5['max_dd'] > 0 else 0
+    rr3 = t3['total_ret'] / t3['max_dd'] if t3['max_dd'] > 0 else 0
+    winner = "T+5" if rr5 > rr3 else "T+3"
+    A.append(f"- 综合看 **{winner} 更优**（收益/回撤比 {rr5:.2f} vs {rr3:.2f}）")
+    A.append("")
+    A.append("> 注：阶段1单因子检验发现 L2 因子 T+1→T+10 单调增强（非超短线衰减），")
+    A.append("> 若 T+5 显著优于 T+3，印证该发现——更长 horizon 吃到更强信号。")
     A.append("")
     A.append("---")
     A.append("")
