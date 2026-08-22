@@ -4,16 +4,16 @@
 FROM python:3.10-slim-bookworm
 
 # 镜像源参数（构建时可传入）
-ARG PIP_INDEX_URL=https://mirrors.aliyun.com/pypi/simple/
-ARG PIP_TRUSTED_HOST=mirrors.aliyun.com
+ARG PIP_INDEX_URL=https://pypi.tuna.tsinghua.edu.cn/simple/
+ARG PIP_TRUSTED_HOST=pypi.tuna.tsinghua.edu.cn
 ARG APT_MIRROR=mirrors.aliyun.com
 
 # torch 版本选择：cpu（默认，构建快、镜像小）、gpu（含 CUDA，需 GPU 且构建慢、镜像 ~24GB）
 # 或 skip（跳过 torch 安装，无 CUDA/PyTorch，适合纯行情/交易服务）
 # 用法: docker build --build-arg TORCH_DEVICE=gpu ...
 ARG TORCH_DEVICE=cpu
-# CPU 版 torch 的国内下载源（阿里云 pytorch-wheels，含 +cpu 轮子）
-ARG TORCH_CPU_INDEX_URL=https://mirrors.aliyun.com/pytorch-wheels/cpu
+# CPU 版 torch 下载源（国内 pytorch 镜像暂缺 2.9.1+cpu，使用官方源）
+ARG TORCH_CPU_INDEX_URL=https://download.pytorch.org/whl/cpu
 
 ENV PYTHONUNBUFFERED=1 \
     PYTHONDONTWRITEBYTECODE=1 \
@@ -60,27 +60,29 @@ COPY requirements/ai.txt /tmp/requirements-ai.txt
 #   cpu -> torch==2.9.1+cpu（仅 CPU 轮子，构建快、镜像小，无需 GPU）
 #   gpu -> torch==2.9.1（完整 CUDA 轮子，构建慢、镜像大，需 NVIDIA GPU）
 # 需要离线/定制 wheel 时自行 COPY docker/torch_wheels/ 后放开下方本地分支。
-RUN python -m pip install --upgrade pip setuptools wheel cython \
+RUN --mount=type=cache,target=/root/.cache/pip,id=quantmind-pip \
+    python -m pip install --upgrade pip setuptools wheel cython \
     && if [ "$TORCH_DEVICE" = "skip" ] || [ "$TORCH_DEVICE" = "none" ]; then \
          echo "跳过 torch 安装（TORCH_DEVICE=${TORCH_DEVICE}，不包含 CUDA/PyTorch）"; \
        elif ls /tmp/torch_wheels/*.whl >/dev/null 2>&1; then \
          echo "安装本地 torch wheel"; \
-         python -m pip install --no-cache-dir --root-user-action=ignore /tmp/torch_wheels/*.whl; \
+         python -m pip install --root-user-action=ignore /tmp/torch_wheels/*.whl; \
        elif [ "$TORCH_DEVICE" = "gpu" ]; then \
          echo "构建 GPU 版 torch（完整 CUDA，构建慢）"; \
-         python -m pip install --no-cache-dir --root-user-action=ignore "torch==2.9.1"; \
+         python -m pip install --root-user-action=ignore "torch==2.9.1"; \
        else \
          echo "构建 CPU 版 torch（快速、无需 GPU）"; \
-         python -m pip install --no-cache-dir --root-user-action=ignore "torch==2.9.1+cpu" \
+         python -m pip install --root-user-action=ignore "torch==2.9.1+cpu" \
            --index-url ${TORCH_CPU_INDEX_URL}; \
        fi \
-    && python -m pip install --no-cache-dir --root-user-action=ignore -r /tmp/requirements.txt \
-    && python -m pip install --no-cache-dir --root-user-action=ignore -r /tmp/requirements-production.txt \
-    && python -m pip install --no-cache-dir --root-user-action=ignore -r /tmp/requirements-ai.txt \
+    && python -m pip install --root-user-action=ignore -r /tmp/requirements.txt \
+    && python -m pip install --root-user-action=ignore -r /tmp/requirements-production.txt \
+    && python -m pip install --root-user-action=ignore -r /tmp/requirements-ai.txt \
     && rm -rf /tmp/requirements*.txt /tmp/torch_wheels
 
 # 安装 QuantDB SDK（付费高质量数据源：K线/Tick/财报/估值/315维AI因子）
-RUN python -m pip install --no-cache-dir --root-user-action=ignore "quantdb-sdk>=0.3.1"
+RUN --mount=type=cache,target=/root/.cache/pip,id=quantmind-pip \
+    python -m pip install --root-user-action=ignore "quantdb-sdk>=0.3.1"
 
 # 修复 qlib 0.9.7 bug: position.py 中 price=None 导致 TypeError
 COPY docker/patch_qlib.py /tmp/patch_qlib.py
