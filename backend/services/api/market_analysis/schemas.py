@@ -108,6 +108,8 @@ class MarketBreadthResponse(BaseModel):
     total_turnover_yi: float = 0.0
     exploded_ratio: float = 0.0  # 炸板率 %
     profit_effect_score: float = 50.0  # 赚钱效应指数 0-100
+    profit_effect: float = 50.0  # 前端字段别名（上涨占比 %）
+    limit_up_broken_ratio: float = 0.0  # 前端字段别名（炸板率 %）
 
 
 class HeatmapSectorItem(BaseModel):

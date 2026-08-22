@@ -11,6 +11,7 @@
 from __future__ import annotations
 
 import logging
+import math
 import threading
 import time
 from functools import lru_cache
@@ -43,19 +44,31 @@ _QUERY_TTL = 30  # 资金流聚合结果
 
 _cache_lock = threading.Lock()
 _cache: dict[str, tuple[float, Any]] = {}
+_inflight: dict[str, threading.Lock] = {}
 
 
 def _cached(key: str, ttl: float, loader):
-    """带 TTL 的内存缓存（进程内，单机部署足够）。"""
-    with _cache_lock:
-        now = time.monotonic()
-        hit = _cache.get(key)
-        if hit and now - hit[0] < ttl:
-            return hit[1]
-    value = loader()
-    with _cache_lock:
-        _cache[key] = (time.monotonic(), value)
-    return value
+    """带 TTL 的单飞缓存（进程内；同 key 并发只算一次，防止重复重查询打挂服务）。"""
+    while True:
+        with _cache_lock:
+            now = time.monotonic()
+            hit = _cache.get(key)
+            if hit and now - hit[0] < ttl:
+                return hit[1]
+            lk = _inflight.setdefault(key, threading.Lock())
+        with lk:
+            with _cache_lock:
+                hit = _cache.get(key)
+                if hit and time.monotonic() - hit[0] < ttl:
+                    return hit[1]
+            try:
+                value = loader()
+            finally:
+                with _cache_lock:
+                    _inflight.pop(key, None)
+            with _cache_lock:
+                _cache[key] = (time.monotonic(), value)
+            return value
 
 
 def _hub() -> QuantDBDataHub:
@@ -94,6 +107,25 @@ def _latest_l2_date() -> str | None:
     if df.empty or df.iloc[0]["dt"] is None:
         return None
     return str(int(df.iloc[0]["dt"]))
+
+
+_MIN_INDICATOR_ROWS = 1000
+
+
+def _effective_trade_date(max_lookback: int = 7) -> str | None:
+    """最新「行情与技术指标都完整覆盖」的交易日。
+
+    技术指标（pct_change 等）由上游盘后计算，常比日线晚一个分区；
+    直接用最新交易日 JOIN 会得到大量 NULL。此处回退到指标覆盖完整的最近交易日。
+    """
+    latest = _latest_trade_date()
+    if not latest:
+        return None
+    for d in _trading_days(latest, max_lookback):
+        df = _q(f"SELECT count(*) AS n FROM qdb_technical_indicators WHERE dt = {d}")
+        if not df.empty and int(df.iloc[0]["n"] or 0) >= _MIN_INDICATOR_ROWS:
+            return d
+    return latest
 
 
 def _trading_days(end: str | None, n: int) -> list[str]:
@@ -179,12 +211,21 @@ def _normalize_prefix(symbol: str) -> str:
     return StockCodeUtil.to_prefix(symbol)
 
 
+def _f(v: Any, default: float = 0.0) -> float:
+    """NaN/None 安全的 float 转换（防止 NaN 序列化进 JSON 导致前端解析失败）。"""
+    try:
+        f = float(v)
+    except (TypeError, ValueError):
+        return default
+    return default if math.isnan(f) else f
+
+
 def _main_ratio(net: float, super_net: float, large_net: float, buy: float, sell: float) -> float:
     """主力占比 = (超大单+大单)净额 / 总买+总卖。"""
-    denom = abs(float(buy or 0.0)) + abs(float(sell or 0.0))
+    denom = abs(_f(buy)) + abs(_f(sell))
     if denom <= 0:
         return 0.0
-    return round((float(super_net or 0.0) + float(large_net or 0.0)) / denom * 100, 2)
+    return round((_f(super_net) + _f(large_net)) / denom * 100, 2)
 
 
 def _day_flow_series(flow: pd.DataFrame, days: list[str]) -> list[float]:
@@ -202,6 +243,13 @@ def get_stock_money_flow(limit: int = 20) -> list[dict[str, Any]]:
     if not _available():
         return []
 
+    def _load() -> list[dict[str, Any]]:
+        return _stock_money_flow_impl(limit=limit)
+
+    return _cached(f"stock_flow_{limit}", _QUERY_TTL, _load)
+
+
+def _stock_money_flow_impl(limit: int) -> list[dict[str, Any]]:
     ref = _latest_l2_date()
     if not ref:
         return []
@@ -210,7 +258,12 @@ def get_stock_money_flow(limit: int = 20) -> list[dict[str, Any]]:
         return []
 
     today = days[0]  # 降序列表，最新有 L2 数据的交易日
-    flow = _load_l2_flow([today])
+    # 一次性加载 30 天明细，当日榜单与历史趋势共用（避免重复全量扫描）
+    hist = _load_l2_flow(days)
+    if hist.empty:
+        return []
+    hist_dt = hist["dt"].astype(str)
+    flow = hist[hist_dt == today]
     if flow.empty:
         return []
 
@@ -218,38 +271,42 @@ def get_stock_money_flow(limit: int = 20) -> list[dict[str, Any]]:
     names = _instrument_names()
     flow = flow.merge(prices[["symbol", "close", "pct_change"]], on="symbol", how="left")
 
-    # 30 日趋势与每日明细（亿元）
-    hist = _load_l2_flow(days)
-    hist_sym = hist.assign(symbol=hist["symbol"].map(_normalize_prefix))
+    top = flow.sort_values("flow_net_amount", ascending=False).head(limit)
+
+    # 只为入榜股票构建 30 日趋势与每日明细（原先为全市场 ~5000 只逐只构建，CPU/内存开销过大）
+    top_syms = set(top["symbol"])
+    grp_by_prefix: dict[str, pd.DataFrame] = {}
+    for sym, grp in hist[hist["symbol"].isin(top_syms)].groupby("symbol"):
+        grp_by_prefix[_normalize_prefix(sym)] = grp.sort_values("dt")
     trend_map = {
         sym: _day_flow_series(grp, days)
-        for sym, grp in hist.groupby("symbol")
+        for sym, grp in grp_by_prefix.items()
     }
-    detail_map: dict[str, list[dict[str, Any]]] = {}
-    for sym, grp in hist_sym.groupby("symbol"):
-        grp = grp.sort_values("dt")
-        detail_map[sym] = [
+    detail_map: dict[str, list[dict[str, Any]]] = {
+        sym: [
             {
                 "date": str(row.dt),
-                "inflow": round(float(row.flow_buy_amount or 0.0) / 1e8, 2),
-                "outflow": round(float(row.flow_sell_amount or 0.0) / 1e8, 2),
-                "net_flow": round(float(row.flow_net_amount or 0.0) / 1e8, 2),
+                "inflow": round(_f(row.flow_buy_amount) / 1e8, 2),
+                "outflow": round(_f(row.flow_sell_amount) / 1e8, 2),
+                "net_flow": round(_f(row.flow_net_amount) / 1e8, 2),
             }
             for row in grp.itertuples(index=False)
         ]
+        for sym, grp in grp_by_prefix.items()
+    }
 
     items: list[dict[str, Any]] = []
-    for row in flow.sort_values("flow_net_amount", ascending=False).head(limit).itertuples(index=False):
+    for row in top.itertuples(index=False):
         sym_prefix = _normalize_prefix(row.symbol)
-        net = float(row.flow_net_amount or 0.0)
+        net = _f(row.flow_net_amount)
         items.append({
             "symbol": sym_prefix,
             "name": names.get(row.symbol, ""),
-            "close_price": round(float(row.close or 0.0), 2),
-            "pct_change": round(float(row.pct_change or 0.0), 2),
+            "close_price": round(_f(row.close), 2),
+            "pct_change": round(_f(row.pct_change), 2),
             "net_inflow": int(net),
-            "gross_inflow": int(float(row.flow_buy_amount or 0.0)),
-            "gross_outflow": int(float(row.flow_sell_amount or 0.0)),
+            "gross_inflow": int(_f(row.flow_buy_amount)),
+            "gross_outflow": int(_f(row.flow_sell_amount)),
             "main_ratio": _main_ratio(
                 net,
                 row.flow_super_net,
@@ -257,11 +314,11 @@ def get_stock_money_flow(limit: int = 20) -> list[dict[str, Any]]:
                 row.flow_buy_amount,
                 row.flow_sell_amount,
             ),
-            "super_large": int(float(row.flow_super_net or 0.0)),
-            "large": int(float(row.flow_large_net or 0.0)),
-            "medium": int(float(row.flow_medium_net or 0.0)),
-            "small": int(float(row.flow_small_net or 0.0)),
-            "trend_30d": trend_map.get(row.symbol, []),
+            "super_large": int(_f(row.flow_super_net)),
+            "large": int(_f(row.flow_large_net)),
+            "medium": int(_f(row.flow_medium_net)),
+            "small": int(_f(row.flow_small_net)),
+            "trend_30d": trend_map.get(sym_prefix, []),
             "daily_details_30d": detail_map.get(sym_prefix, []),
         })
     return items
@@ -277,6 +334,16 @@ def get_money_flow_period(
     if not _available():
         return []
 
+    key = f"period_{period}_{dimension}_{category}_{limit}"
+    return _cached(key, _QUERY_TTL, lambda: _money_flow_period_impl(period, dimension, category, limit))
+
+
+def _money_flow_period_impl(
+    period: str,
+    dimension: str,
+    category: str,
+    limit: int,
+) -> list[dict[str, Any]]:
     n_days = PERIOD_DAYS.get(period.lower(), 1)
     ref = _latest_l2_date()
     if not ref:
@@ -298,26 +365,31 @@ def get_money_flow_period(
     prices = _load_prices([days[0]])
     names = _instrument_names()
 
+    # 预计算每只股票的净流入趋势，避免逐股全表扫描（O(N²) -> O(N)）
+    trend_by_sym: dict[str, list[float]] = {
+        sym: _day_flow_series(grp, days)
+        for sym, grp in flow_all.groupby("symbol")
+    }
+
     def _build_items(grouped, is_sector: bool) -> list[dict[str, Any]]:
         items: list[dict[str, Any]] = []
         for key, grp in grouped:
             grp = grp.copy()
-            net = float(grp["flow_net_amount"].sum() or 0.0)
-            super_net = float(grp["flow_super_net"].sum() or 0.0)
-            large_net = float(grp["flow_large_net"].sum() or 0.0)
-            medium_net = float(grp["flow_medium_net"].sum() or 0.0)
-            small_net = float(grp["flow_small_net"].sum() or 0.0)
-            buy = float(grp["flow_buy_amount"].sum() or 0.0)
-            sell = float(grp["flow_sell_amount"].sum() or 0.0)
+            net = _f(grp["flow_net_amount"].sum())
+            super_net = _f(grp["flow_super_net"].sum())
+            large_net = _f(grp["flow_large_net"].sum())
+            medium_net = _f(grp["flow_medium_net"].sum())
+            small_net = _f(grp["flow_small_net"].sum())
+            buy = _f(grp["flow_buy_amount"].sum())
+            sell = _f(grp["flow_sell_amount"].sum())
 
             if is_sector:
                 name = str(key)
                 last_day = window[0]
                 day_rows = grp[grp["dt"] == last_day]
-                pct = float(day_rows["pct_change"].mean()) if not day_rows.empty else 0.0
-                pct = pct if pd.notna(pct) else 0.0
+                pct = _f(day_rows["pct_change"].mean()) if not day_rows.empty else 0.0
                 prices_row = prices[prices["symbol"].isin(grp["symbol"].unique())]
-                last_price = float(prices_row["close"].mean()) if not prices_row.empty else 0.0
+                last_price = _f(prices_row["close"].mean()) if not prices_row.empty else 0.0
                 trend = _day_flow_series(
                     flow_all[flow_all["symbol"].isin(grp["symbol"].unique())], days
                 )
@@ -325,12 +397,12 @@ def get_money_flow_period(
             else:
                 sym = str(key)
                 prices_row = prices[prices["symbol"] == sym]
-                last_price = float(prices_row["close"].iloc[-1]) if not prices_row.empty else 0.0
-                pct = float(prices_row["pct_change"].iloc[-1]) if not prices_row.empty else 0.0
+                last_price = _f(prices_row["close"].iloc[-1]) if not prices_row.empty else 0.0
+                pct = _f(prices_row["pct_change"].iloc[-1]) if not prices_row.empty else 0.0
                 id_ = _normalize_prefix(sym)
                 name = names.get(sym, "")
                 symbol_out = id_
-                trend = _day_flow_series(flow_all[flow_all["symbol"] == sym], days)
+                trend = trend_by_sym.get(sym, [])
 
             items.append({
                 "id": id_ if not is_sector else name,
@@ -393,10 +465,10 @@ def get_money_flow_sankey() -> dict[str, Any] | None:
             continue
         agg.append((
             name,
-            float(grp["flow_super_net"].sum() or 0.0),
-            float(grp["flow_large_net"].sum() or 0.0),
-            float(grp["flow_medium_net"].sum() or 0.0),
-            float(grp["flow_small_net"].sum() or 0.0),
+            _f(grp["flow_super_net"].sum()),
+            _f(grp["flow_large_net"].sum()),
+            _f(grp["flow_medium_net"].sum()),
+            _f(grp["flow_small_net"].sum()),
         ))
     if not agg:
         return None
@@ -452,7 +524,7 @@ def get_market_breadth() -> dict[str, Any]:
                 "exploded_ratio": 0.0,
                 "profit_effect_score": 50.0,
             }
-        latest = _latest_trade_date()
+        latest = _effective_trade_date()
         if not latest:
             return {
                 "trade_date": "",
@@ -525,7 +597,7 @@ def get_sector_heatmap(category: str = "shenwan") -> list[dict[str, Any]]:
     def _load():
         if not _available():
             return []
-        latest = _latest_trade_date()
+        latest = _effective_trade_date()
         if not latest:
             return []
 
@@ -651,9 +723,9 @@ def get_stocks_by_tag(tag: str, limit: int = 30) -> list[dict[str, Any]] | None:
         items.append({
             "symbol": _normalize_prefix(row.symbol),
             "name": names.get(row.symbol, ""),
-            "close_price": round(float(row.close or 0.0), 2),
-            "pct_change": round(float(row.pct_change or 0.0), 2),
-            "net_inflow": int(float(row.flow_net_amount or 0.0)),
+            "close_price": round(_f(row.close), 2),
+            "pct_change": round(_f(row.pct_change), 2),
+            "net_inflow": int(_f(row.flow_net_amount)),
         })
     return items
 
