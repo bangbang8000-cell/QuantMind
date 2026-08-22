@@ -109,23 +109,47 @@ def _latest_l2_date() -> str | None:
     return str(int(df.iloc[0]["dt"]))
 
 
-_MIN_INDICATOR_ROWS = 1000
+def _market_pct_snapshot() -> tuple[str | None, pd.DataFrame]:
+    """最新交易日的全市场涨跌幅快照。
 
-
-def _effective_trade_date(max_lookback: int = 7) -> str | None:
-    """最新「行情与技术指标都完整覆盖」的交易日。
-
-    技术指标（pct_change 等）由上游盘后计算，常比日线晚一个分区；
-    直接用最新交易日 JOIN 会得到大量 NULL。此处回退到指标覆盖完整的最近交易日。
+    官方 technical_indicators 常滞后一个分区（最新日可能只有少量行），
+    此处用不复权收盘价 close_t / close_{t-1} - 1 自行推算兜底
+    （仅除权除息个股有轻微偏差），官方指标可用处仍优先采用。
+    返回 (trade_date, DataFrame[symbol, close, amount, pct_change])。
     """
     latest = _latest_trade_date()
     if not latest:
-        return None
-    for d in _trading_days(latest, max_lookback):
-        df = _q(f"SELECT count(*) AS n FROM qdb_technical_indicators WHERE dt = {d}")
-        if not df.empty and int(df.iloc[0]["n"] or 0) >= _MIN_INDICATOR_ROWS:
-            return d
-    return latest
+        return None, pd.DataFrame()
+    days = _trading_days(latest, 2)
+    if len(days) < 2:
+        return days[0] if days else None, pd.DataFrame()
+
+    dt_in = ",".join(days[:2])
+    k = _q(f"SELECT symbol, dt, close, amount FROM qdb_daily_unadjusted WHERE dt IN ({dt_in})")
+    if k.empty:
+        return days[0], pd.DataFrame()
+    k["dt"] = k["dt"].astype(str)
+
+    cur_day = days[0]
+    snap = k[k["dt"] == cur_day][["symbol", "close", "amount"]]
+    if snap.empty:
+        return cur_day, pd.DataFrame()
+
+    p = k.pivot_table(index="symbol", columns="dt", values="close")
+    cols = list(p.columns)
+    if len(cols) >= 2 and cols[-1] == cur_day:
+        calc = ((p[cols[-1]] / p[cols[-2]] - 1) * 100).rename("pct_calc").rename_axis("symbol").reset_index()
+        snap = snap.merge(calc, on="symbol", how="left")
+        off = _q(f"SELECT symbol, pct_change FROM qdb_technical_indicators WHERE dt = {cur_day}")
+        if not off.empty:
+            snap = snap.merge(off, on="symbol", how="left")
+            snap["pct_change"] = snap["pct_change"].where(snap["pct_change"].notna(), snap["pct_calc"])
+        else:
+            snap["pct_change"] = snap["pct_calc"]
+        snap = snap.drop(columns=["pct_calc"])
+    else:
+        snap["pct_change"] = 0.0
+    return cur_day, snap
 
 
 def _trading_days(end: str | None, n: int) -> list[str]:
@@ -511,59 +535,33 @@ def get_money_flow_sankey() -> dict[str, Any] | None:
 
 def get_market_breadth() -> dict[str, Any]:
     """全市场情绪温度计与赚钱效应（上涨/下跌/平盘/涨跌停/总成交额/赚钱效应指数）。"""
+    def _empty(trade_date: str = ""):
+        return {
+            "trade_date": trade_date,
+            "advance_count": 0,
+            "decline_count": 0,
+            "flat_count": 0,
+            "limit_up_count": 0,
+            "limit_down_count": 0,
+            "total_turnover_yi": 0.0,
+            "exploded_ratio": 0.0,
+            "profit_effect_score": 50.0,
+        }
+
     def _load():
         if not _available():
-            return {
-                "trade_date": "",
-                "advance_count": 0,
-                "decline_count": 0,
-                "flat_count": 0,
-                "limit_up_count": 0,
-                "limit_down_count": 0,
-                "total_turnover_yi": 0.0,
-                "exploded_ratio": 0.0,
-                "profit_effect_score": 50.0,
-            }
-        latest = _effective_trade_date()
-        if not latest:
-            return {
-                "trade_date": "",
-                "advance_count": 0,
-                "decline_count": 0,
-                "flat_count": 0,
-                "limit_up_count": 0,
-                "limit_down_count": 0,
-                "total_turnover_yi": 0.0,
-                "exploded_ratio": 0.0,
-                "profit_effect_score": 50.0,
-            }
+            return _empty()
+        latest, snap = _market_pct_snapshot()
+        if not latest or snap.empty:
+            return _empty(f"{latest[:4]}-{latest[4:6]}-{latest[6:]}" if latest else "")
 
-        df = _q(
-            f"SELECT k.symbol, k.close, k.amount, t.pct_change "
-            f"FROM qdb_daily_unadjusted k "
-            f"LEFT JOIN qdb_technical_indicators t ON k.symbol = t.symbol AND k.dt = t.dt "
-            f"WHERE k.dt = {latest}"
-        )
-        if df.empty:
-            return {
-                "trade_date": f"{latest[:4]}-{latest[4:6]}-{latest[6:]}",
-                "advance_count": 0,
-                "decline_count": 0,
-                "flat_count": 0,
-                "limit_up_count": 0,
-                "limit_down_count": 0,
-                "total_turnover_yi": 0.0,
-                "exploded_ratio": 0.0,
-                "profit_effect_score": 50.0,
-            }
-
-        pct = df["pct_change"].fillna(0.0)
+        pct = snap["pct_change"].fillna(0.0)
         adv = int((pct > 0).sum())
         dec = int((pct < 0).sum())
         flat = int((pct == 0).sum())
         l_up = int((pct >= 9.8).sum())
         l_down = int((pct <= -9.8).sum())
-        total_amt = float(df["amount"].sum() or 0.0)
+        total_amt = float(snap["amount"].sum() or 0.0)
         if total_amt > 1e11:
             turnover_yi = round(total_amt / 1e8, 1)
         elif total_amt > 1e7:
@@ -597,16 +595,8 @@ def get_sector_heatmap(category: str = "shenwan") -> list[dict[str, Any]]:
     def _load():
         if not _available():
             return []
-        latest = _effective_trade_date()
-        if not latest:
-            return []
 
-        prices = _q(
-            f"SELECT k.symbol, k.close, k.amount, t.pct_change "
-            f"FROM qdb_daily_unadjusted k "
-            f"LEFT JOIN qdb_technical_indicators t ON k.symbol = t.symbol AND k.dt = t.dt "
-            f"WHERE k.dt = {latest}"
-        )
+        _, prices = _market_pct_snapshot()
         if prices.empty:
             return []
 
