@@ -49,6 +49,14 @@ _MARKET_QLIB_PREFIX: dict[str, str] = {
     "FUTURES": "fut_",
 }
 
+# A 股额外纳入 Qlib 的指数（index_daily 数据，原生代码格式）
+# 沪深300 / 中证500 / 中证1000
+CN_QLIB_INDEX_SYMBOLS: list[str] = [
+    "000300.SH",
+    "000905.SH",
+    "000852.SH",
+]
+
 _MARKET_HUB_FACTORY = {}
 
 
@@ -292,7 +300,10 @@ class QlibDataBuilder:
         return len(qlib_symbols)
 
     def _collect_raw_symbols(self) -> set[str]:
-        """收集原生 symbol 列表：优先 hub.fetch_stock_list，否则从 parquet 推导。"""
+        """收集原生 symbol 列表：优先 hub.fetch_stock_list，否则从 parquet 推导。
+
+        额外补充 A 股指数（CN_QLIB_INDEX_SYMBOLS），让指数进入 instruments 与 features。
+        """
         symbols: set[str] = set()
         try:
             df = self._hub.fetch_stock_list()
@@ -309,6 +320,13 @@ class QlibDataBuilder:
                             symbols.add(qs)
         except Exception as exc:  # noqa: BLE001
             logger.warning("%s fetch_stock_list 失败，回退 parquet 推导: %s", self._market, exc)
+
+        # A 股额外纳入指定指数（index_daily）
+        if self._market == "CN":
+            for idx_code in CN_QLIB_INDEX_SYMBOLS:
+                qs = self._to_qlib_symbol(idx_code)
+                if qs:
+                    symbols.add(qs)
 
         if symbols:
             return symbols
@@ -372,7 +390,7 @@ class QlibDataBuilder:
         incremental: bool = True,
         batch_size: int = 100,
     ) -> dict:
-        """从 parquet 前复权 K 线生成 features/*.day.bin。
+        """从 parquet 后复权 K 线生成 features/*.day.bin。
 
         非 A 股市场标的数大（HK 数千），逐标的全库扫描太慢，
         走 build_features_bulk 一次读入再分组。
@@ -591,7 +609,7 @@ class QlibDataBuilder:
     ) -> bool:
         """从 parquet 全量构建 symbol 的 features。"""
         start_dt = self._market_start_date()
-        df_qfq = self._hub.fetch_daily_kline(qdb_sym, start_dt, date(2026, 12, 31), adjust="qfq")
+        df_qfq = self._hub.fetch_daily_kline(qdb_sym, start_dt, date(2026, 12, 31), adjust="hfq")
         if df_qfq.empty:
             return False
 
@@ -682,7 +700,7 @@ class QlibDataBuilder:
         except ValueError:
             return False
 
-        df_qfq = self._hub.fetch_daily_kline(qdb_sym, start_dt, end_dt, adjust="qfq")
+        df_qfq = self._hub.fetch_daily_kline(qdb_sym, start_dt, end_dt, adjust="hfq")
         if df_qfq.empty:
             return False
 
