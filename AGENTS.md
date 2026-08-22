@@ -81,19 +81,23 @@ Required `.env` keys (defaults in `docker-compose.yml`):
 - Python: Line length 88, use ruff for linting/formatting
 - TypeScript: Run `npm run typecheck` before committing frontend changes
 
-## Deployment Workflow
+## Development & Deployment Workflow
 
-After making code changes, always:
-1. **Commit to git**: Create a commit with descriptive message
-2. **Deploy to server**: SSH to `quant-server` and pull/deploy updates
+### 1. Frontend Development (NPM Mode)
+- **Local Dev Mode**: 前端统一使用本地 `npm run dev`（Electron 桌面端 / Vite Web 模式，自带 HMR 热重载）。
+- **前端修改规则**: **修改前端（electron/src）代码后，不需要每次重新构建或重启服务器上的 `web` 容器**，本地可实时热重载预览调试。提交前运行 `npm run typecheck` 保证类型安全即可。
+
+### 2. Backend Sync & Deployment
+- **后端修改规则**: **修改后端（backend/）代码后，必须推送到仓库并同步重启远程服务器上的后端容器**。
 
 ```bash
-# Local: commit changes
+# 1. 本地提交并推送
 git add .
 git commit -m "descriptive message"
+git push gitee NEXT
 
-# Deploy to quant-server
-ssh quant-server "cd /opt/quantmind && git pull && docker-compose restart"
+# 2. 同步并重启 quant-server 后端服务
+ssh quant-server "cd /root/quantmindoss && git pull && docker compose restart quantmind quantmind-celery"
 ```
 
 ## Key Files
