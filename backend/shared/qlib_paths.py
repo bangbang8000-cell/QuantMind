@@ -70,8 +70,9 @@ def resolve_qlib_provider_uri(market: str = "CN") -> str:
                 return str(candidate)
         return str(_PROJECT_ROOT / "db" / "qlib_data" / subdir)
 
-    # A 股 (CN)：优先 QuantDB 缓存路径
+    # A 股 (CN)：优先固定目录（便于维护），其次 QuantDB 缓存路径
     for candidate in (
+        Path("/data/qlib/cn_data"),
         Path("/data/quantdb/.qlib_cache/cn_data"),
         _PROJECT_ROOT / "data" / "quantdb" / ".qlib_cache" / "cn_data",
         Path("/app/db/qlib_data"),

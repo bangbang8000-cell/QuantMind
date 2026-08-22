@@ -67,10 +67,10 @@ QLIB_DATA_DIR = PROJECT_ROOT / "db" / "qlib_data"
 INVESTMENT_DATA_DIR = Path(
     os.getenv("QM_INVESTMENT_DATA_DIR", "/data/third_party/investment_data")
 )
-# A 股 Qlib 缓存优先使用 QuantDB 派生目录
-QDB_QLIB_CACHE = Path(
-    os.getenv("QM_QUANTDB_DATA_DIR", str(PROJECT_ROOT / "data" / "quantdb"))
-) / ".qlib_cache" / "cn_data"
+# A 股 Qlib 目录统一走 qlib_paths 解析（固定目录 /data/qlib/cn_data 优先）
+from backend.shared.qlib_paths import resolve_qlib_provider_uri
+
+QDB_QLIB_CACHE = Path(resolve_qlib_provider_uri("CN"))
 
 # Default partition start date for stock_daily_latest backfills.
 # 历史回测可通过 --start-date YYYY-MM-DD 或 env QM_SYNC_PARTITION_START 覆盖。

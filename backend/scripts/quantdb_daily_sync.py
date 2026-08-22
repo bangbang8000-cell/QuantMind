@@ -844,8 +844,12 @@ def show_status() -> dict:
             count = sum(1 for _ in p.rglob("*.parquet")) if p.exists() else 0
             status[f"{parent}/{sub}"] = count
 
-    # Qlib cache
-    qlib_cache = QUANTDB_DATA_DIR / ".qlib_cache" / "cn_data"
+    # Qlib cache（统一走 qlib_paths 解析，固定目录 /data/qlib/cn_data）
+    try:
+        from backend.shared.qlib_paths import resolve_qlib_provider_uri
+        qlib_cache = Path(resolve_qlib_provider_uri("CN"))
+    except Exception:
+        qlib_cache = QUANTDB_DATA_DIR / ".qlib_cache" / "cn_data"
     if qlib_cache.is_dir():
         cal_file = qlib_cache / "calendars" / "day.txt"
         if cal_file.exists():

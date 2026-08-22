@@ -347,7 +347,7 @@ class RDLoopWrapper:
         qlib_source = market_cfg["qlib_source"]
         qlib_target_name = market_cfg["qlib_target_name"]
 
-        # parquet 单源市场：优先使用各市场本地 parquet 派生的 .qlib_cache 缓存
+        # parquet 单源市场：优先固定目录/各市场本地派生缓存（CN 统一走 qlib_paths）
         market_cache = {
             "a_share": ("/data/quantdb", ".qlib_cache", "cn_data"),
             "hong_kong": ("/data/quanthk", ".qlib_cache", "hk_data"),
@@ -355,8 +355,15 @@ class RDLoopWrapper:
         }
         if self.market in market_cache:
             base_dir_cfg, cache_sub, leaf = market_cache[self.market]
-            for candidate in (Path(base_dir_cfg) / cache_sub / leaf,
-                              self._resolve_market_data_dir(base_dir_cfg) / cache_sub / leaf):
+            candidates = [Path(base_dir_cfg) / cache_sub / leaf,
+                          self._resolve_market_data_dir(base_dir_cfg) / cache_sub / leaf]
+            if self.market == "a_share":
+                try:
+                    from backend.shared.qlib_paths import resolve_qlib_provider_uri
+                    candidates.insert(0, Path(resolve_qlib_provider_uri("CN")))
+                except Exception:
+                    pass
+            for candidate in candidates:
                 if candidate.is_dir():
                     qlib_source = str(candidate)
                     break

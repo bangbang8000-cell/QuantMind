@@ -27,7 +27,13 @@ class AShareAdapter(MarketAdapter):
         )
 
     def get_qlib_provider_uri(self) -> str:
-        # 优先使用 QuantDB parquet 构建的 Qlib 缓存
+        # 统一走 qlib_paths 解析（固定目录 /data/qlib/cn_data 优先）
+        try:
+            from backend.shared.qlib_paths import resolve_qlib_provider_uri
+            return resolve_qlib_provider_uri("CN")
+        except Exception:
+            pass
+        # Fallback: QuantDB parquet 构建的 Qlib 缓存
         quantdb_dir = self._get_quantdb_dir()
         if quantdb_dir:
             qlib_cache = os.path.join(quantdb_dir, ".qlib_cache", "cn_data")

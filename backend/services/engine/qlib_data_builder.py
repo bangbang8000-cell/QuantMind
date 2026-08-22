@@ -104,7 +104,7 @@ class QlibDataBuilder:
             if data_dir is None:
                 data_dir = _resolve_cn_data_dir()
             hub = QuantDBDataHub(data_dir)
-            default_qlib = Path(data_dir) / ".qlib_cache" / "cn_data"
+            default_qlib = Path("/data/qlib/cn_data")
         elif market_upper == "US":
             if data_dir is None:
                 data_dir = quantus_hub._resolve_quantus_data_dir()

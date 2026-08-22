@@ -34,8 +34,18 @@ _QUANTUS_DATA_DIR = Path(
 _QUANTFUTURES_DATA_DIR = Path(
     os.getenv("QM_QUANTFUTURES_DATA_DIR", str(Path(os.getcwd()) / "data" / "quantfutures"))
 )
+def _resolve_cn_qlib_dir() -> str:
+    """A 股 Qlib 目录统一走 qlib_paths 解析。"""
+    try:
+        from backend.shared.qlib_paths import resolve_qlib_provider_uri
+        return resolve_qlib_provider_uri("CN")
+    except Exception:
+        return str(_QDB_DATA_DIR / ".qlib_cache" / "cn_data")
+
+
 _MARKET_QLIB_DIRS: dict[str, Path] = {
-    "a_share": _QDB_DATA_DIR / ".qlib_cache" / "cn_data",
+    # A 股统一走 qlib_paths（固定目录 /data/qlib/cn_data 优先）
+    "a_share": Path(_resolve_cn_qlib_dir()),
     "crypto": Path(os.getcwd()) / "db" / "qlib_data" / "crypto_data",
     "hong_kong": _QUANTHK_DATA_DIR / ".qlib_cache" / "hk_data",
     "us_stock": _QUANTUS_DATA_DIR / ".qlib_cache" / "us_data",

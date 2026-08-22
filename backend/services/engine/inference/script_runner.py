@@ -379,7 +379,11 @@ class InferenceScriptRunner:
             )
         if data_source == "quantdb_factors":
             return str(os.getenv("QUANTDB_DATA_DIR", "/app/data/quantdb"))
-        return str(os.getenv("QLIB_PRIMARY_DATA_PATH", "db/qlib_data"))
+        try:
+            from backend.shared.qlib_paths import resolve_qlib_provider_uri
+            return resolve_qlib_provider_uri("CN")
+        except Exception:
+            return str(os.getenv("QLIB_PRIMARY_DATA_PATH", "db/qlib_data"))
 
     def _query_quantdb_readiness(self, trade_date: str) -> dict:
         meta = self._read_primary_metadata()

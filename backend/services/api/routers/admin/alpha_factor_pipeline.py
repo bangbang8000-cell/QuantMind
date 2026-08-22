@@ -37,11 +37,15 @@ router = APIRouter(
 # ── 路径配置 ──
 if os.path.exists("/app") and not os.environ.get("QUANTMIND_HOST_MODE"):
     PARQUET_PATH = Path("/app/db/feature_snapshots/model_features_2026.parquet")
-    QLIB_PROVIDER_URI = "/app/db/qlib_data/cn_data"
 else:
     PROJECT_ROOT = Path(__file__).resolve().parents[5]
     PARQUET_PATH = PROJECT_ROOT / "db" / "feature_snapshots" / "model_features_2026.parquet"
-    QLIB_PROVIDER_URI = str(PROJECT_ROOT / "db" / "qlib_data" / "cn_data")
+# Qlib 目录统一走 qlib_paths 解析（固定目录优先）
+try:
+    from backend.shared.qlib_paths import resolve_qlib_provider_uri
+    QLIB_PROVIDER_URI = resolve_qlib_provider_uri("CN")
+except Exception:
+    QLIB_PROVIDER_URI = "/app/db/qlib_data/cn_data"
 
 
 class PromoteRequest(BaseModel):
