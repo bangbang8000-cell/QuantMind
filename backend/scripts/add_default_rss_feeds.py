@@ -38,6 +38,7 @@ async def add_feeds():
 
     # 2. 100% 实测连通与解析正常的优质源
     feeds = [
+        {'name': '同花顺 7x24全球财经直播', 'url': 'http://quantmind-rsshub:1200/10jqka/realtimenews', 'folder': 'A股快讯'},
         {'name': '财联社 7x24快讯', 'url': 'http://quantmind-rsshub:1200/cls/telegraph', 'folder': 'A股快讯'},
         {'name': '华尔街见闻 实时快讯', 'url': 'http://quantmind-rsshub:1200/wallstreetcn/news/global', 'folder': 'A股快讯'},
         {'name': '格隆汇 实时快讯', 'url': 'http://quantmind-rsshub:1200/gelonghui/live', 'folder': 'A股快讯'},

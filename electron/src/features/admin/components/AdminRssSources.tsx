@@ -61,6 +61,7 @@ const UNGROUPED_LABEL = '未分组';
 
 // 精选优质预设源（100% 实测可用）
 const PRESET_FEEDS = [
+  { name: '同花顺 7x24直播', url: 'http://quantmind-rsshub:1200/10jqka/realtimenews', folder: 'A股快讯' },
   { name: '财联社 7x24快讯', url: 'http://quantmind-rsshub:1200/cls/telegraph', folder: 'A股快讯' },
   { name: '华尔街见闻 实时快讯', url: 'http://quantmind-rsshub:1200/wallstreetcn/news/global', folder: 'A股快讯' },
   { name: '格隆汇 市场快讯', url: 'http://quantmind-rsshub:1200/gelonghui/live', folder: 'A股快讯' },
