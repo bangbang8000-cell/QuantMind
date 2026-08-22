@@ -347,22 +347,21 @@ class RDLoopWrapper:
         qlib_source = market_cfg["qlib_source"]
         qlib_target_name = market_cfg["qlib_target_name"]
 
-        # parquet 单源市场：优先固定目录/各市场本地派生缓存（CN 统一走 qlib_paths）
+        # parquet 单源市场：优先固定目录/各市场本地派生缓存（统一走 qlib_paths）
         market_cache = {
-            "a_share": ("/data/quantdb", ".qlib_cache", "cn_data"),
-            "hong_kong": ("/data/quanthk", ".qlib_cache", "hk_data"),
-            "us_stock": ("/data/quantus", ".qlib_cache", "us_data"),
+            "a_share": ("CN", ("/data/quantdb", ".qlib_cache", "cn_data")),
+            "hong_kong": ("HK", ("/data/quanthk", ".qlib_cache", "hk_data")),
+            "us_stock": ("US", ("/data/quantus", ".qlib_cache", "us_data")),
         }
         if self.market in market_cache:
-            base_dir_cfg, cache_sub, leaf = market_cache[self.market]
+            mkt_key, (base_dir_cfg, cache_sub, leaf) = market_cache[self.market]
             candidates = [Path(base_dir_cfg) / cache_sub / leaf,
                           self._resolve_market_data_dir(base_dir_cfg) / cache_sub / leaf]
-            if self.market == "a_share":
-                try:
-                    from backend.shared.qlib_paths import resolve_qlib_provider_uri
-                    candidates.insert(0, Path(resolve_qlib_provider_uri("CN")))
-                except Exception:
-                    pass
+            try:
+                from backend.shared.qlib_paths import resolve_qlib_provider_uri
+                candidates.insert(0, Path(resolve_qlib_provider_uri(mkt_key)))
+            except Exception:
+                pass
             for candidate in candidates:
                 if candidate.is_dir():
                     qlib_source = str(candidate)

@@ -109,22 +109,22 @@ class QlibDataBuilder:
             if data_dir is None:
                 data_dir = quantus_hub._resolve_quantus_data_dir()
             hub = quantus_hub.QuantUSDataHub(data_dir)
-            default_qlib = Path(data_dir) / ".qlib_cache" / "us_data"
+            default_qlib = Path("/data/qlib/us_data")
         elif market_upper == "HK":
             if data_dir is None:
                 data_dir = quanthk_hub._resolve_quanthk_data_dir()
             hub = quanthk_hub.QuantHKDataHub(data_dir)
-            default_qlib = Path(data_dir) / ".qlib_cache" / "hk_data"
+            default_qlib = Path("/data/qlib/hk_data")
         elif market_upper == "CRYPTO":
             if data_dir is None:
                 data_dir = quantbc_hub._resolve_quantbc_data_dir()
             hub = quantbc_hub.QuantBCDataHub(data_dir)
-            default_qlib = Path(data_dir) / ".qlib_cache" / "bc_data"
+            default_qlib = Path("/data/qlib/bc_data")
         elif market_upper == "FUTURES":
             if data_dir is None:
                 data_dir = quantfutures_hub._resolve_quantfutures_data_dir()
             hub = quantfutures_hub.QuantFuturesDataHub(data_dir)
-            default_qlib = Path(data_dir) / ".qlib_cache" / "futures_data"
+            default_qlib = Path("/data/qlib/futures_data")
         else:
             raise ValueError(f"未知市场: {market_upper}")
 

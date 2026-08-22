@@ -127,6 +127,14 @@ class CryptoAdapter(MarketAdapter):
             _resolve_quantbc_data_dir,
         )
 
+        # 统一固定目录优先（/data/qlib/{sub}）
+        try:
+            from backend.shared.qlib_paths import resolve_qlib_provider_uri
+            fixed = resolve_qlib_provider_uri("CRYPTO")
+            if os.path.isdir(fixed):
+                return fixed
+        except Exception:
+            pass
         return str(Path(_resolve_quantbc_data_dir()) / ".qlib_cache" / "bc_data")
 
     def get_backtest_config(self) -> BacktestConfig:

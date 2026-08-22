@@ -54,7 +54,10 @@ def resolve_qlib_provider_uri(market: str = "CN") -> str:
     }
     if market_upper in _MARKET_SUBDIR:
         subdir = _MARKET_SUBDIR[market_upper]
-        # 优先各市场自己的 .qlib_cache（新构建的多市场 Qlib 缓存）
+        # 统一固定目录优先（/data/qlib/{subdir}），其次各市场 .qlib_cache（历史遗留）
+        fixed = Path(f"/data/qlib/{subdir}")
+        if fixed.exists():
+            return str(fixed)
         market_data_dir = _MARKET_DATA_DIR.get(market_upper)
         if market_data_dir:
             cache_sub = _CACHE_SUBDIR.get(market_upper, subdir)

@@ -73,6 +73,14 @@ class HongKongAdapter(MarketAdapter):
         )
 
         cache = Path(_resolve_quanthk_data_dir()) / ".qlib_cache" / "hk_data"
+        # 统一固定目录优先（/data/qlib/{sub}）
+        try:
+            from backend.shared.qlib_paths import resolve_qlib_provider_uri
+            fixed = resolve_qlib_provider_uri("HK")
+            if os.path.isdir(fixed):
+                return fixed
+        except Exception:
+            pass
         if cache.exists():
             return str(cache)
         container_path = "/app/db/qlib_data/hk_data"

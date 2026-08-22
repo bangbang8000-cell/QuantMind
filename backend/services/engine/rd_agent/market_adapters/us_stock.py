@@ -85,6 +85,14 @@ class USStockAdapter(MarketAdapter):
         )
 
         cache = Path(_resolve_quantus_data_dir()) / ".qlib_cache" / "us_data"
+        # 统一固定目录优先（/data/qlib/{sub}）
+        try:
+            from backend.shared.qlib_paths import resolve_qlib_provider_uri
+            fixed = resolve_qlib_provider_uri("US")
+            if os.path.isdir(fixed):
+                return fixed
+        except Exception:
+            pass
         if cache.exists():
             return str(cache)
         container_path = "/app/db/qlib_data/us_data"

@@ -43,13 +43,25 @@ def _resolve_cn_qlib_dir() -> str:
         return str(_QDB_DATA_DIR / ".qlib_cache" / "cn_data")
 
 
+def _resolve_market_qlib_dir(market: str, fallback: Path) -> Path:
+    """各市场 Qlib 目录统一走 qlib_paths（固定目录 /data/qlib/{sub} 优先）。"""
+    try:
+        from backend.shared.qlib_paths import resolve_qlib_provider_uri
+        return Path(resolve_qlib_provider_uri(market))
+    except Exception:
+        return fallback
+
+
 _MARKET_QLIB_DIRS: dict[str, Path] = {
-    # A 股统一走 qlib_paths（固定目录 /data/qlib/cn_data 优先）
-    "a_share": Path(_resolve_cn_qlib_dir()),
-    "crypto": Path(os.getcwd()) / "db" / "qlib_data" / "crypto_data",
-    "hong_kong": _QUANTHK_DATA_DIR / ".qlib_cache" / "hk_data",
-    "us_stock": _QUANTUS_DATA_DIR / ".qlib_cache" / "us_data",
-    "futures": _QUANTFUTURES_DATA_DIR / ".qlib_cache" / "futures_data",
+    "a_share": _resolve_market_qlib_dir("CN", _QDB_DATA_DIR / ".qlib_cache" / "cn_data"),
+    "crypto": _resolve_market_qlib_dir(
+        "CRYPTO", Path(os.getcwd()) / "db" / "qlib_data" / "crypto_data"
+    ),
+    "hong_kong": _resolve_market_qlib_dir("HK", _QUANTHK_DATA_DIR / ".qlib_cache" / "hk_data"),
+    "us_stock": _resolve_market_qlib_dir("US", _QUANTUS_DATA_DIR / ".qlib_cache" / "us_data"),
+    "futures": _resolve_market_qlib_dir(
+        "FUTURES", _QUANTFUTURES_DATA_DIR / ".qlib_cache" / "futures_data"
+    ),
 }
 
 # 市场 → 交易日历服务 market 代码
