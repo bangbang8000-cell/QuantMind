@@ -1,4 +1,4 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 880 540" font-family="-apple-system, BlinkMacSystemFont, 'Inter', 'Segoe UI', sans-serif">
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 880 530" font-family="-apple-system, BlinkMacSystemFont, 'Inter', 'Segoe UI', sans-serif">
   <defs>
     <!-- Background Gradient -->
     <linearGradient id="bgGrad" x1="0%" y1="0%" x2="0%" y2="100%">
@@ -6,28 +6,23 @@
       <stop offset="100%" stop-color="#f8fafc"/>
     </linearGradient>
 
-    <!-- Card Gradients -->
+    <!-- Dark Top Header Gradient -->
     <linearGradient id="cardClient" x1="0%" y1="0%" x2="100%" y2="100%">
       <stop offset="0%" stop-color="#1e293b"/>
       <stop offset="100%" stop-color="#0f172a"/>
     </linearGradient>
-    
-    <linearGradient id="cardPrimary" x1="0%" y1="0%" x2="100%" y2="100%">
-      <stop offset="0%" stop-color="#ffffff"/>
-      <stop offset="100%" stop-color="#f8fafc"/>
-    </linearGradient>
 
     <!-- Shadows -->
     <filter id="softShadow" x="-5%" y="-5%" width="110%" height="115%">
-      <feDropShadow dx="0" dy="3" stdDeviation="4" flood-opacity="0.05"/>
+      <feDropShadow dx="0" dy="2" stdDeviation="3" flood-opacity="0.04"/>
     </filter>
     <filter id="cardHover" x="-5%" y="-5%" width="110%" height="115%">
-      <feDropShadow dx="0" dy="4" stdDeviation="6" flood-opacity="0.08"/>
+      <feDropShadow dx="0" dy="4" stdDeviation="6" flood-opacity="0.06"/>
     </filter>
 
     <!-- Arrow Markers -->
     <marker id="dot" markerWidth="6" markerHeight="6" refX="3" refY="3">
-      <circle cx="3" cy="3" r="2.5" fill="#94a3b8"/>
+      <circle cx="3" cy="3" r="2" fill="#94a3b8"/>
     </marker>
     <marker id="arrow" markerWidth="6" markerHeight="6" refX="5" refY="3" orient="auto">
       <path d="M0,1 L5,3 L0,5" fill="none" stroke="#94a3b8" stroke-width="1.2" stroke-linecap="round"/>
@@ -35,122 +30,117 @@
   </defs>
 
   <!-- Canvas -->
-  <rect width="880" height="540" fill="url(#bgGrad)" rx="16"/>
-  <rect x="1" y="1" width="878" height="538" fill="none" stroke="#e2e8f0" stroke-width="1.5" rx="16"/>
+  <rect width="880" height="530" fill="url(#bgGrad)" rx="14"/>
+  <rect x="1" y="1" width="878" height="528" fill="none" stroke="#e2e8f0" stroke-width="1.2" rx="14"/>
 
   <!-- ================= 1. CLIENT / PRESENTATION ================= -->
-  <g transform="translate(60, 35)" filter="url(#cardHover)">
-    <rect width="760" height="58" rx="10" fill="url(#cardClient)"/>
-    <text x="35" y="35" font-size="15" font-weight="700" fill="#ffffff" letter-spacing="0.5">🖥️ QuantMind 工作台</text>
-    <text x="210" y="35" font-size="13" fill="#94a3b8">Electron 桌面客户端  ·  Web 浏览器端</text>
-    <rect x="520" y="15" width="215" height="28" rx="6" fill="#334155"/>
-    <text x="627" y="33" text-anchor="middle" font-size="11" font-weight="600" fill="#38bdf8">React 18  +  TypeScript  +  Vite</text>
+  <g transform="translate(60, 30)" filter="url(#cardHover)">
+    <rect width="760" height="56" rx="8" fill="url(#cardClient)"/>
+    <text x="380" y="26" text-anchor="middle" font-size="14" font-weight="700" fill="#ffffff" letter-spacing="0.5">QuantMind 统一工作台</text>
+    <text x="380" y="44" text-anchor="middle" font-size="11" fill="#94a3b8">Electron 桌面客户端  ·  Web 浏览器端  (React 18 + TypeScript + Vite)</text>
   </g>
 
   <!-- Connect 1 -> 2 -->
-  <line x1="440" y1="93" x2="440" y2="120" stroke="#cbd5e1" stroke-width="1.5" stroke-dasharray="3,3" marker-start="url(#dot)" marker-end="url(#arrow)"/>
-  <rect x="400" y="100" width="80" height="16" rx="4" fill="#f1f5f9"/>
-  <text x="440" y="112" text-anchor="middle" font-size="9" font-weight="600" fill="#64748b">REST / WS</text>
+  <line x1="440" y1="86" x2="440" y2="114" stroke="#cbd5e1" stroke-width="1.2" stroke-dasharray="3,3" marker-start="url(#dot)" marker-end="url(#arrow)"/>
+  <rect x="390" y="93" width="100" height="16" rx="4" fill="#f1f5f9"/>
+  <text x="440" y="105" text-anchor="middle" font-size="9" font-weight="600" fill="#64748b">REST / WebSocket</text>
 
   <!-- ================= 2. GATEWAY ================= -->
-  <g transform="translate(60, 125)" filter="url(#softShadow)">
-    <rect width="760" height="48" rx="8" fill="#ffffff" stroke="#e2e8f0" stroke-width="1.2"/>
-    <rect x="12" y="12" width="24" height="24" rx="4" fill="#f8fafc" stroke="#cbd5e1"/>
-    <text x="24" y="28" text-anchor="middle" font-size="12">🚪</text>
-    <text x="46" y="29" font-size="13" font-weight="700" fill="#0f172a">API Gateway &amp; Auth (:8000)</text>
-    <text x="280" y="29" font-size="12" fill="#64748b">认证鉴权  ·  策略路由  ·  租户隔离  ·  资讯代理</text>
-    <text x="730" y="29" text-anchor="end" font-size="11" font-weight="600" fill="#0284c7">FastAPI</text>
+  <g transform="translate(60, 118)" filter="url(#softShadow)">
+    <rect width="760" height="50" rx="8" fill="#ffffff" stroke="#e2e8f0" stroke-width="1.2"/>
+    <text x="380" y="24" text-anchor="middle" font-size="13" font-weight="700" fill="#0f172a">API Gateway &amp; Auth  (:8000)</text>
+    <text x="380" y="40" text-anchor="middle" font-size="11" fill="#64748b">认证鉴权  ·  策略路由  ·  租户隔离  ·  资讯代理 (FastAPI)</text>
   </g>
 
   <!-- Connect 2 -> 3 -->
-  <path d="M 180,173 L 180,205" fill="none" stroke="#cbd5e1" stroke-width="1.2" marker-end="url(#arrow)"/>
-  <path d="M 440,173 L 440,205" fill="none" stroke="#cbd5e1" stroke-width="1.2" marker-end="url(#arrow)"/>
-  <path d="M 700,173 L 700,205" fill="none" stroke="#cbd5e1" stroke-width="1.2" marker-end="url(#arrow)"/>
+  <path d="M 180,168 L 180,198" fill="none" stroke="#cbd5e1" stroke-width="1.2" marker-end="url(#arrow)"/>
+  <path d="M 440,168 L 440,198" fill="none" stroke="#cbd5e1" stroke-width="1.2" marker-end="url(#arrow)"/>
+  <path d="M 700,168 L 700,198" fill="none" stroke="#cbd5e1" stroke-width="1.2" marker-end="url(#arrow)"/>
 
-  <!-- ================= 3. CORE SERVICES (3 CARDS) ================= -->
+  <!-- ================= 3. CORE SERVICES (3 CARDS, CENTER-ALIGNED) ================= -->
   <!-- Engine -->
-  <g transform="translate(60, 210)" filter="url(#softShadow)">
+  <g transform="translate(60, 202)" filter="url(#softShadow)">
     <rect width="240" height="135" rx="8" fill="#ffffff" stroke="#e2e8f0" stroke-width="1.2"/>
     <rect x="0" y="0" width="240" height="34" rx="8" fill="#f8fafc"/>
     <line x1="0" y1="34" x2="240" y2="34" stroke="#f1f5f9" stroke-width="1"/>
-    <text x="16" y="22" font-size="12" font-weight="700" fill="#1e293b">🧠 Engine 引擎服务 (:8001)</text>
+    <text x="120" y="22" text-anchor="middle" font-size="12" font-weight="700" fill="#1e293b">Engine 引擎服务  (:8001)</text>
 
-    <text x="16" y="58" font-size="12" font-weight="600" fill="#334155">微软 Qlib 回测系统</text>
-    <text x="16" y="76" font-size="11" fill="#64748b">Topk / Dropout 策略框架</text>
+    <text x="120" y="58" text-anchor="middle" font-size="12" font-weight="600" fill="#334155">微软 Qlib 回测系统</text>
+    <text x="120" y="75" text-anchor="middle" font-size="11" fill="#64748b">Topk / Dropout 策略框架</text>
 
-    <text x="16" y="100" font-size="12" font-weight="600" fill="#334155">13 种 AI 模型训练与推理</text>
-    <text x="16" y="118" font-size="11" fill="#64748b">Optuna 调参 · Stacking 融合</text>
+    <text x="120" y="100" text-anchor="middle" font-size="12" font-weight="600" fill="#334155">13 种 AI 模型训练与推理</text>
+    <text x="120" y="117" text-anchor="middle" font-size="11" fill="#64748b">Optuna 调参 · Stacking 融合</text>
   </g>
 
   <!-- Trade -->
-  <g transform="translate(320, 210)" filter="url(#softShadow)">
+  <g transform="translate(320, 202)" filter="url(#softShadow)">
     <rect width="240" height="135" rx="8" fill="#ffffff" stroke="#e2e8f0" stroke-width="1.2"/>
     <rect x="0" y="0" width="240" height="34" rx="8" fill="#f8fafc"/>
     <line x1="0" y1="34" x2="240" y2="34" stroke="#f1f5f9" stroke-width="1"/>
-    <text x="16" y="22" font-size="12" font-weight="700" fill="#1e293b">💹 Trade 交易服务 (:8002)</text>
+    <text x="120" y="22" text-anchor="middle" font-size="12" font-weight="700" fill="#1e293b">Trade 交易服务  (:8002)</text>
 
-    <text x="16" y="58" font-size="12" font-weight="600" fill="#334155">订单与持仓管理</text>
-    <text x="16" y="76" font-size="11" fill="#64748b">本地优先持久化 · T+1 撮合</text>
+    <text x="120" y="58" text-anchor="middle" font-size="12" font-weight="600" fill="#334155">订单与持仓管理</text>
+    <text x="120" y="75" text-anchor="middle" font-size="11" fill="#64748b">本地优先持久化 · T+1 撮合</text>
 
-    <text x="16" y="100" font-size="12" font-weight="600" fill="#334155">量化风控评分卡</text>
-    <text x="16" y="118" font-size="11" fill="#64748b">涨跌停保护 · 历史逐笔回放</text>
+    <text x="120" y="100" text-anchor="middle" font-size="12" font-weight="600" fill="#334155">量化风控评分卡</text>
+    <text x="120" y="117" text-anchor="middle" font-size="11" fill="#64748b">涨跌停保护 · 历史逐笔回放</text>
   </g>
 
   <!-- Stream -->
-  <g transform="translate(580, 210)" filter="url(#softShadow)">
+  <g transform="translate(580, 202)" filter="url(#softShadow)">
     <rect width="240" height="135" rx="8" fill="#ffffff" stroke="#e2e8f0" stroke-width="1.2"/>
     <rect x="0" y="0" width="240" height="34" rx="8" fill="#f8fafc"/>
     <line x1="0" y1="34" x2="240" y2="34" stroke="#f1f5f9" stroke-width="1"/>
-    <text x="16" y="22" font-size="12" font-weight="700" fill="#1e293b">📡 Stream 行情服务 (:8003)</text>
+    <text x="120" y="22" text-anchor="middle" font-size="12" font-weight="700" fill="#1e293b">Stream 行情服务  (:8003)</text>
 
-    <text x="16" y="58" font-size="12" font-weight="600" fill="#334155">实时行情 WebSocket</text>
-    <text x="16" y="76" font-size="11" fill="#64748b">毫秒级推送 · 状态广播</text>
+    <text x="120" y="58" text-anchor="middle" font-size="12" font-weight="600" fill="#334155">实时行情 WebSocket</text>
+    <text x="120" y="75" text-anchor="middle" font-size="11" fill="#64748b">毫秒级推送 · 状态广播</text>
 
-    <text x="16" y="100" font-size="12" font-weight="600" fill="#334155">通达信联动预警</text>
-    <text x="16" y="118" font-size="11" fill="#64748b">板块写入 · 盘中弹窗预警</text>
+    <text x="120" y="100" text-anchor="middle" font-size="12" font-weight="600" fill="#334155">通达信联动预警</text>
+    <text x="120" y="117" text-anchor="middle" font-size="11" fill="#64748b">板块写入 · 盘中弹窗预警</text>
   </g>
 
   <!-- Connect 3 -> 4 -->
-  <path d="M 180,345 L 180,375" fill="none" stroke="#cbd5e1" stroke-width="1.2" marker-end="url(#arrow)"/>
-  <path d="M 440,345 L 440,375" fill="none" stroke="#cbd5e1" stroke-width="1.2" marker-end="url(#arrow)"/>
-  <path d="M 700,345 L 700,375" fill="none" stroke="#cbd5e1" stroke-width="1.2" marker-end="url(#arrow)"/>
+  <path d="M 180,337 L 180,367" fill="none" stroke="#cbd5e1" stroke-width="1.2" marker-end="url(#arrow)"/>
+  <path d="M 440,337 L 440,367" fill="none" stroke="#cbd5e1" stroke-width="1.2" marker-end="url(#arrow)"/>
+  <path d="M 700,337 L 700,367" fill="none" stroke="#cbd5e1" stroke-width="1.2" marker-end="url(#arrow)"/>
 
   <!-- ================= 4. DATA & INFRASTRUCTURE ================= -->
-  <g transform="translate(60, 380)" filter="url(#softShadow)">
+  <g transform="translate(60, 372)" filter="url(#softShadow)">
     <rect width="760" height="64" rx="8" fill="#ffffff" stroke="#e2e8f0" stroke-width="1.2"/>
     
-    <g transform="translate(25, 14)">
-      <text x="0" y="15" font-size="12" font-weight="700" fill="#0f172a">📊 QuantDB 专业数据</text>
-      <text x="0" y="32" font-size="11" fill="#64748b">Parquet / DuckDB / 300+预计算因子L1+L2</text>
+    <g transform="translate(125, 16)">
+      <text x="0" y="14" text-anchor="middle" font-size="12" font-weight="700" fill="#0f172a">QuantDB 专业数据</text>
+      <text x="0" y="32" text-anchor="middle" font-size="11" fill="#64748b">Parquet / DuckDB / 300+预计算因子L1+L2</text>
     </g>
 
-    <line x1="250" y1="12" x2="250" y2="52" stroke="#f1f5f9" stroke-width="1.5"/>
+    <line x1="255" y1="12" x2="255" y2="52" stroke="#f1f5f9" stroke-width="1.5"/>
 
-    <g transform="translate(275, 14)">
-      <text x="0" y="15" font-size="12" font-weight="700" fill="#0f172a">⚡ AutoDL GPU 集群</text>
-      <text x="0" y="32" font-size="11" fill="#64748b">RTX 4090 / A100 自动调度</text>
+    <g transform="translate(380, 16)">
+      <text x="0" y="14" text-anchor="middle" font-size="12" font-weight="700" fill="#0f172a">AutoDL GPU 集群</text>
+      <text x="0" y="32" text-anchor="middle" font-size="11" fill="#64748b">RTX 4090 / A100 自动调度</text>
     </g>
 
-    <line x1="510" y1="12" x2="510" y2="52" stroke="#f1f5f9" stroke-width="1.5"/>
+    <line x1="505" y1="12" x2="505" y2="52" stroke="#f1f5f9" stroke-width="1.5"/>
 
-    <g transform="translate(535, 14)">
-      <text x="0" y="15" font-size="12" font-weight="700" fill="#0f172a">💾 存储与任务队列</text>
-      <text x="0" y="32" font-size="11" fill="#64748b">PostgreSQL + Redis (6库) + Celery</text>
+    <g transform="translate(635, 16)">
+      <text x="0" y="14" text-anchor="middle" font-size="12" font-weight="700" fill="#0f172a">存储与任务队列</text>
+      <text x="0" y="32" text-anchor="middle" font-size="11" fill="#64748b">PostgreSQL + Redis (6库) + Celery</text>
     </g>
   </g>
 
-  <!-- ================= 5. FOOTER ECOSYSTEM PILLS ================= -->
-  <g transform="translate(60, 465)">
+  <!-- ================= 5. FOOTER ECOSYSTEM PILLS (CENTER-ALIGNED) ================= -->
+  <g transform="translate(60, 456)">
     <!-- Pill 1 -->
-    <rect x="0" y="0" width="240" height="40" rx="6" fill="#f8fafc" stroke="#e2e8f0"/>
-    <text x="120" y="24" text-anchor="middle" font-size="12" font-weight="600" fill="#334155">⚡ 通达信 (TDX) 闪电下单</text>
+    <rect x="0" y="0" width="240" height="38" rx="6" fill="#ffffff" stroke="#e2e8f0" filter="url(#softShadow)"/>
+    <text x="120" y="23" text-anchor="middle" font-size="11" font-weight="600" fill="#334155">通达信 (TDX) 闪电下单</text>
 
     <!-- Pill 2 -->
-    <rect x="260" y="0" width="240" height="40" rx="6" fill="#f8fafc" stroke="#e2e8f0"/>
-    <text x="380" y="24" text-anchor="middle" font-size="12" font-weight="600" fill="#334155">🌐 A股 / 港股 / 美股 / 加密 / 期货</text>
+    <rect x="260" y="0" width="240" height="38" rx="6" fill="#ffffff" stroke="#e2e8f0" filter="url(#softShadow)"/>
+    <text x="380" y="23" text-anchor="middle" font-size="11" font-weight="600" fill="#334155">A股 / 港股 / 美股 / 加密 / 期货</text>
 
     <!-- Pill 3 -->
-    <rect x="520" y="0" width="240" height="40" rx="6" fill="#f8fafc" stroke="#e2e8f0"/>
-    <text x="640" y="24" text-anchor="middle" font-size="12" font-weight="600" fill="#334155">🤖 RD-Agent / TradingAgents</text>
+    <rect x="520" y="0" width="240" height="38" rx="6" fill="#ffffff" stroke="#e2e8f0" filter="url(#softShadow)"/>
+    <text x="640" y="23" text-anchor="middle" font-size="11" font-weight="600" fill="#334155">RD-Agent / TradingAgents</text>
   </g>
 </svg>
