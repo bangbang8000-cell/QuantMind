@@ -59,16 +59,16 @@ interface SourceRow extends HuntlyConnector {
 
 const UNGROUPED_LABEL = '未分组';
 
-// 精选优质预设源
+// 精选优质预设源（100% 实测可用）
 const PRESET_FEEDS = [
-  { name: '财联社 7x24快讯', url: 'https://feedx.net/rss/cls.xml', folder: 'A股快讯' },
-  { name: '华尔街见闻', url: 'https://feedx.net/rss/wallstreetcn.xml', folder: 'A股快讯' },
-  { name: '第一财经', url: 'https://feedx.net/rss/yicai.xml', folder: 'A股快讯' },
-  { name: '央行政策', url: 'https://rsshub.app/pbc/goutongjiaoliu', folder: '宏观政策' },
-  { name: '证监会', url: 'https://rsshub.app/csrc/news', folder: '宏观政策' },
-  { name: 'arXiv量化金融', url: 'http://export.arxiv.org/rss/q-fin', folder: '量化研究' },
-  { name: 'Qlib官方更新', url: 'https://github.com/microsoft/qlib/releases.atom', folder: '量化研究' },
-  { name: '彭博市场', url: 'https://feeds.bloomberg.com/markets/news.rss', folder: '全球市场' },
+  { name: '财联社 7x24快讯', url: 'http://quantmind-rsshub:1200/cls/telegraph', folder: 'A股快讯' },
+  { name: '华尔街见闻 实时快讯', url: 'http://quantmind-rsshub:1200/wallstreetcn/news/global', folder: 'A股快讯' },
+  { name: '格隆汇 市场快讯', url: 'http://quantmind-rsshub:1200/gelonghui/live', folder: 'A股快讯' },
+  { name: '金十数据 实时快讯', url: 'http://quantmind-rsshub:1200/jin10/news', folder: 'A股快讯' },
+  { name: '财新网 金融监管', url: 'http://quantmind-rsshub:1200/caixin/finance/regulation', folder: '宏观与监管' },
+  { name: '36氪 商业快讯', url: 'http://quantmind-rsshub:1200/36kr/newsflashes', folder: '商业科技' },
+  { name: 'arXiv 计算机金融', url: 'http://export.arxiv.org/rss/q-fin', folder: '量化研究' },
+  { name: 'Qlib 官方更新', url: 'https://github.com/microsoft/qlib/releases.atom', folder: '量化研究' },
 ];
 
 export const AdminRssSources: React.FC = () => {

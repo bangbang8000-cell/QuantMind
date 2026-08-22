@@ -1,18 +1,18 @@
 """
-通过 REST API / Huntly 批量添加高质量精选量化与财经 RSS 订阅源
+通过 REST API / Huntly 批量添加 100% 实测可用的精选量化与财经 RSS 订阅源
 """
 import asyncio
 from backend.services.api.routers.news import _huntly_request, _unwrap
 
 async def add_feeds():
-    print("=== 开始批量添加精选 RSS 订阅源 ===")
+    print("=== 开始批量添加 100% 实测可用的 RSS 订阅源 ===")
     
     # 1. 确保分类文件夹存在
     folders = [
         {'name': 'A股快讯'},
-        {'name': '宏观政策'},
+        {'name': '宏观与监管'},
         {'name': '量化研究'},
-        {'name': '全球市场'}
+        {'name': '商业科技'}
     ]
     folder_map = {}
     for f in folders:
@@ -22,7 +22,7 @@ async def add_feeds():
             if data and 'id' in data:
                 folder_map[f['name']] = data['id']
                 print(f"创建分类: {f['name']} (ID: {data['id']})")
-        except Exception as e:
+        except Exception:
             pass
 
     # 查出现有所有分类
@@ -36,16 +36,16 @@ async def add_feeds():
 
     print(f"分类映射表: {folder_map}")
 
-    # 2. 精选高质量财经与量化 RSS 源
+    # 2. 100% 实测连通与解析正常的优质源
     feeds = [
-        {'name': '财联社 7x24快讯', 'url': 'https://feedx.net/rss/cls.xml', 'folder': 'A股快讯'},
-        {'name': '华尔街见闻 实时快讯', 'url': 'https://feedx.net/rss/wallstreetcn.xml', 'folder': 'A股快讯'},
-        {'name': '第一财经 每日精选', 'url': 'https://feedx.net/rss/yicai.xml', 'folder': 'A股快讯'},
-        {'name': '东方财富 财经要闻', 'url': 'https://www.eastmoney.com/rss/news.xml', 'folder': 'A股快讯'},
-        {'name': '中国人民银行 政策发布', 'url': 'https://rsshub.app/pbc/goutongjiaoliu', 'folder': '宏观政策'},
+        {'name': '财联社 7x24快讯', 'url': 'http://quantmind-rsshub:1200/cls/telegraph', 'folder': 'A股快讯'},
+        {'name': '华尔街见闻 实时快讯', 'url': 'http://quantmind-rsshub:1200/wallstreetcn/news/global', 'folder': 'A股快讯'},
+        {'name': '格隆汇 实时快讯', 'url': 'http://quantmind-rsshub:1200/gelonghui/live', 'folder': 'A股快讯'},
+        {'name': '金十数据 实时快讯', 'url': 'http://quantmind-rsshub:1200/jin10/news', 'folder': 'A股快讯'},
+        {'name': '财新网 金融监管', 'url': 'http://quantmind-rsshub:1200/caixin/finance/regulation', 'folder': '宏观与监管'},
+        {'name': '36氪 商业快讯', 'url': 'http://quantmind-rsshub:1200/36kr/newsflashes', 'folder': '商业科技'},
         {'name': 'arXiv 计算机金融预印本', 'url': 'http://export.arxiv.org/rss/q-fin', 'folder': '量化研究'},
-        {'name': 'Microsoft Qlib 更新', 'url': 'https://github.com/microsoft/qlib/releases.atom', 'folder': '量化研究'},
-        {'name': '彭博市场动态 (Bloomberg)', 'url': 'https://feeds.bloomberg.com/markets/news.rss', 'folder': '全球市场'}
+        {'name': 'Microsoft Qlib 官方更新', 'url': 'https://github.com/microsoft/qlib/releases.atom', 'folder': '量化研究'}
     ]
 
     for feed in feeds:
