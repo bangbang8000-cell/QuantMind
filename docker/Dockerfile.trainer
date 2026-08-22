@@ -8,6 +8,7 @@ ARG PIP_TRUSTED_HOST=mirrors.aliyun.com
 ARG APT_MIRROR=mirrors.aliyun.com
 ARG TORCH_DEVICE=gpu
 ARG TORCH_CPU_INDEX_URL=https://mirrors.aliyun.com/pytorch-wheels/cpu
+ARG TORCH_CUDA_INDEX_URL=https://download.pytorch.org/whl/cu128
 
 ENV PYTHONUNBUFFERED=1 \
     PYTHONDONTWRITEBYTECODE=1 \
@@ -41,7 +42,10 @@ RUN python -m pip install --upgrade pip setuptools wheel && \
     if [ "$TORCH_DEVICE" = "cpu" ]; then \
       pip install --no-cache-dir torch torchvision torchaudio --index-url ${TORCH_CPU_INDEX_URL}; \
     else \
-      pip install --no-cache-dir torch torchvision torchaudio; \
+      # 用 --extra-index-url 仅让 torch 本体走 cu128 源，传递依赖仍走默认索引（阿里云）
+      pip install --no-cache-dir \
+        "torch==2.11.0+cu128" "torchvision==0.26.0+cu128" "torchaudio==2.11.0+cu128" \
+        --extra-index-url ${TORCH_CUDA_INDEX_URL}; \
     fi
 
 RUN pip install --no-cache-dir \
