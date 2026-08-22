@@ -2,23 +2,28 @@
  * RSS 源管理（管理员）
  *
  * 代理 Huntly 的 /api/setting/feeds/* 与 /api/setting/folder/*
- * 提供：列表 / 预览 / 新增 / 删除 / 重命名 / 移动文件夹 / 文件夹 CRUD
+ * 提供：列表 / 预览 / 新增 / 删除 / 重命名 / 移动文件夹 / 常用精选一键填入 / RSSHub生成
  */
 
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import {
   Alert,
+  Badge,
   Button,
   Card,
+  Col,
+  Divider,
   Empty,
   Form,
   Input,
   InputNumber,
   Modal,
   Popconfirm,
+  Row,
   Select,
   Space,
   Spin,
+  Statistic,
   Switch,
   Table,
   Tag,
@@ -27,12 +32,18 @@ import {
   message,
 } from 'antd';
 import {
+  CheckCircleOutlined,
+  CopyOutlined,
   DeleteOutlined,
   EditOutlined,
   EyeOutlined,
   FolderAddOutlined,
+  FolderOpenOutlined,
+  GlobalOutlined,
   PlusOutlined,
+  ReadOutlined,
   ReloadOutlined,
+  ThunderboltOutlined,
 } from '@ant-design/icons';
 import type { ColumnsType } from 'antd/es/table';
 import {
@@ -42,7 +53,7 @@ import {
   type HuntlyFolder,
 } from '../../news/services/newsService';
 
-const { Title, Text } = Typography;
+const { Title, Text, Paragraph } = Typography;
 
 interface SourceRow extends HuntlyConnector {
   folderId: number | null;
@@ -50,6 +61,41 @@ interface SourceRow extends HuntlyConnector {
 }
 
 const UNGROUPED_LABEL = '未分组';
+
+// 精选优质预设源
+const PRESET_FEEDS = [
+  {
+    category: 'A股核心快讯',
+    items: [
+      { name: '财联社 7x24快讯', url: 'https://feedx.net/rss/cls.xml', folder: 'A股快讯' },
+      { name: '华尔街见闻 实时快讯', url: 'https://feedx.net/rss/wallstreetcn.xml', folder: 'A股快讯' },
+      { name: '第一财经 每日精选', url: 'https://feedx.net/rss/yicai.xml', folder: 'A股快讯' },
+      { name: '东方财富 财经要闻', url: 'https://www.eastmoney.com/rss/news.xml', folder: 'A股快讯' },
+    ],
+  },
+  {
+    category: '宏观政策与监管',
+    items: [
+      { name: '中国人民银行 政策动态', url: 'https://rsshub.app/pbc/goutongjiaoliu', folder: '宏观政策' },
+      { name: '中国证监会 要闻发布', url: 'https://rsshub.app/csrc/news', folder: '宏观政策' },
+      { name: '国家统计局 数据发布', url: 'https://rsshub.app/stats/release', folder: '宏观政策' },
+    ],
+  },
+  {
+    category: '量化研究与前沿',
+    items: [
+      { name: 'arXiv 计算机金融预印本', url: 'http://export.arxiv.org/rss/q-fin', folder: '量化研究' },
+      { name: 'Microsoft Qlib 官方更新', url: 'https://github.com/microsoft/qlib/releases.atom', folder: '量化研究' },
+    ],
+  },
+  {
+    category: '全球市场与资产',
+    items: [
+      { name: '彭博市场动态 (Bloomberg)', url: 'https://feeds.bloomberg.com/markets/news.rss', folder: '全球市场' },
+      { name: 'Coindesk 数字货币', url: 'https://www.coindesk.com/arc/outboundfeeds/rss/', folder: '全球市场' },
+    ],
+  },
+];
 
 export const AdminRssSources: React.FC = () => {
   const [loading, setLoading] = useState(false);
@@ -108,6 +154,10 @@ export const AdminRssSources: React.FC = () => {
     return out;
   }, [folders]);
 
+  const totalInboxCount = useMemo(() => {
+    return rows.reduce((acc, curr) => acc + (curr.inboxCount || 0), 0);
+  }, [rows]);
+
   const handlePreview = async () => {
     const url = addForm.getFieldValue('subscribe_url');
     if (!url) {
@@ -121,12 +171,28 @@ export const AdminRssSources: React.FC = () => {
       setPreviewData(data);
       if (data?.title) {
         message.success(`预览成功：${data.title}`);
+        if (!addForm.getFieldValue('name')) {
+          addForm.setFieldsValue({ name: data.title });
+        }
       }
     } catch (e: any) {
       message.error(`预览失败: ${e?.response?.data?.detail || e?.message || e}`);
     } finally {
       setPreviewing(false);
     }
+  };
+
+  const applyPreset = (preset: { name: string; url: string; folder: string }) => {
+    addForm.setFieldsValue({
+      subscribe_url: preset.url,
+      name: preset.name,
+    });
+    // 寻找匹配的 folderId
+    const foundFolder = folders.find((f) => f.name === preset.folder);
+    if (foundFolder && foundFolder.id) {
+      addForm.setFieldsValue({ folder_id: foundFolder.id });
+    }
+    message.info(`已填入「${preset.name}」`);
   };
 
   const handleAddSubmit = async () => {
@@ -233,57 +299,70 @@ export const AdminRssSources: React.FC = () => {
     }
   };
 
+  const getFolderTagColor = (name: string) => {
+    if (name === UNGROUPED_LABEL) return 'default';
+    if (name.includes('A股') || name.includes('快讯')) return 'blue';
+    if (name.includes('政策') || name.includes('宏观')) return 'purple';
+    if (name.includes('量化') || name.includes('研究')) return 'cyan';
+    if (name.includes('全球') || name.includes('市场')) return 'geekblue';
+    return 'volcano';
+  };
+
   const columns: ColumnsType<SourceRow> = [
     {
-      title: '名称',
+      title: '订阅源名称',
       dataIndex: 'name',
       key: 'name',
+      width: 240,
       render: (text, row) => (
         <Space>
           {row.iconUrl ? (
-            <img src={row.iconUrl} alt="" style={{ width: 16, height: 16 }} />
-          ) : null}
+            <img src={row.iconUrl} alt="" style={{ width: 18, height: 18, borderRadius: 4 }} />
+          ) : (
+            <GlobalOutlined style={{ color: '#1890ff', fontSize: 16 }} />
+          )}
           <Text strong>{text || '(未命名)'}</Text>
           {row.type ? <Tag color="default">{row.type}</Tag> : null}
         </Space>
       ),
     },
     {
-      title: '订阅地址',
+      title: '订阅地址 (Feed URL)',
       dataIndex: 'subscribeUrl',
       key: 'subscribeUrl',
       ellipsis: true,
       render: (u) => (
         <Tooltip title={u}>
-          <Text type="secondary" copyable={!!u} ellipsis>
+          <Text type="secondary" copyable={{ tooltips: ['复制链接', '已复制'] }} ellipsis style={{ maxWidth: 360 }}>
             {u}
           </Text>
         </Tooltip>
       ),
     },
     {
-      title: '所在文件夹',
+      title: '所属分类',
       dataIndex: 'folderName',
       key: 'folderName',
-      width: 160,
-      render: (n) => <Tag color={n === UNGROUPED_LABEL ? 'default' : 'blue'}>{n}</Tag>,
+      width: 140,
+      render: (n) => <Tag color={getFolderTagColor(n)}>{n}</Tag>,
     },
     {
-      title: '未读',
+      title: '未读资讯',
       dataIndex: 'inboxCount',
       key: 'inboxCount',
-      width: 80,
+      width: 100,
       align: 'right',
-      render: (v) => (v ? <Tag color="orange">{v}</Tag> : <Text type="secondary">0</Text>),
+      render: (v) => (v ? <Badge count={v} overflowCount={999} /> : <Text type="secondary">0</Text>),
     },
     {
       title: '操作',
       key: 'actions',
-      width: 180,
+      width: 130,
+      align: 'center',
       render: (_, row) => (
-        <Space>
-          <Tooltip title="编辑">
-            <Button size="small" icon={<EditOutlined />} onClick={() => openEdit(row)} />
+        <Space size="middle">
+          <Tooltip title="编辑属性">
+            <Button type="text" size="small" icon={<EditOutlined />} onClick={() => openEdit(row)} />
           </Tooltip>
           <Popconfirm
             title={`确定删除「${row.name || row.id}」吗？`}
@@ -292,7 +371,9 @@ export const AdminRssSources: React.FC = () => {
             cancelText="取消"
             onConfirm={() => handleDelete(row)}
           >
-            <Button size="small" danger icon={<DeleteOutlined />} />
+            <Tooltip title="删除订阅">
+              <Button type="text" danger size="small" icon={<DeleteOutlined />} />
+            </Tooltip>
           </Popconfirm>
         </Space>
       ),
@@ -301,18 +382,23 @@ export const AdminRssSources: React.FC = () => {
 
   return (
     <div className="p-6 space-y-4">
-      <div className="flex items-center justify-between">
+      {/* 顶部标题与统计概览 */}
+      <div className="flex items-center justify-between pb-2">
         <div>
-          <Title level={4} style={{ margin: 0 }}>RSS 源管理</Title>
-          <Text type="secondary">代理 Huntly 订阅源 CRUD — 与前台「RSS信息流」共用同一数据</Text>
+          <Title level={4} style={{ margin: 0 }}>
+            <ReadOutlined style={{ marginRight: 8, color: '#1890ff' }} />
+            RSS 资讯源管理
+          </Title>
+          <Text type="secondary">
+            全网金融资讯聚合引擎 · 支持 RSS / Atom / RSSHub · 后端自动 NLP 抽取与情感计算
+          </Text>
         </div>
         <Space>
-          <Button icon={<ReloadOutlined />} onClick={refresh}>刷新</Button>
-          <Button
-            icon={<FolderAddOutlined />}
-            onClick={() => setFolderOpen(true)}
-          >
-            管理文件夹
+          <Button icon={<ReloadOutlined />} onClick={refresh}>
+            刷新状态
+          </Button>
+          <Button icon={<FolderOpenOutlined />} onClick={() => setFolderOpen(true)}>
+            分类管理
           </Button>
           <Button
             type="primary"
@@ -328,33 +414,101 @@ export const AdminRssSources: React.FC = () => {
         </Space>
       </div>
 
-      <Card bodyStyle={{ padding: 0 }}>
+      {/* 状态统计卡片 */}
+      <Row gutter={16}>
+        <Col span={8}>
+          <Card size="small" bordered={false} style={{ background: '#f0f5ff', borderRadius: 8 }}>
+            <Statistic
+              title="当前活跃订阅源"
+              value={rows.length}
+              suffix="个"
+              valueStyle={{ color: '#1d39c4', fontWeight: 600 }}
+            />
+          </Card>
+        </Col>
+        <Col span={8}>
+          <Card size="small" bordered={false} style={{ background: '#f6ffed', borderRadius: 8 }}>
+            <Statistic
+              title="资讯分类目录"
+              value={folders.filter((f) => f.id != null).length}
+              suffix="组"
+              valueStyle={{ color: '#389e0d', fontWeight: 600 }}
+            />
+          </Card>
+        </Col>
+        <Col span={8}>
+          <Card size="small" bordered={false} style={{ background: '#fff7e6', borderRadius: 8 }}>
+            <Statistic
+              title="未读资讯总数"
+              value={totalInboxCount}
+              suffix="篇"
+              valueStyle={{ color: '#d46b08', fontWeight: 600 }}
+            />
+          </Card>
+        </Col>
+      </Row>
+
+      {/* 订阅源列表表格 */}
+      <Card bodyStyle={{ padding: 0 }} style={{ borderRadius: 8, overflow: 'hidden' }}>
         <Spin spinning={loading}>
           {rows.length === 0 && !loading ? (
-            <Empty description="暂无订阅源" style={{ padding: 48 }} />
+            <Empty
+              description="暂无订阅源，点击右上角「新增订阅源」一键配置"
+              style={{ padding: 48 }}
+            />
           ) : (
             <Table<SourceRow>
               rowKey="id"
               dataSource={rows}
               columns={columns}
-              pagination={{ pageSize: 20, showSizeChanger: true }}
+              pagination={{ pageSize: 15, showSizeChanger: true }}
               size="middle"
             />
           )}
         </Spin>
       </Card>
 
-      {/* —— 新增 modal —— */}
+      {/* —— 新增 RSS 源 Modal (全新美化) —— */}
       <Modal
-        title="新增 RSS 订阅源"
+        title={
+          <Space>
+            <PlusOutlined style={{ color: '#1890ff' }} />
+            <span>新增 RSS 订阅源</span>
+          </Space>
+        }
         open={addOpen}
         onCancel={() => setAddOpen(false)}
         onOk={handleAddSubmit}
-        okText="添加"
+        okText="确认添加"
         cancelText="取消"
-        width={640}
+        width={720}
         destroyOnClose
       >
+        {/* 1. 常用精选推荐一键填入 */}
+        <div style={{ background: '#f8fafc', padding: 12, borderRadius: 8, marginBottom: 16, border: '1px solid #e2e8f0' }}>
+          <div style={{ display: 'flex', alignItems: 'center', marginBottom: 8 }}>
+            <ThunderboltOutlined style={{ color: '#f59e0b', marginRight: 6 }} />
+            <Text strong style={{ fontSize: 13 }}>精选金融 RSS 源一键填入：</Text>
+          </div>
+          <div className="space-y-2">
+            {PRESET_FEEDS.map((group) => (
+              <div key={group.category} style={{ display: 'flex', alignItems: 'center', flexWrap: 'wrap', gap: 6 }}>
+                <Text type="secondary" style={{ fontSize: 11, minWidth: 80 }}>{group.category}：</Text>
+                {group.items.map((item) => (
+                  <Tag
+                    key={item.name}
+                    color="blue"
+                    style={{ cursor: 'pointer', margin: 0 }}
+                    onClick={() => applyPreset(item)}
+                  >
+                    + {item.name}
+                  </Tag>
+                ))}
+              </div>
+            ))}
+          </div>
+        </div>
+
         <Form form={addForm} layout="vertical">
           <Form.Item
             name="subscribe_url"
@@ -370,88 +524,97 @@ export const AdminRssSources: React.FC = () => {
                   icon={<EyeOutlined />}
                   loading={previewing}
                   onClick={handlePreview}
-                  style={{ padding: 0 }}
+                  style={{ padding: '0 8px' }}
                 >
-                  预览
+                  测试预览
                 </Button>
               }
             />
           </Form.Item>
 
-          {/* Twitter / 微博 / 雪球 RSSHub 快捷生成 */}
-          <Alert
-            type="info"
-            showIcon
-            style={{ marginBottom: 12 }}
-            message="快捷生成 (走本地 RSSHub)"
-            description={
-              <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
+          {/* 2. 本地 RSSHub 快捷构造 */}
+          <div style={{ background: '#f0f9ff', padding: '10px 14px', borderRadius: 8, marginBottom: 16, border: '1px solid #bae6fd' }}>
+            <Text type="secondary" style={{ fontSize: 12, display: 'block', marginBottom: 6 }}>
+              快捷生成（通过本地 RSSHub 服务）:
+            </Text>
+            <Row gutter={8}>
+              <Col span={8}>
                 <Input
                   size="small"
-                  placeholder="Twitter 用户名 (如 elonmusk)"
-                  style={{ width: 180 }}
+                  placeholder="Twitter 用户名"
                   onPressEnter={(e) => {
                     const u = (e.target as HTMLInputElement).value.trim().replace(/^@/, '');
                     if (u) addForm.setFieldValue('subscribe_url', `http://quantmind-rsshub:1200/twitter/user/${u}`);
                   }}
                 />
+              </Col>
+              <Col span={8}>
                 <Input
                   size="small"
                   placeholder="微博用户 UID"
-                  style={{ width: 160 }}
                   onPressEnter={(e) => {
                     const u = (e.target as HTMLInputElement).value.trim();
                     if (u) addForm.setFieldValue('subscribe_url', `http://quantmind-rsshub:1200/weibo/user/${u}`);
                   }}
                 />
+              </Col>
+              <Col span={8}>
                 <Input
                   size="small"
                   placeholder="雪球用户 ID"
-                  style={{ width: 160 }}
                   onPressEnter={(e) => {
                     const u = (e.target as HTMLInputElement).value.trim();
                     if (u) addForm.setFieldValue('subscribe_url', `http://quantmind-rsshub:1200/xueqiu/user/${u}`);
                   }}
                 />
-                <Text type="secondary" style={{ fontSize: 11 }}>回车自动填入订阅地址</Text>
-              </div>
-            }
-          />
+              </Col>
+            </Row>
+          </div>
 
+          {/* 3. 预览反馈结果 */}
           {previewData ? (
             <Alert
-              type={previewData.subscribed ? 'warning' : 'info'}
+              type={previewData.subscribed ? 'warning' : 'success'}
               showIcon
               style={{ marginBottom: 16 }}
-              message={previewData.title || '(无标题)'}
+              message={
+                <Space>
+                  <Text strong>{previewData.title || '(无标题)'}</Text>
+                  {previewData.subscribed ? <Tag color="warning">该源已在列表中</Tag> : <Tag color="success">解析有效</Tag>}
+                </Space>
+              }
               description={
-                <div className="space-y-1">
-                  {previewData.siteLink ? (
+                <div style={{ marginTop: 4, fontSize: 12 }}>
+                  {previewData.siteLink && (
                     <div>
-                      <Text type="secondary">站点：</Text>
+                      <Text type="secondary">主页: </Text>
                       <a href={previewData.siteLink} target="_blank" rel="noreferrer">
                         {previewData.siteLink}
                       </a>
                     </div>
-                  ) : null}
-                  {previewData.description ? (
-                    <Text type="secondary">{previewData.description}</Text>
-                  ) : null}
-                  {previewData.subscribed ? (
-                    <Tag color="warning">该源已订阅</Tag>
-                  ) : null}
+                  )}
+                  {previewData.description && (
+                    <Text type="secondary" ellipsis style={{ display: 'block', marginTop: 2 }}>
+                      {previewData.description}
+                    </Text>
+                  )}
                 </div>
               }
             />
           ) : null}
 
-          <Form.Item name="name" label="自定义名称（可选）">
-            <Input placeholder="留空则使用源默认名称" />
-          </Form.Item>
-
-          <Form.Item name="folder_id" label="归入文件夹" initialValue={0}>
-            <Select options={folderOptions} />
-          </Form.Item>
+          <Row gutter={16}>
+            <Col span={12}>
+              <Form.Item name="name" label="自定义源名称（可选）">
+                <Input placeholder="留空则自动提取源标题" />
+              </Form.Item>
+            </Col>
+            <Col span={12}>
+              <Form.Item name="folder_id" label="归入分类目录" initialValue={0}>
+                <Select options={folderOptions} />
+              </Form.Item>
+            </Col>
+          </Row>
         </Form>
       </Modal>
 
@@ -463,7 +626,7 @@ export const AdminRssSources: React.FC = () => {
         onOk={handleEditSubmit}
         okText="保存"
         cancelText="取消"
-        width={640}
+        width={600}
         destroyOnClose
       >
         <Form form={editForm} layout="vertical">
@@ -473,24 +636,24 @@ export const AdminRssSources: React.FC = () => {
           <Form.Item name="name" label="名称" rules={[{ required: true, message: '请输入名称' }]}>
             <Input />
           </Form.Item>
-          <Form.Item name="folder_id" label="所在文件夹">
+          <Form.Item name="folder_id" label="所在分类目录">
             <Select options={folderOptions} />
           </Form.Item>
           <Form.Item
             name="fetch_interval_minutes"
-            label="抓取间隔（分钟，留空使用默认）"
+            label="抓取间隔（分钟）"
           >
             <InputNumber min={1} max={1440} style={{ width: '100%' }} />
           </Form.Item>
           <Space size="large">
-            <Form.Item name="enabled" label="启用" valuePropName="checked">
+            <Form.Item name="enabled" label="启用抓取" valuePropName="checked">
               <Switch />
             </Form.Item>
             <Form.Item
               name="crawl_full_content"
-              label="抓取全文"
+              label="深度抓取全文"
               valuePropName="checked"
-              tooltip="开启后 Huntly 会尝试拉取文章完整正文"
+              tooltip="开启后将尝试自动解析文章正文完整内容"
             >
               <Switch />
             </Form.Item>
@@ -500,20 +663,27 @@ export const AdminRssSources: React.FC = () => {
 
       {/* —— 文件夹管理 modal —— */}
       <Modal
-        title="文件夹管理"
+        title={
+          <Space>
+            <FolderOpenOutlined style={{ color: '#1890ff' }} />
+            <span>资讯分类目录管理</span>
+          </Space>
+        }
         open={folderOpen}
         onCancel={() => setFolderOpen(false)}
         footer={null}
-        width={520}
+        width={540}
       >
         <Space.Compact style={{ width: '100%', marginBottom: 16 }}>
           <Input
-            placeholder="新文件夹名称"
+            placeholder="输入新分类名称 (如：A股快讯、量化研究)"
             value={folderName}
             onChange={(e) => setFolderName(e.target.value)}
             onPressEnter={handleAddFolder}
           />
-          <Button type="primary" onClick={handleAddFolder}>新建</Button>
+          <Button type="primary" icon={<FolderAddOutlined />} onClick={handleAddFolder}>
+            新建分类
+          </Button>
         </Space.Compact>
 
         <Table<HuntlyFolder>
@@ -522,31 +692,39 @@ export const AdminRssSources: React.FC = () => {
           pagination={false}
           dataSource={folders.filter((f) => f.id != null)}
           columns={[
-            { title: '名称', dataIndex: 'name', key: 'name' },
             {
-              title: '订阅源数',
+              title: '分类名称',
+              dataIndex: 'name',
+              key: 'name',
+              render: (n) => <Tag color={getFolderTagColor(n || '')}>{n}</Tag>,
+            },
+            {
+              title: '包含订阅源',
               key: 'count',
-              width: 100,
+              width: 110,
               align: 'right',
-              render: (_, f) => (f.connectors || []).length,
+              render: (_, f) => <Text strong>{(f.connectors || []).length} 个</Text>,
             },
             {
               title: '操作',
               key: 'actions',
-              width: 150,
+              width: 140,
+              align: 'center',
               render: (_, f) => (
                 <Space>
-                  <Button size="small" onClick={() => handleRenameFolder(f)}>
+                  <Button size="small" type="link" onClick={() => handleRenameFolder(f)}>
                     重命名
                   </Button>
                   <Popconfirm
-                    title={`删除文件夹「${f.name}」？源会被移到未分组`}
+                    title={`确定删除分类「${f.name}」？所属订阅源将移入「未分组」`}
                     onConfirm={() => handleDeleteFolder(f)}
                     okText="删除"
                     okButtonProps={{ danger: true }}
                     cancelText="取消"
                   >
-                    <Button size="small" danger>删除</Button>
+                    <Button size="small" type="link" danger>
+                      删除
+                    </Button>
                   </Popconfirm>
                 </Space>
               ),
