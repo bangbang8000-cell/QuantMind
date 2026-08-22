@@ -39,7 +39,9 @@ from backend.services.engine.inference.script_runner import InferenceScriptRunne
 from backend.services.engine.services.model_inference_batch_persistence import (
     model_inference_batch_persistence,
 )
-from backend.services.engine.services.model_inference_persistence import model_inference_persistence
+from backend.services.engine.services.model_inference_persistence import (
+    model_inference_persistence,
+)
 from backend.shared.database_manager_v2 import get_session
 from backend.shared.inference_stats import compute_score_distribution
 from backend.shared.model_registry import model_registry_service
@@ -77,8 +79,14 @@ def compute_market_signals(signals: list[dict[str, Any]]) -> dict[str, Any]:
             continue
         if board not in board_top1 or fscore > board_top1[board]:
             board_top1[board] = fscore
-    top1_scores = [board_top1[b] for b in ("沪主板", "深主板", "中小板", "创业板", "科创板") if b in board_top1]
-    board_top1_avg = round(sum(top1_scores) / len(top1_scores), 4) if top1_scores else None
+    top1_scores = [
+        board_top1[b]
+        for b in ("沪主板", "深主板", "中小板", "创业板", "科创板")
+        if b in board_top1
+    ]
+    board_top1_avg = (
+        round(sum(top1_scores) / len(top1_scores), 4) if top1_scores else None
+    )
 
     # 行业信号：Top20 股票按申万行业分组取各行业 Top1
     sorted_signals = sorted(
@@ -102,15 +110,27 @@ def compute_market_signals(signals: list[dict[str, Any]]) -> dict[str, Any]:
                 "top1_name": str(it.get("stock_name") or ""),
             }
 
-    industry_stats = sorted(industry_top1.values(), key=lambda x: x["top1_score"], reverse=True)
+    industry_stats = sorted(
+        industry_top1.values(), key=lambda x: x["top1_score"], reverse=True
+    )
     ind_top1_values = [float(x["top1_score"]) for x in industry_stats]
-    industry_avg_top1 = round(sum(ind_top1_values) / len(ind_top1_values), 4) if ind_top1_values else None
+    industry_avg_top1 = (
+        round(sum(ind_top1_values) / len(ind_top1_values), 4)
+        if ind_top1_values
+        else None
+    )
 
     # 阈值自适应：融合模型分数是截面百分位 [-1,1]（高分常见 0.8+），
     # 硬编码 0.09/0.06/0.10 会把所有行业判为强信号或全部弱信号。
     # 检测实际分数范围，wide scale 时用 80/50 分位数作为强/弱阈值。
-    _all_scores = [float(it["fusion_score"]) for it in signals if it.get("fusion_score") is not None]
-    _is_wide = bool(_all_scores) and (max(_all_scores) > 0.35 or min(_all_scores) < -0.35)
+    _all_scores = [
+        float(it["fusion_score"])
+        for it in signals
+        if it.get("fusion_score") is not None
+    ]
+    _is_wide = bool(_all_scores) and (
+        max(_all_scores) > 0.35 or min(_all_scores) < -0.35
+    )
     if _is_wide and _all_scores:
         _sn = len(_all_scores)
         _ss = sorted(_all_scores)
@@ -119,10 +139,20 @@ def compute_market_signals(signals: list[dict[str, Any]]) -> dict[str, Any]:
         empty_thr = float(_ss[max(0, min(_sn - 1, int(0.30 * (_sn - 1))))])
     else:
         strong_thr, entry_thr, empty_thr = 0.10, 0.09, 0.06
-    strong_industry_count = sum(1 for x in industry_stats if float(x["top1_score"]) >= strong_thr)
+    strong_industry_count = sum(
+        1 for x in industry_stats if float(x["top1_score"]) >= strong_thr
+    )
 
     # 入场判断（平衡型默认）：avg Top1 ≥ entry_thr 且 强行业数 ≥ 2
-    entry_signal = "strong" if (industry_avg_top1 is not None and industry_avg_top1 >= entry_thr and strong_industry_count >= 2) else "weak"
+    entry_signal = (
+        "strong"
+        if (
+            industry_avg_top1 is not None
+            and industry_avg_top1 >= entry_thr
+            and strong_industry_count >= 2
+        )
+        else "weak"
+    )
     if industry_avg_top1 is not None and industry_avg_top1 < empty_thr:
         entry_signal = "empty"  # 绝对空仓
 
@@ -140,13 +170,18 @@ def compute_market_signals(signals: list[dict[str, Any]]) -> dict[str, Any]:
             "empty_threshold": empty_thr,
             "strong_threshold": strong_thr,
             "score_scale": "wide" if _is_wide else "normal",
-            "label": "可入场" if entry_signal == "strong" else ("空仓观望" if entry_signal == "empty" else "谨慎"),
+            "label": "可入场"
+            if entry_signal == "strong"
+            else ("空仓观望" if entry_signal == "empty" else "谨慎"),
         },
     }
 
+
 # models/production 目录（相对项目根）
 _PROJECT_ROOT = Path(__file__).resolve().parents[4]
-_PRODUCTION_DIR = Path(os.getenv("MODELS_PRODUCTION_ROOT", str(_PROJECT_ROOT / "models" / "production")))
+_PRODUCTION_DIR = Path(
+    os.getenv("MODELS_PRODUCTION_ROOT", str(_PROJECT_ROOT / "models" / "production"))
+)
 
 
 def _load_production_models() -> list[dict[str, Any]]:
@@ -169,10 +204,10 @@ def _load_production_models() -> list[dict[str, Any]]:
         perf = meta.get("performance_metrics", {})
 
         # 统一字段名：新训练脚本用 val_start/val_end，旧格式用 valid_start/valid_end
-        val_start  = meta.get("val_start")  or meta.get("valid_start")
-        val_end    = meta.get("val_end")    or meta.get("valid_end")
+        val_start = meta.get("val_start") or meta.get("valid_start")
+        val_end = meta.get("val_end") or meta.get("valid_end")
         test_start = meta.get("test_start")
-        test_end   = meta.get("test_end")
+        test_end = meta.get("test_end")
 
         # display_name 优先取平铺字段，回退旧格式 model_info.name
         display_name = (
@@ -183,54 +218,62 @@ def _load_production_models() -> list[dict[str, Any]]:
         )
 
         # label_formula 优先取平铺字段，回退旧格式 training_config.label
-        label_formula = (
-            meta.get("label_formula")
-            or tc.get("label")
-            or ""
-        )
+        label_formula = meta.get("label_formula") or tc.get("label") or ""
 
         # metrics：新格式在 meta.metrics，旧格式在 performance_metrics
         new_metrics = meta.get("metrics", {})
         if new_metrics:
             perf = {
-                "train": {"mean_ic": new_metrics.get("train_ic"), "icir": new_metrics.get("train_rank_icir")},
-                "valid": {"mean_ic": new_metrics.get("val_ic"),   "icir": new_metrics.get("val_rank_icir")},
-                "test":  {"mean_ic": new_metrics.get("test_ic"),  "icir": new_metrics.get("test_rank_icir")},
+                "train": {
+                    "mean_ic": new_metrics.get("train_ic"),
+                    "icir": new_metrics.get("train_rank_icir"),
+                },
+                "valid": {
+                    "mean_ic": new_metrics.get("val_ic"),
+                    "icir": new_metrics.get("val_rank_icir"),
+                },
+                "test": {
+                    "mean_ic": new_metrics.get("test_ic"),
+                    "icir": new_metrics.get("test_rank_icir"),
+                },
             }
 
-        results.append({
-            "model_id": model_id,
-            "dir_name": subdir.name,
-            "tenant_id": "system",
-            "display_name": display_name,
-            "description": meta.get("description") or info.get("description", ""),
-            "framework": meta.get("framework", ""),
-            "model_type": meta.get("model_type", ""),
-            "feature_count": meta.get("feature_count"),
-            "feature_columns": meta.get("feature_columns", []),
-            "is_neutralized": meta.get("is_neutralized", False),
-            "algorithm": info.get("algorithm", ""),
-            "version": info.get("version", meta.get("version", "")),
-            "created_at": meta.get("generated_at") or info.get("created_at", meta.get("trained_at", "")),
-            "training_config": tc,
-            # 统一字段名：val_start/val_end（和用户模型 metadata_json 保持一致）
-            "train_start": meta.get("train_start"),
-            "train_end":   meta.get("train_end"),
-            "valid_start": val_start,
-            "valid_end":   val_end,
-            "test_start":  test_start,
-            "test_end":    test_end,
-            # 额外平铺字段（前端 systemModelToUserModel 直接映射）
-            "label_formula": label_formula,
-            "target_horizon_days": meta.get("target_horizon_days"),
-            "target_mode": meta.get("target_mode"),
-            "data_source": meta.get("data_source", ""),
-            "best_iteration": meta.get("best_iteration"),
-            "performance_metrics": perf,
-            "inference_config": meta.get("inference", {}),
-            "files": meta.get("files", {}),
-            "metadata_path": str(meta_file),
-        })
+        results.append(
+            {
+                "model_id": model_id,
+                "dir_name": subdir.name,
+                "tenant_id": "system",
+                "display_name": display_name,
+                "description": meta.get("description") or info.get("description", ""),
+                "framework": meta.get("framework", ""),
+                "model_type": meta.get("model_type", ""),
+                "feature_count": meta.get("feature_count"),
+                "feature_columns": meta.get("feature_columns", []),
+                "is_neutralized": meta.get("is_neutralized", False),
+                "algorithm": info.get("algorithm", ""),
+                "version": info.get("version", meta.get("version", "")),
+                "created_at": meta.get("generated_at")
+                or info.get("created_at", meta.get("trained_at", "")),
+                "training_config": tc,
+                # 统一字段名：val_start/val_end（和用户模型 metadata_json 保持一致）
+                "train_start": meta.get("train_start"),
+                "train_end": meta.get("train_end"),
+                "valid_start": val_start,
+                "valid_end": val_end,
+                "test_start": test_start,
+                "test_end": test_end,
+                # 额外平铺字段（前端 systemModelToUserModel 直接映射）
+                "label_formula": label_formula,
+                "target_horizon_days": meta.get("target_horizon_days"),
+                "target_mode": meta.get("target_mode"),
+                "data_source": meta.get("data_source", ""),
+                "best_iteration": meta.get("best_iteration"),
+                "performance_metrics": perf,
+                "inference_config": meta.get("inference", {}),
+                "files": meta.get("files", {}),
+                "metadata_path": str(meta_file),
+            }
+        )
     return results
 
 
@@ -242,7 +285,9 @@ class EnsembleCreateRequest(BaseModel):
     source_model_ids: list[str] = Field(
         ..., min_length=2, description="源模型 ID 列表（至少 2 个）"
     )
-    display_name: str = Field(default="", description="融合模型显示名（可选，自动生成）")
+    display_name: str = Field(
+        default="", description="融合模型显示名（可选，自动生成）"
+    )
     weight_strategy: str = Field(
         default="equal",
         description="权重策略: equal / icir / manual / recent_ic",
@@ -361,7 +406,9 @@ async def _resolve_requested_model(current_user: dict[str, Any], model_id: str):
     tenant_id, user_id = _owner_scope(current_user)
     requested_model_id = str(model_id or "").strip()
     if not requested_model_id:
-        default_model = await model_registry_service.get_default_model(tenant_id=tenant_id, user_id=user_id)
+        default_model = await model_registry_service.get_default_model(
+            tenant_id=tenant_id, user_id=user_id
+        )
         if not default_model:
             raise HTTPException(status_code=404, detail="未找到默认模型")
         requested_model_id = str(default_model.get("model_id") or "")
@@ -370,14 +417,25 @@ async def _resolve_requested_model(current_user: dict[str, Any], model_id: str):
         user_id=user_id,
         model_id=requested_model_id,
     )
-    if requested_model_id and resolved.fallback_used and resolved.model_source in {"user_default", "system_fallback"}:
-        raise HTTPException(status_code=404, detail=f"模型不可用或未就绪: {requested_model_id}")
+    if (
+        requested_model_id
+        and resolved.fallback_used
+        and resolved.model_source in {"user_default", "system_fallback"}
+    ):
+        raise HTTPException(
+            status_code=404, detail=f"模型不可用或未就绪: {requested_model_id}"
+        )
     if not resolved.storage_path:
-        raise HTTPException(status_code=404, detail=f"模型路径不可用: {requested_model_id}")
+        raise HTTPException(
+            status_code=404, detail=f"模型路径不可用: {requested_model_id}"
+        )
     return requested_model_id, resolved
 
 
-from backend.shared.qlib_paths import resolve_qlib_provider_uri, resolve_qlib_calendar_path
+from backend.shared.qlib_paths import (
+    resolve_qlib_provider_uri,
+    resolve_qlib_calendar_path,
+)
 
 _MARKET_QLIB_DATA_PATH: dict[str, str] = {
     "CN": resolve_qlib_provider_uri("CN"),
@@ -429,8 +487,11 @@ def _get_model_data_dir(model_dir: Path, metadata: dict | None = None) -> str:
        - "parquet" 或其他 -> db/feature_snapshots
     4. 默认值 -> db/feature_snapshots
     """
-    # 优先读取 metadata 中的 qlib_data_path
+    # QuantDB-bound models are pinned to the raw factor root.  This must be
+    # evaluated before historical qlib_data_path/context compatibility hints.
     if metadata:
+        if str(metadata.get("data_source") or "").lower() == "quantdb_factors":
+            return os.getenv("QUANTDB_DATA_DIR", "/app/data/quantdb")
         qlib_data_path = metadata.get("qlib_data_path")
         if qlib_data_path:
             return qlib_data_path
@@ -452,6 +513,8 @@ def _get_model_data_dir(model_dir: Path, metadata: dict | None = None) -> str:
     if meta_file.is_file():
         try:
             meta = json.loads(meta_file.read_text(encoding="utf-8"))
+            if str(meta.get("data_source") or "").lower() == "quantdb_factors":
+                return os.getenv("QUANTDB_DATA_DIR", "/app/data/quantdb")
             qlib_data_path = meta.get("qlib_data_path")
             if qlib_data_path:
                 return qlib_data_path
@@ -487,7 +550,9 @@ def _render_next_run(next_run_at: Any) -> str | None:
         return str(next_run_at)
 
 
-@router.get("/system-models", summary="获取系统内置模型列表（读取 models/production 目录）")
+@router.get(
+    "/system-models", summary="获取系统内置模型列表（读取 models/production 目录）"
+)
 async def list_system_models(
     current_user: dict[str, Any] = Depends(get_current_user),
 ):
@@ -503,7 +568,9 @@ async def list_system_models(
 async def get_model_feature_catalog(
     market: str | None = None,
     factor_source: str = Query("l1_l2_factors", description="QuantDB 因子源"),
-    include_coverage: bool = Query(False, description="是否附带 parquet 数据覆盖统计（默认 false，加速首屏）"),
+    include_coverage: bool = Query(
+        False, description="是否附带 parquet 数据覆盖统计（默认 false，加速首屏）"
+    ),
     current_user: dict[str, Any] = Depends(get_current_user),
 ):
     _ = current_user
@@ -523,10 +590,14 @@ async def get_model_feature_catalog(
         catalog = _load_feature_catalog_from_file(market=market)
 
     if not catalog:
-        raise HTTPException(status_code=404, detail="未找到可用的特征字典（DB/文件均不可用）")
+        raise HTTPException(
+            status_code=404, detail="未找到可用的特征字典（DB/文件均不可用）"
+        )
 
     if include_coverage:
-        return await _enrich_feature_catalog_with_data_coverage_async(catalog, market=market)
+        return await _enrich_feature_catalog_with_data_coverage_async(
+            catalog, market=market
+        )
     return catalog
 
 
@@ -618,7 +689,9 @@ async def get_default_model(
 ):
     tenant_id = str(current_user.get("tenant_id") or "default")
     user_id = str(current_user.get("user_id") or current_user.get("sub") or "")
-    model = await model_registry_service.get_default_model(tenant_id=tenant_id, user_id=user_id)
+    model = await model_registry_service.get_default_model(
+        tenant_id=tenant_id, user_id=user_id
+    )
     if not model:
         raise HTTPException(status_code=404, detail="Default model not found")
     return model
@@ -701,7 +774,9 @@ async def get_user_model(
 ):
     tenant_id = str(current_user.get("tenant_id") or "default")
     user_id = str(current_user.get("user_id") or current_user.get("sub") or "")
-    model = await model_registry_service.get_model(tenant_id=tenant_id, user_id=user_id, model_id=model_id)
+    model = await model_registry_service.get_model(
+        tenant_id=tenant_id, user_id=user_id, model_id=model_id
+    )
     if not model:
         raise HTTPException(status_code=404, detail="Model not found")
     return model
@@ -714,11 +789,17 @@ async def get_model_shap_summary(
 ):
     tenant_id = str(current_user.get("tenant_id") or "default")
     user_id = str(current_user.get("user_id") or current_user.get("sub") or "")
-    model = await model_registry_service.get_model(tenant_id=tenant_id, user_id=user_id, model_id=model_id)
+    model = await model_registry_service.get_model(
+        tenant_id=tenant_id, user_id=user_id, model_id=model_id
+    )
     if not model:
         raise HTTPException(status_code=404, detail="Model not found")
 
-    metadata = model.get("metadata_json") if isinstance(model.get("metadata_json"), dict) else {}
+    metadata = (
+        model.get("metadata_json")
+        if isinstance(model.get("metadata_json"), dict)
+        else {}
+    )
     shap_meta = metadata.get("shap") if isinstance(metadata.get("shap"), dict) else {}
     storage_path = str(model.get("storage_path") or "").strip()
     if not storage_path:
@@ -743,7 +824,9 @@ async def get_model_shap_summary(
         try:
             items = read_shap_summary_rows(shap_file)
         except Exception as exc:
-            logger.warning("failed to parse shap summary: model_id=%s err=%s", model_id, exc)
+            logger.warning(
+                "failed to parse shap summary: model_id=%s err=%s", model_id, exc
+            )
             parse_error = str(exc)
             items = []
 
@@ -783,7 +866,9 @@ async def archive_user_model(
     tenant_id = str(current_user.get("tenant_id") or "default")
     user_id = str(current_user.get("user_id") or current_user.get("sub") or "")
     try:
-        model = await model_registry_service.archive_model(tenant_id=tenant_id, user_id=user_id, model_id=model_id)
+        model = await model_registry_service.archive_model(
+            tenant_id=tenant_id, user_id=user_id, model_id=model_id
+        )
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
     return model
@@ -798,7 +883,9 @@ async def activate_user_model(
     tenant_id = str(current_user.get("tenant_id") or "default")
     user_id = str(current_user.get("user_id") or current_user.get("sub") or "")
     try:
-        model = await model_registry_service.activate_model(tenant_id=tenant_id, user_id=user_id, model_id=model_id)
+        model = await model_registry_service.activate_model(
+            tenant_id=tenant_id, user_id=user_id, model_id=model_id
+        )
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
     return model
@@ -818,19 +905,23 @@ async def get_model_quality(
     user_id = str(current_user.get("user_id") or current_user.get("sub") or "")
     async with get_session(read_only=True) as session:
         rows = (
-            await session.execute(
-                _text(
-                    """
+            (
+                await session.execute(
+                    _text(
+                        """
                     SELECT trade_date, signals_count, coverage, ic, rank_ic, horizon_days
                     FROM qm_model_inference_quality
                     WHERE model_id = :model_id
                     ORDER BY trade_date DESC
                     LIMIT :window
                     """
-                ),
-                {"model_id": model_id, "window": int(window)},
+                    ),
+                    {"model_id": model_id, "window": int(window)},
+                )
             )
-        ).mappings().all()
+            .mappings()
+            .all()
+        )
 
     items = [dict(r) for r in rows]
     for it in items:
@@ -852,12 +943,16 @@ async def get_model_quality(
         recent_mean = float(sum(recent) / len(recent))
         if recent_mean < 0:
             drift_status = "degraded"
-            drift_reasons.append(f"近{len(recent)}日 Rank IC 均值 {recent_mean:.4f} < 0，信号可能失效")
+            drift_reasons.append(
+                f"近{len(recent)}日 Rank IC 均值 {recent_mean:.4f} < 0，信号可能失效"
+            )
         elif len(rank_ics) >= 30:
             hist_mean = float(sum(rank_ics) / len(rank_ics))
             if hist_mean > 0 and recent_mean < hist_mean * 0.5:
                 drift_status = "drifted"
-                drift_reasons.append(f"近{len(recent)}日 Rank IC {recent_mean:.4f} 较历史均值 {hist_mean:.4f} 衰减超50%")
+                drift_reasons.append(
+                    f"近{len(recent)}日 Rank IC {recent_mean:.4f} 较历史均值 {hist_mean:.4f} 衰减超50%"
+                )
     coverages = [it["coverage"] for it in items if it.get("coverage") is not None]
     if coverages and min(coverages[-10:]) < 0.6:
         drift_status = "data_issue"
@@ -867,6 +962,7 @@ async def get_model_quality(
     rank_icir_30d = None
     if len(rank_ics) >= 5:
         import statistics
+
         s = rank_ics[-30:] if len(rank_ics) >= 30 else rank_ics
         mean_s = sum(s) / len(s)
         std_s = statistics.pstdev(s)
@@ -881,7 +977,9 @@ async def get_model_quality(
             "rank_icir_30d": rank_icir_30d,
             "drift_status": drift_status,
             "drift_reasons": drift_reasons,
-            "coverage_mean": float(sum(coverages) / len(coverages)) if coverages else None,
+            "coverage_mean": float(sum(coverages) / len(coverages))
+            if coverages
+            else None,
         },
     }
 
@@ -902,8 +1000,12 @@ async def compare_models(
     tenant_id = str(current_user.get("tenant_id") or "default")
     user_id = str(current_user.get("user_id") or current_user.get("sub") or "")
 
-    meta_a = await model_registry_service.get_model(tenant_id=tenant_id, user_id=user_id, model_id=model_a)
-    meta_b = await model_registry_service.get_model(tenant_id=tenant_id, user_id=user_id, model_id=model_b)
+    meta_a = await model_registry_service.get_model(
+        tenant_id=tenant_id, user_id=user_id, model_id=model_a
+    )
+    meta_b = await model_registry_service.get_model(
+        tenant_id=tenant_id, user_id=user_id, model_id=model_b
+    )
     if not meta_a or not meta_b:
         raise HTTPException(status_code=404, detail="对比模型不存在")
 
@@ -939,19 +1041,30 @@ async def compare_models(
     async def _quality_series(mid: str) -> list[dict]:
         async with get_session(read_only=True) as session:
             rows = (
-                await session.execute(
-                    _text(
-                        """
+                (
+                    await session.execute(
+                        _text(
+                            """
                         SELECT trade_date, rank_ic, coverage
                         FROM qm_model_inference_quality
                         WHERE model_id = :mid
                         ORDER BY trade_date
                         """
-                    ),
-                    {"mid": mid},
+                        ),
+                        {"mid": mid},
+                    )
                 )
-            ).mappings().all()
-        return [{"trade_date": str(r["trade_date"])[:10], "rank_ic": float(r["rank_ic"]) if r["rank_ic"] is not None else None, "coverage": float(r["coverage"]) if r["coverage"] is not None else None} for r in rows]
+                .mappings()
+                .all()
+            )
+        return [
+            {
+                "trade_date": str(r["trade_date"])[:10],
+                "rank_ic": float(r["rank_ic"]) if r["rank_ic"] is not None else None,
+                "coverage": float(r["coverage"]) if r["coverage"] is not None else None,
+            }
+            for r in rows
+        ]
 
     quality_a = await _quality_series(model_a)
     quality_b = await _quality_series(model_b)
@@ -1019,7 +1132,9 @@ def _build_precheck_items(
             "label": "模型文件存在",
             "passed": model_file_exists,
             "severity": "hard",
-            "detail": str(model_file_path) if model_file_path else f"{model_dir}/{model_file}",
+            "detail": str(model_file_path)
+            if model_file_path
+            else f"{model_dir}/{model_file}",
         }
     )
 
@@ -1050,7 +1165,10 @@ def _build_precheck_items(
     script_exists = runner.check_script_exists()
     if not script_exists:
         primary_meta = runner._read_primary_metadata()
-        if str(primary_meta.get("data_source") or "").lower() == "parquet":
+        if str(primary_meta.get("data_source") or "").lower() in {
+            "parquet",
+            "quantdb_factors",
+        }:
             if runner._try_deploy_parquet_template(script_path):
                 script_exists = True
     items.append(
@@ -1078,14 +1196,19 @@ def _build_precheck_items(
     primary_meta = runner._read_primary_metadata()
     data_source = str(primary_meta.get("data_source") or "").lower()
 
-    if data_source == "parquet":
+    if data_source == "quantdb_factors":
+        readiness = runner._query_quantdb_readiness(trade_date=data_trade_date)
+        readiness_label = "QuantDB 因子数据就绪"
+    elif data_source == "parquet":
         readiness = runner._query_parquet_readiness(trade_date=data_trade_date)
         readiness_label = "历史 Parquet 数据就绪"
     elif data_source in ("qlib", "qlib_bin", "bin"):
         readiness = runner._query_qlib_readiness(trade_date=data_trade_date)
         readiness_label = "Qlib 二进制数据就绪"
     else:
-        readiness = runner._query_dimension_readiness(trade_date=data_trade_date, expected_dim=expected_feature_dim)
+        readiness = runner._query_dimension_readiness(
+            trade_date=data_trade_date, expected_dim=expected_feature_dim
+        )
         readiness_label = "当日数据覆盖就绪"
 
     market_data_item: dict[str, Any] = {
@@ -1121,7 +1244,9 @@ def _build_precheck_items(
 
 
 def _precheck_passed(items: list[dict[str, Any]]) -> bool:
-    return all(bool(item.get("passed")) for item in items if item.get("severity") != "soft")
+    return all(
+        bool(item.get("passed")) for item in items if item.get("severity") != "soft"
+    )
 
 
 @router.get("/inference/precheck", summary="推理前置检查（用户态）")
@@ -1130,11 +1255,18 @@ async def precheck_inference(
     inference_date: date | None = Query(None, description="推理基准日期 YYYY-MM-DD"),
     current_user: dict[str, Any] = Depends(get_current_user),
 ):
-    requested_model_id, resolved = await _resolve_requested_model(current_user, model_id)
+    requested_model_id, resolved = await _resolve_requested_model(
+        current_user, model_id
+    )
     model_dir = Path(resolved.storage_path)
     model_calendar = _get_model_calendar(model_dir)
-    requested_inference_date = inference_date or datetime.now(ZoneInfo("Asia/Shanghai")).date()
-    resolved_data_trade_date, calendar_adjusted = await _resolve_inference_trade_date_with_calendar(
+    requested_inference_date = (
+        inference_date or datetime.now(ZoneInfo("Asia/Shanghai")).date()
+    )
+    (
+        resolved_data_trade_date,
+        calendar_adjusted,
+    ) = await _resolve_inference_trade_date_with_calendar(
         current_user=current_user,
         requested_date=requested_inference_date,
         market=model_calendar,
@@ -1162,7 +1294,9 @@ async def precheck_inference(
             latest = item.get("latest_available_date")
             if latest and latest != data_trade_date:
                 data_trade_date = latest
-                prediction_trade_date = runner._resolve_prediction_trade_date(data_trade_date)
+                prediction_trade_date = runner._resolve_prediction_trade_date(
+                    data_trade_date
+                )
                 items = _build_precheck_items(
                     resolved_model_id=requested_model_id,
                     model_dir=model_dir,
@@ -1189,13 +1323,16 @@ async def precheck_inference(
         },
     )
     if data_fallback:
-        items.insert(1, {
-            "key": "data_fallback",
-            "label": "数据日期回退",
-            "passed": True,
-            "severity": "soft",
-            "detail": f"请求日期 {requested_inference_date.isoformat()} 无数据，已回退到最新可用 {data_trade_date}",
-        })
+        items.insert(
+            1,
+            {
+                "key": "data_fallback",
+                "label": "数据日期回退",
+                "passed": True,
+                "severity": "soft",
+                "detail": f"请求日期 {requested_inference_date.isoformat()} 无数据，已回退到最新可用 {data_trade_date}",
+            },
+        )
     return {
         "passed": _precheck_passed(items),
         "checked_at": datetime.now(ZoneInfo("Asia/Shanghai")).isoformat(),
@@ -1273,7 +1410,9 @@ async def _execute_single_day_inference(
             latest = item.get("latest_available_date")
             if latest and latest != data_trade_date:
                 data_trade_date = latest
-                prediction_trade_date = runner._resolve_prediction_trade_date(data_trade_date)
+                prediction_trade_date = runner._resolve_prediction_trade_date(
+                    data_trade_date
+                )
                 precheck_items = _build_precheck_items(
                     resolved_model_id=requested_model_id,
                     model_dir=model_dir,
@@ -1347,7 +1486,9 @@ async def _execute_single_day_inference(
             data_trade_date=date.fromisoformat(data_trade_date),
             prediction_trade_date=date.fromisoformat(prediction_trade_date),
             status="failed",
-            request_payload=_build_inference_request_payload(requested_model_id, data_trade_date, precheck, batch_id),
+            request_payload=_build_inference_request_payload(
+                requested_model_id, data_trade_date, precheck, batch_id
+            ),
             created_at=run_created_at,
         )
         await model_inference_persistence.update_run(
@@ -1425,7 +1566,9 @@ async def _execute_single_day_inference(
             data_trade_date=date.fromisoformat(data_trade_date),
             prediction_trade_date=date.fromisoformat(prediction_trade_date),
             status="failed",
-            request_payload=_build_inference_request_payload(requested_model_id, data_trade_date, precheck, batch_id),
+            request_payload=_build_inference_request_payload(
+                requested_model_id, data_trade_date, precheck, batch_id
+            ),
             created_at=inference_started_at,
         )
         await model_inference_persistence.update_run(
@@ -1458,8 +1601,12 @@ async def _execute_single_day_inference(
     duration_ms = int((time.perf_counter() - start_ts) * 1000)
     stdout = (result.stdout or "")[-4000:]
     stderr = (result.stderr or "")[-4000:]
-    result_model_source = str(getattr(result, "model_source", "") or resolved.model_source)
-    result_effective_model_id = str(getattr(result, "effective_model_id", "") or resolved.effective_model_id)
+    result_model_source = str(
+        getattr(result, "model_source", "") or resolved.model_source
+    )
+    result_effective_model_id = str(
+        getattr(result, "effective_model_id", "") or resolved.effective_model_id
+    )
     success_payload = {
         "success": bool(result.success),
         "run_id": run_id,
@@ -1468,7 +1615,8 @@ async def _execute_single_day_inference(
         "effective_model_id": resolved.effective_model_id,
         "active_model_id": result.active_model_id or resolved.effective_model_id,
         "model_source": result_model_source,
-        "active_data_source": result.active_data_source or _get_model_data_dir(model_dir),
+        "active_data_source": result.active_data_source
+        or _get_model_data_dir(model_dir),
         "requested_inference_date": requested_inference_date.isoformat(),
         "calendar_adjusted": calendar_adjusted,
         "data_trade_date": data_trade_date,
@@ -1495,7 +1643,9 @@ async def _execute_single_day_inference(
         data_trade_date=date.fromisoformat(data_trade_date),
         prediction_trade_date=date.fromisoformat(prediction_trade_date),
         status="completed" if result.success else "failed",
-        request_payload=_build_inference_request_payload(requested_model_id, data_trade_date, precheck, batch_id),
+        request_payload=_build_inference_request_payload(
+            requested_model_id, data_trade_date, precheck, batch_id
+        ),
         created_at=inference_started_at,
     )
     await model_inference_persistence.update_run(
@@ -1531,7 +1681,9 @@ async def run_model_inference(
     current_user: dict[str, Any] = Depends(get_current_user),
 ):
     tenant_id, user_id = _owner_scope(current_user)
-    requested_model_id, resolved = await _resolve_requested_model(current_user, payload.model_id)
+    requested_model_id, resolved = await _resolve_requested_model(
+        current_user, payload.model_id
+    )
     return await _execute_single_day_inference(
         requested_model_id=requested_model_id,
         resolved=resolved,
@@ -1567,7 +1719,9 @@ async def submit_batch_inference(
     mode=range：显式日期区间内逐个交易日推理。
     """
     tenant_id, user_id = _owner_scope(current_user)
-    requested_model_id, resolved = await _resolve_requested_model(current_user, payload.model_id)
+    requested_model_id, resolved = await _resolve_requested_model(
+        current_user, payload.model_id
+    )
     model_dir = Path(resolved.storage_path)
     horizon_days = _get_model_horizon_days(model_dir)
     market = _get_model_market(model_dir)
@@ -1575,7 +1729,9 @@ async def submit_batch_inference(
     mode = (payload.mode or "lookback").lower()
     if mode == "range":
         if payload.start_date is None or payload.end_date is None:
-            raise HTTPException(status_code=400, detail="range 模式必须提供 start_date 与 end_date")
+            raise HTTPException(
+                status_code=400, detail="range 模式必须提供 start_date 与 end_date"
+            )
         if payload.start_date > payload.end_date:
             raise HTTPException(status_code=400, detail="start_date 不能晚于 end_date")
         anchor_date: date | None = None
@@ -1584,7 +1740,9 @@ async def submit_batch_inference(
         window_days: int | None = None
     else:
         if payload.anchor_date is None:
-            raise HTTPException(status_code=400, detail="lookback 模式必须提供 anchor_date")
+            raise HTTPException(
+                status_code=400, detail="lookback 模式必须提供 anchor_date"
+            )
         anchor_date = payload.anchor_date
         start_date = None
         end_date = None
@@ -1929,10 +2087,14 @@ async def list_model_inference_runs(
     )
     # 为每条 run 附带市场信号指标（板块avg Top1 / 行业avg Top1 / 强行业数 / 覆盖行业数）
     # 只对 completed 批次计算；信号批量读取，避免 N+1 查询。
-    completed_items = [it for it in result.get("items", []) if it.get("status") == "completed"]
+    completed_items = [
+        it for it in result.get("items", []) if it.get("status") == "completed"
+    ]
     if completed_items:
         run_ids = [str(it["run_id"]) for it in completed_items]
-        from backend.services.engine.inference.shenwan_industry import load_shenwan_industry_map
+        from backend.services.engine.inference.shenwan_industry import (
+            load_shenwan_industry_map,
+        )
         from backend.shared.stock_utils import StockCodeUtil
 
         industry_map = load_shenwan_industry_map()
@@ -1940,9 +2102,10 @@ async def list_model_inference_runs(
         try:
             async with get_session(read_only=True) as session:
                 rows = (
-                    await session.execute(
-                        text(
-                            """
+                    (
+                        await session.execute(
+                            text(
+                                """
                             SELECT symbol, fusion_score, run_id,
                                    CASE
                                        WHEN LEFT(symbol, 3) = '688' THEN '科创板'
@@ -1957,14 +2120,17 @@ async def list_model_inference_runs(
                             WHERE run_id = ANY(:run_ids)
                               AND tenant_id = :tenant_id AND user_id = :user_id
                             """
-                        ),
-                        {
-                            "run_ids": run_ids,
-                            "tenant_id": tenant_id,
-                            "user_id": user_id,
-                        },
+                            ),
+                            {
+                                "run_ids": run_ids,
+                                "tenant_id": tenant_id,
+                                "user_id": user_id,
+                            },
+                        )
                     )
-                ).mappings().all()
+                    .mappings()
+                    .all()
+                )
             for row in rows:
                 signals_by_run.setdefault(str(row["run_id"]), []).append(dict(row))
         except Exception as exc:  # pragma: no cover
@@ -1977,7 +2143,12 @@ async def list_model_inference_runs(
                 continue
             # 标注申万行业
             for s in sigs:
-                s["industry"] = industry_map.get(StockCodeUtil.to_suffix(str(s.get("symbol") or ""))) or ""
+                s["industry"] = (
+                    industry_map.get(
+                        StockCodeUtil.to_suffix(str(s.get("symbol") or ""))
+                    )
+                    or ""
+                )
             it.update(compute_market_signals(sigs))
     return result
 
@@ -1988,7 +2159,9 @@ async def get_model_inference_run_detail(
     current_user: dict[str, Any] = Depends(get_current_user),
 ):
     tenant_id, user_id = _owner_scope(current_user)
-    run = await model_inference_persistence.get_run(run_id=run_id, tenant_id=tenant_id, user_id=user_id)
+    run = await model_inference_persistence.get_run(
+        run_id=run_id, tenant_id=tenant_id, user_id=user_id
+    )
     if not run:
         raise HTTPException(status_code=404, detail="推理批次不存在")
 
@@ -1997,9 +2170,10 @@ async def get_model_inference_run_detail(
         try:
             async with get_session(read_only=True) as session:
                 rows = (
-                    await session.execute(
-                        text(
-                            """
+                    (
+                        await session.execute(
+                            text(
+                                """
                             WITH scored AS (
                                 SELECT
                                     ess.*,
@@ -2075,23 +2249,38 @@ async def get_model_inference_run_detail(
                                 OR s.symbol = ess.symbol
                             ORDER BY ess.fusion_score DESC NULLS LAST, ess.symbol ASC
                             """
-                        ),
-                        {"run_id": run_id, "tenant_id": tenant_id, "user_id": user_id},
+                            ),
+                            {
+                                "run_id": run_id,
+                                "tenant_id": tenant_id,
+                                "user_id": user_id,
+                            },
+                        )
                     )
-                ).mappings().all()
+                    .mappings()
+                    .all()
+                )
             for row in rows:
                 item = dict(row or {})
                 if item.get("created_at") is not None:
                     item["created_at"] = item["created_at"].isoformat()
                 signals.append(item)
         except Exception as exc:  # pragma: no cover - DB fallback
-            logger.warning("failed to load inference signal rows for %s: %s", run_id, exc)
+            logger.warning(
+                "failed to load inference signal rows for %s: %s", run_id, exc
+            )
             signals = []
 
     summary = dict(run)
     summary["rows_count"] = len(signals)
-    summary["symbols_count"] = len({str(item.get("symbol") or "") for item in signals if item.get("symbol")})
-    fusion_scores = [float(item["fusion_score"]) for item in signals if item.get("fusion_score") is not None]
+    summary["symbols_count"] = len(
+        {str(item.get("symbol") or "") for item in signals if item.get("symbol")}
+    )
+    fusion_scores = [
+        float(item["fusion_score"])
+        for item in signals
+        if item.get("fusion_score") is not None
+    ]
     summary["min_fusion_score"] = min(fusion_scores) if fusion_scores else None
     summary["max_fusion_score"] = max(fusion_scores) if fusion_scores else None
     summary["score_distribution"] = compute_score_distribution(fusion_scores)
@@ -2103,7 +2292,9 @@ async def get_model_inference_run_detail(
     # ── 板块/行业标注 + 5大板块 Top1 统计 ──
     if signals:
         try:
-            from backend.services.engine.inference.shenwan_industry import load_shenwan_industry_map
+            from backend.services.engine.inference.shenwan_industry import (
+                load_shenwan_industry_map,
+            )
             from backend.shared.stock_utils import StockCodeUtil
 
             industry_map = load_shenwan_industry_map()
@@ -2125,25 +2316,45 @@ async def get_model_inference_run_detail(
             if dt_int:
                 qdb_dir = os.getenv("QM_QUANTDB_DATA_DIR", "/data/quantdb")
                 fpath = f"{qdb_dir}/6_ml_datasets/features_daily/**/*.parquet"
-                mv_rows = _duckdb.connect().execute(
-                    f"""
+                mv_rows = (
+                    _duckdb.connect()
+                    .execute(
+                        f"""
                     SELECT symbol, total_mv, float_mv
                     FROM read_parquet('{fpath}', hive_partitioning=true)
                     WHERE dt = {dt_int}
                     """
-                ).fetchdf()
+                    )
+                    .fetchdf()
+                )
                 mv_map: dict[str, dict] = {}
                 for _, row in mv_rows.iterrows():
                     raw_sym = str(row["symbol"]).strip().upper()
                     # 归一化为 6 位纯数字，与信号表 symbol（纯数字）对齐
-                    key = raw_sym.split(".")[0].replace("SH", "").replace("SZ", "").replace("BJ", "")
+                    key = (
+                        raw_sym.split(".")[0]
+                        .replace("SH", "")
+                        .replace("SZ", "")
+                        .replace("BJ", "")
+                    )
                     mv_map[key] = {
-                        "total_mv": float(row["total_mv"]) if row["total_mv"] is not None and str(row["total_mv"]) not in ("nan", "None") else None,
-                        "float_mv": float(row["float_mv"]) if row["float_mv"] is not None and str(row["float_mv"]) not in ("nan", "None") else None,
+                        "total_mv": float(row["total_mv"])
+                        if row["total_mv"] is not None
+                        and str(row["total_mv"]) not in ("nan", "None")
+                        else None,
+                        "float_mv": float(row["float_mv"])
+                        if row["float_mv"] is not None
+                        and str(row["float_mv"]) not in ("nan", "None")
+                        else None,
                     }
                 for item in signals:
                     sym = str(item.get("symbol") or "").strip().upper()
-                    key = sym.split(".")[0].replace("SH", "").replace("SZ", "").replace("BJ", "")
+                    key = (
+                        sym.split(".")[0]
+                        .replace("SH", "")
+                        .replace("SZ", "")
+                        .replace("BJ", "")
+                    )
                     mv = mv_map.get(key) or {}
                     tm = mv.get("total_mv")
                     item["total_mv"] = tm
@@ -2209,44 +2420,112 @@ async def get_model_inference_run_detail(
         score_buckets: list[dict[str, Any]] = []
         bucket_cfg = [
             ("lt_010", "< 0.10", "不买", lambda s: s < 0.10, "slate"),
-            ("gold", "0.10 - 0.12", "黄金区间 · 首选", lambda s: 0.10 <= s < 0.12, "emerald"),
-            ("opt_012_015", "0.12 - 0.15", "可选 · 主板优先", lambda s: 0.12 <= s < 0.15, "amber"),
-            ("warn_015_020", "0.15 - 0.20", "谨慎 · 仅强市", lambda s: 0.15 <= s < 0.20, "orange"),
+            (
+                "gold",
+                "0.10 - 0.12",
+                "黄金区间 · 首选",
+                lambda s: 0.10 <= s < 0.12,
+                "emerald",
+            ),
+            (
+                "opt_012_015",
+                "0.12 - 0.15",
+                "可选 · 主板优先",
+                lambda s: 0.12 <= s < 0.15,
+                "amber",
+            ),
+            (
+                "warn_015_020",
+                "0.15 - 0.20",
+                "谨慎 · 仅强市",
+                lambda s: 0.15 <= s < 0.20,
+                "orange",
+            ),
             ("gte_020", "≥ 0.20", "极谨慎 · 样本少", lambda s: s >= 0.20, "rose"),
         ]
-        _is_wide_scale = bool(fusion_scores) and (max(fusion_scores) > 0.35 or min(fusion_scores) < -0.35)
+        _is_wide_scale = bool(fusion_scores) and (
+            max(fusion_scores) > 0.35 or min(fusion_scores) < -0.35
+        )
         if _is_wide_scale:
             # 融合模型：基于分数分布的分位数分桶（从高分到低分）
             _n = len(fusion_scores)
             _sorted = sorted(fusion_scores)
-            _thr = {p: _sorted[max(0, int(p * (_n - 1)))] for p in (0.80, 0.60, 0.40, 0.20)}
+            _thr = {
+                p: _sorted[max(0, int(p * (_n - 1)))] for p in (0.80, 0.60, 0.40, 0.20)
+            }
             bucket_cfg = [
-                ("lt_010", f"< {_thr[0.20]:.3f}", "低分区间", lambda s: s < _thr[0.20], "slate"),
-                ("gold", f"{_thr[0.20]:.3f} - {_thr[0.40]:.3f}", "中低区间", lambda s: _thr[0.20] <= s < _thr[0.40], "emerald"),
-                ("opt_012_015", f"{_thr[0.40]:.3f} - {_thr[0.60]:.3f}", "中高分区间", lambda s: _thr[0.40] <= s < _thr[0.60], "amber"),
-                ("warn_015_020", f"{_thr[0.60]:.3f} - {_thr[0.80]:.3f}", "高分区", lambda s: _thr[0.60] <= s < _thr[0.80], "orange"),
-                ("gte_020", f"≥ {_thr[0.80]:.3f}", "最高分区 · 首选", lambda s: s >= _thr[0.80], "rose"),
+                (
+                    "lt_010",
+                    f"< {_thr[0.20]:.3f}",
+                    "低分区间",
+                    lambda s: s < _thr[0.20],
+                    "slate",
+                ),
+                (
+                    "gold",
+                    f"{_thr[0.20]:.3f} - {_thr[0.40]:.3f}",
+                    "中低区间",
+                    lambda s: _thr[0.20] <= s < _thr[0.40],
+                    "emerald",
+                ),
+                (
+                    "opt_012_015",
+                    f"{_thr[0.40]:.3f} - {_thr[0.60]:.3f}",
+                    "中高分区间",
+                    lambda s: _thr[0.40] <= s < _thr[0.60],
+                    "amber",
+                ),
+                (
+                    "warn_015_020",
+                    f"{_thr[0.60]:.3f} - {_thr[0.80]:.3f}",
+                    "高分区",
+                    lambda s: _thr[0.60] <= s < _thr[0.80],
+                    "orange",
+                ),
+                (
+                    "gte_020",
+                    f"≥ {_thr[0.80]:.3f}",
+                    "最高分区 · 首选",
+                    lambda s: s >= _thr[0.80],
+                    "rose",
+                ),
             ]
         for key, label, action, predicate, color in bucket_cfg:
-            matches = [it for it in signals if it.get("fusion_score") is not None and predicate(float(it["fusion_score"]))]
-            score_buckets.append({
-                "key": key,
-                "label": label,
-                "action": action,
-                "color": color,
-                "count": len(matches),
-                "symbols": [str(it.get("symbol") or "") for it in matches],
-            })
+            matches = [
+                it
+                for it in signals
+                if it.get("fusion_score") is not None
+                and predicate(float(it["fusion_score"]))
+            ]
+            score_buckets.append(
+                {
+                    "key": key,
+                    "label": label,
+                    "action": action,
+                    "color": color,
+                    "count": len(matches),
+                    "symbols": [str(it.get("symbol") or "") for it in matches],
+                }
+            )
         # 假信号区（黄金区间内 0.10-0.11，单看胜率低，须配合行业确认）— 仅普通模型有意义
         if _is_wide_scale:
             fake_signal = []
         else:
-            fake_signal = [it for it in signals if it.get("fusion_score") is not None and 0.10 <= float(it["fusion_score"]) < 0.11]
+            fake_signal = [
+                it
+                for it in signals
+                if it.get("fusion_score") is not None
+                and 0.10 <= float(it["fusion_score"]) < 0.11
+            ]
         summary["score_buckets"] = score_buckets
-        summary["gold_zone_count"] = next((b["count"] for b in score_buckets if b["key"] == "gold"), 0)
+        summary["gold_zone_count"] = next(
+            (b["count"] for b in score_buckets if b["key"] == "gold"), 0
+        )
         summary["fake_signal_count"] = len(fake_signal)
         summary["is_wide_scale"] = bool(_is_wide_scale)
-        summary["fake_signal_symbols"] = [str(it.get("symbol") or "") for it in fake_signal]
+        summary["fake_signal_symbols"] = [
+            str(it.get("symbol") or "") for it in fake_signal
+        ]
 
         # ── 3天分数趋势（决定买点）──
         # 对当前批次 T，取同一模型最近两个历史批次日（T-2 / T-1）的同股分数，判断过去3天走势：
@@ -2255,17 +2534,23 @@ async def get_model_inference_run_detail(
         #   连续下降  T-2 > T-1 > T   → 信号衰退，不买
         # 全部用已发生分数，最新批次也能算出完整趋势。
         try:
-            data_date = run.get("data_trade_date") or run.get("inference_date") or run.get("prediction_trade_date")
+            data_date = (
+                run.get("data_trade_date")
+                or run.get("inference_date")
+                or run.get("prediction_trade_date")
+            )
             model_id = run.get("model_id")
             if data_date and model_id:
                 from datetime import date as _date, timedelta as _td
+
                 if not isinstance(data_date, _date):
                     data_date = _date.fromisoformat(str(data_date)[:10])
                 async with get_session(read_only=True) as trend_session:
                     trend_rows = (
-                        await trend_session.execute(
-                            text(
-                                """
+                        (
+                            await trend_session.execute(
+                                text(
+                                    """
                                 SELECT r.data_trade_date, r.run_id
                                 FROM qm_model_inference_runs r
                                 WHERE r.model_id = :p_model
@@ -2276,10 +2561,18 @@ async def get_model_inference_run_detail(
                                 ORDER BY r.data_trade_date DESC
                                 LIMIT 2
                                 """
-                            ),
-                            {"p_model": model_id, "p_date": data_date, "p_tenant": tenant_id, "p_user": user_id},
+                                ),
+                                {
+                                    "p_model": model_id,
+                                    "p_date": data_date,
+                                    "p_tenant": tenant_id,
+                                    "p_user": user_id,
+                                },
+                            )
                         )
-                    ).mappings().all()
+                        .mappings()
+                        .all()
+                    )
 
                 # trend_rows 按日期升序 → [T-2, T-1]（不足两个时 T-2 为 None）
                 trend_rows.sort(key=lambda tr: tr["data_trade_date"])
@@ -2292,19 +2585,40 @@ async def get_model_inference_run_detail(
                         continue
                     async with get_session(read_only=True) as ss:
                         srows = (
-                            await ss.execute(
-                                text(
-                                    """
+                            (
+                                await ss.execute(
+                                    text(
+                                        """
                                     SELECT symbol, fusion_score FROM engine_signal_scores
                                     WHERE run_id = :rid AND tenant_id = :tenant_id AND user_id = :user_id
                                     """
-                                ),
-                                {"rid": rid, "tenant_id": tenant_id, "user_id": user_id},
+                                    ),
+                                    {
+                                        "rid": rid,
+                                        "tenant_id": tenant_id,
+                                        "user_id": user_id,
+                                    },
+                                )
                             )
-                        ).mappings().all()
-                    score_lookup[label] = {str(r["symbol"]): (float(r["fusion_score"]) if r["fusion_score"] is not None else None) for r in srows}
+                            .mappings()
+                            .all()
+                        )
+                    score_lookup[label] = {
+                        str(r["symbol"]): (
+                            float(r["fusion_score"])
+                            if r["fusion_score"] is not None
+                            else None
+                        )
+                        for r in srows
+                    }
 
-                trend_counter: dict[str, int] = {"先升后降": 0, "连续上升": 0, "连续下降": 0, "其他": 0, "数据不足": 0}
+                trend_counter: dict[str, int] = {
+                    "先升后降": 0,
+                    "连续上升": 0,
+                    "连续下降": 0,
+                    "其他": 0,
+                    "数据不足": 0,
+                }
                 for item in signals:
                     sym = str(item.get("symbol") or "").strip()
                     cur = item.get("fusion_score")
@@ -2315,13 +2629,17 @@ async def get_model_inference_run_detail(
                     cur = float(cur)
                     prev1 = (score_lookup.get("prev1") or {}).get(sym)  # T-1
                     prev2 = (score_lookup.get("prev2") or {}).get(sym)  # T-2
-                    item["prev_score"] = prev1   # 保留字段名兼容前端 tooltip（T-1）
+                    item["prev_score"] = prev1  # 保留字段名兼容前端 tooltip（T-1）
                     item["prev2_score"] = prev2  # T-2
                     item["next_score"] = None
                     if prev1 is None or prev2 is None:
                         # 缺历史分数：只有单日方向（当前 vs T-1）
                         if prev1 is not None:
-                            item["trend"] = "上升" if cur > prev1 else ("下降" if cur < prev1 else "持平")
+                            item["trend"] = (
+                                "上升"
+                                if cur > prev1
+                                else ("下降" if cur < prev1 else "持平")
+                            )
                         else:
                             item["trend"] = "数据不足"
                     else:
@@ -2333,7 +2651,9 @@ async def get_model_inference_run_detail(
                             item["trend"] = "连续下降"
                         else:
                             item["trend"] = "其他"
-                    trend_counter[item["trend"]] = trend_counter.get(item["trend"], 0) + 1
+                    trend_counter[item["trend"]] = (
+                        trend_counter.get(item["trend"], 0) + 1
+                    )
                 summary["trend_stats"] = trend_counter
         except Exception as exc:  # pragma: no cover - 趋势统计失败不影响主流程
             logger.warning("3天趋势统计失败: %s", exc)
@@ -2344,16 +2664,33 @@ async def get_model_inference_run_detail(
             from datetime import date as _date, timedelta as _td
             from backend.services.engine.data_platform.quantdb_hub import QuantDBDataHub
 
-            ref_date = run.get("data_trade_date") or run.get("inference_date") or run.get("prediction_trade_date")
+            ref_date = (
+                run.get("data_trade_date")
+                or run.get("inference_date")
+                or run.get("prediction_trade_date")
+            )
             if ref_date:
-                end = ref_date if isinstance(ref_date, _date) else _date.fromisoformat(str(ref_date)[:10])
+                end = (
+                    ref_date
+                    if isinstance(ref_date, _date)
+                    else _date.fromisoformat(str(ref_date)[:10])
+                )
                 start = end - _td(days=60)
                 hub = QuantDBDataHub()
                 idx = hub.fetch_index_kline("000001.SH", start, end)
                 ma_cfg = {
-                    "ma5": 5, "ma10": 10, "ma20": 20, "ma30": 30, "ma60": 60,
+                    "ma5": 5,
+                    "ma10": 10,
+                    "ma20": 20,
+                    "ma30": 30,
+                    "ma60": 60,
                 }
-                idx_meta: dict[str, Any] = {"symbol": "000001.SH", "dates": [], "close": None, "mavg": {}}
+                idx_meta: dict[str, Any] = {
+                    "symbol": "000001.SH",
+                    "dates": [],
+                    "close": None,
+                    "mavg": {},
+                }
                 if not idx.empty:
                     df = idx.sort_values("dt")
                     closes = df["close"].astype(float).tolist()
@@ -2367,7 +2704,9 @@ async def get_model_inference_run_detail(
                             idx_meta["mavg"][name] = None
                     close = idx_meta["close"]
                     ma20 = idx_meta["mavg"].get("ma20")
-                    idx_meta["below_ma20"] = bool(close is not None and ma20 is not None and close < ma20)
+                    idx_meta["below_ma20"] = bool(
+                        close is not None and ma20 is not None and close < ma20
+                    )
                     idx_meta["ref_date"] = str(end)[:10]
                 summary["market_ma_filter"] = idx_meta
         except Exception as exc:  # pragma: no cover - 均线过滤失败不影响主流程
@@ -2380,7 +2719,8 @@ async def get_model_inference_run_detail(
         #   行业：银行/半导体/元器件抗跌（错杀）；酒店餐饮/渔业/焦炭/酿酒下跌持续（做空首选）。
         try:
             neg_items = [
-                it for it in signals
+                it
+                for it in signals
                 if it.get("fusion_score") is not None and float(it["fusion_score"]) < 0
             ]
             short_candidates: list[dict[str, Any]] = []
@@ -2401,9 +2741,15 @@ async def get_model_inference_run_detail(
 
             # 负分区间分布
             neg_buckets = {
-                "轻负分 (>-0.06)": sum(1 for it in neg_items if float(it["fusion_score"]) > -0.06),
-                "中负分 (-0.06~-0.15)": sum(1 for it in neg_items if -0.15 <= float(it["fusion_score"]) <= -0.06),
-                "极端负分 (≤-0.15)": sum(1 for it in neg_items if float(it["fusion_score"]) < -0.15),
+                "轻负分 (>-0.06)": sum(
+                    1 for it in neg_items if float(it["fusion_score"]) > -0.06
+                ),
+                "中负分 (-0.06~-0.15)": sum(
+                    1 for it in neg_items if -0.15 <= float(it["fusion_score"]) <= -0.06
+                ),
+                "极端负分 (≤-0.15)": sum(
+                    1 for it in neg_items if float(it["fusion_score"]) < -0.15
+                ),
             }
             neg_by_tier: dict[str, int] = {}
             for it in neg_items:
@@ -2418,22 +2764,33 @@ async def get_model_inference_run_detail(
                     if not ind:
                         continue
                     sc = float(it["fusion_score"])
-                    a = agg.setdefault(ind, {"industry": ind, "count": 0, "sum_score": 0.0})
+                    a = agg.setdefault(
+                        ind, {"industry": ind, "count": 0, "sum_score": 0.0}
+                    )
                     a["count"] += 1
                     a["sum_score"] += sc
                 rows = []
                 for a in agg.values():
-                    rows.append({"industry": a["industry"], "count": a["count"],
-                                 "avg_score": round(a["sum_score"] / a["count"], 4)})
+                    rows.append(
+                        {
+                            "industry": a["industry"],
+                            "count": a["count"],
+                            "avg_score": round(a["sum_score"] / a["count"], 4),
+                        }
+                    )
                 rows.sort(key=lambda x: x["count"], reverse=True)
                 return fn(rows)[:8]
 
             # 做空首选行业：负分股票最多的行业（下跌持续）
-            short_industries = _top_industry(lambda rows: sorted(rows, key=lambda x: x["count"], reverse=True))
+            short_industries = _top_industry(
+                lambda rows: sorted(rows, key=lambda x: x["count"], reverse=True)
+            )
             # 抗跌行业：银行/半导体/元器件 等负分但实际错杀的
             resistant_industries = [
-                r for r in _top_industry(lambda rows: rows)
-                if r["industry"] in ("银行", "半导体", "元件", "光学光电子", "通信设备", "电子")
+                r
+                for r in _top_industry(lambda rows: rows)
+                if r["industry"]
+                in ("银行", "半导体", "元件", "光学光电子", "通信设备", "电子")
             ]
 
             summary["negative_analysis"] = {
@@ -2443,15 +2800,29 @@ async def get_model_inference_run_detail(
                 "neg_by_tier": neg_by_tier,
                 "short_candidates_count": len(short_candidates),
                 "short_candidates": [
-                    {"symbol": it.get("symbol"), "name": it.get("stock_name"), "score": float(it["fusion_score"]),
-                     "tier": it.get("market_cap_tier"), "industry": it.get("industry")}
-                    for it in sorted(short_candidates, key=lambda x: float(x["fusion_score"]))[:10]
+                    {
+                        "symbol": it.get("symbol"),
+                        "name": it.get("stock_name"),
+                        "score": float(it["fusion_score"]),
+                        "tier": it.get("market_cap_tier"),
+                        "industry": it.get("industry"),
+                    }
+                    for it in sorted(
+                        short_candidates, key=lambda x: float(x["fusion_score"])
+                    )[:10]
                 ],
                 "mistake_candidates_count": len(mistake_candidates),
                 "mistake_candidates": [
-                    {"symbol": it.get("symbol"), "name": it.get("stock_name"), "score": float(it["fusion_score"]),
-                     "tier": it.get("market_cap_tier"), "industry": it.get("industry")}
-                    for it in sorted(mistake_candidates, key=lambda x: float(x["fusion_score"]))[:10]
+                    {
+                        "symbol": it.get("symbol"),
+                        "name": it.get("stock_name"),
+                        "score": float(it["fusion_score"]),
+                        "tier": it.get("market_cap_tier"),
+                        "industry": it.get("industry"),
+                    }
+                    for it in sorted(
+                        mistake_candidates, key=lambda x: float(x["fusion_score"])
+                    )[:10]
                 ],
                 "extreme_neg_count": len(extreme_neg),
                 "short_industries": short_industries,
@@ -2471,7 +2842,9 @@ async def get_model_inference_run_detail(
                     it["negative_tag"] = "做空候选"
                 elif sym in mistake_syms:
                     it["negative_tag"] = "错杀候选"
-                elif it.get("fusion_score") is not None and float(it["fusion_score"]) < 0:
+                elif (
+                    it.get("fusion_score") is not None and float(it["fusion_score"]) < 0
+                ):
                     ind = str(it.get("industry") or "")
                     if ind in resistant_set:
                         it["negative_tag"] = "抗跌行业"
@@ -2495,17 +2868,23 @@ async def delete_model_inference_run(
     current_user: dict[str, Any] = Depends(get_current_user),
 ):
     tenant_id, user_id = _owner_scope(current_user)
-    delete = await model_inference_persistence.delete_run(run_id=run_id, tenant_id=tenant_id, user_id=user_id)
+    delete = await model_inference_persistence.delete_run(
+        run_id=run_id, tenant_id=tenant_id, user_id=user_id
+    )
     if not delete.get("deleted"):
         raise HTTPException(status_code=404, detail="推理批次不存在或已删除")
     return delete
 
 
-@router.get("/inference/stock/{symbol}/history", summary="查询单只股票历史推理分数（用户态）")
+@router.get(
+    "/inference/stock/{symbol}/history", summary="查询单只股票历史推理分数（用户态）"
+)
 async def get_stock_inference_history(
     symbol: str,
     days: int = Query(180, ge=7, le=7300, description="回溯天数"),
-    model_id: str | None = Query(None, description="按模型过滤，缺省返回所有模型的最新批次"),
+    model_id: str | None = Query(
+        None, description="按模型过滤，缺省返回所有模型的最新批次"
+    ),
     current_user: dict[str, Any] = Depends(get_current_user),
 ):
     """返回某只股票的历史推理分数（按交易日去重取最新批次），供 K 线叠加。
@@ -2525,7 +2904,12 @@ async def get_stock_inference_history(
     if "." not in norm and not norm.startswith(("SH", "SZ", "BJ")):
         norm = StockCodeUtil.to_suffix(norm)
 
-    params: dict[str, Any] = {"sym": sym, "cutoff": cutoff, "tenant_id": tenant_id, "user_id": user_id}
+    params: dict[str, Any] = {
+        "sym": sym,
+        "cutoff": cutoff,
+        "tenant_id": tenant_id,
+        "user_id": user_id,
+    }
     model_filter_sql = ""
     if model_id:
         model_filter_sql = "AND e.run_id IN (SELECT run_id FROM qm_model_inference_runs WHERE model_id = :model_id)"
@@ -2537,9 +2921,10 @@ async def get_stock_inference_history(
         # （旧写法 CTE 对所有股票 RANK() 后才过滤 symbol，500 天要 20s，现 ~0.6s）。
         # 排名仍在同一批 run 内计算：同一天多个 run 各自内部排名，取最新批次那条。
         rows = (
-            await session.execute(
-                text(
-                    f"""
+            (
+                await session.execute(
+                    text(
+                        f"""
                     WITH mine AS (
                         SELECT DISTINCT ON (e.trade_date)
                                e.trade_date, e.run_id, e.fusion_score, e.signal_side, e.created_at
@@ -2560,10 +2945,13 @@ async def get_stock_inference_history(
                     LEFT JOIN qm_model_inference_runs r ON r.run_id = m.run_id
                     ORDER BY m.trade_date DESC
                     """
-                ),
-                params,
+                    ),
+                    params,
+                )
             )
-        ).mappings().all()
+            .mappings()
+            .all()
+        )
 
     # 按交易日去重（同一天多批次只取最新 created_at 的一条）
     by_date: dict[str, dict[str, Any]] = {}
@@ -2584,11 +2972,17 @@ async def get_stock_inference_history(
     try:
         async with get_session(read_only=True) as s2:
             r2 = (
-                await s2.execute(
-                    text("SELECT name, industry, sector FROM stocks WHERE symbol = :sym"),
-                    {"sym": norm},
+                (
+                    await s2.execute(
+                        text(
+                            "SELECT name, industry, sector FROM stocks WHERE symbol = :sym"
+                        ),
+                        {"sym": norm},
+                    )
                 )
-            ).mappings().first()
+                .mappings()
+                .first()
+            )
         if r2:
             stock_meta = dict(r2)
     except Exception:  # pragma: no cover
@@ -2617,9 +3011,10 @@ async def get_stock_inference_history(
         # 只查该股涉及的去重模型ID（避免 join qm_user_models 大表慢查询）
         async with get_session(read_only=True) as s3:
             mrows = (
-                await s3.execute(
-                    text(
-                        """
+                (
+                    await s3.execute(
+                        text(
+                            """
                         SELECT DISTINCT r.model_id
                         FROM engine_signal_scores e
                         LEFT JOIN qm_model_inference_runs r ON r.run_id = e.run_id
@@ -2627,33 +3022,55 @@ async def get_stock_inference_history(
                           AND e.tenant_id = :tenant_id AND e.user_id = :user_id
                           AND r.model_id IS NOT NULL
                         """
-                    ),
-                    {"sym": sym, "cutoff": cutoff, "tenant_id": tenant_id, "user_id": user_id},
+                        ),
+                        {
+                            "sym": sym,
+                            "cutoff": cutoff,
+                            "tenant_id": tenant_id,
+                            "user_id": user_id,
+                        },
+                    )
                 )
-            ).mappings().all()
+                .mappings()
+                .all()
+            )
         mids = [str(r["model_id"]) for r in mrows]
         # 批量查模型元数据（名称/训练区间）
         if mids:
             async with get_session(read_only=True) as s4:
                 ur = (
-                    await s4.execute(
-                        text(
-                            "SELECT model_id, metadata_json FROM qm_user_models WHERE model_id = ANY(:mids)"
-                        ),
-                        {"mids": mids},
+                    (
+                        await s4.execute(
+                            text(
+                                "SELECT model_id, metadata_json FROM qm_user_models WHERE model_id = ANY(:mids)"
+                            ),
+                            {"mids": mids},
+                        )
                     )
-                ).mappings().all()
-            meta_by_id = {str(r["model_id"]): (r.get("metadata_json") or {}) for r in ur}
+                    .mappings()
+                    .all()
+                )
+            meta_by_id = {
+                str(r["model_id"]): (r.get("metadata_json") or {}) for r in ur
+            }
             for mid in mids:
                 meta = meta_by_id.get(mid) or {}
                 if not isinstance(meta, dict):
                     meta = {}
-                models.append({
-                    "model_id": mid,
-                    "display_name": meta.get("display_name") or meta.get("model_name") or "",
-                    "train_start": str(meta.get("train_start") or "")[:10] if meta.get("train_start") else "",
-                    "train_end": str(meta.get("train_end") or "")[:10] if meta.get("train_end") else "",
-                })
+                models.append(
+                    {
+                        "model_id": mid,
+                        "display_name": meta.get("display_name")
+                        or meta.get("model_name")
+                        or "",
+                        "train_start": str(meta.get("train_start") or "")[:10]
+                        if meta.get("train_start")
+                        else "",
+                        "train_end": str(meta.get("train_end") or "")[:10]
+                        if meta.get("train_end")
+                        else "",
+                    }
+                )
     except Exception:  # pragma: no cover
         pass
 
@@ -2682,13 +3099,19 @@ async def get_model_inference_settings(
     )
     if settings.get("last_run_json") and not settings.get("last_run"):
         settings["last_run"] = settings["last_run_json"]
-    settings["next_run"] = _render_next_run(settings.get("next_run_at")) if settings.get("next_run_at") else settings.get("next_run")
+    settings["next_run"] = (
+        _render_next_run(settings.get("next_run_at"))
+        if settings.get("next_run_at")
+        else settings.get("next_run")
+    )
     return settings
 
 
 @router.get("/inference/latest", summary="获取当前生效推理批次（用户态）")
 async def get_model_inference_latest(
-    model_id: str | None = Query(None, description="模型ID，可选，用于检查是否与当前生效模型匹配"),
+    model_id: str | None = Query(
+        None, description="模型ID，可选，用于检查是否与当前生效模型匹配"
+    ),
     current_user: dict[str, Any] = Depends(get_current_user),
 ):
     tenant_id, user_id = _owner_scope(current_user)
@@ -2764,7 +3187,9 @@ async def update_model_inference_settings(
     )
 
 
-@router.post("/training-runs/{run_id}/complete", summary="训练完成回调（用户态内部接口）")
+@router.post(
+    "/training-runs/{run_id}/complete", summary="训练完成回调（用户态内部接口）"
+)
 async def training_complete_callback(
     run_id: str,
     result: dict[str, Any],
@@ -2786,11 +3211,24 @@ async def create_ensemble_model(
       - manual  手动指定权重（自动归一化到和为 1）
     """
     if payload.weight_strategy not in ("equal", "icir", "manual", "recent_ic"):
-        raise HTTPException(status_code=422, detail="weight_strategy 应为 equal / icir / manual / recent_ic")
+        raise HTTPException(
+            status_code=422,
+            detail="weight_strategy 应为 equal / icir / manual / recent_ic",
+        )
     if payload.weight_strategy == "manual" and not payload.manual_weights:
-        raise HTTPException(status_code=422, detail="manual 策略必须提供 manual_weights")
-    if payload.fusion_strategy not in ("linear", "majority_vote", "periodic_hierarchy", "confidence_gate"):
-        raise HTTPException(status_code=422, detail="fusion_strategy 应为 linear / majority_vote / periodic_hierarchy / confidence_gate")
+        raise HTTPException(
+            status_code=422, detail="manual 策略必须提供 manual_weights"
+        )
+    if payload.fusion_strategy not in (
+        "linear",
+        "majority_vote",
+        "periodic_hierarchy",
+        "confidence_gate",
+    ):
+        raise HTTPException(
+            status_code=422,
+            detail="fusion_strategy 应为 linear / majority_vote / periodic_hierarchy / confidence_gate",
+        )
 
     tenant_id, user_id = _owner_scope(current_user)
     try:

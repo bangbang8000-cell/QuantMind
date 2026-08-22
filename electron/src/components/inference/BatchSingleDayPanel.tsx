@@ -131,6 +131,7 @@ export const BatchSingleDayPanel: React.FC<Props> = ({ modelId }) => {
     const timer = setTimeout(async () => {
       try {
         const dates = await modelTrainingService.getBacktestTradingDates(
+          modelId,
           start.format('YYYY-MM-DD'),
           end.format('YYYY-MM-DD'),
         );
@@ -142,7 +143,7 @@ export const BatchSingleDayPanel: React.FC<Props> = ({ modelId }) => {
       }
     }, 400);
     return () => clearTimeout(timer);
-  }, [dateRange]);
+  }, [dateRange, modelId]);
 
   const startPolling = useCallback((batchId: string) => {
     if (pollTimer) clearInterval(pollTimer);

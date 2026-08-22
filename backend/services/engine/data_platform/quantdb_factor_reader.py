@@ -30,7 +30,16 @@ FACTOR_SOURCE_DIRS: dict[FactorSource, str] = {
     "l1_l2_factors": "6_ml_datasets/l1_l2_factors",
 }
 DEFAULT_FACTOR_SOURCE: FactorSource = "l1_l2_factors"
-REQUIRED_COLUMNS = ("symbol", "date", "open", "high", "low", "close", "volume", "amount")
+REQUIRED_COLUMNS = (
+    "symbol",
+    "date",
+    "open",
+    "high",
+    "low",
+    "close",
+    "volume",
+    "amount",
+)
 KEY_COLUMNS = {"symbol", "date", "dt", "time", "release_id", "published_at"}
 _IDENTIFIER = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 
@@ -73,7 +82,9 @@ class QuantDBFactorReader:
     def validate_source(source: str) -> FactorSource:
         if source not in FACTOR_SOURCE_DIRS:
             allowed = ", ".join(FACTOR_SOURCE_DIRS)
-            raise QuantDBFactorError(f"Unsupported factor source {source!r}; expected one of {allowed}")
+            raise QuantDBFactorError(
+                f"Unsupported factor source {source!r}; expected one of {allowed}"
+            )
         return source  # type: ignore[return-value]
 
     def source_path(self, source: str) -> Path:
@@ -88,7 +99,9 @@ class QuantDBFactorReader:
         try:
             import duckdb
         except ImportError as exc:  # pragma: no cover - deployment dependency
-            raise QuantDBFactorError("duckdb is required to read QuantDB factor datasets") from exc
+            raise QuantDBFactorError(
+                "duckdb is required to read QuantDB factor datasets"
+            ) from exc
         return duckdb
 
     def _relation(self, source: str) -> str:
@@ -163,13 +176,15 @@ class QuantDBFactorReader:
         )
 
     def discover(self) -> dict[str, dict]:
-        return {source: self.describe(source).to_dict() for source in FACTOR_SOURCE_DIRS}
+        return {
+            source: self.describe(source).to_dict() for source in FACTOR_SOURCE_DIRS
+        }
 
     @staticmethod
     def _date_expression(columns: Iterable[str]) -> str:
         cols = set(columns)
         if "date" in cols:
-            return "CAST(\"date\" AS DATE)"
+            return 'CAST("date" AS DATE)'
         # Compatibility only.  New factor sources must publish the date column.
         if "dt" in cols:
             return "strptime(CAST(\"dt\" AS VARCHAR), '%Y%m%d')::DATE"
@@ -184,16 +199,28 @@ class QuantDBFactorReader:
     ) -> FactorSourceStatus:
         status = self.describe(source)
         if not status.ready:
-            detail = ", ".join(status.missing_required) or status.reason or "unknown reason"
-            raise QuantDBFactorError(f"{source} is not ready for direct training: {detail}")
+            detail = (
+                ", ".join(status.missing_required) or status.reason or "unknown reason"
+            )
+            raise QuantDBFactorError(
+                f"{source} is not ready for direct training: {detail}"
+            )
         if start and status.min_date and str(start)[:10] < status.min_date:
-            raise QuantDBFactorError(f"{source} starts at {status.min_date}; requested {start}")
+            raise QuantDBFactorError(
+                f"{source} starts at {status.min_date}; requested {start}"
+            )
         if end and status.max_date and str(end)[:10] > status.max_date:
-            raise QuantDBFactorError(f"{source} ends at {status.max_date}; requested {end}")
+            raise QuantDBFactorError(
+                f"{source} ends at {status.max_date}; requested {end}"
+            )
         return status
 
     def factor_columns(self, source: str) -> list[str]:
-        return [column for column in self.describe(source).columns if column not in KEY_COLUMNS and column not in REQUIRED_COLUMNS]
+        return [
+            column
+            for column in self.describe(source).columns
+            if column not in KEY_COLUMNS and column not in REQUIRED_COLUMNS
+        ]
 
     def read_range(
         self,
@@ -211,21 +238,33 @@ class QuantDBFactorReader:
         requested = list(dict.fromkeys(features))
         reserved = set(REQUIRED_COLUMNS) | {"trade_date"}
         if any(feature in reserved for feature in requested):
-            raise QuantDBFactorError("Mapped factor names cannot overwrite key or OHLCV columns")
+            raise QuantDBFactorError(
+                "Mapped factor names cannot overwrite key or OHLCV columns"
+            )
         if any(not _IDENTIFIER.fullmatch(feature) for feature in requested):
             raise QuantDBFactorError("Mapped factor names must be SQL identifiers")
         feature_sources = feature_sources or {}
-        source_columns = {feature: feature_sources.get(feature, feature) for feature in requested}
-        missing = [column for column in source_columns.values() if column not in available]
+        source_columns = {
+            feature: feature_sources.get(feature, feature) for feature in requested
+        }
+        missing = [
+            column for column in source_columns.values() if column not in available
+        ]
         if missing:
-            raise QuantDBFactorError(f"{source} is missing mapped fields: {', '.join(missing[:10])}")
+            raise QuantDBFactorError(
+                f"{source} is missing mapped fields: {', '.join(missing[:10])}"
+            )
 
-        selected = ['"symbol"', f"{self._date_expression(status.columns)} AS trade_date"]
+        selected = [
+            '"symbol"',
+            f"{self._date_expression(status.columns)} AS trade_date",
+        ]
         if include_ohlcv:
             selected.extend(_quote(column) for column in REQUIRED_COLUMNS[2:])
         selected.extend(
             f"{_quote(source_column)} AS {_quote(feature)}"
-            if source_column != feature else _quote(feature)
+            if source_column != feature
+            else _quote(feature)
             for feature, source_column in source_columns.items()
         )
         start_s, end_s = str(start)[:10], str(end)[:10]
@@ -243,23 +282,35 @@ class QuantDBFactorReader:
         finally:
             con.close()
         frame["trade_date"] = pd.to_datetime(frame["trade_date"], errors="coerce")
-        # QuantDB may publish either suffix or prefix codes.  All consumers in
-        # QuantMind use the canonical code representation at this boundary.
-        frame["symbol"] = frame["symbol"].map(lambda value: StockCodeUtil.to_suffix(str(value)))
+        # QuantDB may publish either suffix or prefix codes.  QuantMind's
+        # canonical internal representation is the prefix form (SH600036),
+        # including model inputs, prediction outputs, and persistence keys.
+        frame["symbol"] = frame["symbol"].map(
+            lambda value: StockCodeUtil.to_prefix(str(value))
+        )
         return frame.dropna(subset=["symbol", "trade_date"]).drop_duplicates(
             subset=["symbol", "trade_date"], keep="last"
         )
 
     def read_day(
-        self, source: str, *, features: list[str], trade_date: str | date,
+        self,
+        source: str,
+        *,
+        features: list[str],
+        trade_date: str | date,
         feature_sources: dict[str, str] | None = None,
     ) -> pd.DataFrame:
         return self.read_range(
-            source, features=features, feature_sources=feature_sources,
-            start=trade_date, end=trade_date,
+            source,
+            features=features,
+            feature_sources=feature_sources,
+            start=trade_date,
+            end=trade_date,
         )
 
-    def available_dates(self, source: str, *, start: str | None = None, end: str | None = None) -> list[str]:
+    def available_dates(
+        self, source: str, *, start: str | None = None, end: str | None = None
+    ) -> list[str]:
         status = self.assert_ready(source)
         duckdb = self._duckdb()
         con = duckdb.connect(config={"memory_limit": "2GB", "threads": "2"})
@@ -275,17 +326,22 @@ class QuantDBFactorReader:
                 params.append(end)
             where = f" WHERE {' AND '.join(conditions)}" if conditions else ""
             rows = con.execute(
-                f"SELECT DISTINCT {date_expr} AS d FROM {relation}{where} ORDER BY d", params
+                f"SELECT DISTINCT {date_expr} AS d FROM {relation}{where} ORDER BY d",
+                params,
             ).fetchall()
             return [str(row[0])[:10] for row in rows]
         finally:
             con.close()
 
     @staticmethod
-    def forward_labels(frame: pd.DataFrame, *, horizon: int, signal_lag_days: int = 1) -> pd.DataFrame:
+    def forward_labels(
+        frame: pd.DataFrame, *, horizon: int, signal_lag_days: int = 1
+    ) -> pd.DataFrame:
         """Build labels from the source close column without persisting a derived dataset."""
         if "close" not in frame.columns:
-            raise QuantDBFactorError("close is required to construct direct-training labels")
+            raise QuantDBFactorError(
+                "close is required to construct direct-training labels"
+            )
         data = frame[["symbol", "trade_date", "close"]].copy()
         data["close"] = pd.to_numeric(data["close"], errors="coerce")
         data = data[data["close"] > 0].sort_values(["symbol", "trade_date"])

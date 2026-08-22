@@ -16,6 +16,7 @@
 - T+1 结算: 信号日 T 选股，T+1 开盘执行，避免前视偏差。
 - 涨跌停不可成交: 涨停买不进 / 跌停卖不出。
 """
+
 from __future__ import annotations
 
 import logging
@@ -38,14 +39,15 @@ logger = logging.getLogger(__name__)
 # 策略参数
 # ---------------------------------------------------------------------------
 
+
 @dataclass
 class StrategyConfig:
     """选股策略参数。默认值 = 平衡型（用户策略文档推荐组合）。"""
 
     # 入场/空仓（行业 avg Top1）
-    entry_threshold: float = 0.09      # 行业avgTop1 ≥ 此值才入场
-    exit_threshold: float = 0.06       # 行业avgTop1 < 此值强制空仓
-    strong_industry_min: int = 2       # 强行业数（Top1≥0.10）≥ 此值才入场
+    entry_threshold: float = 0.09  # 行业avgTop1 ≥ 此值才入场
+    exit_threshold: float = 0.06  # 行业avgTop1 < 此值强制空仓
+    strong_industry_min: int = 2  # 强行业数（Top1≥0.10）≥ 此值才入场
 
     # 个股分数区间
     score_min: float = 0.10
@@ -53,21 +55,21 @@ class StrategyConfig:
 
     # 交易
     initial_capital: float = 100_000.0
-    max_hold_days: int = 5             # 最长持有交易日
-    take_profit: float = 0.08          # 止盈 +8%
-    stop_loss: float = 0.05            # 止损 -5%
-    max_positions: int = 5             # 每日最多持有股票数
-    daily_select_max: int = 5          # 每日新选股上限
+    max_hold_days: int = 5  # 最长持有交易日
+    take_profit: float = 0.08  # 止盈 +8%
+    stop_loss: float = 0.05  # 止损 -5%
+    max_positions: int = 5  # 每日最多持有股票数
+    daily_select_max: int = 5  # 每日新选股上限
 
     # 过滤开关
-    exclude_limit_moves: bool = True   # 涨停买不进/跌停卖不出
-    exclude_st: bool = True            # 剔除 ST
-    main_board_only: bool = True       # 仅主板（600/000 开头）
-    use_index_ma20_filter: bool = True # 大盘跌破 MA20 强制空仓
-    index_symbol: str = "sh000001"     # 上证指数
+    exclude_limit_moves: bool = True  # 涨停买不进/跌停卖不出
+    exclude_st: bool = True  # 剔除 ST
+    main_board_only: bool = True  # 仅主板（600/000 开头）
+    use_index_ma20_filter: bool = True  # 大盘跌破 MA20 强制空仓
+    index_symbol: str = "sh000001"  # 上证指数
 
     # 数据源
-    signal_mode: str = "realtime"      # realtime=逐日推理 | stored=读已有信号
+    signal_mode: str = "realtime"  # realtime=逐日推理 | stored=读已有信号
 
     @classmethod
     def preset(cls, name: str) -> "StrategyConfig":
@@ -111,13 +113,13 @@ class Trade:
     date: str
     symbol: str
     name: str
-    side: str            # BUY / SELL
+    side: str  # BUY / SELL
     price: float
     shares: int
     amount: float
     industry: str
     score: float
-    reason: str = ""     # 买入理由 / 卖出理由
+    reason: str = ""  # 买入理由 / 卖出理由
     profit_pct: float = 0.0
     hold_days: int = 0
 
@@ -142,7 +144,7 @@ class BacktestResult:
     metrics: dict[str, Any]
     daily_selections: list[DailySelection]
     trades: list[Trade]
-    nav_curve: list[dict[str, Any]]          # [{date, nav, cash, holdings_value, drawdown}]
+    nav_curve: list[dict[str, Any]]  # [{date, nav, cash, holdings_value, drawdown}]
     holdings_snapshot: list[dict[str, Any]]  # 每日持仓快照
     industry_rotation: list[dict[str, Any]]  # 每月强行业统计
     monthly_returns: dict[str, float]
@@ -153,6 +155,7 @@ class BacktestResult:
 # ---------------------------------------------------------------------------
 # 行业信号计算
 # ---------------------------------------------------------------------------
+
 
 def _compute_industry_signals(
     day_scores: pd.DataFrame,
@@ -193,7 +196,9 @@ def _compute_industry_signals(
     top20 = joined.nlargest(20, "score")
     top20_industries = top20["industry"].unique()
     if len(top20_industries) > 0:
-        avg_top1 = float(np.mean([ind_top1[i] for i in top20_industries if i in ind_top1]))
+        avg_top1 = float(
+            np.mean([ind_top1[i] for i in top20_industries if i in ind_top1])
+        )
     else:
         avg_top1 = 0.0
 
@@ -219,6 +224,7 @@ def _market_state(avg_top1: float, strong_count: int) -> str:
 # ---------------------------------------------------------------------------
 # 价格数据加载
 # ---------------------------------------------------------------------------
+
 
 def _load_price_panel(
     data_dir: Path,
@@ -272,11 +278,24 @@ def _load_price_panel(
                     )
                     rows = cur.fetchall()
                     if rows:
-                        frames.append(pd.DataFrame(
-                            rows,
-                            columns=["symbol", "trade_date", "open", "high", "low", "close",
-                                     "volume", "amount", "pct_change", "ma20", "is_st"],
-                        ))
+                        frames.append(
+                            pd.DataFrame(
+                                rows,
+                                columns=[
+                                    "symbol",
+                                    "trade_date",
+                                    "open",
+                                    "high",
+                                    "low",
+                                    "close",
+                                    "volume",
+                                    "amount",
+                                    "pct_change",
+                                    "ma20",
+                                    "is_st",
+                                ],
+                            )
+                        )
                 except Exception as exc:
                     logger.warning("读取价格表 %s 失败: %s", table, exc)
             cur.close()
@@ -347,6 +366,7 @@ def _load_index_close(
 # ---------------------------------------------------------------------------
 # 选股策略
 # ---------------------------------------------------------------------------
+
 
 def _is_main_board(symbol: str) -> bool:
     """主板判断: 600/601/603/605/000/001/002 开头（含后缀）。"""
@@ -440,11 +460,20 @@ def _select_stocks_daily(
         has_st_col = "is_st" in price_day.columns
         keep = []
         for _, row in df.iterrows():
-            p = price_map.loc[row["symbol"]] if row["symbol"] in price_map.index else None
+            p = (
+                price_map.loc[row["symbol"]]
+                if row["symbol"] in price_map.index
+                else None
+            )
             if p is None:
                 keep.append(True)
                 continue
-            if config.exclude_st and has_st_col and pd.notna(p.get("is_st")) and float(p["is_st"]) == 1:
+            if (
+                config.exclude_st
+                and has_st_col
+                and pd.notna(p.get("is_st"))
+                and float(p["is_st"]) == 1
+            ):
                 keep.append(False)
                 continue
             if config.exclude_limit_moves and pd.notna(p.get("pct_change")):
@@ -471,7 +500,9 @@ def _select_stocks_daily(
                 keep.append(True)
                 continue
             ok, trend = _check_three_day_trend(
-                hist.get("score_t_minus_1"), float(row.score), hist.get("score_t_plus_1")
+                hist.get("score_t_minus_1"),
+                float(row.score),
+                hist.get("score_t_plus_1"),
             )
             trend_map[row.symbol] = trend
             keep.append(ok)
@@ -497,6 +528,7 @@ def _select_stocks_daily(
 # 事件驱动模拟引擎
 # ---------------------------------------------------------------------------
 
+
 class _SimulationEngine:
     """事件驱动交易模拟。"""
 
@@ -520,7 +552,9 @@ class _SimulationEngine:
         self.index_close = index_series
         if not index_series.empty:
             self.index_ma20 = index_series.rolling(20).mean()
-        self.trade_dates_sorted = sorted(set(panel["trade_date"])) if not panel.empty else []
+        self.trade_dates_sorted = (
+            sorted(set(panel["trade_date"])) if not panel.empty else []
+        )
         self.date_pos = {d: i for i, d in enumerate(self.trade_dates_sorted)}
 
     # -- 工具 --
@@ -533,7 +567,8 @@ class _SimulationEngine:
 
     def _get_prices(self, symbol: str, trade_date: str) -> dict[str, float] | None:
         row = self.price_panel[
-            (self.price_panel["symbol"] == symbol) & (self.price_panel["trade_date"] == trade_date)
+            (self.price_panel["symbol"] == symbol)
+            & (self.price_panel["trade_date"] == trade_date)
         ]
         if row.empty:
             return None
@@ -571,7 +606,11 @@ class _SimulationEngine:
             day_scores = day_scores.copy()
             day_scores["symbol"] = day_scores["symbol"].map(StockCodeUtil.to_suffix)
 
-        price_day = self.price_panel[self.price_panel["trade_date"] == trade_date] if not self.price_panel.empty else pd.DataFrame()
+        price_day = (
+            self.price_panel[self.price_panel["trade_date"] == trade_date]
+            if not self.price_panel.empty
+            else pd.DataFrame()
+        )
 
         # 1. 大盘 MA20 过滤
         index_ok = self._index_above_ma20(trade_date)
@@ -592,33 +631,39 @@ class _SimulationEngine:
             and strong_count >= self.config.strong_industry_min
         )
         if not should_enter:
-            self.daily_selections.append(DailySelection(
-                trade_date=trade_date,
-                market_state=state,
-                industry_avg_top1=avg_top1,
-                strong_industry_count=strong_count,
-                index_above_ma20=index_ok,
-                selections=[],
-            ))
+            self.daily_selections.append(
+                DailySelection(
+                    trade_date=trade_date,
+                    market_state=state,
+                    industry_avg_top1=avg_top1,
+                    strong_industry_count=strong_count,
+                    index_above_ma20=index_ok,
+                    selections=[],
+                )
+            )
             self._record_nav(trade_date, price_day)
             return
 
         # 5. 选股（分数区间 + 过滤）
-        picks = _select_stocks_daily(day_scores, self.industry_map, self.config, price_day)
+        picks = _select_stocks_daily(
+            day_scores, self.industry_map, self.config, price_day
+        )
 
         # 6. 买入（T+1 开盘执行: 今天信号 → 下个交易日开盘买）
         exec_date = self._next_date(trade_date)
         if exec_date:
             self._process_buys(picks, exec_date, price_day)
 
-        self.daily_selections.append(DailySelection(
-            trade_date=trade_date,
-            market_state=state,
-            industry_avg_top1=avg_top1,
-            strong_industry_count=strong_count,
-            index_above_ma20=index_ok,
-            selections=picks,
-        ))
+        self.daily_selections.append(
+            DailySelection(
+                trade_date=trade_date,
+                market_state=state,
+                industry_avg_top1=avg_top1,
+                strong_industry_count=strong_count,
+                index_above_ma20=index_ok,
+                selections=picks,
+            )
+        )
         self._record_nav(trade_date, price_day)
 
     # -- 卖出 --
@@ -638,7 +683,7 @@ class _SimulationEngine:
                 continue
             close = price["close"]
             pos.hold_days += 1
-            pos.open_pnl = (close / pos.buy_price - 1.0)
+            pos.open_pnl = close / pos.buy_price - 1.0
 
             # 持有到期
             if pos.hold_days >= self.config.max_hold_days:
@@ -669,7 +714,8 @@ class _SimulationEngine:
 
     def _is_limit_down(self, symbol: str, trade_date: str) -> bool:
         row = self.price_panel[
-            (self.price_panel["symbol"] == symbol) & (self.price_panel["trade_date"] == trade_date)
+            (self.price_panel["symbol"] == symbol)
+            & (self.price_panel["trade_date"] == trade_date)
         ]
         if row.empty or "pct_change" not in row.columns:
             return False
@@ -692,25 +738,32 @@ class _SimulationEngine:
         pos.profit_pct = sell_price / pos.buy_price - 1.0
         pos.realized_pnl = (sell_price - pos.buy_price) * pos.shares - cost
 
-        self.trades.append(Trade(
-            date=trade_date,
-            symbol=pos.symbol,
-            name=pos.name,
-            side="SELL",
-            price=sell_price,
-            shares=pos.shares,
-            amount=amount,
-            industry=pos.industry,
-            score=pos.score,
-            reason=reason,
-            profit_pct=pos.profit_pct,
-            hold_days=pos.hold_days,
-        ))
+        self.trades.append(
+            Trade(
+                date=trade_date,
+                symbol=pos.symbol,
+                name=pos.name,
+                side="SELL",
+                price=sell_price,
+                shares=pos.shares,
+                amount=amount,
+                industry=pos.industry,
+                score=pos.score,
+                reason=reason,
+                profit_pct=pos.profit_pct,
+                hold_days=pos.hold_days,
+            )
+        )
         del self.positions[pos.symbol]
 
     # -- 买入 --
 
-    def _process_buys(self, picks: list[dict[str, Any]], exec_date: str, signal_price_day: pd.DataFrame) -> None:
+    def _process_buys(
+        self,
+        picks: list[dict[str, Any]],
+        exec_date: str,
+        signal_price_day: pd.DataFrame,
+    ) -> None:
         slots = self.config.max_positions - len(self.positions)
         if slots <= 0:
             return
@@ -737,7 +790,7 @@ class _SimulationEngine:
                 amount = shares * buy_price
                 cost = amount * 0.00025
 
-            self.cash -= (amount + cost)
+            self.cash -= amount + cost
             pos = Position(
                 symbol=symbol,
                 name="",
@@ -748,18 +801,20 @@ class _SimulationEngine:
                 shares=shares,
             )
             self.positions[symbol] = pos
-            self.trades.append(Trade(
-                date=exec_date,
-                symbol=symbol,
-                name="",
-                side="BUY",
-                price=buy_price,
-                shares=shares,
-                amount=amount,
-                industry=pick["industry"],
-                score=pick["score"],
-                reason="行业信号+分数区间",
-            ))
+            self.trades.append(
+                Trade(
+                    date=exec_date,
+                    symbol=symbol,
+                    name="",
+                    side="BUY",
+                    price=buy_price,
+                    shares=shares,
+                    amount=amount,
+                    industry=pick["industry"],
+                    score=pick["score"],
+                    reason="行业信号+分数区间",
+                )
+            )
 
     # -- 净值 --
 
@@ -770,13 +825,15 @@ class _SimulationEngine:
             if price:
                 holdings_value += price["close"] * pos.shares
         nav = self.cash + holdings_value
-        self.nav_history.append({
-            "date": trade_date,
-            "nav": round(nav, 2),
-            "cash": round(self.cash, 2),
-            "holdings": round(holdings_value, 2),
-            "position_count": len(self.positions),
-        })
+        self.nav_history.append(
+            {
+                "date": trade_date,
+                "nav": round(nav, 2),
+                "cash": round(self.cash, 2),
+                "holdings": round(holdings_value, 2),
+                "position_count": len(self.positions),
+            }
+        )
 
     def finalize(self) -> None:
         # 回测结束，按最后一日收盘价强制平仓（不产生交易流水，仅计净值）
@@ -789,12 +846,14 @@ class _SimulationEngine:
 # 主入口
 # ---------------------------------------------------------------------------
 
+
 def run_inference_backtest(
     *,
     model_id: str,
     start_date: str,
     end_date: str,
     data_dir: Path | None = None,
+    model_meta: dict[str, Any] | None = None,
     config: StrategyConfig | None = None,
     signal_provider: Any = None,
 ) -> BacktestResult:
@@ -811,7 +870,10 @@ def run_inference_backtest(
     from .data_loader import get_available_dates
 
     trade_dates = get_available_dates(
-        data_dir=data_dir, start_date=start_date, end_date=end_date
+        data_dir=data_dir,
+        start_date=start_date,
+        end_date=end_date,
+        meta=model_meta,
     )
     if not trade_dates:
         return BacktestResult(
@@ -832,8 +894,13 @@ def run_inference_backtest(
 
     if panel.empty:
         return BacktestResult(
-            status="error", metrics={}, daily_selections=[], trades=[],
-            nav_curve=[], holdings_snapshot=[], industry_rotation=[],
+            status="error",
+            metrics={},
+            daily_selections=[],
+            trades=[],
+            nav_curve=[],
+            holdings_snapshot=[],
+            industry_rotation=[],
             monthly_returns={},
             errors=[{"error": "价格面板为空"}],
         )
@@ -889,6 +956,7 @@ def _realtime_signals(trade_date: str, data_dir: Path) -> pd.DataFrame | None:
 # ---------------------------------------------------------------------------
 # 指标计算
 # ---------------------------------------------------------------------------
+
 
 def _compute_metrics(
     nav_history: list[dict[str, Any]],
@@ -982,8 +1050,10 @@ def _compute_industry_rotation(
     result: list[dict[str, Any]] = []
     for month in sorted(month_counts):
         top = sorted(month_counts[month].items(), key=lambda x: -x[1])[:5]
-        result.append({
-            "month": month,
-            "top_industries": [{"industry": k, "days": v} for k, v in top],
-        })
+        result.append(
+            {
+                "month": month,
+                "top_industries": [{"industry": k, "days": v} for k, v in top],
+            }
+        )
     return result

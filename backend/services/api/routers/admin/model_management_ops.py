@@ -19,7 +19,9 @@ from sqlalchemy import text
 
 from backend.services.api.user_app.middleware.auth import require_admin
 from backend.services.engine.inference.script_runner import InferenceScriptRunner
-from backend.services.engine.data_platform.quantdb_factor_reader import QuantDBFactorReader
+from backend.services.engine.data_platform.quantdb_factor_reader import (
+    QuantDBFactorReader,
+)
 from backend.shared.database_manager_v2 import get_session
 from backend.shared.redis_sentinel_client import get_redis_sentinel_client
 from backend.shared.trading_calendar import calendar_service
@@ -47,6 +49,21 @@ from .model_management_utils import (
 )
 
 router = APIRouter(dependencies=[Depends(require_admin)])  # 路由器级认证兜底
+
+
+def _model_data_context(model_dir: Path) -> tuple[Path, dict[str, Any]]:
+    """Resolve the only valid data root from immutable model metadata.
+
+    Direct QuantDB models must never be date-discovered or backtested from a
+    feature snapshot merely because that was the historic API default.
+    """
+    try:
+        meta = json.loads((model_dir / "metadata.json").read_text(encoding="utf-8"))
+    except (OSError, ValueError, TypeError):
+        meta = {}
+    if str(meta.get("data_source") or "").lower() == "quantdb_factors":
+        return Path(os.getenv("QUANTDB_DATA_DIR", "/app/data/quantdb")), meta
+    return Path(os.getcwd()) / "db" / "feature_snapshots", meta
 
 
 @router.get("/scan", summary="扫描本地模型目录")
@@ -91,6 +108,7 @@ async def scan_model_directories(
     def _sanitize(obj):
         """Replace NaN/Inf with None so FastAPI can JSON-serialize."""
         import math
+
         if isinstance(obj, float):
             if math.isnan(obj) or math.isinf(obj):
                 return None
@@ -109,7 +127,9 @@ async def scan_model_directories(
             try:
                 results.append(_sanitize(_scan_model_directory(d)))
             except Exception as e:
-                results.append({"model_id": Path(d).name, "dir_path": d, "error": str(e)})
+                results.append(
+                    {"model_id": Path(d).name, "dir_path": d, "error": str(e)}
+                )
         return results
 
     loop = asyncio.get_event_loop()
@@ -147,7 +167,9 @@ async def scan_model_directories(
 async def get_model_feature_catalog(
     market: str | None = None,
     factor_source: str = Query("l1_l2_factors", description="QuantDB 因子源"),
-    include_coverage: bool = Query(False, description="是否附带 parquet 数据覆盖统计（默认 false，加速首屏）"),
+    include_coverage: bool = Query(
+        False, description="是否附带 parquet 数据覆盖统计（默认 false，加速首屏）"
+    ),
     current_user: dict = Depends(require_admin),
 ):
     """
@@ -165,7 +187,9 @@ async def get_model_feature_catalog(
             direct_catalog = None
         if direct_catalog:
             if include_coverage:
-                direct_catalog["data_coverage"] = QuantDBFactorReader().describe(factor_source).to_dict()
+                direct_catalog["data_coverage"] = (
+                    QuantDBFactorReader().describe(factor_source).to_dict()
+                )
             return direct_catalog
     try:
         catalog = await _load_feature_catalog_from_db(market=market)
@@ -181,7 +205,9 @@ async def get_model_feature_catalog(
         )
 
     if include_coverage:
-        return await _enrich_feature_catalog_with_data_coverage_async(catalog, market=market)
+        return await _enrich_feature_catalog_with_data_coverage_async(
+            catalog, market=market
+        )
     return catalog
 
 
@@ -200,12 +226,20 @@ async def update_feature_catalog(
     for cat in categories:
         features = cat.get("features", [])
         if not isinstance(features, list):
-            raise HTTPException(status_code=400, detail=f"Category '{cat.get('id')}' features must be a list")
+            raise HTTPException(
+                status_code=400,
+                detail=f"Category '{cat.get('id')}' features must be a list",
+            )
         cat["feature_count"] = len(features)
         total_features += len(features)
     catalog["feature_count"] = total_features
 
-    path = Path(os.getcwd()) / "config" / "features" / "model_training_feature_catalog_v1.json"
+    path = (
+        Path(os.getcwd())
+        / "config"
+        / "features"
+        / "model_training_feature_catalog_v1.json"
+    )
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(catalog, ensure_ascii=False, indent=2), encoding="utf-8")
     return {"status": "ok", "feature_count": total_features, "path": str(path)}
@@ -214,7 +248,9 @@ async def update_feature_catalog(
 @router.get("/data-status", summary="查看当前数据状态（Qlib + 特征快照）")
 async def get_data_status(
     refresh: bool = Query(False, description="是否强制刷新（后台异步）"),
-    market: str = Query("a_share", description="市场: a_share, crypto, hong_kong, us_stock"),
+    market: str = Query(
+        "a_share", description="市场: a_share, crypto, hong_kong, us_stock"
+    ),
     current_user: dict = Depends(require_admin),
 ):
     """
@@ -272,6 +308,7 @@ async def get_data_status(
         return result
     except Exception as e:
         import traceback
+
         error_msg = f"Data status scanning failed: {str(e)}"
         print(error_msg)
         print(traceback.format_exc())
@@ -281,7 +318,7 @@ async def get_data_status(
             "market": market,
             "qlib_data": {"exists": False},
             "feature_snapshots": {"exists": False},
-            "message": f"状态扫描异常: {str(e)}"
+            "message": f"状态扫描异常: {str(e)}",
         }
 
 
@@ -347,7 +384,9 @@ async def update_market_features(
     script_path = Path("/app/backend/scripts/update_market_features.py")
     if not script_path.exists():
         # 回退到主机路径
-        script_path = Path(os.getcwd()) / "backend" / "scripts" / "update_market_features.py"
+        script_path = (
+            Path(os.getcwd()) / "backend" / "scripts" / "update_market_features.py"
+        )
     if not script_path.exists():
         raise HTTPException(status_code=404, detail=f"脚本不存在: {script_path}")
 
@@ -382,7 +421,9 @@ async def update_market_features(
     summary="日常全量同步：从本地 parquet 补齐 stock_daily_latest 所有列（含 is_st/指数成分/技术指标等）",
 )
 async def sync_stock_daily_full(
-    max_days: int = Query(30, ge=1, le=365, description="同步最近 N 个交易日（默认30）"),
+    max_days: int = Query(
+        30, ge=1, le=365, description="同步最近 N 个交易日（默认30）"
+    ),
     current_user: dict = Depends(require_admin),
 ):
     """
@@ -726,9 +767,15 @@ async def precheck_inference(
 class TradingCostParams(BaseModel):
     """交易成本覆盖参数。留空则回退到模型 metadata.context，再回退 A 股标准费率。"""
 
-    commission_rate: float | None = Field(default=None, description="佣金费率（双边），如 0.00025")
-    stamp_duty: float | None = Field(default=None, description="印花税（仅卖出），如 0.001")
-    transfer_fee: float | None = Field(default=None, description="过户费（沪市），如 0.00001")
+    commission_rate: float | None = Field(
+        default=None, description="佣金费率（双边），如 0.00025"
+    )
+    stamp_duty: float | None = Field(
+        default=None, description="印花税（仅卖出），如 0.001"
+    )
+    transfer_fee: float | None = Field(
+        default=None, description="过户费（沪市），如 0.00001"
+    )
     slippage: float | None = Field(default=None, description="滑点（单边），如 0.001")
 
     def to_override(self) -> dict[str, float]:
@@ -786,11 +833,12 @@ async def run_model_backtest(
         raise HTTPException(status_code=404, detail=f"模型 {model_id} 未找到")
 
     # 2. Get available trading dates in range
-    data_dir = os.path.join(os.getcwd(), "db", "feature_snapshots")
+    data_dir, model_meta = _model_data_context(model_dir)
     available_dates = get_available_dates(
         data_dir=data_dir,
         start_date=request.start_date,
         end_date=request.end_date,
+        meta=model_meta,
     )
 
     if not available_dates:
@@ -878,11 +926,12 @@ async def run_multi_horizon_backtest(
     if model_dir is None:
         raise HTTPException(status_code=404, detail=f"模型 {model_id} 未找到")
 
-    data_dir = os.path.join(os.getcwd(), "db", "feature_snapshots")
+    data_dir, model_meta = _model_data_context(model_dir)
     available_dates = get_available_dates(
         data_dir=data_dir,
         start_date=request.start_date,
         end_date=request.end_date,
+        meta=model_meta,
     )
 
     if not available_dates:
@@ -925,6 +974,7 @@ async def run_multi_horizon_backtest(
 
 @router.get("/backtest/trading-dates", summary="获取可用回测日期列表")
 async def get_backtest_trading_dates(
+    model_id: str = Query(..., description="模型ID，用于选择其绑定的数据源"),
     start: str = Query(..., description="起始日期 YYYY-MM-DD"),
     end: str = Query(..., description="结束日期 YYYY-MM-DD"),
     current_user: dict = Depends(require_admin),
@@ -932,8 +982,15 @@ async def get_backtest_trading_dates(
     """返回指定日期范围内的所有可用交易日。"""
     from backend.services.engine.inference.data_loader import get_available_dates
 
-    data_dir = os.path.join(os.getcwd(), "db", "feature_snapshots")
-    dates = get_available_dates(data_dir=data_dir, start_date=start, end_date=end)
+    model_dir = next(
+        (d for d in _find_model_directories(MODELS_ROOT) if d.name == model_id), None
+    )
+    if model_dir is None:
+        raise HTTPException(status_code=404, detail=f"模型 {model_id} 未找到")
+    data_dir, model_meta = _model_data_context(model_dir)
+    dates = get_available_dates(
+        data_dir=data_dir, start_date=start, end_date=end, meta=model_meta
+    )
     return {"status": "success", "dates": dates, "count": len(dates)}
 
 
@@ -953,15 +1010,19 @@ async def list_models_for_backtest(
                 with open(meta_file, encoding="utf-8") as f:
                     meta = json.load(f)
                 model_id = model_dir.name
-                models.append({
-                    "model_id": model_id,
-                    "model_dir": str(model_dir),
-                    "framework": meta.get("framework", "unknown"),
-                    "feature_count": len(meta.get("feature_columns") or meta.get("features", [])),
-                    "target_horizon_days": meta.get("target_horizon_days", 1),
-                    "metrics": meta.get("metrics", {}),
-                    "type": "user",
-                })
+                models.append(
+                    {
+                        "model_id": model_id,
+                        "model_dir": str(model_dir),
+                        "framework": meta.get("framework", "unknown"),
+                        "feature_count": len(
+                            meta.get("feature_columns") or meta.get("features", [])
+                        ),
+                        "target_horizon_days": meta.get("target_horizon_days", 1),
+                        "metrics": meta.get("metrics", {}),
+                        "type": "user",
+                    }
+                )
             except Exception:
                 continue
 
@@ -976,15 +1037,19 @@ async def list_models_for_backtest(
             try:
                 with open(meta_file, encoding="utf-8") as f:
                     meta = json.load(f)
-                models.append({
-                    "model_id": model_id,
-                    "model_dir": str(model_dir),
-                    "framework": meta.get("framework", "unknown"),
-                    "feature_count": len(meta.get("feature_columns") or meta.get("features", [])),
-                    "target_horizon_days": meta.get("target_horizon_days", 1),
-                    "metrics": meta.get("metrics", {}),
-                    "type": "production",
-                })
+                models.append(
+                    {
+                        "model_id": model_id,
+                        "model_dir": str(model_dir),
+                        "framework": meta.get("framework", "unknown"),
+                        "feature_count": len(
+                            meta.get("feature_columns") or meta.get("features", [])
+                        ),
+                        "target_horizon_days": meta.get("target_horizon_days", 1),
+                        "metrics": meta.get("metrics", {}),
+                        "type": "production",
+                    }
+                )
             except Exception:
                 continue
 
@@ -999,6 +1064,7 @@ async def get_backtest_history(
 ):
     """返回指定模型的回测历史记录列表（最新在前）。"""
     from backend.services.engine.inference.backtest_service import BacktestService
+
     svc = BacktestService()
     records = svc.list_history(model_id, limit=limit)
     return {"status": "success", "records": records, "count": len(records)}
@@ -1012,6 +1078,7 @@ async def get_backtest_detail(
 ):
     """返回指定回测运行的完整详情（含逐日数据）。"""
     from backend.services.engine.inference.backtest_service import BacktestService
+
     svc = BacktestService()
     detail = svc.get_history_detail(model_id, run_id)
     if detail is None:
@@ -1027,6 +1094,7 @@ async def delete_backtest_history(
 ):
     """删除指定回测记录。"""
     from backend.services.engine.inference.backtest_service import BacktestService
+
     svc = BacktestService()
     deleted = svc.delete_history(model_id, run_id)
     if not deleted:
@@ -1058,8 +1126,12 @@ class InferenceBacktestRequest(BaseModel):
     model_id: str = Field(..., description="模型ID")
     start_date: str = Field(..., description="回测起始日期 YYYY-MM-DD")
     end_date: str = Field(..., description="回测结束日期 YYYY-MM-DD")
-    signal_mode: str = Field(default="realtime", description="realtime=逐日推理 | stored=读已有信号")
-    strategy: InferenceBacktestStrategyParams = Field(default_factory=InferenceBacktestStrategyParams)
+    signal_mode: str = Field(
+        default="realtime", description="realtime=逐日推理 | stored=读已有信号"
+    )
+    strategy: InferenceBacktestStrategyParams = Field(
+        default_factory=InferenceBacktestStrategyParams
+    )
     model_config = {"protected_namespaces": ()}
 
 
@@ -1100,7 +1172,13 @@ async def run_inference_backtest(
         signal_mode=request.signal_mode,
     )
 
-    data_dir = Path(os.getcwd()) / "db" / "feature_snapshots"
+    model_dir = next(
+        (d for d in _find_model_directories(MODELS_ROOT) if d.name == request.model_id),
+        None,
+    )
+    if model_dir is None:
+        raise HTTPException(status_code=404, detail=f"模型 {request.model_id} 未找到")
+    data_dir, model_meta = _model_data_context(model_dir)
 
     # 信号提供者：stored 模式读 engine_signal_scores
     signal_provider = None
@@ -1117,6 +1195,7 @@ async def run_inference_backtest(
                 start_date=request.start_date,
                 end_date=request.end_date,
                 data_dir=data_dir,
+                model_meta=model_meta,
                 config=config,
                 signal_provider=signal_provider,
             ),
@@ -1125,7 +1204,12 @@ async def run_inference_backtest(
         raise HTTPException(status_code=500, detail=f"推理回测执行失败: {exc}") from exc
 
     if result.status == "error":
-        raise HTTPException(status_code=400, detail=str(result.errors[0].get("error") if result.errors else "推理回测失败"))
+        raise HTTPException(
+            status_code=400,
+            detail=str(
+                result.errors[0].get("error") if result.errors else "推理回测失败"
+            ),
+        )
 
     return _serialize_backtest_result(result)
 

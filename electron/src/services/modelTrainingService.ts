@@ -947,9 +947,9 @@ class ModelTrainingService {
     return (resp.data as any)?.models ?? [];
   }
 
-  async getBacktestTradingDates(start: string, end: string): Promise<string[]> {
+  async getBacktestTradingDates(modelId: string, start: string, end: string): Promise<string[]> {
     const resp = await this.client.get('/admin/models/backtest/trading-dates', {
-      params: { start, end },
+      params: { model_id: modelId, start, end },
     });
     return (resp.data as any)?.dates ?? [];
   }
