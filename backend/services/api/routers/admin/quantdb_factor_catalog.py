@@ -584,8 +584,8 @@ async def upsert_factor_mapping(version_id: str, payload: MappingUpdate, current
               category_id, category_name, enabled, default_selected, required, sort_order)
             VALUES (:mapping_id, :version_id, :source_dataset, :source_column, :feature_key, :display_name,
                     :category_id, :category_name, :enabled, :default_selected, :required, :sort_order)
-            ON CONFLICT (mapping_id) DO UPDATE SET
-              source_column = EXCLUDED.source_column, feature_key = EXCLUDED.feature_key,
+            ON CONFLICT (version_id, source_dataset, feature_key) DO UPDATE SET
+              mapping_id = EXCLUDED.mapping_id, source_column = EXCLUDED.source_column,
               display_name = EXCLUDED.display_name, category_id = EXCLUDED.category_id,
               category_name = EXCLUDED.category_name, enabled = EXCLUDED.enabled,
               default_selected = EXCLUDED.default_selected, required = EXCLUDED.required,
@@ -661,7 +661,10 @@ async def clone_factor_catalog(version_id: str, payload: CatalogVersionClone, cu
 
 @router.post("/versions/{version_id}/seed")
 async def seed_draft_mappings(version_id: str, current_user: dict = Depends(require_admin)):
-    """Convenience endpoint: add all discovered factor columns to a draft as disabled mappings."""
+    """Convenience endpoint: add all discovered factor columns to a draft as mappings.
+
+    草稿显示全部发现因子，但默认不勾选（default_selected=False），enabled 默认 False 由管理员开启。
+    """
     _ = current_user
     async with get_session() as session:
         await _ensure_schema(session)
@@ -701,7 +704,7 @@ async def seed_draft_mappings(version_id: str, current_user: dict = Depends(requ
                 "category_id": cat_id,
                 "display_name": str(definition["display_name"]),
                 "enabled": bool(inherited.get("enabled", False)),
-                "default_selected": bool(inherited.get("default_selected", False)),
+                "default_selected": False,
                 "sort_order": int(definition["sort_order"]) + count,
             })
             count += 1
