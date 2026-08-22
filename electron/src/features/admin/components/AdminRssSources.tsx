@@ -489,11 +489,11 @@ export const AdminRssSources: React.FC = () => {
             name="subscribe_url"
             label={<span style={{ fontSize: 13, fontWeight: 500 }}>订阅地址 (RSS / Atom URL)</span>}
             rules={[{ required: true, message: '请输入订阅地址' }]}
-            style={{ marginBottom: 10 }}
+            style={{ marginBottom: 12 }}
           >
             <Input
               placeholder="https://example.com/feed.xml 或 http://quantmind-rsshub:1200/..."
-              style={{ borderRadius: 6 }}
+              style={{ height: 36, borderRadius: 6 }}
               suffix={
                 <Button
                   type="link"
@@ -501,7 +501,7 @@ export const AdminRssSources: React.FC = () => {
                   icon={<EyeOutlined />}
                   loading={previewing}
                   onClick={handlePreview}
-                  style={{ padding: '0 4px', fontSize: 12 }}
+                  style={{ padding: '0 4px', fontSize: 12, height: 28 }}
                 >
                   测试预览
                 </Button>
@@ -509,18 +509,17 @@ export const AdminRssSources: React.FC = () => {
             />
           </Form.Item>
 
-          {/* 2. RSSHub 快捷生成面板 (紧凑圆角卡片) */}
-          <div style={{ background: '#f0f9ff', padding: '8px 12px', borderRadius: 8, marginBottom: 12, border: '1px solid #bae6fd' }}>
-            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 6 }}>
-              <Text type="secondary" style={{ fontSize: 11 }}>快捷生成 (本地 RSSHub 服务):</Text>
+          {/* 2. RSSHub 快捷生成面板 (高度与圆角统一) */}
+          <div style={{ background: '#f0f9ff', padding: '10px 12px', borderRadius: 8, marginBottom: 12, border: '1px solid #bae6fd' }}>
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 8 }}>
+              <Text type="secondary" style={{ fontSize: 11, fontWeight: 500, color: '#0369a1' }}>快捷生成 (本地 RSSHub 服务):</Text>
               <Text type="secondary" style={{ fontSize: 10 }}>回车自动填入</Text>
             </div>
             <Row gutter={8}>
               <Col span={8}>
                 <Input
-                  size="small"
                   placeholder="Twitter 用户名"
-                  style={{ borderRadius: 4, background: '#ffffff', borderColor: '#90cdf4' }}
+                  style={{ height: 34, borderRadius: 6, background: '#ffffff', borderColor: '#bae6fd' }}
                   onPressEnter={(e) => {
                     const u = (e.target as HTMLInputElement).value.trim().replace(/^@/, '');
                     if (u) addForm.setFieldValue('subscribe_url', `http://quantmind-rsshub:1200/twitter/user/${u}`);
@@ -529,9 +528,8 @@ export const AdminRssSources: React.FC = () => {
               </Col>
               <Col span={8}>
                 <Input
-                  size="small"
                   placeholder="微博用户 UID"
-                  style={{ borderRadius: 4, background: '#ffffff', borderColor: '#90cdf4' }}
+                  style={{ height: 34, borderRadius: 6, background: '#ffffff', borderColor: '#bae6fd' }}
                   onPressEnter={(e) => {
                     const u = (e.target as HTMLInputElement).value.trim();
                     if (u) addForm.setFieldValue('subscribe_url', `http://quantmind-rsshub:1200/weibo/user/${u}`);
@@ -540,9 +538,8 @@ export const AdminRssSources: React.FC = () => {
               </Col>
               <Col span={8}>
                 <Input
-                  size="small"
                   placeholder="雪球用户 ID"
-                  style={{ borderRadius: 4, background: '#ffffff', borderColor: '#90cdf4' }}
+                  style={{ height: 34, borderRadius: 6, background: '#ffffff', borderColor: '#bae6fd' }}
                   onPressEnter={(e) => {
                     const u = (e.target as HTMLInputElement).value.trim();
                     if (u) addForm.setFieldValue('subscribe_url', `http://quantmind-rsshub:1200/xueqiu/user/${u}`);
@@ -574,16 +571,16 @@ export const AdminRssSources: React.FC = () => {
             />
           ) : null}
 
-          {/* 4. 自定义名称与分类并排 */}
+          {/* 4. 自定义名称与分类并排 (统一 36px 高度) */}
           <Row gutter={12}>
             <Col span={12}>
               <Form.Item name="name" label={<span style={{ fontSize: 13 }}>自定义源名称 (可选)</span>} style={{ marginBottom: 4 }}>
-                <Input placeholder="留空则自动提取源标题" style={{ borderRadius: 6 }} />
+                <Input placeholder="留空则自动提取源标题" style={{ height: 36, borderRadius: 6 }} />
               </Form.Item>
             </Col>
             <Col span={12}>
               <Form.Item name="folder_id" label={<span style={{ fontSize: 13 }}>归入分类目录</span>} initialValue={0} style={{ marginBottom: 4 }}>
-                <Select options={folderOptions} style={{ width: '100%', borderRadius: 6 }} />
+                <Select options={folderOptions} style={{ width: '100%', height: 36, borderRadius: 6 }} />
               </Form.Item>
             </Col>
           </Row>
@@ -607,20 +604,20 @@ export const AdminRssSources: React.FC = () => {
       >
         <Form form={editForm} layout="vertical">
           <Form.Item name="subscribe_url" label="订阅地址" style={{ marginBottom: 10 }}>
-            <Input disabled style={{ borderRadius: 6 }} />
+            <Input disabled style={{ height: 36, borderRadius: 6 }} />
           </Form.Item>
           <Form.Item name="name" label="名称" rules={[{ required: true, message: '请输入名称' }]} style={{ marginBottom: 10 }}>
-            <Input style={{ borderRadius: 6 }} />
+            <Input style={{ height: 36, borderRadius: 6 }} />
           </Form.Item>
           <Form.Item name="folder_id" label="所在分类目录" style={{ marginBottom: 10 }}>
-            <Select options={folderOptions} style={{ borderRadius: 6 }} />
+            <Select options={folderOptions} style={{ height: 36, borderRadius: 6 }} />
           </Form.Item>
           <Form.Item
             name="fetch_interval_minutes"
             label="抓取间隔（分钟）"
             style={{ marginBottom: 10 }}
           >
-            <InputNumber min={1} max={1440} style={{ width: '100%', borderRadius: 6 }} />
+            <InputNumber min={1} max={1440} style={{ width: '100%', height: 36, borderRadius: 6 }} />
           </Form.Item>
           <Space size="large">
             <Form.Item name="enabled" label="启用抓取" valuePropName="checked" style={{ marginBottom: 0 }}>
