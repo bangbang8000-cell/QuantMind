@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { Sparkles, Search, Activity, Layers, Network, ArrowUpRight, TrendingUp, BarChart3, PieChart, Clock, Filter, ArrowRightLeft } from 'lucide-react';
+import { Sparkles, Search, Activity, Layers, Network, TrendingUp, BarChart3, Clock } from 'lucide-react';
 import { Input, Spin } from 'antd';
 import { BroadMarketHeader, IndexItem } from '../components/BroadMarketHeader';
 import { ShenwanHeatmapChart } from '../components/ShenwanHeatmapChart';
@@ -33,6 +33,7 @@ export const MarketAnalysisPage: React.FC = () => {
   const [heatmapData, setHeatmapData] = useState<any[]>([]);
   const [sankeyData, setSankeyData] = useState<{ nodes: any[]; links: any[] } | null>(null);
   const [updateTime, setUpdateTime] = useState<string>('');
+  const [treemapData, setTreemapData] = useState<any[]>([]);
 
   // 🎯 多周期资金流向专属状态
   const [period, setPeriod] = useState<'1d' | '3d' | '5d' | '10d' | '20d'>('5d');
@@ -44,6 +45,16 @@ export const MarketAnalysisPage: React.FC = () => {
   useEffect(() => {
     fetchMarketData();
   }, []);
+
+  // 矩形树图数据：随分类模式切换拉取对应热力图
+  useEffect(() => {
+    if (activeTab !== 'flow-bar' || chartViewMode !== 'treemap') return;
+    const token = localStorage.getItem('access_token') || '';
+    fetch(`/api/v1/market-analysis/heatmap?category=${categoryMode}`, { headers: { Authorization: `Bearer ${token}` } })
+      .then((res) => (res.ok ? res.json() : null))
+      .then((d) => setTreemapData(d?.items && d.items.length > 0 ? d.items : []))
+      .catch(() => setTreemapData([]));
+  }, [activeTab, chartViewMode, categoryMode]);
 
   const fetchMarketData = async () => {
     setLoading(true);
@@ -324,7 +335,7 @@ export const MarketAnalysisPage: React.FC = () => {
                   onItemClick={(item) => setSelectedFlowItem(item)}
                 />
               ) : (
-                <ShenwanHeatmapChart height={780} />
+                <ShenwanHeatmapChart data={treemapData} height={780} />
               )}
             </div>
 
@@ -475,7 +486,7 @@ export const MarketAnalysisPage: React.FC = () => {
             </h3>
             <span className="text-xs text-slate-400">包含超大单、大单、中单、小单拆解</span>
           </div>
-          <StockMoneyFlowTable items={stockFlows} loading={loading} />
+          <StockMoneyFlowTable items={stockFlows} loading={loading} latestDate={breadth?.trade_date} />
         </div>
       )}
 

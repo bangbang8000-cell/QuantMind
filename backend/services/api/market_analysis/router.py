@@ -276,6 +276,16 @@ async def get_money_flow_sankey(
 
 # ---- Tag Dual Lookup Endpoints (标签双向查询) ----
 
+@router.get("/tags/stats")
+async def get_tag_stats(
+    limit: int = Query(default=30, ge=1, le=100),
+    current_user: dict = Depends(get_current_user),
+) -> dict:
+    """标签体系统计与热门标签列表（真实 QuantDB sector_members 聚合）"""
+    _ = current_user
+    return quantdb_feed.get_tag_stats(limit=limit)
+
+
 @router.get("/tags/by-tag")
 async def get_stocks_by_tag(
     tag: str = Query(..., description="标签或板块名称，如：低空经济 / 华为概念 / 电子"),

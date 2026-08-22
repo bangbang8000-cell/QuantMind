@@ -744,3 +744,64 @@ def get_tags_by_stock(symbol: str) -> dict[str, list[str]] | None:
         if sname:
             tags.setdefault(stype, []).append(sname)
     return tags if tags else None
+
+
+def get_tag_stats(limit: int = 30) -> dict[str, Any]:
+    """标签体系统计与热门标签（按成分股数量排序，真实 sector_members 聚合）。"""
+    if not _available():
+        return {
+            "total_sectors": 0,
+            "total_stocks": 0,
+            "avg_tags_per_stock": 0.0,
+            "max_tags_per_stock": 0,
+            "total_relations": 0,
+            "hot_tags": [],
+        }
+
+    def _load() -> dict[str, Any]:
+        members = _sector_members()
+        if members.empty or "symbol" not in members.columns:
+            return {
+                "total_sectors": 0,
+                "total_stocks": 0,
+                "avg_tags_per_stock": 0.0,
+                "max_tags_per_stock": 0,
+                "total_relations": 0,
+                "hot_tags": [],
+            }
+
+        members = members.copy()
+        members["symbol"] = members["symbol"].astype(str)
+        members["sector_name"] = members["sector_name"].astype(str).str.strip()
+        members = members[members["sector_name"] != ""]
+        total_relations = int(len(members))
+        total_sectors = int(members["sector_name"].nunique())
+        total_stocks = int(members["symbol"].nunique())
+        per_stock = members.groupby("symbol")["sector_name"].nunique()
+        avg_tags = round(float(per_stock.mean()) if not per_stock.empty else 0.0, 1)
+        max_tags = int(per_stock.max()) if not per_stock.empty else 0
+
+        grp = (
+            members.groupby(["sector_name", "sector_type"], dropna=False)
+            .size()
+            .reset_index(name="count")
+            .sort_values("count", ascending=False)
+        )
+        hot: list[dict[str, Any]] = [
+            {
+                "name": str(r.sector_name),
+                "type": str(r.sector_type or "通用标签"),
+                "count": int(r.count),
+            }
+            for r in grp.head(limit).itertuples(index=False)
+        ]
+        return {
+            "total_sectors": total_sectors,
+            "total_stocks": total_stocks,
+            "avg_tags_per_stock": avg_tags,
+            "max_tags_per_stock": max_tags,
+            "total_relations": total_relations,
+            "hot_tags": hot[:limit],
+        }
+
+    return _cached(f"tag_stats_{limit}", 300.0, _load)

@@ -9,12 +9,8 @@ import {
   Layers,
   Hash,
   BarChart3,
-  ChevronDown,
-  ChevronUp,
-  Table as TableIcon,
-  ChevronRight
 } from 'lucide-react';
-import { Input, Table, Tag, Tooltip } from 'antd';
+import { Input, Table } from 'antd';
 import type { ColumnsType } from 'antd/es/table';
 
 interface HotTagItem {
@@ -23,167 +19,125 @@ interface HotTagItem {
   count: number;
 }
 
-interface SectorCardItem {
-  code: string;
+interface TagStats {
+  total_sectors: number;
+  total_stocks: number;
+  avg_tags_per_stock: number;
+  max_tags_per_stock: number;
+  total_relations: number;
+  hot_tags: HotTagItem[];
+}
+
+interface TagStockItem {
+  symbol: string;
   name: string;
-  type: string;
-  count: number;
-  stocks: { symbol: string; name: string }[];
+  close_price: number;
+  pct_change: number;
+  net_inflow: number;
 }
 
 export const TagLookupPanel: React.FC = () => {
   const [perspective, setPerspective] = useState<'stock' | 'sector'>('stock');
   const [sectorFilter, setSectorFilter] = useState<string>('全部');
-  const [searchQuery, setSearchQuery] = useState('600000.SH');
+  const [searchQuery, setSearchQuery] = useState('SH600000');
   const [loading, setLoading] = useState(false);
-  const [isHotTagsCollapsed, setIsHotTagsCollapsed] = useState(false);
-  const [expandedSectorCode, setExpandedSectorCode] = useState<string | null>(null);
+  const [statsLoading, setStatsLoading] = useState(false);
 
-  const [tagToStocksData, setTagToStocksData] = useState<any[]>([]);
+  const [stats, setStats] = useState<TagStats | null>(null);
+  const [tagToStocksData, setTagToStocksData] = useState<TagStockItem[]>([]);
+  const [activeTag, setActiveTag] = useState<string>('');
   const [stockToTagsData, setStockToTagsData] = useState<Record<string, string[]>>({});
+  const [activeSymbol, setActiveSymbol] = useState<string>('');
 
   const sectorSubCategories = ['全部', '地区板块', '概念板块', '行业板块(一级)', '行业板块(二级)', '风格板块'];
 
-  const hotTagsList: HotTagItem[] = [
-    { name: '机器人概念', type: '概念板块', count: 1207 },
-    { name: '专精特新', type: '概念板块', count: 1203 },
-    { name: '连续亏损', type: '概念板块', count: 1078 },
-    { name: '人工智能', type: '概念板块', count: 1067 },
-    { name: '新能源车', type: '概念板块', count: 1064 },
-    { name: '芯片', type: '概念板块', count: 910 },
-    { name: '储能', type: '概念板块', count: 909 },
-    { name: '一带一路', type: '概念板块', count: 775 },
-    { name: 'DeepSeek概念', type: '概念板块', count: 775 },
-    { name: '浙江板块', type: '地区板块', count: 750 },
-    { name: '江苏板块', type: '地区板块', count: 734 },
-    { name: '数据中心', type: '概念板块', count: 652 },
-    { name: '锂电池概念', type: '概念板块', count: 611 },
-    { name: '微小盘股', type: '概念板块', count: 600 },
-    { name: '破发股价', type: '概念板块', count: 547 },
-    { name: '业绩预升', type: '概念板块', count: 546 },
-    { name: '国防军工', type: '概念板块', count: 532 },
-    { name: '商业航天', type: '概念板块', count: 526 },
-    { name: '光伏', type: '概念板块', count: 517 },
-    { name: '物联网', type: '概念板块', count: 511 },
-  ];
-
-  // 模拟板块视角下的板块列表卡片数据 (完美复刻参考图 2)
-  const sectorCardsList: SectorCardItem[] = [
-    {
-      code: '880081.SH',
-      name: '轮动趋势',
-      type: '风格板块',
-      count: 2,
-      stocks: [
-        { symbol: '511010.SH', name: '国债现货' },
-        { symbol: '511260.SH', name: '十年国债' },
-      ],
-    },
-    {
-      code: '880082.SH',
-      name: '破净修复',
-      type: '风格板块',
-      count: 3,
-      stocks: [
-        { symbol: 'SH600036', name: '招商银行' },
-        { symbol: 'SZ000001', name: '平安银行' },
-        { symbol: 'SH601328', name: '交通银行' },
-      ],
-    },
-    {
-      code: '880083.SH',
-      name: '机器人概念',
-      type: '概念板块',
-      count: 1207,
-      stocks: [
-        { symbol: 'SZ002085', name: '万丰奥威' },
-        { symbol: 'SZ002475', name: '立讯精密' },
-        { symbol: 'SZ002594', name: '比亚迪' },
-      ],
-    },
-    {
-      code: '880084.SH',
-      name: '上海金融核心区',
-      type: '地区板块',
-      count: 15,
-      stocks: [
-        { symbol: 'SH600000', name: '浦发银行' },
-        { symbol: 'SH600036', name: '招商银行' },
-      ],
-    },
-  ];
-
-  const handlePerspectiveChange = (newMode: 'stock' | 'sector') => {
-    setPerspective(newMode);
-    if (newMode === 'stock') {
-      setSearchQuery('600000.SH');
-      handleSearch('600000.SH');
-    } else {
-      setSearchQuery('880081.SH');
-      handleSearch('880081.SH');
-    }
-  };
-
-  useEffect(() => {
-    handleSearch(searchQuery);
-  }, []);
-
-  const handleSearch = async (queryText: string) => {
-    if (!queryText.trim()) return;
-    setSearchQuery(queryText);
-    setLoading(true);
-
+  const fetchStats = async () => {
+    setStatsLoading(true);
     try {
-      if (perspective === 'sector') {
-        const res = await fetch(`/api/v1/market-analysis/tags/by-tag?tag=${encodeURIComponent(queryText)}`, {
-          headers: { Authorization: `Bearer ${localStorage.getItem('access_token') || ''}` },
-        });
-        if (res.ok) {
-          const data = await res.json();
-          setTagToStocksData(data.items || []);
-        } else {
-          fallbackTagToStocks(queryText);
-        }
-      } else {
-        const res = await fetch(`/api/v1/market-analysis/tags/by-stock?symbol=${encodeURIComponent(queryText)}`, {
-          headers: { Authorization: `Bearer ${localStorage.getItem('access_token') || ''}` },
-        });
-        if (res.ok) {
-          const data = await res.json();
-          setStockToTagsData(data.tags || {});
-        } else {
-          fallbackStockToTags(queryText);
-        }
+      const token = localStorage.getItem('access_token') || '';
+      const res = await fetch('/api/v1/market-analysis/tags/stats?limit=30', {
+        headers: { Authorization: `Bearer ${token}` },
+      });
+      if (res.ok) {
+        const data = await res.json();
+        if (data) setStats(data);
       }
     } catch (e) {
-      if (perspective === 'sector') fallbackTagToStocks(queryText);
-      else fallbackStockToTags(queryText);
+      console.warn('标签统计接口请求异常', e);
+    }
+    setStatsLoading(false);
+  };
+
+  const handleStockSearch = async (symbol: string) => {
+    const q = symbol.trim();
+    if (!q) return;
+    setSearchQuery(q);
+    setActiveSymbol(q);
+    setLoading(true);
+    try {
+      const token = localStorage.getItem('access_token') || '';
+      const res = await fetch(`/api/v1/market-analysis/tags/by-stock?symbol=${encodeURIComponent(q)}`, {
+        headers: { Authorization: `Bearer ${token}` },
+      });
+      if (res.ok) {
+        const data = await res.json();
+        setStockToTagsData(data.tags || {});
+      } else {
+        setStockToTagsData({});
+      }
+    } catch (e) {
+      console.warn('个股标签接口请求异常', e);
+      setStockToTagsData({});
     }
     setLoading(false);
   };
 
-  const fallbackTagToStocks = (tag: string) => {
-    setTagToStocksData([
-      { symbol: '511010.SH', name: '国债现货', close_price: 104.25, pct_change: 0.12, market_cap: 1250.4, net_inflow: 310000000 },
-      { symbol: '511260.SH', name: '十年国债', close_price: 102.80, pct_change: 0.08, market_cap: 890.5, net_inflow: 180000000 },
-      { symbol: 'SZ002085', name: '万丰奥威', close_price: 16.85, pct_change: 9.98, market_cap: 358.4, net_inflow: 310000000 },
-      { symbol: 'SZ002475', name: '立讯精密', close_price: 38.50, pct_change: 4.12, market_cap: 2760.5, net_inflow: 280000000 },
-      { symbol: 'SZ002594', name: '比亚迪', close_price: 248.50, pct_change: 3.12, market_cap: 7230.1, net_inflow: 415000000 },
-      { symbol: 'SH600036', name: '招商银行', close_price: 35.80, pct_change: 2.45, market_cap: 9020.8, net_inflow: 482000000 },
-    ]);
+  const handleTagSearch = async (tag: string) => {
+    const q = tag.trim();
+    if (!q) return;
+    setSearchQuery(q);
+    setActiveTag(q);
+    setLoading(true);
+    try {
+      const token = localStorage.getItem('access_token') || '';
+      const res = await fetch(`/api/v1/market-analysis/tags/by-tag?tag=${encodeURIComponent(q)}&limit=50`, {
+        headers: { Authorization: `Bearer ${token}` },
+      });
+      if (res.ok) {
+        const data = await res.json();
+        setTagToStocksData(data.items || []);
+      } else {
+        setTagToStocksData([]);
+      }
+    } catch (e) {
+      console.warn('板块成分接口请求异常', e);
+      setTagToStocksData([]);
+    }
+    setLoading(false);
   };
 
-  const fallbackStockToTags = (symbol: string) => {
-    setStockToTagsData({
-      '风格板块': ['轮动趋势 880081.SH', '破净修复 880082.SH', '高股息率 880083.SH'],
-      '概念板块': ['沪深300', '上证50', 'MSCI中国', '富时罗素概念', 'ESG百强'],
-      '行业板块(一级)': ['金融业', '非银金融'],
-      '行业板块(二级)': ['股份制银行', '大金融集团'],
-      '地区板块': ['上海板块', '陆家嘴金融区'],
-    });
+  const handlePerspectiveChange = (mode: 'stock' | 'sector') => {
+    setPerspective(mode);
+    if (mode === 'sector') {
+      const first = stats?.hot_tags?.[0]?.name;
+      if (first) handleTagSearch(first);
+      else setSearchQuery('');
+    } else {
+      handleStockSearch('SH600000');
+    }
   };
 
-  const columns: ColumnsType<any> = [
+  useEffect(() => {
+    fetchStats();
+    handleStockSearch('SH600000');
+  }, []);
+
+  const hotTagsList: HotTagItem[] = stats?.hot_tags || [];
+  const filteredHotTags = hotTagsList.filter(
+    (t) => sectorFilter === '全部' || t.type === sectorFilter
+  );
+
+  const columns: ColumnsType<TagStockItem> = [
     {
       title: '序号',
       key: 'idx',
@@ -199,7 +153,7 @@ export const TagLookupPanel: React.FC = () => {
       render: (symbol, r) => (
         <div className="flex items-center gap-2 whitespace-nowrap">
           <div className="w-7 h-7 rounded-xl bg-purple-50 text-purple-700 font-extrabold text-xs flex items-center justify-center border border-purple-100 shadow-inner">
-            {r.name.substring(0, 1)}
+            {r.name?.substring(0, 1) || '?'}
           </div>
           <div>
             <div className="font-bold text-slate-800 text-xs flex items-center gap-1">
@@ -236,14 +190,6 @@ export const TagLookupPanel: React.FC = () => {
       },
     },
     {
-      title: '总市值规模',
-      dataIndex: 'market_cap',
-      key: 'market_cap',
-      align: 'right',
-      width: 110,
-      render: (v) => <span className="font-mono text-xs font-medium text-slate-600">¥{v} 亿</span>,
-    },
-    {
       title: '主力资金净流入',
       dataIndex: 'net_inflow',
       key: 'net_inflow',
@@ -260,63 +206,62 @@ export const TagLookupPanel: React.FC = () => {
     },
   ];
 
+  const statCards = [
+    {
+      label: '总板块数',
+      value: stats ? stats.total_sectors.toLocaleString() : '—',
+      sub: '涵盖行业/概念/风格',
+      icon: <Layers className="w-6 h-6" />,
+      cardClass: 'from-white to-blue-50/40 border-blue-100/80',
+      iconClass: 'bg-blue-100/70 text-blue-600 border border-blue-200/60',
+    },
+    {
+      label: '覆盖股票',
+      value: stats ? stats.total_stocks.toLocaleString() : '—',
+      sub: '沪深京 A 股全量',
+      icon: <Hash className="w-6 h-6" />,
+      cardClass: 'from-white to-emerald-50/40 border-emerald-100/80',
+      iconClass: 'bg-emerald-100/70 text-emerald-600 border border-emerald-200/60',
+    },
+    {
+      label: '平均标签数',
+      value: stats ? String(stats.avg_tags_per_stock) : '—',
+      sub: `最高单股 ${stats?.max_tags_per_stock ?? '—'} 个`,
+      icon: <BarChart3 className="w-6 h-6" />,
+      cardClass: 'from-white to-amber-50/40 border-amber-100/80',
+      iconClass: 'bg-amber-100/70 text-amber-600 border border-amber-200/60',
+    },
+    {
+      label: '总记录数',
+      value: stats ? stats.total_relations.toLocaleString() : '—',
+      sub: '股票-板块映射关系',
+      icon: <TagIcon className="w-6 h-6" />,
+      cardClass: 'from-white to-purple-50/40 border-purple-100/80',
+      iconClass: 'bg-purple-100/70 text-purple-600 border border-purple-200/60',
+    },
+  ];
+
   return (
     <div className="w-full flex flex-col gap-5 bg-white/95 backdrop-blur-md rounded-3xl p-6 border border-purple-100/80 shadow-lg shadow-purple-500/5">
-      {/* 🌟 1. 顶部 4 大统计数据卡片 (参考设计图) */}
+      {/* 🌟 1. 顶部 4 大统计数据卡片 */}
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
-        {/* 卡片 1: 总板块数 */}
-        <div className="bg-gradient-to-br from-white to-blue-50/40 rounded-2xl p-4 border border-blue-100/80 shadow-sm flex items-center justify-between">
-          <div>
-            <div className="text-xs text-slate-500 font-bold mb-1">总板块数</div>
-            <div className="text-2xl font-black font-mono text-slate-900 tracking-tight">583</div>
-            <div className="text-[10px] text-slate-400 font-medium mt-1">涵盖行业/概念/风格</div>
+        {statCards.map((c) => (
+          <div key={c.label} className={`bg-gradient-to-br ${c.cardClass} rounded-2xl p-4 shadow-sm flex items-center justify-between`}>
+            <div>
+              <div className="text-xs text-slate-500 font-bold mb-1">{c.label}</div>
+              <div className="text-2xl font-black font-mono text-slate-900 tracking-tight">
+                {statsLoading && !stats ? '...' : c.value}
+              </div>
+              <div className="text-[10px] text-slate-400 font-medium mt-1">{c.sub}</div>
+            </div>
+            <div className={`p-3 rounded-2xl ${c.iconClass} shadow-inner`}>{c.icon}</div>
           </div>
-          <div className="p-3 rounded-2xl bg-blue-100/70 text-blue-600 border border-blue-200/60 shadow-inner">
-            <Layers className="w-6 h-6" />
-          </div>
-        </div>
-
-        {/* 卡片 2: 覆盖股票 */}
-        <div className="bg-gradient-to-br from-white to-emerald-50/40 rounded-2xl p-4 border border-emerald-100/80 shadow-sm flex items-center justify-between">
-          <div>
-            <div className="text-xs text-slate-500 font-bold mb-1">覆盖股票</div>
-            <div className="text-2xl font-black font-mono text-slate-900 tracking-tight">6,035</div>
-            <div className="text-[10px] text-slate-400 font-medium mt-1">沪深京 A 股全量</div>
-          </div>
-          <div className="p-3 rounded-2xl bg-emerald-100/70 text-emerald-600 border border-emerald-200/60 shadow-inner">
-            <Hash className="w-6 h-6" />
-          </div>
-        </div>
-
-        {/* 卡片 3: 平均标签数 */}
-        <div className="bg-gradient-to-br from-white to-amber-50/40 rounded-2xl p-4 border border-amber-100/80 shadow-sm flex items-center justify-between">
-          <div>
-            <div className="text-xs text-slate-500 font-bold mb-1">平均标签数</div>
-            <div className="text-2xl font-black font-mono text-slate-900 tracking-tight">13.5</div>
-            <div className="text-[10px] text-slate-400 font-medium mt-1">最高单股 66 个</div>
-          </div>
-          <div className="p-3 rounded-2xl bg-amber-100/70 text-amber-600 border border-amber-200/60 shadow-inner">
-            <BarChart3 className="w-6 h-6" />
-          </div>
-        </div>
-
-        {/* 卡片 4: 总记录数 */}
-        <div className="bg-gradient-to-br from-white to-purple-50/40 rounded-2xl p-4 border border-purple-100/80 shadow-sm flex items-center justify-between">
-          <div>
-            <div className="text-xs text-slate-500 font-bold mb-1">总记录数</div>
-            <div className="text-2xl font-black font-mono text-slate-900 tracking-tight">81,608</div>
-            <div className="text-[10px] text-slate-400 font-medium mt-1">股票-板块映射关系</div>
-          </div>
-          <div className="p-3 rounded-2xl bg-purple-100/70 text-purple-600 border border-purple-200/60 shadow-inner">
-            <TagIcon className="w-6 h-6" />
-          </div>
-        </div>
+        ))}
       </div>
 
-      {/* 🌟 2. 视角切换与板块类别过滤 (参考设计图) */}
+      {/* 🌟 2. 视角切换与板块类别过滤 */}
       <div className="flex flex-col lg:flex-row items-start lg:items-center justify-between gap-4 pt-1">
         <div className="flex items-center gap-3">
-          {/* 视角分段按钮 */}
           <div className="flex items-center p-1 rounded-2xl bg-slate-100 border border-slate-200/60 shadow-inner">
             <button
               onClick={() => handlePerspectiveChange('stock')}
@@ -340,14 +285,13 @@ export const TagLookupPanel: React.FC = () => {
             </button>
           </div>
 
-          {/* 当在板块视角时，展示子分类 Pills */}
           {perspective === 'sector' && (
             <div className="flex items-center gap-1.5 overflow-x-auto">
               {sectorSubCategories.map((sc) => (
                 <button
                   key={sc}
                   onClick={() => setSectorFilter(sc)}
-                  className={`px-3 py-1.5 rounded-full text-xs font-bold transition-all ${
+                  className={`px-3 py-1.5 rounded-full text-xs font-bold transition-all whitespace-nowrap ${
                     sectorFilter === sc
                       ? 'bg-blue-600 text-white shadow-sm'
                       : 'bg-white text-slate-600 hover:bg-slate-100 border border-slate-200/80'
@@ -360,9 +304,11 @@ export const TagLookupPanel: React.FC = () => {
           )}
         </div>
 
-        <span className="text-xs text-slate-400 font-mono hidden lg:inline-block">
-          探索 583 个板块与 6,035 只股票的多维关联
-        </span>
+        {stats && (
+          <span className="text-xs text-slate-400 font-mono hidden lg:inline-block">
+            探索 {stats.total_sectors.toLocaleString()} 个板块与 {stats.total_stocks.toLocaleString()} 只股票的多维关联
+          </span>
+        )}
       </div>
 
       {/* 🌟 3. 统一搜索输入框与“立即检索”按钮 */}
@@ -370,15 +316,17 @@ export const TagLookupPanel: React.FC = () => {
         <div className="relative flex-1">
           <Input
             prefix={<Search className="w-4 h-4 text-slate-400 mr-2" />}
-            placeholder={perspective === 'stock' ? '输入股票代码或名称，如 600000.SH / 招商银行' : '输入板块名称或代码，如 880081.SH / 轮动趋势 / 机器人概念'}
+            placeholder={perspective === 'stock' ? '输入股票代码或名称，如 SH600000 / 招商银行' : '输入板块名称，如 机器人概念 / 低空经济'}
             value={searchQuery}
             onChange={(e) => setSearchQuery(e.target.value)}
-            onKeyDown={(e) => e.key === 'Enter' && handleSearch(searchQuery)}
+            onKeyDown={(e) =>
+              e.key === 'Enter' && (perspective === 'stock' ? handleStockSearch(searchQuery) : handleTagSearch(searchQuery))
+            }
             className="rounded-2xl border border-slate-200 bg-white text-xs text-slate-800 placeholder-slate-400 py-3 px-4 shadow-xs hover:border-blue-400 focus:bg-white focus:ring-2 focus:ring-blue-100 transition-all"
           />
         </div>
         <button
-          onClick={() => handleSearch(searchQuery)}
+          onClick={() => (perspective === 'stock' ? handleStockSearch(searchQuery) : handleTagSearch(searchQuery))}
           className="px-6 py-3 rounded-2xl bg-gradient-to-r from-blue-600 to-indigo-600 hover:from-blue-700 hover:to-indigo-700 text-white text-xs font-extrabold shadow-md shadow-blue-600/20 hover:shadow-lg transition-all flex items-center gap-2 flex-shrink-0"
         >
           <Search className="w-4 h-4" />
@@ -386,19 +334,23 @@ export const TagLookupPanel: React.FC = () => {
         </button>
       </div>
 
-      {/* 🌟 4. 主内容渲染区 (根据视角精确区分渲染逻辑) */}
+      {/* 🌟 4. 主内容渲染区 */}
       {perspective === 'stock' ? (
-        <div className="flex flex-col gap-3">
-          <div className="bg-white rounded-2xl p-5 border border-slate-200/80 shadow-xs flex flex-col gap-3">
-            <div className="flex items-center justify-between border-b border-slate-100 pb-3">
-              <div className="flex items-center gap-2">
-                <span className="text-sm font-extrabold text-blue-600 font-mono">{searchQuery}</span>
-                <span className="text-xs text-slate-400">包含 {Object.values(stockToTagsData).flat().length || 1} 个板块标签</span>
-              </div>
+        <div className="bg-white rounded-2xl p-5 border border-slate-200/80 shadow-xs flex flex-col gap-3">
+          <div className="flex items-center justify-between border-b border-slate-100 pb-3">
+            <div className="flex items-center gap-2">
+              <span className="text-sm font-extrabold text-blue-600 font-mono">{activeSymbol}</span>
+              <span className="text-xs text-slate-400">
+                包含 {Object.values(stockToTagsData).flat().length} 个板块标签
+              </span>
             </div>
+          </div>
 
-            <div className="flex flex-col gap-3 pt-1">
-              {Object.entries(stockToTagsData).map(([groupTitle, tagList]) => (
+          <div className="flex flex-col gap-3 pt-1">
+            {loading ? (
+              <span className="text-xs text-slate-400">检索中...</span>
+            ) : Object.keys(stockToTagsData).length > 0 ? (
+              Object.entries(stockToTagsData).map(([groupTitle, tagList]) => (
                 <div key={groupTitle} className="flex flex-col gap-2">
                   <div className="text-xs font-bold text-slate-500">{groupTitle}:</div>
                   <div className="flex items-center gap-2 flex-wrap">
@@ -407,7 +359,7 @@ export const TagLookupPanel: React.FC = () => {
                         key={t}
                         onClick={() => {
                           handlePerspectiveChange('sector');
-                          handleSearch(t);
+                          handleTagSearch(t);
                         }}
                         className="px-3.5 py-1.5 rounded-full bg-emerald-50 text-emerald-700 font-extrabold text-xs border border-emerald-200/80 flex items-center gap-1.5 cursor-pointer hover:bg-emerald-600 hover:text-white transition-all shadow-2xs"
                       >
@@ -417,98 +369,60 @@ export const TagLookupPanel: React.FC = () => {
                     ))}
                   </div>
                 </div>
-              ))}
-            </div>
+              ))
+            ) : (
+              <span className="text-xs text-slate-400">未查询到该股票的标签信息</span>
+            )}
           </div>
         </div>
       ) : (
-        /* 🌟 板块视角 (完美复刻参考图 2：展示板块卡片及成分股 Pill) */
-        <div className="flex flex-col gap-4">
-          {sectorCardsList
-            .filter((item) => sectorFilter === '全部' || item.type === sectorFilter)
-            .map((sectorItem) => (
-              <div key={sectorItem.code} className="bg-white rounded-2xl p-5 border border-slate-200/80 shadow-xs flex flex-col gap-3">
-                <div className="flex items-center justify-between border-b border-slate-100 pb-3">
-                  <div className="flex items-center gap-3">
-                    <span className="text-sm font-extrabold text-blue-600 font-mono">{sectorItem.code}</span>
-                    <span className="text-sm font-extrabold text-slate-900">{sectorItem.name}</span>
-                    <span className="px-2.5 py-0.5 rounded-full bg-blue-50 text-blue-600 text-xs font-bold border border-blue-100">
-                      {sectorItem.count} 只成分股
-                    </span>
-                    <span className="px-2.5 py-0.5 rounded-full bg-purple-50 text-purple-600 text-xs font-bold border border-purple-100">
-                      {sectorItem.type}
-                    </span>
-                  </div>
+        /* 🌟 板块视角：成分股行情列表（真实数据） */
+        <div className="bg-white rounded-2xl p-5 border border-slate-200/80 shadow-xs flex flex-col gap-3">
+          <div className="flex items-center justify-between border-b border-slate-100 pb-3">
+            <div className="flex items-center gap-3">
+              <span className="text-sm font-extrabold text-blue-600">{activeTag || searchQuery}</span>
+              <span className="px-2.5 py-0.5 rounded-full bg-blue-50 text-blue-600 text-xs font-bold border border-blue-100">
+                {tagToStocksData.length} 只成分股
+              </span>
+            </div>
+            <span className="text-[11px] text-slate-400">按主力净流入排序 · 点击股票可切换到股票视角</span>
+          </div>
 
-                  <button
-                    onClick={() => setExpandedSectorCode(expandedSectorCode === sectorItem.code ? null : sectorItem.code)}
-                    className="flex items-center gap-1 text-xs font-bold text-blue-600 hover:text-blue-700 transition-colors"
-                  >
-                    <span>{expandedSectorCode === sectorItem.code ? '收起成分股列表' : '查看全量行情列表'}</span>
-                    {expandedSectorCode === sectorItem.code ? <ChevronUp className="w-3.5 h-3.5" /> : <ChevronDown className="w-3.5 h-3.5" />}
-                  </button>
-                </div>
-
-                {/* 板块包含的成分股 Pill 列表 */}
-                <div className="flex items-center gap-2 flex-wrap pt-1">
-                  {sectorItem.stocks.map((stk) => (
-                    <span
-                      key={stk.symbol}
-                      onClick={() => {
-                        handlePerspectiveChange('stock');
-                        handleSearch(stk.symbol);
-                      }}
-                      className="px-3.5 py-1.5 rounded-xl bg-slate-100 hover:bg-blue-50 hover:text-blue-700 text-slate-700 text-xs font-mono font-bold border border-slate-200/70 cursor-pointer transition-all flex items-center gap-1.5"
-                    >
-                      <span>{stk.symbol}</span>
-                      <span className="text-slate-400 font-sans font-normal">({stk.name})</span>
-                    </span>
-                  ))}
-                </div>
-
-                {/* 若展开行情列表 */}
-                {expandedSectorCode === sectorItem.code && (
-                  <div className="mt-2 overflow-hidden rounded-xl border border-slate-200/80 animate-in fade-in duration-150">
-                    <Table
-                      columns={columns}
-                      dataSource={tagToStocksData.map((d, i) => ({ ...d, key: i }))}
-                      loading={loading}
-                      pagination={{ pageSize: 5 }}
-                      size="small"
-                    />
-                  </div>
-                )}
-              </div>
-            ))}
+          <Table
+            columns={columns}
+            dataSource={tagToStocksData.map((d, i) => ({ ...d, key: i }))}
+            loading={loading}
+            pagination={{ pageSize: 8 }}
+            size="small"
+            locale={{ emptyText: '未查询到该板块的成分股数据' }}
+            onRow={(record) => ({
+              onClick: () => {
+                handlePerspectiveChange('stock');
+                handleStockSearch(record.symbol);
+              },
+              className: 'cursor-pointer',
+            })}
+          />
         </div>
       )}
 
-      {/* 🌟 5. 底部“热门板块 (按成分股数量排序)” (可折叠 Collapsible) */}
+      {/* 🌟 5. 底部“热门板块 (按成分股数量排序)” (可折叠) */}
       <div className="bg-slate-50/80 rounded-2xl p-5 border border-slate-200/80 shadow-xs flex flex-col gap-3.5 transition-all">
-        {/* 顶部标题 + 折叠开关 */}
         <div className="flex items-center justify-between">
           <div className="flex items-center gap-2">
             <Sparkles className="w-4 h-4 text-blue-600" />
             <h3 className="text-xs font-extrabold text-slate-900 tracking-tight">热门板块 (按成分股数量排序)</h3>
           </div>
-          <button
-            onClick={() => setIsHotTagsCollapsed(!isHotTagsCollapsed)}
-            className="flex items-center gap-1 text-xs font-bold text-slate-500 hover:text-blue-600 transition-colors px-2.5 py-1 rounded-lg hover:bg-slate-200/60"
-          >
-            <span>{isHotTagsCollapsed ? '展开热门板块' : '收起热门板块'}</span>
-            {isHotTagsCollapsed ? <ChevronDown className="w-4 h-4" /> : <ChevronUp className="w-4 h-4" />}
-          </button>
         </div>
 
-        {/* 标签列表区（可折叠） */}
-        {!isHotTagsCollapsed && (
-          <div className="flex items-center gap-2.5 flex-wrap pt-1 animate-in fade-in duration-200">
-            {hotTagsList.map((tagItem) => (
+        <div className="flex items-center gap-2.5 flex-wrap pt-1 animate-in fade-in duration-200">
+          {filteredHotTags.length > 0 ? (
+            filteredHotTags.map((tagItem) => (
               <div
                 key={tagItem.name}
                 onClick={() => {
                   handlePerspectiveChange('sector');
-                  handleSearch(tagItem.name);
+                  handleTagSearch(tagItem.name);
                 }}
                 className="group flex items-center gap-2 px-3.5 py-1.5 rounded-full bg-white hover:bg-blue-600 text-slate-700 hover:text-white border border-slate-200/80 hover:border-blue-600 cursor-pointer transition-all duration-200 shadow-2xs hover:shadow-sm"
               >
@@ -520,9 +434,11 @@ export const TagLookupPanel: React.FC = () => {
                   {tagItem.count}
                 </span>
               </div>
-            ))}
-          </div>
-        )}
+            ))
+          ) : (
+            <span className="text-xs text-slate-400">{statsLoading ? '加载中...' : '暂无热门板块数据'}</span>
+          )}
+        </div>
       </div>
     </div>
   );

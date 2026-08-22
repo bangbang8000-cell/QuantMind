@@ -31,6 +31,7 @@ interface StockMoneyFlowTableProps {
   items: StockMoneyFlowItem[];
   loading?: boolean;
   isMini?: boolean;
+  latestDate?: string; // 真实最新交易日 (YYYY-MM-DD)
 }
 
 // 🎨 30个交易日按日交互 SVG 趋势图组件 (鼠标悬浮显示当日详细资金情况)
@@ -39,7 +40,7 @@ const InteractiveTrendLine30D: React.FC<{
   historyPoints?: DailyFlowPoint[];
   height?: number;
   index: number;
-}> = ({ netInflow, historyPoints, height = 48, index }) => {
+}> = ({ historyPoints, height = 48, index }) => {
   const [hoverPt, setHoverPt] = useState<{
     idx: number;
     x: number;
@@ -52,40 +53,18 @@ const InteractiveTrendLine30D: React.FC<{
 
   const width = 290;
 
-  // 生成 30 个交易日的每日详细资金点
-  const generateDailyPoints = (): DailyFlowPoint[] => {
-    if (historyPoints && historyPoints.length === 30) return historyPoints;
+  const dailyPoints = (historyPoints && historyPoints.length > 0 ? historyPoints : [])
+    .slice()
+    .sort((a, b) => a.date.localeCompare(b.date));
 
-    const baseVal = netInflow / 1e8;
-    const points: DailyFlowPoint[] = [];
-    let curNet = baseVal * 0.45;
+  if (dailyPoints.length < 2) {
+    return (
+      <div className="flex items-center h-full">
+        <span className="text-[10px] text-slate-400">暂无 30 日资金明细</span>
+      </div>
+    );
+  }
 
-    for (let i = 0; i < 30; i++) {
-      const dayOffset = 29 - i;
-      const d = new Date(2026, 7, 5); // 2026-08-05
-      d.setDate(d.getDate() - dayOffset * 1.4);
-      const dateStr = d.toISOString().split('T')[0];
-
-      const delta = Math.sin(i * 0.45 + index) * 0.95 + (i / 30) * baseVal * 0.55;
-      curNet = baseVal > 0 ? Math.max(-0.6, curNet + delta * 0.22) : Math.min(0.6, curNet - delta * 0.22);
-
-      const grossIn = Math.abs(curNet) * 1.75 + 3.2 + (i % 3) * 0.8;
-      const grossOut = Math.max(0.5, grossIn - curNet);
-
-      points.push({
-        date: dateStr,
-        inflow: grossIn,
-        outflow: grossOut,
-        net_flow: curNet,
-      });
-    }
-
-    // 确保第 30 个点与最新数值一致
-    points[29].net_flow = baseVal;
-    return points;
-  };
-
-  const dailyPoints = generateDailyPoints();
   const netVals = dailyPoints.map((p) => p.net_flow);
 
   const min = Math.min(...netVals);
@@ -139,7 +118,7 @@ const InteractiveTrendLine30D: React.FC<{
               {hoverPt.date}
             </span>
             <span className="px-1.5 py-0.5 rounded bg-purple-950 text-purple-300 text-[10px]">
-              第 {hoverPt.idx + 1} / 30 交易日
+              第 {hoverPt.idx + 1} / {dailyPoints.length} 交易日
             </span>
           </div>
 
@@ -213,17 +192,8 @@ export const StockMoneyFlowTable: React.FC<StockMoneyFlowTableProps> = ({
   items,
   loading = false,
   isMini = false,
+  latestDate,
 }) => {
-  const [selectedDate, setSelectedDate] = useState('2026-08-05');
-
-  const tradeDates = [
-    { label: '2026-08-05 (最新T日)', value: '2026-08-05' },
-    { label: '2026-08-04 (T-1日)', value: '2026-08-04' },
-    { label: '2026-08-01 (T-2日)', value: '2026-08-01' },
-    { label: '2026-07-31 (T-3日)', value: '2026-07-31' },
-    { label: '2026-07-30 (T-4日)', value: '2026-07-30' },
-  ];
-
   const columns: ColumnsType<StockMoneyFlowItem> = [
     {
       title: '序号',
@@ -290,20 +260,22 @@ export const StockMoneyFlowTable: React.FC<StockMoneyFlowTableProps> = ({
       key: 'gross_inflow',
       align: 'right',
       width: 110,
-      render: (_, r) => {
-        const inflowYi = r.gross_inflow ? (r.gross_inflow / 1e8).toFixed(2) : ((Math.abs(r.net_inflow) * 1.85 + 2e8) / 1e8).toFixed(2);
-        return <span className="font-mono text-xs font-bold text-red-500 whitespace-nowrap">+{inflowYi} 亿</span>;
-      },
+      render: (_, r) => (
+        <span className="font-mono text-xs font-bold text-red-500 whitespace-nowrap">
+          {r.gross_inflow ? `+${(r.gross_inflow / 1e8).toFixed(2)} 亿` : '—'}
+        </span>
+      ),
     },
     {
       title: '资金总流出',
       key: 'gross_outflow',
       align: 'right',
       width: 110,
-      render: (_, r) => {
-        const outflowYi = r.gross_outflow ? (r.gross_outflow / 1e8).toFixed(2) : ((Math.abs(r.net_inflow) * 0.85 + 1e8) / 1e8).toFixed(2);
-        return <span className="font-mono text-xs font-bold text-emerald-600 whitespace-nowrap">-{outflowYi} 亿</span>;
-      },
+      render: (_, r) => (
+        <span className="font-mono text-xs font-bold text-emerald-600 whitespace-nowrap">
+          {r.gross_outflow ? `-${(r.gross_outflow / 1e8).toFixed(2)} 亿` : '—'}
+        </span>
+      ),
     },
     {
       title: '当日资金净流入',
@@ -412,20 +384,22 @@ export const StockMoneyFlowTable: React.FC<StockMoneyFlowTableProps> = ({
       key: 'gross_inflow',
       align: 'center',
       width: 80,
-      render: (_, r) => {
-        const inflowYi = r.gross_inflow ? (r.gross_inflow / 1e8).toFixed(2) : ((Math.abs(r.net_inflow) * 1.85 + 2e8) / 1e8).toFixed(2);
-        return <span className="font-mono text-[11px] font-bold text-red-500 whitespace-nowrap">+{inflowYi}亿</span>;
-      },
+      render: (_, r) => (
+        <span className="font-mono text-[11px] font-bold text-red-500 whitespace-nowrap">
+          {r.gross_inflow ? `+${(r.gross_inflow / 1e8).toFixed(2)}亿` : '—'}
+        </span>
+      ),
     },
     {
       title: '总流出',
       key: 'gross_outflow',
       align: 'center',
       width: 80,
-      render: (_, r) => {
-        const outflowYi = r.gross_outflow ? (r.gross_outflow / 1e8).toFixed(2) : ((Math.abs(r.net_inflow) * 0.85 + 1e8) / 1e8).toFixed(2);
-        return <span className="font-mono text-[11px] font-bold text-emerald-600 whitespace-nowrap">-{outflowYi}亿</span>;
-      },
+      render: (_, r) => (
+        <span className="font-mono text-[11px] font-bold text-emerald-600 whitespace-nowrap">
+          {r.gross_outflow ? `-${(r.gross_outflow / 1e8).toFixed(2)}亿` : '—'}
+        </span>
+      ),
     },
     {
       title: '净流入',
@@ -457,9 +431,15 @@ export const StockMoneyFlowTable: React.FC<StockMoneyFlowTableProps> = ({
               <Calendar className="w-3.5 h-3.5 text-purple-600" />
               <span>最新交易日:</span>
             </span>
-            <span className="px-3 py-1 rounded-full bg-purple-100/80 text-purple-700 text-xs font-bold font-mono border border-purple-200 shadow-2xs">
-              2026-08-05 (最新数据)
-            </span>
+            {latestDate ? (
+              <span className="px-3 py-1 rounded-full bg-purple-100/80 text-purple-700 text-xs font-bold font-mono border border-purple-200 shadow-2xs">
+                {latestDate} (最新数据)
+              </span>
+            ) : (
+              <span className="px-3 py-1 rounded-full bg-slate-100 text-slate-400 text-xs font-bold font-mono border border-slate-200">
+                待数据加载
+              </span>
+            )}
           </div>
 
           <span className="text-[11px] text-slate-500 font-medium flex items-center gap-1">

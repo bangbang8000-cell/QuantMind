@@ -25,35 +25,11 @@ export const CapitalFlowSankeyChart: React.FC<CapitalFlowSankeyChartProps> = ({
   const chartRef = useRef<HTMLDivElement>(null);
   const instanceRef = useRef<echarts.ECharts | null>(null);
 
-  const defaultNodes = [
-    { name: '主力资金 (Mainforce)' },
-    { name: '散户资金 (Retail)' },
-    { name: '超大单 (Super Large)' },
-    { name: '大单 (Large)' },
-    { name: '中单 (Medium)' },
-    { name: '小单 (Small)' },
-    { name: '电子信息' },
-    { name: '电力设备' },
-    { name: '医药生物' },
-    { name: '非银金融' },
-  ];
-
-  const defaultLinks = [
-    { source: '主力资金 (Mainforce)', target: '超大单 (Super Large)', value: 1500 },
-    { source: '主力资金 (Mainforce)', target: '大单 (Large)', value: 900 },
-    { source: '散户资金 (Retail)', target: '中单 (Medium)', value: 600 },
-    { source: '散户资金 (Retail)', target: '小单 (Small)', value: 1200 },
-    { source: '超大单 (Super Large)', target: '电子信息', value: 850 },
-    { source: '超大单 (Super Large)', target: '电力设备', value: 650 },
-    { source: '大单 (Large)', target: '医药生物', value: 450 },
-    { source: '大单 (Large)', target: '非银金融', value: 450 },
-  ];
-
-  const sankeyNodes = nodes && nodes.length > 0 ? nodes : defaultNodes;
-  const sankeyLinks = links && links.length > 0 ? links : defaultLinks;
+  const sankeyNodes = nodes && nodes.length > 0 ? nodes : [];
+  const sankeyLinks = links && links.length > 0 ? links : [];
 
   useEffect(() => {
-    if (!chartRef.current) return;
+    if (!chartRef.current || sankeyNodes.length === 0 || sankeyLinks.length === 0) return;
 
     if (!instanceRef.current) {
       instanceRef.current = echarts.init(chartRef.current);
@@ -100,6 +76,17 @@ export const CapitalFlowSankeyChart: React.FC<CapitalFlowSankeyChartProps> = ({
       instanceRef.current = null;
     };
   }, [sankeyNodes, sankeyLinks]);
+
+  if (sankeyNodes.length === 0 || sankeyLinks.length === 0) {
+    return (
+      <div
+        className="w-full flex items-center justify-center text-xs text-slate-400 bg-slate-50/60 rounded-2xl border border-dashed border-slate-200"
+        style={{ height }}
+      >
+        暂无资金流动数据
+      </div>
+    );
+  }
 
   return <div ref={chartRef} style={{ width: '100%', height }} />;
 };
