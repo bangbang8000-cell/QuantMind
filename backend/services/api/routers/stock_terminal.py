@@ -14,7 +14,9 @@ K 线数据复用既有 /api/v1/market/kline 与 /api/v1/market/index-kline，
 
 from __future__ import annotations
 
+import asyncio
 import math
+import threading
 import time
 from functools import lru_cache
 from pathlib import Path
@@ -51,6 +53,10 @@ def _quantdb_dir() -> Path:
 
 _UNIVERSE_TTL = 300.0
 _universe_cache: dict[str, Any] = {"df": None, "ts": 0.0, "trade_date": ""}
+# universe 重建锁：to_thread 并发请求同时过期时只重建一次（读 2 parquet + merge）
+_universe_lock = threading.Lock()
+# 推理模型下拉选项缓存：model JOIN+GROUP BY 2.3s/次，按日频更新，TTL 与 universe 一致
+_model_options_cache: dict[str, Any] = {"v": None, "ts": 0.0}
 _concept_cache: dict[str, Any] = {"ts": 0.0, "symbol_map": {}}
 
 # 概念板块展示上限：单只股票概念过多时截断（板块成员表全市场概念归属）
@@ -132,6 +138,20 @@ def _load_universe(asof: str | None = None) -> tuple[pd.DataFrame, str]:
     if cached is not None and now - _universe_cache["ts"] < _UNIVERSE_TTL and not asof:
         return cached, _universe_cache["trade_date"]
 
+    with _universe_lock:
+        # 双重检查：并发请求同时过期时只重建一次
+        now = time.time()
+        cached = _universe_cache["df"]
+        if cached is not None and now - _universe_cache["ts"] < _UNIVERSE_TTL and not asof:
+            return cached, _universe_cache["trade_date"]
+        df, trade_date = _rebuild_universe(asof)
+        if not asof:
+            _universe_cache.update({"df": df, "ts": now, "trade_date": trade_date})
+        return df, trade_date
+
+
+def _rebuild_universe(asof: str | None) -> tuple[pd.DataFrame, str]:
+    """universe 重建（读 instrument_detail + technical_indicators 两 parquet + merge）。"""
     d = _quantdb_dir()
     # QuantDB SDK 新版落盘为 instrument_list.parquet，旧版为 instrument_detail.parquet
     detail_dir = d / "2_base_sector" / "instrument_detail"
@@ -167,8 +187,6 @@ def _load_universe(asof: str | None = None) -> tuple[pd.DataFrame, str]:
     df["board"] = df["Symbol"].map(_classify_board)
     df["exchange"] = df["Symbol"].map(_exchange_of)
 
-    if not asof:
-        _universe_cache.update({"df": df, "ts": now, "trade_date": trade_date})
     return df, trade_date
 
 
@@ -1286,7 +1304,9 @@ async def list_stocks(
 ):
     _ = current_user
     # 日历点选历史日时 close/pct_change 也读该日快照（左右整页随日期联动）
-    df, trade_date = _load_universe(asof=date)
+    # _load_universe 同步读 parquet+merge，跑在 event loop 上会阻塞全部并发请求
+    # （单 worker uvicorn），挪到线程池执行，list 接口并发不再互相排队
+    df, trade_date = await asyncio.to_thread(_load_universe, asof=date)
 
     m = market.upper()
     if m in ("SH", "SZ", "BJ"):
@@ -1301,7 +1321,7 @@ async def list_stocks(
     if exclude_st:
         df = df[~_st_mask(df)]
     if concept:
-        members = _concept_members(concept)
+        members = await asyncio.to_thread(_concept_members, concept)
         if members:
             df = df[df["Symbol"].isin(members)]
     if index_code:
@@ -1314,7 +1334,12 @@ async def list_stocks(
         try:
             from backend.services.engine.data_platform.tag_rules import stocks_for_tag
 
-            tag_syms = {str(it.get("symbol") or it.get("code") or "") for it in stocks_for_tag(tag, limit=6000)}
+            # stocks_for_tag 内部 df.apply 全市场逐行 + 可能重建特征缓存（读多 parquet），
+            # 同步执行会阻塞 event loop，挪线程池；结果已带 TTL 缓存，重复筛选秒回
+            tag_syms = {
+                str(it.get("symbol") or it.get("code") or "")
+                for it in await asyncio.to_thread(stocks_for_tag, tag, 6000)
+            }
             tag_codes = {x.split(".")[0] for x in tag_syms if x}
             if tag_codes:
                 df = df[df["Symbol"].str.split(".").str[0].isin(tag_codes)]
@@ -1537,8 +1562,12 @@ async def list_stocks(
     # 推理模型选项（供筛选下拉）：最近 90 天内有信号的全部模型（真实 model_id + display_name）。
     # engine_signal_scores.model_version 恒为 'inference_script'（历史遗留无意义），
     # 真实模型标识在 qm_model_inference_runs.model_id（同 model_training history 逻辑）。
+    # JOIN+GROUP BY 全表 2.3s/次，结果按日频更新——缓存 _UNIVERSE_TTL 消除重复开销
     model_options: list[dict[str, Any]] = []
-    if not model:
+    _now = time.time()
+    if not model and _model_options_cache["v"] is not None and _now - _model_options_cache["ts"] < _UNIVERSE_TTL:
+        model_options = _model_options_cache["v"]
+    elif not model:
         try:
             async with get_session() as _s:
                 from sqlalchemy import text as _txt
@@ -1584,8 +1613,13 @@ async def list_stocks(
                             "model_id": str(_mid),
                             "display_name": _meta_map.get(str(_mid), ""),
                         })
+                _model_options_cache.update({"v": model_options, "ts": time.time()})
         except Exception as exc:  # noqa: BLE001
             logger.warning("model options for list failed: %s", exc)
+
+    # ST 掩码全市场一次性预计算：逐行 _st_mask(r.to_frame().T) 约 40ms/行，
+    # 100 行 items 要 4s+，且在 event loop 主线程执行——并发请求全部被拖慢
+    st_mask_series = _st_mask(df)
 
     def _item(r: pd.Series) -> dict[str, Any]:
         info = score_info.get(str(r.get("Symbol")).split(".")[0]) if score_info else {}
@@ -1600,7 +1634,7 @@ async def list_stocks(
             "float_mv": _safe_f(r.get("Ltsz")),     # 亿元
             "pe": _safe_f(r.get("DynaPE")),
             "pb": _safe_f(r.get("PB_MRQ")),
-            "is_st": bool(_st_mask(r.to_frame().T).iloc[0]),
+            "is_st": bool(st_mask_series.loc[r.name]) if r.name in st_mask_series.index else False,
             "fusion": (info.get("fusion") if info else None),
             "side": (info.get("side") if info else None),
             "signal_date": (info.get("date") if info else None),
@@ -1774,7 +1808,7 @@ async def list_concepts(
     if not f.exists():
         return {"success": True, "data": {"concepts": []}}
     try:
-        sm = pd.read_parquet(f)
+        sm = await asyncio.to_thread(pd.read_parquet, f)
         name_col = "SectorName" if "SectorName" in sm.columns else "sector_name"
         sym_col = "Symbol" if "Symbol" in sm.columns else "symbol"
         type_col = "SectorType" if "SectorType" in sm.columns else None
@@ -1824,7 +1858,7 @@ async def stock_profile(
 ):
     _ = current_user
     sym = symbol.upper().strip()
-    df, trade_date = _load_universe(asof=date)
+    df, trade_date = await asyncio.to_thread(_load_universe, asof=date)
     hits = df[df["Symbol"] == sym]
     if hits.empty:
         raise HTTPException(status_code=404, detail=f"未找到 {sym}")
