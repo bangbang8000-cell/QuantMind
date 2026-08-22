@@ -3,6 +3,7 @@
 import json
 import logging
 import os
+from datetime import datetime
 from typing import Any
 
 import httpx
@@ -19,6 +20,51 @@ logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/v1/quantbot", tags=["QuantBot"])
 
 task_store = QuantBotTaskStore()
+
+# AlphaAgent 回环调用（查询/回测/解读/导出已挖因子）
+_ALPHA_BASE = os.getenv("ALPHA_AGENT_BASE_URL", "http://127.0.0.1:8000")
+_alpha_token: str = ""
+
+
+async def _alpha_admin_token() -> str:
+    global _alpha_token
+    if _alpha_token:
+        return _alpha_token
+    try:
+        async with httpx.AsyncClient(timeout=10) as client:
+            r = await client.post(
+                f"{_ALPHA_BASE}/api/v1/auth/login",
+                json={"username": "admin", "password": "admin123", "tenant_id": "default"},
+            )
+            r.raise_for_status()
+            _alpha_token = r.json().get("access_token", "")
+    except Exception as e:
+        logger.warning(f"alpha admin token failed: {e}")
+        _alpha_token = ""
+    return _alpha_token
+
+
+async def _alpha_get(path: str) -> dict:
+    token = await _alpha_admin_token()
+    async with httpx.AsyncClient(timeout=45) as client:
+        r = await client.get(
+            f"{_ALPHA_BASE}{path}",
+            headers={"Authorization": f"Bearer {token}"} if token else {},
+        )
+        r.raise_for_status()
+        return r.json()
+
+
+async def _alpha_post(path: str, params: dict | None = None) -> dict:
+    token = await _alpha_admin_token()
+    async with httpx.AsyncClient(timeout=45) as client:
+        r = await client.post(
+            f"{_ALPHA_BASE}{path}",
+            params=params,
+            headers={"Authorization": f"Bearer {token}"} if token else {},
+        )
+        r.raise_for_status()
+        return r.json()
 
 
 class ChatRequest(BaseModel):
@@ -48,6 +94,9 @@ async def chat(request: Request, item: ChatRequest):
 
     if intent.get("intent") == "factor_evolution":
         result = await _handle_factor_evolution(item, user_id, intent)
+        return JSONResponse(content=result)
+    if intent.get("intent") == "factor_inquiry":
+        result = await _handle_factor_inquiry(item, user_id, intent)
         return JSONResponse(content=result)
     else:
         return await _handle_chat_stream(item, history)
@@ -82,6 +131,7 @@ async def _handle_factor_evolution(
     alpha_launcher = get_alpha_agent_launcher()
     alpha_task_id = await alpha_launcher.start_evolution(
         user_id,
+        universe=intent.get("constraints", {}).get("universe", "csi300"),
         loop_n=int(intent.get("constraints", {}).get("loop_n", 3)),
         direction=intent.get("description", item.message),
     )
@@ -91,6 +141,105 @@ async def _handle_factor_evolution(
         "task_id": alpha_task_id,
         "answer": f"已启动 AlphaAgent 因子演化任务：{intent.get('description', item.message)}",
     }
+
+
+async def _handle_factor_inquiry(
+    item: ChatRequest,
+    user_id: str,
+    intent: dict,
+) -> dict:
+    """处理因子后续操作：报告 / 回测 / 解读 / 导出"""
+    action = intent.get("action", "report")
+    constraints = intent.get("constraints", {}) or {}
+    universe = constraints.get("universe", "csi300")
+    target = (intent.get("target") or "").strip().lower()
+    fid = (intent.get("factor_id") or "").strip()
+
+    try:
+        payload = await _alpha_get("/api/v1/alpha-agent/factors?limit=200")
+    except Exception as e:
+        return {"intent": "factor_inquiry", "answer": f"获取因子列表失败：{e}"}
+
+    factors = payload.get("data", {}).get("factors", []) or []
+    if not factors:
+        return {
+            "intent": "factor_inquiry",
+            "answer": "还没有因子记录。先让我挖一批：例如「帮我挖掘连板情绪方向的因子」。",
+        }
+
+    # 定位目标因子：factor_id 优先，其次名称模糊匹配，否则取最高 |IC|
+    hit = next((f for f in factors if f.get("factor_id") == fid), None)
+    if hit is None and target:
+        hit = next(
+            (f for f in factors if target in f.get("factor_name", "").lower()), None
+        )
+    scored = sorted(
+        [f for f in factors if f.get("ic_value") is not None],
+        key=lambda f: -abs(f["ic_value"]),
+    )
+    if hit is None:
+        hit = scored[0] if scored else factors[0]
+
+    if action == "backtest":
+        try:
+            r = await _alpha_post(
+                f"/api/v1/alpha-agent/factors/{hit['factor_id']}/backtest",
+                params={
+                    "start_date": "2025-01-01",
+                    "end_date": datetime.now().strftime("%Y-%m-%d"),
+                    "universe": universe,
+                    "data_source": "qlib_bin",
+                },
+            )
+            msg = r.get("data", {}).get("message", "已触发回测")
+        except Exception as e:
+            msg = f"触发回测失败：{e}"
+        return {"intent": "factor_inquiry", "answer": f"因子「{hit.get('factor_name')}」回测：{msg}。稍后可用「看因子结果」查排行榜。"}
+
+    if action == "explain":
+        try:
+            r = await _alpha_post(f"/api/v1/alpha-agent/factors/{hit['factor_id']}/explain")
+            txt = r.get("data") or r.get("explanation") or r.get("message") or ""
+        except Exception as e:
+            txt = f"解读失败：{e}"
+        return {
+            "intent": "factor_inquiry",
+            "answer": f"### {hit.get('factor_name')}（IC={hit.get('ic_value')}）\n\n{txt}",
+        }
+
+    if action == "export":
+        if not scored:
+            return {"intent": "factor_inquiry", "answer": "还没有完成回测的因子，先跑一次回测再导出。"}
+        best = hit if hit.get("ic_value") is not None else scored[0]
+        try:
+            r = await _alpha_post(f"/api/v1/alpha-agent/factors/{best['factor_id']}/export")
+            msg = r.get("data", {}).get("message", "已导出")
+        except Exception as e:
+            msg = f"导出失败：{e}"
+        return {
+            "intent": "factor_inquiry",
+            "answer": f"已导出最高分因子「{best.get('factor_name')}」：{msg}。可在 AI-IDE 工作空间查看。",
+        }
+
+    # report（默认）
+    lines = []
+    if scored:
+        for f in scored[:10]:
+            lines.append(
+                f"| {f.get('factor_name','?')} | {f.get('ic_value', float('nan')):+.4f} | "
+                f"{f.get('rank_ic')} | {f.get('sharpe_ratio') if f.get('sharpe_ratio') is not None else ''} | {f.get('status')} |"
+            )
+        answer = (
+            "当前因子按 |IC| 排序 Top10：\n\n"
+            "| 因子 | IC | ICIR | Sharpe | 状态 |\n|---|---|---|---|---|\n" + "\n".join(lines) +
+            "\n\n可以对因子做进一步操作：\n"
+            "- 「回测这个因子」触发批量回测\n"
+            "- 「解释一下因子 xxx」看逻辑\n"
+            "- 「导出高分因子」提交进生产特征库"
+        )
+    else:
+        answer = "已有因子记录，但都还没回测（IC 为空）。可以「回测这个因子」或「帮我挖掘 XX 因子」生成新因子。"
+    return {"intent": "factor_inquiry", "answer": answer}
 
 
 async def _handle_chat_stream(
@@ -120,14 +269,20 @@ async def _handle_chat_stream(
         "你是 QuantMind 的智能量化助手 QuantBot。用简洁友好的中文回答。\n"
         "\n"
         "## 你的能力\n"
-        "1. **因子挖掘 (AlphaAgent)** — 你内置了一个 AlphaAgent 因子演化引擎，"
-        "可以基于用户需求自动生成、回测、迭代量化因子。\n"
-        "   - 触发方式：用户只要表达「挖因子 / 进化因子 / 生成一批XX因子 / evolve factors」"
-        "等意图，系统会自动识别并启动后台 AlphaAgent 执行演化循环（5–15 分钟/轮）。\n"
-        "   - 支持的因子类型：价值、动量、波动、质量、成长、技术、综合。\n"
-        "   - 触发后会返回 `task_id`，前端会显示任务卡片，自动轮询进度。\n"
-        "2. **回答量化研究问题** — 因子构造原理、回测指标解读、Qlib 用法、策略思路等。\n"
-        "3. **不主动写代码** — 除非用户明确说「写代码」。\n"
+        "1. **因子挖掘 (AlphaAgent)** — 你内置了 AlphaAgent 因子演化引擎，"
+        "可基于用户需求自动生成、回测、迭代量化因子。完整流程：\n"
+        "   - 演化：按方向自动生成因子（连板情绪/筹码分布/隔夜收益/资金流持续性/"
+        "动量质量/低波动/流动性/行业相对强度等方向均支持，也可自由描述）。\n"
+        "   - 回测：每个因子自动轻量回测，产出 IC/ICIR/Sharpe/回撤。\n"
+        "   - 解读/导出：对高分因子可解释逻辑、提交进生产特征库。\n"
+        "   - 触发方式：用户表达「挖因子 / 进化因子 / 生成一批XX因子 / evolve factors」"
+        "即自动启动后台演化（约 30–90 分钟/方向，返回 task_id，前端展示卡片轮询）。\n"
+        "   - 股票池从用户话中自动识别（沪深300/中证500/创业板/科创板/全A，默认沪深300）。\n"
+        "2. **因子后续操作** — 用户说「看因子结果/因子排行榜」（expert: 报告 Top10）、"
+        "「回测这个因子」（触发批量回测）、「解释一下因子 xxx」（LLM 解读）、"
+        "「导出/提交高分因子」（进生产特征库）时，交给意图引擎处理，不要自己编造因子数据。\n"
+        "3. **回答量化研究问题** — 因子构造原理、回测指标解读、Qlib 用法、策略思路等。\n"
+        "4. **不主动写代码** — 除非用户明确说「写代码」。\n"
         "\n"
         "## 挖好的因子去哪看 / 怎么测试\n"
         "- 演化完成的因子保存在数据库 `rd_agent_factors` 表，可通过 "

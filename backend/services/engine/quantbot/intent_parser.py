@@ -1,4 +1,10 @@
-"""QuantBot 意图识别 — 使用 LLM 判断用户意图"""
+"""QuantBot 意图识别 — 使用 LLM 判断用户意图
+
+intent:
+  - chat              一般对话（走 SSE 流式）
+  - factor_evolution  启动 RD-Agent 因子演化（AlphaAgent）
+  - factor_inquiry    查询/回测/解读/导出已挖因子
+"""
 
 import json
 import logging
@@ -13,19 +19,32 @@ INTENT_SYSTEM_PROMPT = """\
 
 返回 JSON 格式（不要输出其他任何内容）：
 {
-  "intent": "chat" | "factor_evolution",
+  "intent": "chat" | "factor_evolution" | "factor_inquiry",
   "factor_type": "价值|动量|波动|质量|成长|技术|综合" (仅 factor_evolution 时需要),
-  "description": "用户需求描述" (仅 factor_evolution 时需要),
-  "constraints": {"key": "value"} (可选，提取的参数如 stock_pool, min_icir, backtest_years 等)
+  "description": "用户需求描述/挖掘方向" (仅 factor_evolution 时需要),
+  "constraints": {"universe": "csi300", "loop_n": 3, ...} (可选参数),
+  "action": "list" | "backtest" | "explain" | "export" | "report" (仅 factor_inquiry 时需要),
+  "factor_id": "因子 id" (可选，factor_inquiry 指定因子时),
+  "target": "因子名或描述" (可选)
 }
 
-触发 factor_evolution 的典型表达：
-- "帮我挖掘XXX因子" / "evolve factors for XXX"
-- "找一些低波动高收益的因子"
-- "基于 Alpha191 做因子进化"
-- "生成一批价值因子"
-- "进化出XXX类型的因子"
-- "挖掘XXX相关的因子"
+【factor_evolution】触发表达：
+- "帮我挖掘XXX因子" / "evolve factors for XXX" / "生成一批价值因子"
+- "挖连板/筹码/隔夜/资金流方向的因子" / "找一些低波动高收益的因子"
+constraints.universe 从表述中抽取：
+- 含 沪深300/csi300 → csi300；含 中证500/csi500 → csi500；含 中证1000/csi1000 → csi1000
+- 含 创业板/gem → gem；含 科创板/star → star；含 全A/全部A股/all_a → all_a
+- 未提及则不填（默认 csi300）
+constraints.loop_n：含 轮数/5轮/10轮 数字时抽取（默认 3）。
+
+【factor_inquiry】触发表达（对已挖因子做后续操作）：
+- 列表/报告: "看下因子结果" / "挖的因子怎么样" / "因子排行榜"
+- 回测:     "回测一下这个因子" / "因子回测跑一下"
+- 解读:     "解释一下这个因子" / "这个因子逻辑是什么"
+- 导出:     "提交这个因子" / "导出高分因子入库"
+action 映射：含"回测"→backtest；含"解释/解读/逻辑"→explain；含"导出/提交/入库"→export；
+其他（结果/排行榜/怎么样/列表/看一下）→report。
+factor_id / target 在用户指名因子时填写。
 
 其他所有情况返回 intent: "chat"。\
 """
@@ -86,7 +105,10 @@ async def parse_intent(message: str, history: list[dict] | None = None) -> dict:
                     content = content[4:]
                 content = content.strip()
 
-            return json.loads(content)
+            parsed = json.loads(content)
+            if parsed.get("intent") not in ("chat", "factor_evolution", "factor_inquiry"):
+                return _rule_based_intent(message)
+            return parsed
     except Exception as e:
         logger.warning(f"Intent LLM call failed, falling back to rule-based: {e}")
         return _rule_based_intent(message)
@@ -95,6 +117,36 @@ async def parse_intent(message: str, history: list[dict] | None = None) -> dict:
 def _rule_based_intent(message: str) -> dict:
     """基于关键词的意图识别 fallback"""
     lower = message.lower()
+
+    # 因子后续操作（优先判断：含"因子"+"回测/解释/导出/结果"等）
+    inquiry_keywords = {
+        "回测": "backtest",
+        "解释": "explain",
+        "解读": "explain",
+        "逻辑": "explain",
+        "导出": "export",
+        "提交": "export",
+        "入库": "export",
+    }
+    if "因子" in lower or "factor" in lower:
+        for kw, action in inquiry_keywords.items():
+            if kw in lower:
+                return {
+                    "intent": "factor_inquiry",
+                    "action": action,
+                    "target": "",
+                    "factor_id": "",
+                    "constraints": {},
+                }
+        if any(k in lower for k in ("结果", "排行榜", "怎么样", "列表", "看一下", "查看")):
+            return {
+                "intent": "factor_inquiry",
+                "action": "report",
+                "target": "",
+                "factor_id": "",
+                "constraints": {},
+            }
+
     evolution_keywords = [
         "挖掘", "evolve", "进化", "生成因子", "factor evolution",
         "因子进化", "找一些", "生成一批", "挖掘因子",
