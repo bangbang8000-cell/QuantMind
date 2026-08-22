@@ -38,6 +38,7 @@ export default function StockTerminalPage() {
   const [calendarCollapsed, setCalendarCollapsed] = useState(false);
   const [infoTab, setInfoTab] = useState<InfoTab>('overview');
   const [watchlist, setWatchlist] = useState<Set<string>>(new Set());
+  const [positionSymbols, setPositionSymbols] = useState<Set<string>>(new Set());
   const [onlyWatchlist, setOnlyWatchlist] = useState(false);
   const [tagFilter, setTagFilter] = useState<{ id: string; name: string } | null>(null);
   const [listFilters, setListFilters] = useState<ListFilters>({ excludeSt: true });
@@ -59,10 +60,18 @@ export default function StockTerminalPage() {
   useEffect(() => {
     let cancelled = false;
     import('../../../services/researchService').then(({ researchService }) => {
-      return researchService.getWatchlist(200).then(resp => {
-        if (!cancelled) setWatchlist(new Set(resp.items.map(i => i.symbol)));
+      return Promise.all([
+        researchService.getWatchlist(200),
+        researchService.syncWatchlistPositions(),
+      ]).then(([wl, sync]) => {
+        if (cancelled) return;
+        // 持仓合并进自选 Set：让「只看自选」立即包含模拟盘持仓（后端已幂等落库）
+        const merged = new Set(wl.items.map(i => i.symbol));
+        sync.positions.forEach(p => merged.add(p));
+        setWatchlist(merged);
+        setPositionSymbols(new Set(sync.positions));
       });
-    }).catch(() => { if (!cancelled) setWatchlist(new Set()); });
+    }).catch(() => { if (!cancelled) { setWatchlist(new Set()); setPositionSymbols(new Set()); } });
     return () => { cancelled = true; };
   }, []);
 
@@ -137,6 +146,7 @@ export default function StockTerminalPage() {
           selected={selected?.symbol ?? null}
           onSelect={setSelected}
           watchlistSymbols={watchlist}
+          positionSymbols={positionSymbols}
           onlyWatchlist={onlyWatchlist}
           onOnlyWatchlist={setOnlyWatchlist}
           filters={sideFilters}

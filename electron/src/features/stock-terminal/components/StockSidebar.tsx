@@ -12,6 +12,8 @@ interface Props {
   selected: string | null;
   onSelect: (item: StockListItem) => void;
   watchlistSymbols: Set<string>;   // prefix 格式（SH600519）
+  /** 模拟盘当前持仓 prefix 集合（自选列表「持仓」标记，实时推导） */
+  positionSymbols?: Set<string>;
   onlyWatchlist: boolean;
   onOnlyWatchlist: (v: boolean) => void;
   /** 筛选条件（页面持有，看板面板在左侧列表上方） */
@@ -86,7 +88,7 @@ export function positionToneOf(v: number | null | undefined): { cls: string; txt
 
 const MARKETS: [string, string][] = [['ALL', '全部'], ['SH', '沪市'], ['SZ', '深市'], ['BJ', '北交']];
 
-export function StockSidebar({ selected, onSelect, watchlistSymbols, onlyWatchlist, onOnlyWatchlist, filters, onFiltersChange, onModels, models: modelOptions = [], onTotals, onSignalDate, fullTotal = 0 }: Props) {
+export function StockSidebar({ selected, onSelect, watchlistSymbols, positionSymbols = new Set<string>(), onlyWatchlist, onOnlyWatchlist, filters, onFiltersChange, onModels, models: modelOptions = [], onTotals, onSignalDate, fullTotal = 0 }: Props) {
   const [market, setMarket] = useState('ALL');
   const [q, setQ] = useState('');
   const [data, setData] = useState<StockListResponse | null>(null);
@@ -398,6 +400,7 @@ export function StockSidebar({ selected, onSelect, watchlistSymbols, onlyWatchli
                   <span className="flex items-center justify-between gap-1">
                     <span className="text-xs font-bold text-slate-700 truncate flex items-center gap-0.5 min-w-0">
                       {watchlistSymbols.has(toPrefix(it.symbol)) && <Star className="w-2.5 h-2.5 text-amber-400 fill-amber-400 shrink-0" />}
+                      {positionSymbols.has(toPrefix(it.symbol)) && <span title="模拟盘持仓" className="text-[8px] font-bold rounded px-0.5 shrink-0 bg-sky-100 text-sky-700 border border-sky-200">持仓</span>}
                       {it.is_st && <span className="text-[9px] bg-rose-50 text-rose-500 rounded px-0.5 shrink-0">ST</span>}
                       <span className="truncate">{it.name}</span>
                     </span>

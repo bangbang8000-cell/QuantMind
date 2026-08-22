@@ -195,6 +195,12 @@ class ResearchService {
     return resp.data.data;
   }
 
+  /** 模拟盘持仓自动加入自选，返回当前持仓 prefix 列表（用于自选列表「持仓」标记） */
+  async syncWatchlistPositions(): Promise<{ positions: string[] }> {
+    const resp = await this.client.post<{ data: { positions: string[] } }>('/research/watchlist/sync-positions');
+    return resp.data?.data ?? { positions: [] };
+  }
+
   // ============ 研究池接口 ============
 
   async addToResearchPool(symbol: string, options?: {
