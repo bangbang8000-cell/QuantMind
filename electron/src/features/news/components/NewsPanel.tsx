@@ -618,12 +618,12 @@ export const NewsPanel: React.FC = () => {
     return nodes;
   }, [sources, folders]);
 
-  // Init expanded from persisted state
+  // Init expanded from treeData
   useEffect(() => {
-    if (folders.length > 0 && expandedKeys.length <= 1) {
-      setExpandedKeys(folders.map((fd) => `folder-${fd.folder_id}`));
+    if (treeData.length > 0 && expandedKeys.length === 0) {
+      setExpandedKeys(treeData.map((node) => node.key));
     }
-  }, [folders]);
+  }, [treeData, expandedKeys.length]);
 
   // Sync tree checked keys from filter state
   useEffect(() => {
@@ -910,7 +910,7 @@ export const NewsPanel: React.FC = () => {
       <div ref={containerRef} className="news-content-card">
         {/* Left: source tree */}
         <div className="news-left-panel" style={{ flex: `0 0 ${leftWidth}%` }}>
-          {treeData.length <= 1 ? (
+          {sources.length === 0 ? (
             <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description={<span style={{ fontSize: 12 }}>无订阅源</span>} style={{ marginTop: 60 }} />
           ) : (
             <Tree
