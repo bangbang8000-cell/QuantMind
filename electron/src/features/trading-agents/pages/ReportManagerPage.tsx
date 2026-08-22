@@ -6,7 +6,7 @@
  * 顶部：引导横幅（提示用户先通过 QuantBot 技能生成报告）
  */
 
-import React, { useCallback, useEffect, useState } from 'react';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
 import {
   FileText,
   FolderPlus,
@@ -17,6 +17,7 @@ import {
   RefreshCw,
   File as FileIcon,
   Info,
+  Upload,
 } from 'lucide-react';
 import PdfPreview from '../components/PdfPreview';
 
@@ -120,6 +121,9 @@ const ReportManagerPage: React.FC = () => {
   const [bannerDismissed, setBannerDismissed] = useState(false); // 引导横幅已关闭
   const [showMoveFolder, setShowMoveFolder] = useState(false); // 移动到文件夹弹层
   const [moveTarget, setMoveTarget] = useState('');
+  const [uploading, setUploading] = useState(false); // 正在上传 PDF
+  const [uploadTarget, setUploadTarget] = useState(''); // 上传目标文件夹（空=根目录）
+  const fileInputRef = useRef<HTMLInputElement>(null);
 
   const loadFiles = useCallback(async () => {
     try {
@@ -200,6 +204,44 @@ const ReportManagerPage: React.FC = () => {
       await loadFiles();
     } catch (err: any) {
       setError(err.message);
+    }
+  };
+
+  const handleFilesSelected = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const files = Array.from(e.target.files || []);
+    if (files.length === 0) return;
+    setUploading(true);
+    setError('');
+    try {
+      const uploaded: string[] = [];
+      for (const f of files) {
+        if (!f.name.toLowerCase().endsWith('.pdf')) {
+          setError(`跳过非 PDF 文件：${f.name}`);
+          continue;
+        }
+        const form = new FormData();
+        form.append('file', f);
+        if (uploadTarget) form.append('folder', uploadTarget);
+        const resp = await fetch(`${ENGINE_BASE}/files/upload`, { method: 'POST', body: form });
+        if (!resp.ok) {
+          const err = await resp.json().catch(() => ({ detail: resp.statusText }));
+          throw new Error(err.detail || `上传失败：${f.name}`);
+        }
+        const data = await resp.json();
+        uploaded.push(data.data?.filename ?? f.name);
+      }
+      if (uploaded.length > 0) {
+        // 上传成功后自动选中第一份，右侧立即阅读
+        setSelected(uploaded[0]);
+        (setPreviewKey as any)((k: number) => k + 1);
+        setUploadTarget('');
+      }
+      await loadFiles();
+    } catch (err: any) {
+      setError(err.message || '上传失败');
+    } finally {
+      setUploading(false);
+      if (fileInputRef.current) fileInputRef.current.value = '';
     }
   };
 
@@ -468,6 +510,57 @@ const ReportManagerPage: React.FC = () => {
                   <Folder style={{ width: 13, height: 13 }} /> 移动
                 </button>
               </div>
+              {/* 上传 PDF：可选目标文件夹，支持「市场/股票名」两级路径 */}
+              <div style={{ display: 'flex', gap: 6, marginTop: 12, alignItems: 'center' }}>
+                <select
+                  value={uploadTarget}
+                  onChange={(e) => setUploadTarget(e.target.value)}
+                  title="上传目标文件夹"
+                  style={{
+                    flex: 1,
+                    minWidth: 0,
+                    padding: '5px 10px',
+                    border: '1px solid #c7d2fe',
+                    borderRadius: 7,
+                    fontSize: 12,
+                    outline: 'none',
+                    background: '#fff',
+                  }}
+                >
+                  <option value="">上传到根目录</option>
+                  {folderPathOptions.map((path) => (
+                    <option key={path} value={path}>{path}</option>
+                  ))}
+                </select>
+                <button
+                  onClick={() => fileInputRef.current?.click()}
+                  disabled={uploading}
+                  style={{
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: 5,
+                    padding: '5px 12px',
+                    background: uploading ? '#cbd5e1' : '#6366f1',
+                    border: 'none',
+                    borderRadius: 7,
+                    color: '#fff',
+                    fontSize: 11,
+                    fontWeight: 600,
+                    cursor: uploading ? 'not-allowed' : 'pointer',
+                    whiteSpace: 'nowrap',
+                  }}
+                >
+                  <Upload style={{ width: 13, height: 13 }} /> {uploading ? '上传中...' : '上传 PDF'}
+                </button>
+                <input
+                  ref={fileInputRef}
+                  type="file"
+                  accept="application/pdf,.pdf"
+                  multiple
+                  style={{ display: 'none' }}
+                  onChange={handleFilesSelected}
+                />
+              </div>
               {showMoveFolder && (
                 <div style={{ display: 'flex', gap: 6, marginTop: 8, alignItems: 'center' }}>
                   <select
@@ -664,7 +757,7 @@ const ReportManagerPage: React.FC = () => {
                       <div style={{ fontSize: 13, color: '#64748b', lineHeight: 1.6 }}>
                         暂无分析报告<br />
                         <span style={{ fontSize: 11, color: '#94a3b8' }}>
-                          去 QuantBot 深度分析股票，分析完成后自动导出 PDF 显示在这里
+                          点击「上传 PDF」手动上传，或去 QuantBot 深度分析股票自动导出 PDF
                         </span>
                       </div>
                     </div>
@@ -686,7 +779,7 @@ const ReportManagerPage: React.FC = () => {
               color: '#94a3b8',
               lineHeight: 1.5,
             }}>
-              提示：勾选文件可多选删除；分析完成后 md + PDF 自动归档到「市场文件夹 → 股票名文件夹」。
+              提示：点击「上传 PDF」手动上传报告；勾选文件可多选删除；分析完成后 md + PDF 自动归档到「市场文件夹 → 股票名文件夹」。
             </div>
           </div>
 

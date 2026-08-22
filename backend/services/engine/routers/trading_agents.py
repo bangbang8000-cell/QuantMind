@@ -5,12 +5,13 @@ from __future__ import annotations
 import json
 import logging
 import os
+import time
 import uuid
 from datetime import date
 from pathlib import Path
 from typing import Optional
 
-from fastapi import APIRouter, HTTPException, Query
+from fastapi import APIRouter, File, Form, HTTPException, Query, UploadFile
 from pydantic import BaseModel, Field
 
 logger = logging.getLogger(__name__)
@@ -527,6 +528,58 @@ async def list_report_files():
         })
 
     return {"code": 200, "data": {"root": str(root), "folders": folders, "files": files}}
+
+
+@router.post("/files/upload")
+async def upload_report_file(
+    file: UploadFile = File(...),
+    folder: str = Form(""),
+):
+    """前端上传 PDF 报告到报告目录（可选指定「市场/股票名」目标文件夹）。
+
+    仅接受 .pdf；基名为路径穿越时拒绝；同名冲突追加时间戳后缀避免覆盖。
+    """
+    filename = Path(file.filename or "").name
+    if not filename.lower().endswith(".pdf"):
+        raise HTTPException(status_code=400, detail="仅支持 PDF 文件")
+    if not _safe_filename(filename):
+        raise HTTPException(status_code=400, detail="非法文件名")
+
+    root = _resolve_results_dir()
+    target_dir = root
+    if folder:
+        if not _safe_folder_path(folder):
+            raise HTTPException(status_code=400, detail="非法文件夹路径")
+        target_dir = root / Path(folder)
+    target_dir.mkdir(parents=True, exist_ok=True)
+
+    dest = target_dir / filename
+    if dest.exists():
+        dest = target_dir / f"{dest.stem}_{int(time.time())}{dest.suffix}"
+
+    # 分块写入，上限 50MB；文件头必须是 PDF magic 字节，防扩展名伪装
+    max_bytes = 50 * 1024 * 1024
+    written = 0
+    try:
+        with dest.open("wb") as fh:
+            head = await file.read(5)
+            if head.lower() != b"%pdf-":
+                raise HTTPException(status_code=400, detail="文件内容不是 PDF")
+            fh.write(head)
+            written += len(head)
+            while chunk := await file.read(1024 * 1024):
+                written += len(chunk)
+                if written > max_bytes:
+                    raise HTTPException(status_code=413, detail="文件过大（上限 50MB）")
+                fh.write(chunk)
+    except HTTPException:
+        dest.unlink(missing_ok=True)
+        raise
+
+    return {
+        "code": 200,
+        "data": {"filename": dest.name, "folder": folder or "", "size": written},
+    }
 
 
 def _iter_report_files(root: Path):
