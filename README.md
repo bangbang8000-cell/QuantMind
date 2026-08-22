@@ -36,7 +36,7 @@ QuantMind 是一个端到端的 AI 原生量化交易平台，深度集成微软
 与传统手工调因子的量化模式不同，QuantMind 让机器学习和深度学习模型自动从 151+ 维特征中学习市场规律，实现从数据准备、因子挖掘、模型训练（支持本地/远程 GPU）、模型版本管理、批量推理、信号生成到通达信/实盘下单的全闭环。
 
 **核心能力：**
-- **多市场数据底座**：原生接入 QuantDB 专业数据中枢，5000+ 标的、315 维高质量 AI 因子库，Parquet/DuckDB 秒级存算。
+- **多市场数据底座**：原生接入 QuantDB 专业数据中枢，5000+ 标的、300+ 预计算因子 L1+L2，Parquet/DuckDB 秒级存算。
 - **13 种 ML/DL 模型工场**：内置 LightGBM、XGBoost、CatBoost、GRU、LSTM、ALSTM、Transformer、TabNet、TCN、NativeTFT 等，支持 Optuna 自动调参、多周期加权与 Stacking 集成。
 - **AI 因子自动挖掘**：基于微软 RD-Agent 的自动化因子进化框架与 AlphaAgent 编码专家系统。
 - **多 Agent 智能投研**：TradingAgents 7 位 AI 分析师角色协同、观点辩论博弈与自动化研报生成。

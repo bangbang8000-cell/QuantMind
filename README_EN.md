@@ -50,7 +50,7 @@
 **Core Highlights:**
 
 - **🧠 AI Model Training & Inference (Cutting-Edge)**: 13 ML/DL models visualized training, Optuna auto-tuning, multi-horizon/multi-model fusion, remote GPU training; auto-registration after training, one-click inference, multi-market (A-Share/HK/US/Crypto/Futures) signal generation
-- **📊 QuantDB Professional A-Share Data**: production-ready data — 5000+ A-Share stocks, 315 AI factors, professionally cleaned, daily auto-update — **Data ready, train immediately**
+- **📊 QuantDB Professional A-Share Data**: production-ready data — 5000+ A-Share stocks, 300+ precomputed factors (L1+L2), professionally cleaned, daily auto-update — **Data ready, train immediately**
 - **🤖 AI Full Automation**: RD-Agent auto factor mining, QuantBot assistant, multi-agent research, AI strategy generation
 - **🔒 Local Deployment**: one-command docker compose, fully local data & models, no cloud dependency
 
