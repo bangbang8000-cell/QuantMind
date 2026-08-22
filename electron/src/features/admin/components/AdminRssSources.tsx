@@ -2,7 +2,7 @@
  * RSS 源管理（管理员）
  *
  * 代理 Huntly 的 /api/setting/feeds/* 与 /api/setting/folder/*
- * 极致紧凑、现代圆角、精选金融源快捷填入
+ * 极致紧凑、现代全圆角、精选金融源快捷填入、完全兼容 AntD 5 最新规范
  */
 
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
@@ -63,7 +63,7 @@ const UNGROUPED_LABEL = '未分组';
 const PRESET_FEEDS = [
   { name: '财联社 7x24快讯', url: 'https://feedx.net/rss/cls.xml', folder: 'A股快讯' },
   { name: '华尔街见闻', url: 'https://feedx.net/rss/wallstreetcn.xml', folder: 'A股快讯' },
-  { name: '东方财富', url: 'https://www.eastmoney.com/rss/news.xml', folder: 'A股快讯' },
+  { name: '第一财经', url: 'https://feedx.net/rss/yicai.xml', folder: 'A股快讯' },
   { name: '央行政策', url: 'https://rsshub.app/pbc/goutongjiaoliu', folder: '宏观政策' },
   { name: '证监会', url: 'https://rsshub.app/csrc/news', folder: '宏观政策' },
   { name: 'arXiv量化金融', url: 'http://export.arxiv.org/rss/q-fin', folder: '量化研究' },
@@ -150,7 +150,8 @@ export const AdminRssSources: React.FC = () => {
         }
       }
     } catch (e: any) {
-      message.error(`预览失败: ${e?.response?.data?.detail || e?.message || e}`);
+      const errorMsg = e?.response?.data?.detail || e?.message || '连接超时或目标源无响应';
+      message.warning(`预览提示: ${errorMsg}`);
     } finally {
       setPreviewing(false);
     }
@@ -379,7 +380,6 @@ export const AdminRssSources: React.FC = () => {
             icon={<PlusOutlined />}
             style={{ borderRadius: 6 }}
             onClick={() => {
-              addForm.resetFields();
               setPreviewData(null);
               setAddOpen(true);
             }}
@@ -392,7 +392,7 @@ export const AdminRssSources: React.FC = () => {
       {/* 状态统计卡片 */}
       <Row gutter={14}>
         <Col span={8}>
-          <Card size="small" bordered={false} style={{ background: '#f0f5ff', borderRadius: 10 }}>
+          <Card size="small" variant="borderless" style={{ background: '#f0f5ff', borderRadius: 10 }}>
             <Statistic
               title="当前活跃订阅源"
               value={rows.length}
@@ -402,7 +402,7 @@ export const AdminRssSources: React.FC = () => {
           </Card>
         </Col>
         <Col span={8}>
-          <Card size="small" bordered={false} style={{ background: '#f6ffed', borderRadius: 10 }}>
+          <Card size="small" variant="borderless" style={{ background: '#f6ffed', borderRadius: 10 }}>
             <Statistic
               title="资讯分类目录"
               value={folders.filter((f) => f.id != null).length}
@@ -412,7 +412,7 @@ export const AdminRssSources: React.FC = () => {
           </Card>
         </Col>
         <Col span={8}>
-          <Card size="small" bordered={false} style={{ background: '#fff7e6', borderRadius: 10 }}>
+          <Card size="small" variant="borderless" style={{ background: '#fff7e6', borderRadius: 10 }}>
             <Statistic
               title="未读资讯总数"
               value={totalInboxCount}
@@ -424,7 +424,7 @@ export const AdminRssSources: React.FC = () => {
       </Row>
 
       {/* 订阅源列表表格 */}
-      <Card bodyStyle={{ padding: 0 }} style={{ borderRadius: 10, overflow: 'hidden', border: '1px solid #e2e8f0' }}>
+      <Card styles={{ body: { padding: 0 } }} style={{ borderRadius: 10, overflow: 'hidden', border: '1px solid #e2e8f0' }}>
         <Spin spinning={loading}>
           {rows.length === 0 && !loading ? (
             <Empty
@@ -443,7 +443,7 @@ export const AdminRssSources: React.FC = () => {
         </Spin>
       </Card>
 
-      {/* —— 新增 RSS 源 Modal (紧凑低矮、现代全圆角) —— */}
+      {/* —— 新增 RSS 源 Modal (紧凑低矮、现代全圆角、高度严格统一) —— */}
       <Modal
         title={
           <Space size={8}>
@@ -461,9 +461,8 @@ export const AdminRssSources: React.FC = () => {
         okButtonProps={{ style: { borderRadius: 6 } }}
         cancelButtonProps={{ style: { borderRadius: 6 } }}
         width={620}
-        destroyOnClose
         style={{ borderRadius: 12, overflow: 'hidden' }}
-        bodyStyle={{ padding: '14px 20px' }}
+        styles={{ body: { padding: '14px 20px' } }}
       >
         {/* 1. 快捷精选标签条 */}
         <div style={{ background: '#f8fafc', padding: '8px 12px', borderRadius: 8, marginBottom: 12, border: '1px solid #e2e8f0' }}>
@@ -484,7 +483,7 @@ export const AdminRssSources: React.FC = () => {
         </div>
 
         <Form form={addForm} layout="vertical">
-          {/* 订阅地址输入框 */}
+          {/* 订阅地址输入框 (统一 36px 高度) */}
           <Form.Item
             name="subscribe_url"
             label={<span style={{ fontSize: 13, fontWeight: 500 }}>订阅地址 (RSS / Atom URL)</span>}
@@ -509,7 +508,7 @@ export const AdminRssSources: React.FC = () => {
             />
           </Form.Item>
 
-          {/* 2. RSSHub 快捷生成面板 (高度与圆角统一) */}
+          {/* 2. RSSHub 快捷生成面板 (高度 34px 统一) */}
           <div style={{ background: '#f0f9ff', padding: '10px 12px', borderRadius: 8, marginBottom: 12, border: '1px solid #bae6fd' }}>
             <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 8 }}>
               <Text type="secondary" style={{ fontSize: 11, fontWeight: 500, color: '#0369a1' }}>快捷生成 (本地 RSSHub 服务):</Text>
@@ -587,7 +586,7 @@ export const AdminRssSources: React.FC = () => {
         </Form>
       </Modal>
 
-      {/* —— 编辑 modal —— */}
+      {/* —— 编辑 modal (高度与 AntD5 规范统一) —— */}
       <Modal
         title="编辑订阅源"
         open={editOpen}
@@ -598,9 +597,8 @@ export const AdminRssSources: React.FC = () => {
         okButtonProps={{ style: { borderRadius: 6 } }}
         cancelButtonProps={{ style: { borderRadius: 6 } }}
         width={560}
-        destroyOnClose
         style={{ borderRadius: 12, overflow: 'hidden' }}
-        bodyStyle={{ padding: '14px 20px' }}
+        styles={{ body: { padding: '14px 20px' } }}
       >
         <Form form={editForm} layout="vertical">
           <Form.Item name="subscribe_url" label="订阅地址" style={{ marginBottom: 10 }}>
@@ -649,7 +647,7 @@ export const AdminRssSources: React.FC = () => {
         footer={null}
         width={500}
         style={{ borderRadius: 12, overflow: 'hidden' }}
-        bodyStyle={{ padding: '14px 20px' }}
+        styles={{ body: { padding: '14px 20px' } }}
       >
         <Space.Compact style={{ width: '100%', marginBottom: 14 }}>
           <Input
@@ -657,9 +655,9 @@ export const AdminRssSources: React.FC = () => {
             value={folderName}
             onChange={(e) => setFolderName(e.target.value)}
             onPressEnter={handleAddFolder}
-            style={{ borderRadius: '6px 0 0 6px' }}
+            style={{ height: 36, borderRadius: '6px 0 0 6px' }}
           />
-          <Button type="primary" icon={<FolderAddOutlined />} onClick={handleAddFolder} style={{ borderRadius: '0 6px 6px 0' }}>
+          <Button type="primary" icon={<FolderAddOutlined />} onClick={handleAddFolder} style={{ height: 36, borderRadius: '0 6px 6px 0' }}>
             新建分类
           </Button>
         </Space.Compact>
