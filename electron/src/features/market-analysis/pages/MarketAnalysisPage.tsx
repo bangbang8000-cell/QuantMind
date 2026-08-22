@@ -29,6 +29,7 @@ export const MarketAnalysisPage: React.FC = () => {
   const [indices, setIndices] = useState<IndexItem[]>([]);
   const [stockFlows, setStockFlows] = useState<StockMoneyFlowItem[]>([]);
   const [breadth, setBreadth] = useState<MarketBreadthData | null>(null);
+  const [dataDate, setDataDate] = useState<string>('');
   const [heatmapData, setHeatmapData] = useState<any[]>([]);
   const [sankeyData, setSankeyData] = useState<{ nodes: any[]; links: any[] } | null>(null);
   const [updateTime, setUpdateTime] = useState<string>('');
@@ -72,6 +73,7 @@ export const MarketAnalysisPage: React.FC = () => {
       }
       if (resBreadth.ok) {
         const bData = await resBreadth.json();
+        setDataDate(bData?.trade_date || '');
         if (bData && bData.total_turnover_yi > 0) {
           setBreadth(bData);
         }
@@ -134,14 +136,26 @@ export const MarketAnalysisPage: React.FC = () => {
             </h1>
           </div>
 
-          <div className="w-64 flex-shrink-0">
-            <Input
-              prefix={<Search className="w-3.5 h-3.5 text-purple-400 mr-1.5" />}
-              placeholder="全局搜索行业或股票..."
-              value={searchQuery}
-              onChange={(e) => setSearchQuery(e.target.value)}
-              className="rounded-xl border border-purple-200/80 bg-white text-xs text-slate-800 placeholder-slate-400 py-1.5 px-3.5 shadow-2xs hover:border-purple-300 focus:bg-white focus:ring-2 focus:ring-purple-100 transition-all"
-            />
+          <div className="flex items-center gap-2.5 flex-shrink-0">
+            {dataDate && (
+              <span
+                title="行情数据对应的最新交易日"
+                className="hidden md:flex items-center gap-1.5 px-3 py-1 rounded-full bg-white/80 text-slate-600 border border-purple-200/70 text-[11px] font-extrabold font-mono whitespace-nowrap shadow-2xs"
+              >
+                <Clock className="w-3 h-3 text-purple-500" />
+                <span>数据日期:</span>
+                <span className="text-purple-700">{dataDate}</span>
+              </span>
+            )}
+            <div className="w-64">
+              <Input
+                prefix={<Search className="w-3.5 h-3.5 text-purple-400 mr-1.5" />}
+                placeholder="全局搜索行业或股票..."
+                value={searchQuery}
+                onChange={(e) => setSearchQuery(e.target.value)}
+                className="rounded-xl border border-purple-200/80 bg-white text-xs text-slate-800 placeholder-slate-400 py-1.5 px-3.5 shadow-2xs hover:border-purple-300 focus:bg-white focus:ring-2 focus:ring-purple-100 transition-all"
+              />
+            </div>
           </div>
         </div>
 
