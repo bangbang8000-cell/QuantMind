@@ -2,7 +2,7 @@
  * RSS 源管理（管理员）
  *
  * 代理 Huntly 的 /api/setting/feeds/* 与 /api/setting/folder/*
- * 提供：列表 / 预览 / 新增 / 删除 / 重命名 / 移动文件夹 / 常用精选一键填入 / RSSHub生成
+ * 极致紧凑、现代圆角、精选金融源快捷填入
  */
 
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
@@ -12,7 +12,6 @@ import {
   Button,
   Card,
   Col,
-  Divider,
   Empty,
   Form,
   Input,
@@ -32,8 +31,6 @@ import {
   message,
 } from 'antd';
 import {
-  CheckCircleOutlined,
-  CopyOutlined,
   DeleteOutlined,
   EditOutlined,
   EyeOutlined,
@@ -53,7 +50,7 @@ import {
   type HuntlyFolder,
 } from '../../news/services/newsService';
 
-const { Title, Text, Paragraph } = Typography;
+const { Title, Text } = Typography;
 
 interface SourceRow extends HuntlyConnector {
   folderId: number | null;
@@ -64,37 +61,14 @@ const UNGROUPED_LABEL = '未分组';
 
 // 精选优质预设源
 const PRESET_FEEDS = [
-  {
-    category: 'A股核心快讯',
-    items: [
-      { name: '财联社 7x24快讯', url: 'https://feedx.net/rss/cls.xml', folder: 'A股快讯' },
-      { name: '华尔街见闻 实时快讯', url: 'https://feedx.net/rss/wallstreetcn.xml', folder: 'A股快讯' },
-      { name: '第一财经 每日精选', url: 'https://feedx.net/rss/yicai.xml', folder: 'A股快讯' },
-      { name: '东方财富 财经要闻', url: 'https://www.eastmoney.com/rss/news.xml', folder: 'A股快讯' },
-    ],
-  },
-  {
-    category: '宏观政策与监管',
-    items: [
-      { name: '中国人民银行 政策动态', url: 'https://rsshub.app/pbc/goutongjiaoliu', folder: '宏观政策' },
-      { name: '中国证监会 要闻发布', url: 'https://rsshub.app/csrc/news', folder: '宏观政策' },
-      { name: '国家统计局 数据发布', url: 'https://rsshub.app/stats/release', folder: '宏观政策' },
-    ],
-  },
-  {
-    category: '量化研究与前沿',
-    items: [
-      { name: 'arXiv 计算机金融预印本', url: 'http://export.arxiv.org/rss/q-fin', folder: '量化研究' },
-      { name: 'Microsoft Qlib 官方更新', url: 'https://github.com/microsoft/qlib/releases.atom', folder: '量化研究' },
-    ],
-  },
-  {
-    category: '全球市场与资产',
-    items: [
-      { name: '彭博市场动态 (Bloomberg)', url: 'https://feeds.bloomberg.com/markets/news.rss', folder: '全球市场' },
-      { name: 'Coindesk 数字货币', url: 'https://www.coindesk.com/arc/outboundfeeds/rss/', folder: '全球市场' },
-    ],
-  },
+  { name: '财联社 7x24快讯', url: 'https://feedx.net/rss/cls.xml', folder: 'A股快讯' },
+  { name: '华尔街见闻', url: 'https://feedx.net/rss/wallstreetcn.xml', folder: 'A股快讯' },
+  { name: '东方财富', url: 'https://www.eastmoney.com/rss/news.xml', folder: 'A股快讯' },
+  { name: '央行政策', url: 'https://rsshub.app/pbc/goutongjiaoliu', folder: '宏观政策' },
+  { name: '证监会', url: 'https://rsshub.app/csrc/news', folder: '宏观政策' },
+  { name: 'arXiv量化金融', url: 'http://export.arxiv.org/rss/q-fin', folder: '量化研究' },
+  { name: 'Qlib官方更新', url: 'https://github.com/microsoft/qlib/releases.atom', folder: '量化研究' },
+  { name: '彭博市场', url: 'https://feeds.bloomberg.com/markets/news.rss', folder: '全球市场' },
 ];
 
 export const AdminRssSources: React.FC = () => {
@@ -187,7 +161,6 @@ export const AdminRssSources: React.FC = () => {
       subscribe_url: preset.url,
       name: preset.name,
     });
-    // 寻找匹配的 folderId
     const foundFolder = folders.find((f) => f.name === preset.folder);
     if (foundFolder && foundFolder.id) {
       addForm.setFieldsValue({ folder_id: foundFolder.id });
@@ -322,7 +295,7 @@ export const AdminRssSources: React.FC = () => {
             <GlobalOutlined style={{ color: '#1890ff', fontSize: 16 }} />
           )}
           <Text strong>{text || '(未命名)'}</Text>
-          {row.type ? <Tag color="default">{row.type}</Tag> : null}
+          {row.type ? <Tag color="default" style={{ borderRadius: 4 }}>{row.type}</Tag> : null}
         </Space>
       ),
     },
@@ -344,7 +317,7 @@ export const AdminRssSources: React.FC = () => {
       dataIndex: 'folderName',
       key: 'folderName',
       width: 140,
-      render: (n) => <Tag color={getFolderTagColor(n)}>{n}</Tag>,
+      render: (n) => <Tag color={getFolderTagColor(n)} style={{ borderRadius: 4 }}>{n}</Tag>,
     },
     {
       title: '未读资讯',
@@ -362,17 +335,18 @@ export const AdminRssSources: React.FC = () => {
       render: (_, row) => (
         <Space size="middle">
           <Tooltip title="编辑属性">
-            <Button type="text" size="small" icon={<EditOutlined />} onClick={() => openEdit(row)} />
+            <Button type="text" size="small" icon={<EditOutlined />} onClick={() => openEdit(row)} style={{ borderRadius: 4 }} />
           </Tooltip>
           <Popconfirm
             title={`确定删除「${row.name || row.id}」吗？`}
             okText="删除"
-            okButtonProps={{ danger: true }}
+            okButtonProps={{ danger: true, style: { borderRadius: 4 } }}
             cancelText="取消"
+            cancelButtonProps={{ style: { borderRadius: 4 } }}
             onConfirm={() => handleDelete(row)}
           >
             <Tooltip title="删除订阅">
-              <Button type="text" danger size="small" icon={<DeleteOutlined />} />
+              <Button type="text" danger size="small" icon={<DeleteOutlined />} style={{ borderRadius: 4 }} />
             </Tooltip>
           </Popconfirm>
         </Space>
@@ -383,26 +357,27 @@ export const AdminRssSources: React.FC = () => {
   return (
     <div className="p-6 space-y-4">
       {/* 顶部标题与统计概览 */}
-      <div className="flex items-center justify-between pb-2">
+      <div className="flex items-center justify-between pb-1">
         <div>
-          <Title level={4} style={{ margin: 0 }}>
+          <Title level={4} style={{ margin: 0, fontWeight: 700 }}>
             <ReadOutlined style={{ marginRight: 8, color: '#1890ff' }} />
             RSS 资讯源管理
           </Title>
-          <Text type="secondary">
+          <Text type="secondary" style={{ fontSize: 13 }}>
             全网金融资讯聚合引擎 · 支持 RSS / Atom / RSSHub · 后端自动 NLP 抽取与情感计算
           </Text>
         </div>
         <Space>
-          <Button icon={<ReloadOutlined />} onClick={refresh}>
+          <Button icon={<ReloadOutlined />} onClick={refresh} style={{ borderRadius: 6 }}>
             刷新状态
           </Button>
-          <Button icon={<FolderOpenOutlined />} onClick={() => setFolderOpen(true)}>
+          <Button icon={<FolderOpenOutlined />} onClick={() => setFolderOpen(true)} style={{ borderRadius: 6 }}>
             分类管理
           </Button>
           <Button
             type="primary"
             icon={<PlusOutlined />}
+            style={{ borderRadius: 6 }}
             onClick={() => {
               addForm.resetFields();
               setPreviewData(null);
@@ -415,46 +390,46 @@ export const AdminRssSources: React.FC = () => {
       </div>
 
       {/* 状态统计卡片 */}
-      <Row gutter={16}>
+      <Row gutter={14}>
         <Col span={8}>
-          <Card size="small" bordered={false} style={{ background: '#f0f5ff', borderRadius: 8 }}>
+          <Card size="small" bordered={false} style={{ background: '#f0f5ff', borderRadius: 10 }}>
             <Statistic
               title="当前活跃订阅源"
               value={rows.length}
               suffix="个"
-              valueStyle={{ color: '#1d39c4', fontWeight: 600 }}
+              valueStyle={{ color: '#1d39c4', fontWeight: 700 }}
             />
           </Card>
         </Col>
         <Col span={8}>
-          <Card size="small" bordered={false} style={{ background: '#f6ffed', borderRadius: 8 }}>
+          <Card size="small" bordered={false} style={{ background: '#f6ffed', borderRadius: 10 }}>
             <Statistic
               title="资讯分类目录"
               value={folders.filter((f) => f.id != null).length}
               suffix="组"
-              valueStyle={{ color: '#389e0d', fontWeight: 600 }}
+              valueStyle={{ color: '#389e0d', fontWeight: 700 }}
             />
           </Card>
         </Col>
         <Col span={8}>
-          <Card size="small" bordered={false} style={{ background: '#fff7e6', borderRadius: 8 }}>
+          <Card size="small" bordered={false} style={{ background: '#fff7e6', borderRadius: 10 }}>
             <Statistic
               title="未读资讯总数"
               value={totalInboxCount}
               suffix="篇"
-              valueStyle={{ color: '#d46b08', fontWeight: 600 }}
+              valueStyle={{ color: '#d46b08', fontWeight: 700 }}
             />
           </Card>
         </Col>
       </Row>
 
       {/* 订阅源列表表格 */}
-      <Card bodyStyle={{ padding: 0 }} style={{ borderRadius: 8, overflow: 'hidden' }}>
+      <Card bodyStyle={{ padding: 0 }} style={{ borderRadius: 10, overflow: 'hidden', border: '1px solid #e2e8f0' }}>
         <Spin spinning={loading}>
           {rows.length === 0 && !loading ? (
             <Empty
               description="暂无订阅源，点击右上角「新增订阅源」一键配置"
-              style={{ padding: 48 }}
+              style={{ padding: 40 }}
             />
           ) : (
             <Table<SourceRow>
@@ -468,12 +443,14 @@ export const AdminRssSources: React.FC = () => {
         </Spin>
       </Card>
 
-      {/* —— 新增 RSS 源 Modal (全新美化) —— */}
+      {/* —— 新增 RSS 源 Modal (紧凑低矮、现代全圆角) —— */}
       <Modal
         title={
-          <Space>
-            <PlusOutlined style={{ color: '#1890ff' }} />
-            <span>新增 RSS 订阅源</span>
+          <Space size={8}>
+            <div style={{ width: 24, height: 24, borderRadius: 6, background: '#e6f7ff', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+              <PlusOutlined style={{ color: '#1890ff', fontSize: 13 }} />
+            </div>
+            <span style={{ fontWeight: 600, fontSize: 15 }}>新增 RSS 订阅源</span>
           </Space>
         }
         open={addOpen}
@@ -481,50 +458,50 @@ export const AdminRssSources: React.FC = () => {
         onOk={handleAddSubmit}
         okText="确认添加"
         cancelText="取消"
-        width={720}
+        okButtonProps={{ style: { borderRadius: 6 } }}
+        cancelButtonProps={{ style: { borderRadius: 6 } }}
+        width={620}
         destroyOnClose
+        style={{ borderRadius: 12, overflow: 'hidden' }}
+        bodyStyle={{ padding: '14px 20px' }}
       >
-        {/* 1. 常用精选推荐一键填入 */}
-        <div style={{ background: '#f8fafc', padding: 12, borderRadius: 8, marginBottom: 16, border: '1px solid #e2e8f0' }}>
-          <div style={{ display: 'flex', alignItems: 'center', marginBottom: 8 }}>
-            <ThunderboltOutlined style={{ color: '#f59e0b', marginRight: 6 }} />
-            <Text strong style={{ fontSize: 13 }}>精选金融 RSS 源一键填入：</Text>
-          </div>
-          <div className="space-y-2">
-            {PRESET_FEEDS.map((group) => (
-              <div key={group.category} style={{ display: 'flex', alignItems: 'center', flexWrap: 'wrap', gap: 6 }}>
-                <Text type="secondary" style={{ fontSize: 11, minWidth: 80 }}>{group.category}：</Text>
-                {group.items.map((item) => (
-                  <Tag
-                    key={item.name}
-                    color="blue"
-                    style={{ cursor: 'pointer', margin: 0 }}
-                    onClick={() => applyPreset(item)}
-                  >
-                    + {item.name}
-                  </Tag>
-                ))}
-              </div>
+        {/* 1. 快捷精选标签条 */}
+        <div style={{ background: '#f8fafc', padding: '8px 12px', borderRadius: 8, marginBottom: 12, border: '1px solid #e2e8f0' }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}>
+            <ThunderboltOutlined style={{ color: '#f59e0b', fontSize: 12 }} />
+            <Text strong style={{ fontSize: 12, marginRight: 2 }}>常用源：</Text>
+            {PRESET_FEEDS.map((item) => (
+              <Tag
+                key={item.name}
+                color="blue"
+                style={{ cursor: 'pointer', margin: '2px 0', borderRadius: 4, fontSize: 11, padding: '0 6px' }}
+                onClick={() => applyPreset(item)}
+              >
+                + {item.name}
+              </Tag>
             ))}
           </div>
         </div>
 
         <Form form={addForm} layout="vertical">
+          {/* 订阅地址输入框 */}
           <Form.Item
             name="subscribe_url"
-            label="订阅地址 (RSS / Atom URL)"
+            label={<span style={{ fontSize: 13, fontWeight: 500 }}>订阅地址 (RSS / Atom URL)</span>}
             rules={[{ required: true, message: '请输入订阅地址' }]}
+            style={{ marginBottom: 10 }}
           >
             <Input
               placeholder="https://example.com/feed.xml 或 http://quantmind-rsshub:1200/..."
-              addonAfter={
+              style={{ borderRadius: 6 }}
+              suffix={
                 <Button
                   type="link"
                   size="small"
                   icon={<EyeOutlined />}
                   loading={previewing}
                   onClick={handlePreview}
-                  style={{ padding: '0 8px' }}
+                  style={{ padding: '0 4px', fontSize: 12 }}
                 >
                   测试预览
                 </Button>
@@ -532,16 +509,18 @@ export const AdminRssSources: React.FC = () => {
             />
           </Form.Item>
 
-          {/* 2. 本地 RSSHub 快捷构造 */}
-          <div style={{ background: '#f0f9ff', padding: '10px 14px', borderRadius: 8, marginBottom: 16, border: '1px solid #bae6fd' }}>
-            <Text type="secondary" style={{ fontSize: 12, display: 'block', marginBottom: 6 }}>
-              快捷生成（通过本地 RSSHub 服务）:
-            </Text>
+          {/* 2. RSSHub 快捷生成面板 (紧凑圆角卡片) */}
+          <div style={{ background: '#f0f9ff', padding: '8px 12px', borderRadius: 8, marginBottom: 12, border: '1px solid #bae6fd' }}>
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 6 }}>
+              <Text type="secondary" style={{ fontSize: 11 }}>快捷生成 (本地 RSSHub 服务):</Text>
+              <Text type="secondary" style={{ fontSize: 10 }}>回车自动填入</Text>
+            </div>
             <Row gutter={8}>
               <Col span={8}>
                 <Input
                   size="small"
                   placeholder="Twitter 用户名"
+                  style={{ borderRadius: 4, background: '#ffffff', borderColor: '#90cdf4' }}
                   onPressEnter={(e) => {
                     const u = (e.target as HTMLInputElement).value.trim().replace(/^@/, '');
                     if (u) addForm.setFieldValue('subscribe_url', `http://quantmind-rsshub:1200/twitter/user/${u}`);
@@ -552,6 +531,7 @@ export const AdminRssSources: React.FC = () => {
                 <Input
                   size="small"
                   placeholder="微博用户 UID"
+                  style={{ borderRadius: 4, background: '#ffffff', borderColor: '#90cdf4' }}
                   onPressEnter={(e) => {
                     const u = (e.target as HTMLInputElement).value.trim();
                     if (u) addForm.setFieldValue('subscribe_url', `http://quantmind-rsshub:1200/weibo/user/${u}`);
@@ -562,6 +542,7 @@ export const AdminRssSources: React.FC = () => {
                 <Input
                   size="small"
                   placeholder="雪球用户 ID"
+                  style={{ borderRadius: 4, background: '#ffffff', borderColor: '#90cdf4' }}
                   onPressEnter={(e) => {
                     const u = (e.target as HTMLInputElement).value.trim();
                     if (u) addForm.setFieldValue('subscribe_url', `http://quantmind-rsshub:1200/xueqiu/user/${u}`);
@@ -576,42 +557,33 @@ export const AdminRssSources: React.FC = () => {
             <Alert
               type={previewData.subscribed ? 'warning' : 'success'}
               showIcon
-              style={{ marginBottom: 16 }}
+              style={{ marginBottom: 12, borderRadius: 6, padding: '6px 12px' }}
               message={
                 <Space>
-                  <Text strong>{previewData.title || '(无标题)'}</Text>
-                  {previewData.subscribed ? <Tag color="warning">该源已在列表中</Tag> : <Tag color="success">解析有效</Tag>}
+                  <Text strong style={{ fontSize: 12 }}>{previewData.title || '(无标题)'}</Text>
+                  {previewData.subscribed ? <Tag color="warning" style={{ borderRadius: 4 }}>已在列表中</Tag> : <Tag color="success" style={{ borderRadius: 4 }}>解析有效</Tag>}
                 </Space>
               }
               description={
-                <div style={{ marginTop: 4, fontSize: 12 }}>
-                  {previewData.siteLink && (
-                    <div>
-                      <Text type="secondary">主页: </Text>
-                      <a href={previewData.siteLink} target="_blank" rel="noreferrer">
-                        {previewData.siteLink}
-                      </a>
-                    </div>
-                  )}
-                  {previewData.description && (
-                    <Text type="secondary" ellipsis style={{ display: 'block', marginTop: 2 }}>
-                      {previewData.description}
-                    </Text>
-                  )}
-                </div>
+                previewData.description ? (
+                  <Text type="secondary" ellipsis style={{ fontSize: 11, display: 'block', marginTop: 2 }}>
+                    {previewData.description}
+                  </Text>
+                ) : null
               }
             />
           ) : null}
 
-          <Row gutter={16}>
+          {/* 4. 自定义名称与分类并排 */}
+          <Row gutter={12}>
             <Col span={12}>
-              <Form.Item name="name" label="自定义源名称（可选）">
-                <Input placeholder="留空则自动提取源标题" />
+              <Form.Item name="name" label={<span style={{ fontSize: 13 }}>自定义源名称 (可选)</span>} style={{ marginBottom: 4 }}>
+                <Input placeholder="留空则自动提取源标题" style={{ borderRadius: 6 }} />
               </Form.Item>
             </Col>
             <Col span={12}>
-              <Form.Item name="folder_id" label="归入分类目录" initialValue={0}>
-                <Select options={folderOptions} />
+              <Form.Item name="folder_id" label={<span style={{ fontSize: 13 }}>归入分类目录</span>} initialValue={0} style={{ marginBottom: 4 }}>
+                <Select options={folderOptions} style={{ width: '100%', borderRadius: 6 }} />
               </Form.Item>
             </Col>
           </Row>
@@ -626,27 +598,32 @@ export const AdminRssSources: React.FC = () => {
         onOk={handleEditSubmit}
         okText="保存"
         cancelText="取消"
-        width={600}
+        okButtonProps={{ style: { borderRadius: 6 } }}
+        cancelButtonProps={{ style: { borderRadius: 6 } }}
+        width={560}
         destroyOnClose
+        style={{ borderRadius: 12, overflow: 'hidden' }}
+        bodyStyle={{ padding: '14px 20px' }}
       >
         <Form form={editForm} layout="vertical">
-          <Form.Item name="subscribe_url" label="订阅地址">
-            <Input disabled />
+          <Form.Item name="subscribe_url" label="订阅地址" style={{ marginBottom: 10 }}>
+            <Input disabled style={{ borderRadius: 6 }} />
           </Form.Item>
-          <Form.Item name="name" label="名称" rules={[{ required: true, message: '请输入名称' }]}>
-            <Input />
+          <Form.Item name="name" label="名称" rules={[{ required: true, message: '请输入名称' }]} style={{ marginBottom: 10 }}>
+            <Input style={{ borderRadius: 6 }} />
           </Form.Item>
-          <Form.Item name="folder_id" label="所在分类目录">
-            <Select options={folderOptions} />
+          <Form.Item name="folder_id" label="所在分类目录" style={{ marginBottom: 10 }}>
+            <Select options={folderOptions} style={{ borderRadius: 6 }} />
           </Form.Item>
           <Form.Item
             name="fetch_interval_minutes"
             label="抓取间隔（分钟）"
+            style={{ marginBottom: 10 }}
           >
-            <InputNumber min={1} max={1440} style={{ width: '100%' }} />
+            <InputNumber min={1} max={1440} style={{ width: '100%', borderRadius: 6 }} />
           </Form.Item>
           <Space size="large">
-            <Form.Item name="enabled" label="启用抓取" valuePropName="checked">
+            <Form.Item name="enabled" label="启用抓取" valuePropName="checked" style={{ marginBottom: 0 }}>
               <Switch />
             </Form.Item>
             <Form.Item
@@ -654,6 +631,7 @@ export const AdminRssSources: React.FC = () => {
               label="深度抓取全文"
               valuePropName="checked"
               tooltip="开启后将尝试自动解析文章正文完整内容"
+              style={{ marginBottom: 0 }}
             >
               <Switch />
             </Form.Item>
@@ -672,16 +650,19 @@ export const AdminRssSources: React.FC = () => {
         open={folderOpen}
         onCancel={() => setFolderOpen(false)}
         footer={null}
-        width={540}
+        width={500}
+        style={{ borderRadius: 12, overflow: 'hidden' }}
+        bodyStyle={{ padding: '14px 20px' }}
       >
-        <Space.Compact style={{ width: '100%', marginBottom: 16 }}>
+        <Space.Compact style={{ width: '100%', marginBottom: 14 }}>
           <Input
             placeholder="输入新分类名称 (如：A股快讯、量化研究)"
             value={folderName}
             onChange={(e) => setFolderName(e.target.value)}
             onPressEnter={handleAddFolder}
+            style={{ borderRadius: '6px 0 0 6px' }}
           />
-          <Button type="primary" icon={<FolderAddOutlined />} onClick={handleAddFolder}>
+          <Button type="primary" icon={<FolderAddOutlined />} onClick={handleAddFolder} style={{ borderRadius: '0 6px 6px 0' }}>
             新建分类
           </Button>
         </Space.Compact>
@@ -696,7 +677,7 @@ export const AdminRssSources: React.FC = () => {
               title: '分类名称',
               dataIndex: 'name',
               key: 'name',
-              render: (n) => <Tag color={getFolderTagColor(n || '')}>{n}</Tag>,
+              render: (n) => <Tag color={getFolderTagColor(n || '')} style={{ borderRadius: 4 }}>{n}</Tag>,
             },
             {
               title: '包含订阅源',
@@ -719,8 +700,9 @@ export const AdminRssSources: React.FC = () => {
                     title={`确定删除分类「${f.name}」？所属订阅源将移入「未分组」`}
                     onConfirm={() => handleDeleteFolder(f)}
                     okText="删除"
-                    okButtonProps={{ danger: true }}
+                    okButtonProps={{ danger: true, style: { borderRadius: 4 } }}
                     cancelText="取消"
+                    cancelButtonProps={{ style: { borderRadius: 4 } }}
                   >
                     <Button size="small" type="link" danger>
                       删除
