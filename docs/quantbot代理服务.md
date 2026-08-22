@@ -9,15 +9,15 @@ QuantMind 后端通过 `COPAW_BASE_URL` 环境变量（默认 `http://copaw:8088
 ### 1. 拉取镜像
 
 ```bash
-docker pull agentscope/qwenpaw:latest
+docker pull docker.1ms.run/agentscope/qwenpaw:latest
+docker tag docker.1ms.run/agentscope/qwenpaw:latest agentscope/qwenpaw:latest
 ```
 
-> **国内网络提示**：Docker Hub 拉取报 `CloudFront ... connection reset by peer`（IPv6 链路被重置）时，
-> 用镜像加速源拉取后打回官方标签：
+> **国内网络提示**：若 `docker.1ms.run` 镜像源不可用，可改用其他国内加速源拉取后打回官方标签：
 >
 > ```bash
-> docker pull docker.1ms.run/agentscope/qwenpaw:latest
-> docker tag  docker.1ms.run/agentscope/qwenpaw:latest agentscope/qwenpaw:latest
+> docker pull <其他国内加速源>/agentscope/qwenpaw:latest
+> docker tag  <其他国内加速源>/agentscope/qwenpaw:latest agentscope/qwenpaw:latest
 > ```
 
 ### 2. 启动服务（独立部署，首次配置）
@@ -75,8 +75,9 @@ docker run -d \
 数据卷（`qwenpaw-data` 等）与容器解耦，升级只需重拉镜像并重建容器：
 
 ```bash
-# 拉取最新镜像（失败时用镜像加速源，见上文「拉取镜像」）
-docker pull agentscope/qwenpaw:latest
+# 拉取最新镜像（国内源；失败时用其他加速源，见上文「拉取镜像」）
+docker pull docker.1ms.run/agentscope/qwenpaw:latest
+docker tag docker.1ms.run/agentscope/qwenpaw:latest agentscope/qwenpaw:latest
 
 # 重建容器（数据卷保持不变）
 docker rm -f qwenpaw

@@ -1,10 +1,11 @@
 # Use the official PyTorch image as the base image  
-FROM pytorch/pytorch:latest
-# FROM pytorch/pytorch:2.4.1-cuda12.1-cudnn9-runtime
+FROM docker.1ms.run/pytorch/pytorch:latest
+# FROM docker.1ms.run/pytorch/pytorch:2.4.1-cuda12.1-cudnn9-runtime
 # torch.__version__ == '2.4.1+cu121' in "gcr.io/kaggle-gpu-images/python"
   
 # Install additional tools  
-RUN apt-get update && apt-get install -y \  
+RUN sed -i 's/archive.ubuntu.com/mirrors.aliyun.com/g; s/security.ubuntu.com/mirrors.aliyun.com/g' /etc/apt/sources.list \
+    && apt-get update && apt-get install -y \  
     curl \  
     vim \  
     git \  

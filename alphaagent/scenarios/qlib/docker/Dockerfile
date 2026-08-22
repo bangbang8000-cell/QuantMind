@@ -1,6 +1,6 @@
 FROM docker.1panel.live/pytorch/pytorch:2.2.1-cuda12.1-cudnn8-runtime
 
-# For GPU support, please choose the proper tag from https://hub.docker.com/r/pytorch/pytorch/tags
+# For GPU support, please choose the proper tag from https://docker.1ms.run/pytorch/pytorch/tags
 
 RUN sed -i 's/archive.ubuntu.com/mirrors.aliyun.com/g' /etc/apt/sources.list  
 RUN apt-get clean && apt-get update && apt-get install -y \  

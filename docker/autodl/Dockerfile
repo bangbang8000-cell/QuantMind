@@ -12,7 +12,7 @@
 #     -t quantmind-train:latest .
 # 或经 scripts/setup/build-autodl-remote.sh 一键远程构建。
 
-FROM python:3.10-slim-bookworm
+FROM docker.1ms.run/library/python:3.10-slim-bookworm
 
 # torch 版本：gpu=完整 CUDA（AutoDL 节点推荐，需 nvidia-container-toolkit）
 #            cpu=CPU 版（更快、更小）
@@ -29,7 +29,9 @@ ENV PYTHONUNBUFFERED=1 \
     PIP_TRUSTED_HOST=${PIP_TRUSTED_HOST}
 
 # 系统依赖（libgomp 供 lightgbm/xgboost；openssh 供主节点 ssh）
-RUN apt-get update && apt-get install -y --no-install-recommends \
+RUN sed -i "s/deb.debian.org/mirrors.aliyun.com/g; s/security.debian.org/mirrors.aliyun.com/g" /etc/apt/sources.list.d/debian.sources || \
+    sed -i "s/deb.debian.org/mirrors.aliyun.com/g; s/security.debian.org/mirrors.aliyun.com/g" /etc/apt/sources.list && \
+    apt-get update && apt-get install -y --no-install-recommends \
         libgomp1 \
         git \
         openssh-client \
@@ -44,7 +46,7 @@ RUN python -m pip install --upgrade pip setuptools wheel \
        else \
          echo "安装 CPU 版 torch"; \
          python -m pip install --no-cache-dir "torch==2.9.1+cpu" \
-           --index-url https://download.pytorch.org/whl/cpu \
+           --index-url https://mirrors.aliyun.com/pytorch-wheels/cpu \
            --extra-index-url ${PIP_INDEX_URL}; \
        fi \
     && python -m pip install --no-cache-dir \
