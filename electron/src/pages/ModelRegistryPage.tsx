@@ -3,7 +3,7 @@ import { motion, AnimatePresence } from 'framer-motion';
 import {
   Layers, Star, RefreshCw, Search, Code, Calendar, Layers2,
   History, Archive, Brain, Clock, XCircle, X,
-  ChevronRight, Play, Cpu, Download, ChevronDown,
+  ChevronRight, Play, Download, ChevronDown,
   ChevronUp, Shield, Zap, Activity, ListFilter, BarChart3, TrendingUp, TrendingDown,
   Compass, Sparkles,
 } from 'lucide-react';
@@ -44,7 +44,6 @@ import {
   ModelDetailPanel,
   TrainingSourcePanel,
   AttributionAnalysisPanel,
-  InferenceCenterPanel,
   ProductionMonitorPanel,
   MetricCard,
   TimeItem,
@@ -53,8 +52,6 @@ import {
 import { CreateEnsembleModal } from './CreateEnsembleModal';
 import { PublishModelModal } from './hub/PublishModelModal';
 import { InferenceBacktestModule } from '../components/backtestCenter/InferenceBacktestModule';
-import { BatchInferencePanel } from '../components/inference/BatchInferencePanel';
-import { BatchSingleDayPanel } from '../components/inference/BatchSingleDayPanel';
 import { InferenceHistoryPanel } from '../components/inference/InferenceHistoryPanel';
 import { ModelScoreResearch } from '../components/inference/ModelScoreResearch';
 import { StockPickingPanel } from '../components/inference/StockPickingPanel';
@@ -218,9 +215,6 @@ export const ModelRegistryPage: React.FC = () => {
       void loadFeatureLabelCatalog();
       void loadShapSummary(selectedModel.model_id);
     }
-    if (key === 'inference' && selectedModel) {
-      void refreshInferencePanel(selectedModel.model_id);
-    }
   };
 
   const loadTrainingRun = useCallback(async (runId: string) => {
@@ -347,30 +341,6 @@ export const ModelRegistryPage: React.FC = () => {
       loadLatestInferenceRun(modelId),
     ]);
   }, [inferenceDate, loadAutoSettings, loadLatestInferenceRun, loadPrecheck]);
-
-  useEffect(() => {
-    if (selectedModel && mainTab === 'inference') {
-      void refreshInferencePanel(selectedModel.model_id);
-    }
-  }, [selectedModel?.model_id, mainTab, inferenceDate, refreshInferencePanel]);
-
-  useEffect(() => {
-    if (mainTab === 'inference') {
-      void loadInferenceTargetDate();
-    }
-  }, [mainTab, loadInferenceTargetDate]);
-
-  useEffect(() => {
-    if (selectedModel && mainTab === 'inference') {
-      void loadInferenceHistory(selectedModel.model_id, {
-        runId: historyRunIdFilter || undefined,
-        status: historyStatusFilter === 'all' ? undefined : historyStatusFilter,
-        inferenceDate: historyDateFilter ? historyDateFilter.format('YYYY-MM-DD') : undefined,
-        page: 1,
-        pageSize: 20,
-      });
-    }
-  }, [selectedModel?.model_id, mainTab, historyRunIdFilter, historyStatusFilter, historyDateFilter, loadInferenceHistory]);
 
   const handleSetDefault = async () => {
     if (!selectedModel) return;
@@ -712,14 +682,6 @@ export const ModelRegistryPage: React.FC = () => {
                     </div>
                     <div className="flex gap-2 flex-shrink-0">
                       <Button
-                        type="primary"
-                        icon={<Cpu size={13} />}
-                        className="rounded-xl h-9 px-4 font-bold bg-blue-600 border-none text-xs shadow-sm shadow-blue-200"
-                        onClick={() => navigate('/inference-center', { state: { modelId: selectedModel.model_id, tab: 'cross-section' } })}
-                      >
-                        前往推理中心
-                      </Button>
-                      <Button
                         icon={<Sparkles size={13} />}
                         className="rounded-xl h-9 px-4 font-bold border-blue-200 text-blue-600 bg-blue-50/50 hover:bg-blue-100 text-xs"
                         onClick={() => setShowPublishModal(true)}
@@ -814,117 +776,6 @@ export const ModelRegistryPage: React.FC = () => {
                           </span>
                         ),
                         children: <ProductionMonitorPanel model={selectedModel} />,
-                      },
-                      {
-                        key: 'inference',
-                        label: (
-                          <span className="text-xs font-black uppercase tracking-widest px-1 flex items-center gap-1.5">
-                            <Cpu size={11} />推理中心
-                          </span>
-                        ),
-                        children: (
-                          <div>
-                            <div className="flex items-center justify-between p-3.5 mb-4 bg-gradient-to-r from-blue-50 to-indigo-50/50 rounded-2xl border border-blue-100">
-                              <div className="flex items-center gap-2.5">
-                                <div className="w-8 h-8 rounded-xl bg-blue-600 text-white flex items-center justify-center shadow-xs">
-                                  <Cpu size={16} />
-                                </div>
-                                <div>
-                                  <div className="text-xs font-bold text-slate-800">独立推理中心已上线</div>
-                                  <div className="text-[10px] text-slate-500">支持全市场截面预测、批量多日以及个股多维深度推理看板</div>
-                                </div>
-                              </div>
-                              <Button
-                                size="small"
-                                type="primary"
-                                className="rounded-xl text-xs font-bold h-7 bg-blue-600 border-none shadow-xs shadow-blue-200"
-                                onClick={() => navigate('/inference-center', { state: { modelId: selectedModel.model_id, tab: 'cross-section' } })}
-                              >
-                                打开独立推理中心
-                              </Button>
-                            </div>
-
-                            <div className="flex items-center gap-2 mb-4">
-                              <Button
-                                size="small"
-                                type={inferenceMode === 'single' ? 'primary' : 'default'}
-                                className={clsx('rounded-lg text-[10px] font-bold h-7 px-4', inferenceMode === 'single' ? 'bg-blue-600 border-blue-600' : 'border-slate-200')}
-                                onClick={() => setInferenceMode('single')}
-                              >
-                                单日推理
-                              </Button>
-                              <Button
-                                size="small"
-                                type={inferenceMode === 'batch' ? 'primary' : 'default'}
-                                className={clsx('rounded-lg text-[10px] font-bold h-7 px-4', inferenceMode === 'batch' ? 'bg-violet-600 border-violet-600' : 'border-slate-200')}
-                                onClick={() => setInferenceMode('batch')}
-                              >
-                                批量多日
-                              </Button>
-                              <Button
-                                size="small"
-                                type={inferenceMode === 'batch-range' ? 'primary' : 'default'}
-                                className={clsx('rounded-lg text-[10px] font-bold h-7 px-4', inferenceMode === 'batch-range' ? 'bg-emerald-600 border-emerald-600' : 'border-slate-200')}
-                                onClick={() => setInferenceMode('batch-range')}
-                              >
-                                批量单日
-                              </Button>
-                              <Button
-                                size="small"
-                                type={inferenceMode === 'history' ? 'primary' : 'default'}
-                                className={clsx('rounded-lg text-[10px] font-bold h-7 px-4', inferenceMode === 'history' ? 'bg-indigo-600 border-indigo-600' : 'border-slate-200')}
-                                onClick={() => setInferenceMode('history')}
-                              >
-                                推理历史
-                              </Button>
-                            </div>
-                            {inferenceMode === 'single' ? (
-                              <InferenceCenterPanel
-                                model={selectedModel}
-                                inferenceDate={inferenceDate}
-                                onDateChange={setInferenceDate}
-                                targetDate={targetDate}
-                                targetDateLoading={inferenceTargetLoading}
-                                horizonDays={horizonDays}
-                                running={inferenceRunning}
-                                onRun={handleRunInference}
-                                onRunAsDefault={handleSetDefault}
-                                isDefault={selectedModel.is_default}
-                                lastRun={lastInferenceRun}
-                                history={inferenceHistory}
-                                historyLoading={inferenceHistoryLoading}
-                                autoSettings={autoSettings}
-                                autoSaving={autoSaving}
-                                onToggleAuto={handleToggleAuto}
-                                latestInferenceRun={latestInferenceRun}
-                                latestInferenceRunLoading={latestInferenceRunLoading}
-                                precheck={inferencePrecheck}
-                                precheckLoading={inferencePrecheckLoading}
-                                onRefreshPrecheck={() => {
-                                  if (selectedModel) {
-                                    void loadPrecheck(selectedModel.model_id, inferenceDate?.format('YYYY-MM-DD'));
-                                  }
-                                }}
-                                historyRunIdFilter={historyRunIdFilter}
-                                onHistoryRunIdFilterChange={setHistoryRunIdFilter}
-                                historyStatusFilter={historyStatusFilter}
-                                onHistoryStatusFilterChange={setHistoryStatusFilter}
-                                historyDateFilter={historyDateFilter}
-                                onHistoryDateFilterChange={setHistoryDateFilter}
-                                onDeleteHistory={handleDeleteHistory}
-                              />
-                            ) : inferenceMode === 'batch' ? (
-                              <BatchInferencePanel modelId={selectedModel.model_id} horizonDays={horizonDays} />
-                            ) : inferenceMode === 'batch-range' ? (
-                              <BatchSingleDayPanel modelId={selectedModel.model_id} horizonDays={horizonDays} />
-                            ) : (
-                              <InferenceHistoryPanel
-                                modelId={selectedModel.model_id}
-                                onDelete={handleDeleteHistory}
-                              />
-                            )}
-                          </div>
-                        ),
                       },
                       {
                         key: 'backtest',

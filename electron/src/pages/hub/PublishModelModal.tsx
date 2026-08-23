@@ -29,11 +29,10 @@ export const PublishModelModal: React.FC<PublishModelModalProps> = ({
   const [publishing, setPublishing] = useState(false);
 
   useEffect(() => {
-    if (initialModelId) {
-      setSelectedModelId(initialModelId);
-      form.setFieldsValue({ model_id: initialModelId });
-    }
-  }, [initialModelId, form]);
+    if (!open || !initialModelId) return;
+    setSelectedModelId(initialModelId);
+    form.setFieldsValue({ model_id: initialModelId });
+  }, [initialModelId, open, form]);
 
   const currentModel = userModels.find((m) => m.model_id === selectedModelId);
   const meta = currentModel ? getMeta(currentModel) : null;
@@ -112,6 +111,7 @@ export const PublishModelModal: React.FC<PublishModelModalProps> = ({
       open={open}
       onCancel={onClose}
       width={520}
+      forceRender
       footer={[
         <Button key="cancel" className="rounded-xl font-bold" onClick={onClose}>
           取消

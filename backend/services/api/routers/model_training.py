@@ -2176,7 +2176,7 @@ async def get_model_inference_run_detail(
                         await session.execute(
                             text(
                                 """
-                            WITH scored AS (
+                            WITH raw AS (
                                 SELECT
                                     ess.*,
                                     -- 归一化到规范 suffix 格式（600036.SH），口径与
@@ -2199,39 +2199,27 @@ async def get_model_inference_run_detail(
                                         WHEN ess.symbol ~ '^[0-9]{4,5}$'
                                             THEN LPAD(ess.symbol, 5, '0') || '.HK'
                                         ELSE UPPER(ess.symbol)
-                                    END AS canonical_symbol,
-                                    CASE
-                                        WHEN UPPER(ess.symbol) ~ '^[0-9]{6}[.](SH|SZ|BJ)$'
-                                            THEN UPPER(ess.symbol)
-                                        WHEN UPPER(ess.symbol) ~ '^(SH|SZ|BJ)[0-9]{6}$'
-                                            THEN SUBSTRING(UPPER(ess.symbol), 3)
-                                                 || '.' || SUBSTRING(UPPER(ess.symbol), 1, 2)
-                                        WHEN ess.symbol ~ '^[0-9]{6}$'
-                                            THEN ess.symbol || CASE
-                                                WHEN LEFT(ess.symbol, 2) IN ('60', '68', '90') THEN '.SH'
-                                                WHEN LEFT(ess.symbol, 2) IN ('00', '30', '20') THEN '.SZ'
-                                                WHEN LEFT(ess.symbol, 2) IN ('83', '43', '87', '88', '92') THEN '.BJ'
-                                                ELSE ''
-                                            END
-                                        WHEN ess.symbol ~ '^[0-9]{4,5}$'
-                                            THEN LPAD(ess.symbol, 5, '0') || '.HK'
-                                        ELSE UPPER(ess.symbol)
-                                    END,
-                                    -- A股板块（按代码前缀，与选股策略口径一致）
-                                    -- 北交所：4/8 开头（43/83/87/88）及 9 开头（920 新段）
-                                    CASE
-                                        WHEN LEFT(ess.symbol, 3) = '688' THEN '科创板'
-                                        WHEN LEFT(ess.symbol, 3) IN ('300', '301') THEN '创业板'
-                                        WHEN LEFT(ess.symbol, 3) IN ('002', '003') THEN '中小板'
-                                        WHEN LEFT(ess.symbol, 3) IN ('000', '001') THEN '深主板'
-                                        WHEN LEFT(ess.symbol, 1) IN ('4', '8', '9') THEN '北交所'
-                                        WHEN LEFT(ess.symbol, 2) IN ('60') THEN '沪主板'
-                                        ELSE '其他'
-                                    END AS board
+                                    END AS canonical_symbol
                                 FROM engine_signal_scores ess
                                 WHERE ess.run_id = :run_id
                                   AND ess.tenant_id = :tenant_id
                                   AND ess.user_id = :user_id
+                            ),
+                            scored AS (
+                                SELECT
+                                    raw.*,
+                                    -- A股板块按「归一化后」代码前缀判断（旧口径用原始 prefix
+                                    -- 格式 SH600519 取前缀，永远命中不了 688/300 等，恒为"其他"）
+                                    CASE
+                                        WHEN LEFT(raw.canonical_symbol, 3) = '688' THEN '科创板'
+                                        WHEN LEFT(raw.canonical_symbol, 3) IN ('300', '301') THEN '创业板'
+                                        WHEN LEFT(raw.canonical_symbol, 3) IN ('002', '003') THEN '中小板'
+                                        WHEN LEFT(raw.canonical_symbol, 3) IN ('000', '001') THEN '深主板'
+                                        WHEN SUBSTRING(raw.canonical_symbol, 1, 1) IN ('4', '8', '9') THEN '北交所'
+                                        WHEN LEFT(raw.canonical_symbol, 2) = '60' THEN '沪主板'
+                                        ELSE '其他'
+                                    END AS board
+                                FROM raw
                             )
                             SELECT
                                 ess.symbol,

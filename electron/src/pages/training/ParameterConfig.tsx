@@ -130,7 +130,7 @@ export const ParameterConfig: React.FC<ParameterConfigProps> = ({
                         className="!inline-flex !items-center [&_.ant-checkbox]:top-0 [&_.ant-checkbox]:self-center"
                       >
                         <span className="inline-flex items-center flex-wrap gap-x-1.5 leading-normal">
-                          <Tooltip title={m.tooltip} placement="topLeft" overlayStyle={{ maxWidth: 360 }}>
+                          <Tooltip title={m.tooltip} placement="topLeft" styles={{ root: { maxWidth: 360 } }}>
                             <span className="text-sm cursor-help border-b border-dashed border-slate-300 font-medium text-slate-700">{m.label}</span>
                           </Tooltip>
                           <span className="text-xs text-slate-400">{m.description}</span>
@@ -149,7 +149,7 @@ export const ParameterConfig: React.FC<ParameterConfigProps> = ({
                         className="!inline-flex !items-center [&_.ant-checkbox]:top-0 [&_.ant-checkbox]:self-center"
                       >
                         <span className="inline-flex items-center flex-wrap gap-x-1.5 leading-normal">
-                          <Tooltip title={m.tooltip} placement="topLeft" overlayStyle={{ maxWidth: 360 }}>
+                          <Tooltip title={m.tooltip} placement="topLeft" styles={{ root: { maxWidth: 360 } }}>
                             <span className="text-sm cursor-help border-b border-dashed border-slate-300 font-medium text-slate-700">{m.label}</span>
                           </Tooltip>
                           <span className="text-xs text-slate-400">{m.description}</span>
@@ -168,7 +168,7 @@ export const ParameterConfig: React.FC<ParameterConfigProps> = ({
                         className="!inline-flex !items-center [&_.ant-checkbox]:top-0 [&_.ant-checkbox]:self-center"
                       >
                         <span className="inline-flex items-center flex-wrap gap-x-1.5 leading-normal">
-                          <Tooltip title={m.tooltip} placement="topLeft" overlayStyle={{ maxWidth: 360 }}>
+                          <Tooltip title={m.tooltip} placement="topLeft" styles={{ root: { maxWidth: 360 } }}>
                             <span className="text-sm cursor-help border-b border-dashed border-slate-300 font-medium text-slate-700">{m.label}</span>
                           </Tooltip>
                           <span className="text-xs text-slate-400">{m.description}</span>

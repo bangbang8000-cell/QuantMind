@@ -257,6 +257,10 @@ async def daily_selection(
     day_scores["symbol"] = day_scores["symbol"].map(StockCodeUtil.to_suffix)
     day_scores = day_scores.drop_duplicates(subset="symbol", keep="last")
 
+    # 过滤非有限分数（NaN/±Inf），避免下游 JSON 序列化失败
+    _num_scores = pd.to_numeric(day_scores["score"], errors="coerce")
+    day_scores = day_scores[_num_scores.notna() & _num_scores.abs().ne(float("inf"))].copy()
+
     # 3. 行业信号
     industry_map = load_shenwan_industry_map()
     ind_top1, ind_count, avg_top1, strong_count = _compute_industry_signals(
@@ -615,6 +619,17 @@ async def negative_selection(
     )
     day_scores["symbol"] = day_scores["symbol"].map(StockCodeUtil.to_suffix)
     day_scores = day_scores.drop_duplicates(subset="symbol", keep="last")
+
+    # 过滤非有限分数（NaN/±Inf），避免下游 JSON 序列化失败（Inf 会通过负分过滤）
+    _num_scores = pd.to_numeric(day_scores["score"], errors="coerce")
+    day_scores = day_scores[_num_scores.notna() & _num_scores.abs().ne(float("inf"))].copy()
+    if day_scores.empty:
+        return {
+            "status": "success",
+            "meta": {"trade_date": trade_date or None, "total_signals": len(signals), "negative_count": 0},
+            "short_candidates": [], "missed_reference": [],
+            "matrix": [], "warnings": ["信号分数均无效（非有限值）"],
+        }
 
     # 只保留负分（研究关注 < -0.06）
     neg_df = day_scores[day_scores["score"] < -0.06].copy()

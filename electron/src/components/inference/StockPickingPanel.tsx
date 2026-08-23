@@ -173,7 +173,10 @@ export const StockPickingPanel: React.FC = () => {
         <>
           {/* 市场状态卡片 */}
           <div className="grid grid-cols-3 gap-3">
-            <Card className="rounded-2xl border-slate-100 shadow-sm" styles={{ body: { padding: '16px 20px' } }}>
+            <Card
+              className="rounded-2xl border-slate-100 shadow-sm"
+              styles={{ body: { padding: '16px 20px', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', textAlign: 'center' } }}
+            >
               <div className="flex items-center gap-1.5 mb-2">
                 <TrendingUp size={13} className="text-blue-500" />
                 <span className="text-[10px] font-black tracking-widest text-slate-400">大盘状态</span>
@@ -192,12 +195,15 @@ export const StockPickingPanel: React.FC = () => {
               </div>
               <div className="mt-1 text-[10px] text-slate-400">{market?.index_detail}</div>
             </Card>
-            <Card className="rounded-2xl border-slate-100 shadow-sm" styles={{ body: { padding: '16px 20px' } }}>
+            <Card
+              className="rounded-2xl border-slate-100 shadow-sm"
+              styles={{ body: { padding: '16px 20px', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', textAlign: 'center' } }}
+            >
               <div className="flex items-center gap-1.5 mb-2">
                 <BarChartIcon size={13} className="text-violet-500" />
                 <span className="text-[10px] font-black tracking-widest text-slate-400">行业信号</span>
               </div>
-              <div className="flex items-end gap-4">
+              <div className="flex items-end justify-center gap-4">
                 <div>
                   <div className="text-xl font-black font-mono text-slate-800">{market?.avg_top1?.toFixed(3) ?? '—'}</div>
                   <div className="text-[9px] text-slate-400">avgTop1</div>
@@ -208,12 +214,15 @@ export const StockPickingPanel: React.FC = () => {
                 </div>
               </div>
             </Card>
-            <Card className="rounded-2xl border-slate-100 shadow-sm" styles={{ body: { padding: '16px 20px' } }}>
+            <Card
+              className="rounded-2xl border-slate-100 shadow-sm"
+              styles={{ body: { padding: '16px 20px', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', textAlign: 'center' } }}
+            >
               <div className="flex items-center gap-1.5 mb-2">
                 <ShieldAlert size={13} className="text-amber-500" />
                 <span className="text-[10px] font-black tracking-widest text-slate-400">仓位建议</span>
               </div>
-              <div className="flex items-baseline gap-2">
+              <div className="flex items-baseline justify-center gap-2">
                 <span className={clsx('text-xl font-black', market?.should_enter ? 'text-emerald-600' : 'text-slate-400')}>
                   {market?.position ?? '—'}
                 </span>
@@ -262,7 +271,7 @@ export const StockPickingPanel: React.FC = () => {
                   />
                   <Bar dataKey="top1" radius={[0, 4, 4, 0]} barSize={20} isAnimationActive={false}>
                     {industryData.map((it, i) => (
-                      <Cell key={i} fill={it.top1 >= (STRATEGY_PRESETS.find(p => p.key === strategy)!.entry) ? '#1677ff' : '#d9d9d9'} />
+                      <Cell key={i} fill={it.top1 >= (STRATEGY_PRESETS.find(p => p.key === strategy)!.entry) ? '#7dd3fc' : '#c9e8fb'} />
                     ))}
                     <LabelList
                       dataKey="top1"
