@@ -363,10 +363,12 @@ class LocalDockerOrchestrator(TrainingOrchestrator):
             try:
                 from backend.services.engine.data_platform.quantdb_factor_reader import QuantDBFactorReader
 
+                source_start = payload.get("train_start") or "2023-01-11"
+                source_end = payload.get("test_end") or payload.get("valid_end") or payload.get("train_end") or ""
                 source_status = QuantDBFactorReader(_qdb_dir).assert_ready(
                     factor_source,
-                    start=str(payload.get("train_start") or "") or None,
-                    end=str(payload.get("test_end") or payload.get("valid_end") or payload.get("train_end") or "") or None,
+                    start=str(source_start) or None,
+                    end=str(source_end) or None,
                 )
                 available = set(source_status.columns)
                 field_sources = dict(payload.get("factor_field_sources") or {})

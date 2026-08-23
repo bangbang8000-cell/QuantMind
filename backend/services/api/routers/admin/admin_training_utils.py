@@ -374,7 +374,7 @@ def _normalize_payload(payload: dict[str, Any], allowed_features: list[str]) -> 
     if len(display_name) > 128:
         raise HTTPException(status_code=422, detail="display_name must be at most 128 characters")
 
-    train_start = str(payload.get("train_start", "2022-01-01")).strip()
+    train_start = str(payload.get("train_start", "2023-01-11")).strip()
     train_end = str(payload.get("train_end", "2024-12-31")).strip()
     dt_train_start = _parse_date(train_start, "train_start")
     dt_train_end = _parse_date(train_end, "train_end")
