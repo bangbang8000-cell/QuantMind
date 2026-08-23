@@ -929,6 +929,8 @@ async def admin_create_source(payload: dict):
     """新增订阅源: body = {subscribe_url, folder_id?, name?}
 
     Huntly /feeds/follow 仅接受 subscribeUrl，folder/name 需追加一次 updateSetting。
+    注意: Huntly 的 updateSetting 是全量覆盖更新（缺失字段会被写为 NULL），
+    因此必须显式回传 subscribeUrl/enabled，否则订阅地址与启用状态会丢失。
     """
     subscribe_url = (payload or {}).get("subscribe_url", "").strip()
     if not subscribe_url:
@@ -945,7 +947,11 @@ async def admin_create_source(payload: dict):
     folder_id = (payload or {}).get("folder_id")
     custom_name = (payload or {}).get("name")
     if connector_id and (folder_id is not None or custom_name):
-        update_body: dict[str, Any] = {"connectorId": connector_id}
+        update_body: dict[str, Any] = {
+            "connectorId": connector_id,
+            "subscribeUrl": subscribe_url,
+            "enabled": True,
+        }
         if folder_id is not None:
             update_body["folderId"] = folder_id or None  # 0 视为未分组 → null
         if custom_name:
@@ -964,8 +970,28 @@ async def admin_create_source(payload: dict):
 
 @router.put("/admin/sources/{connector_id}")
 async def admin_update_source(connector_id: int, payload: dict):
-    """编辑订阅源: body = {name?, folder_id?, fetch_interval_minutes?, enabled?, crawl_full_content?}"""
-    body: dict[str, Any] = {"connectorId": connector_id}
+    """编辑订阅源: body = {name?, folder_id?, fetch_interval_minutes?, enabled?, crawl_full_content?}
+
+    Huntly updateSetting 是全量覆盖更新，先读当前设置合并成完整 body 再提交，
+    保证部分字段更新不会把 subscribeUrl/enabled 等未提及字段抹成 NULL。
+    """
+    cur = await _huntly_request(
+        "GET", "/api/setting/feeds/setting", params={"connectorId": connector_id}
+    )
+    current: dict[str, Any] = _unwrap(cur.json()) if cur.status_code == 200 else {}
+    if not isinstance(current, dict):
+        current = {}
+
+    body: dict[str, Any] = {
+        "connectorId": connector_id,
+        "name": current.get("name"),
+        "folderId": current.get("folderId"),
+        "subscribeUrl": current.get("subscribeUrl"),
+        "crawlFullContent": bool(current.get("crawlFullContent")),
+        "enabled": bool(current.get("enabled")),
+        "fetchIntervalMinutes": current.get("fetchIntervalMinutes")
+        or current.get("defaultFetchIntervalMinutes"),
+    }
     if "name" in payload:
         body["name"] = payload["name"]
     if "folder_id" in payload:
