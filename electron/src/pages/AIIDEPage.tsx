@@ -2467,86 +2467,147 @@ const AIIDEPage: React.FC = () => {
 
             {/* 2. Main Editor & Log Area */}
             <main className="flex-1 flex flex-col min-w-0 gap-4">
-                {/* Editor Toolbar */}
-                <div className="h-14 flex-shrink-0 bg-white border border-gray-200 rounded-[32px] shadow-sm flex items-center justify-between px-6 relative z-10">
-                    <div className="flex flex-col justify-center gap-1 min-w-0">
-                        <span
-                            className="font-bold text-gray-800 text-xs leading-none truncate max-w-[420px]"
-                            title={(() => {
-                                return activeTab === 'local'
-                                    ? (selectedFile?.name || '未选择文件')
-                                    : (selectedRemote?.name || '未选择策略');
-                            })()}
-                        >
-                            {(() => {
-                                const rawName = activeTab === 'local'
-                                    ? (selectedFile?.name || '未选择文件')
-                                    : (selectedRemote?.name || '未选择策略');
-                                return rawName.length > 30 ? rawName.substring(0, 30) + '...' : rawName;
-                            })()}
-                        </span>
-                        {defaultModelName ? (
-                            <span
-                                className="inline-flex w-fit max-w-full items-center gap-1 px-2 py-0.5 rounded-full bg-blue-50 text-blue-600 border border-blue-100 font-medium"
-                                title="回测默认使用的模型"
-                            >
-                                <BrainCircuit className="h-3 w-3 shrink-0" />
-                                <span className="truncate max-w-[320px] leading-none">
-                                    默认模型: {defaultModelName.length > 26 ? defaultModelName.substring(0, 26) + '...' : defaultModelName}
+                {/* Editor Toolbar - Double Row Structure */}
+                <div className="flex-shrink-0 bg-white border border-gray-200 rounded-[24px] shadow-sm flex flex-col justify-between p-3 px-5 gap-2.5 relative z-10">
+                    {/* Row 1: File & Environment Meta */}
+                    <div className="flex items-center justify-between min-w-0 gap-3 border-b border-gray-100 pb-2">
+                        <div className="flex items-center gap-2 min-w-0">
+                            <div className="p-1 rounded-lg bg-blue-50 text-blue-600 shrink-0">
+                                <FileCode className="h-3.5 w-3.5" />
+                            </div>
+                            <div className="flex items-center gap-2 min-w-0">
+                                <span
+                                    className="font-bold text-gray-800 text-xs truncate max-w-[260px]"
+                                    title={activeTab === 'local' ? (selectedFile?.name || '未选择文件') : (selectedRemote?.name || '未选择策略')}
+                                >
+                                    {activeTab === 'local'
+                                        ? (selectedFile?.name || '未选择文件')
+                                        : (selectedRemote?.name || '未选择策略')}
                                 </span>
-                            </span>
-                        ) : null}
+                                <span className="shrink-0 px-2 py-0.5 rounded-full text-[10px] font-medium bg-gray-100 text-gray-500 border border-gray-200/60">
+                                    {activeTab === 'local' ? '本地工作区' : '云端策略库'}
+                                </span>
+                                <span className="shrink-0 px-1.5 py-0.5 rounded text-[10px] font-mono text-emerald-600 bg-emerald-50 border border-emerald-100">
+                                    Python
+                                </span>
+                            </div>
+                        </div>
+
+                        <div className="flex items-center gap-2 shrink-0">
+                            {defaultModelName ? (
+                                <span
+                                    className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full bg-blue-50 text-blue-600 border border-blue-100 text-[11px] font-medium whitespace-nowrap"
+                                    title={`回测默认使用的模型: ${defaultModelName}`}
+                                >
+                                    <BrainCircuit className="h-3 w-3 shrink-0" />
+                                    <span>模型: {defaultModelName.length > 20 ? defaultModelName.substring(0, 20) + '...' : defaultModelName}</span>
+                                </span>
+                            ) : null}
+
+                            {isCheckingSyntax ? (
+                                <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md bg-gray-50 text-gray-400 border border-gray-100 text-[10px] whitespace-nowrap">
+                                    <RefreshCw className="h-2.5 w-2.5 animate-spin text-gray-400" />
+                                    校验中
+                                </span>
+                            ) : syntaxError ? (
+                                <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md bg-red-50 text-red-600 border border-red-100 text-[10px] whitespace-nowrap" title={syntaxError}>
+                                    <AlertCircle className="h-2.5 w-2.5 text-red-500" />
+                                    语法异常
+                                </span>
+                            ) : (
+                                <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md bg-emerald-50 text-emerald-600 border border-emerald-100 text-[10px] whitespace-nowrap">
+                                    <CheckCircle className="h-2.5 w-2.5 text-emerald-500" />
+                                    语法正常
+                                </span>
+                            )}
+                        </div>
                     </div>
-                    <div className="flex items-center gap-2">
-                        <button
-                            onClick={handleSendSelectedCode}
-                            disabled={activeTab === 'local' ? !selectedFile : !selectedRemote}
-                            className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium bg-white border border-gray-200 text-gray-700 rounded-lg hover:bg-gray-50 transition-all hover:scale-105"
-                        >
-                            <Code2 className="h-3.5 w-3.5" />
-                            填入选中代码
-                        </button>
-                        <button
-                            onClick={handleRun}
-                            disabled={isRunning || (activeTab === 'local' ? !selectedFile : !selectedRemote)}
-                            className={clsx(
-                                "flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded-lg transition-all hover:scale-105 shadow-sm",
-                                isRunning || (activeTab === 'local' ? !selectedFile : !selectedRemote)
-                                    ? "bg-gray-100 text-gray-400 cursor-not-allowed opacity-60"
-                                    : "bg-blue-600 text-white hover:bg-blue-700 active:scale-95"
+
+                    {/* Row 2: Action Toolbar */}
+                    <div className="flex items-center justify-between min-w-0 gap-3">
+                        <div className="flex items-center gap-2">
+                            <button
+                                onClick={handleSendSelectedCode}
+                                disabled={activeTab === 'local' ? !selectedFile : !selectedRemote}
+                                className="flex items-center gap-1.5 px-3.5 py-1.5 text-xs font-medium bg-gray-50 border border-gray-200 text-gray-700 rounded-full hover:bg-gray-100 hover:text-blue-600 transition-all hover:scale-[1.02] active:scale-95 disabled:opacity-50 disabled:cursor-not-allowed whitespace-nowrap shadow-2xs"
+                                title="将编辑器中选中的代码注入右侧 AI 对话框"
+                            >
+                                <Code2 className="h-3.5 w-3.5 text-blue-500 shrink-0" />
+                                <span>填入选中代码</span>
+                            </button>
+
+                            {activeTab === 'local' && selectedFile && (
+                                <button
+                                    onClick={handleUploadToCloud}
+                                    className="flex items-center gap-1.5 px-3.5 py-1.5 text-xs font-medium bg-white border border-gray-200 text-gray-700 rounded-full hover:bg-gray-50 hover:text-blue-600 transition-all hover:scale-[1.02] active:scale-95 whitespace-nowrap shadow-2xs"
+                                    title="保存到云端策略库"
+                                >
+                                    <CloudUpload className="h-3.5 w-3.5 text-indigo-500 shrink-0" />
+                                    <span>发布云端</span>
+                                </button>
                             )}
-                        >
-                            {isRunning ? <RefreshCw className="h-3.5 w-3.5 animate-spin" /> : <Play className="h-3.5 w-3.5" />}
-                            {isRunning ? '正在运行...' : '运行'}
-                        </button>
-                        <button
-                            onClick={handleStrategyLabRun}
-                            disabled={isRunning || !editorContent.trim()}
-                            className={clsx(
-                                "flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded-lg transition-all hover:scale-105 shadow-sm",
-                                isRunning || !editorContent.trim()
-                                    ? "bg-gray-100 text-gray-400 cursor-not-allowed opacity-60"
-                                    : "bg-amber-600 text-white hover:bg-amber-700 active:scale-95"
+                        </div>
+
+                        <div className="flex items-center gap-2 shrink-0">
+                            {/* Save Button */}
+                            <button
+                                onClick={handleSave}
+                                disabled={isSaving || (activeTab === 'local' && !selectedFile)}
+                                className={clsx(
+                                    "flex items-center gap-1.5 px-4 py-1.5 text-xs font-medium rounded-full transition-all hover:scale-[1.02] active:scale-95 whitespace-nowrap border shadow-2xs",
+                                    isSaving || (activeTab === 'local' && !selectedFile)
+                                        ? "bg-gray-100 text-gray-400 border-gray-200 cursor-not-allowed opacity-60"
+                                        : "bg-white border-gray-200 text-gray-700 hover:bg-gray-50 hover:border-gray-300"
+                                )}
+                                title="保存代码 (Ctrl+S / Cmd+S)"
+                            >
+                                {isSaving ? <CheckCircle className="h-3.5 w-3.5 text-green-500 shrink-0" /> : <Save className="h-3.5 w-3.5 text-gray-500 shrink-0" />}
+                                <span>{isSaving ? '已保存' : '保存'}</span>
+                            </button>
+
+                            {/* Run Button */}
+                            {isRunning ? (
+                                <button
+                                    onClick={handleStop}
+                                    className="flex items-center gap-1.5 px-4 py-1.5 text-xs font-medium rounded-full bg-red-600 text-white hover:bg-red-700 active:scale-95 transition-all shadow-sm whitespace-nowrap"
+                                    title="停止当前运行脚本"
+                                >
+                                    <Square className="h-3.5 w-3.5 fill-current shrink-0" />
+                                    <span>停止运行</span>
+                                </button>
+                            ) : (
+                                <button
+                                    onClick={handleRun}
+                                    disabled={activeTab === 'local' ? !selectedFile : !selectedRemote}
+                                    className={clsx(
+                                        "flex items-center gap-1.5 px-4 py-1.5 text-xs font-medium rounded-full transition-all hover:scale-[1.02] shadow-sm whitespace-nowrap",
+                                        activeTab === 'local' ? !selectedFile : !selectedRemote
+                                            ? "bg-gray-100 text-gray-400 cursor-not-allowed opacity-60"
+                                            : "bg-blue-600 text-white hover:bg-blue-700 active:scale-95"
+                                    )}
+                                    title="直接运行当前 Python 脚本，查看控制台输出和实时日志 (F5)"
+                                >
+                                    <Play className="h-3.5 w-3.5 fill-current shrink-0" />
+                                    <span>运行</span>
+                                </button>
                             )}
-                            title="使用策略实验室SDK运行回测，查看KPI、收益曲线、热力图等完整结果"
-                        >
-                            {strategyLabLoading ? <RefreshCw className="h-3.5 w-3.5 animate-spin" /> : <FlaskRound className="h-3.5 w-3.5" />}
-                            {strategyLabLoading ? '回测中...' : '回测'}
-                        </button>
-                        <button
-                            onClick={handleSave}
-                            disabled={isSaving || activeTab !== 'local' || !selectedFile}
-                            className={clsx(
-                                "flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded-lg transition-all hover:scale-105",
-                                isSaving || activeTab !== 'local' || !selectedFile
-                                    ? "bg-gray-100 text-gray-400 cursor-not-allowed opacity-60"
-                                    : "bg-white border border-gray-200 text-gray-700 hover:bg-gray-50 active:scale-95"
-                            )}
-                        >
-                            {isSaving ? <CheckCircle className="h-3.5 w-3.5 text-green-500" /> : <Save className="h-3.5 w-3.5" />}
-                            {isSaving ? '已保存' : '保存'}
-                        </button>
-                        <div className="w-[1px] h-4 bg-gray-200 mx-1" />
+
+                            {/* Strategy Lab Backtest Button */}
+                            <button
+                                onClick={handleStrategyLabRun}
+                                disabled={isRunning || strategyLabLoading || !editorContent.trim()}
+                                className={clsx(
+                                    "flex items-center gap-1.5 px-4 py-1.5 text-xs font-medium rounded-full transition-all hover:scale-[1.02] active:scale-95 whitespace-nowrap border shadow-2xs",
+                                    isRunning || strategyLabLoading || !editorContent.trim()
+                                        ? "bg-gray-100 text-gray-400 border-gray-200 cursor-not-allowed opacity-60"
+                                        : "bg-white border-gray-200 text-gray-700 hover:bg-gray-50 hover:text-blue-600 hover:border-gray-300"
+                                )}
+                                title="使用策略实验室 SDK 运行回测，查看 KPI、收益曲线、热力图等完整结果"
+                            >
+                                {strategyLabLoading ? <RefreshCw className="h-3.5 w-3.5 animate-spin shrink-0" /> : <FlaskRound className="h-3.5 w-3.5 text-gray-500 shrink-0" />}
+                                <span>{strategyLabLoading ? '回测中...' : '策略回测'}</span>
+                            </button>
+                        </div>
                     </div>
                 </div>
 
@@ -2590,27 +2651,28 @@ const AIIDEPage: React.FC = () => {
                                 onClick={() => setLogTab('result')}
                                 className={clsx(
                                     "text-xs font-medium border-b-2 transition-all h-10 flex items-center gap-1.5",
-                                    logTab === 'result' ? "border-blue-600 text-blue-600" : "border-transparent text-gray-500 hover:text-gray-700"
+                                    logTab === 'result' ? "border-blue-600 text-blue-600 font-semibold" : "border-transparent text-gray-500 hover:text-gray-700"
                                 )}
                             >
                                 运行结果
                                 {logs.length > 0 && <span className="w-4 h-4 rounded-full bg-blue-100 text-[10px] flex items-center justify-center font-bold">{logs.length}</span>}
+                            </button>
+                            <button
+                                onClick={() => setLogTab('backtest')}
+                                className={clsx(
+                                    "text-xs font-medium border-b-2 transition-all h-10 flex items-center gap-1.5",
+                                    logTab === 'backtest' ? "border-zinc-900 text-zinc-900 font-semibold" : "border-transparent text-gray-500 hover:text-gray-700"
+                                )}
+                            >
+                                <FlaskRound className="w-3.5 h-3.5" />
+                                策略回测
+                                {strategyLabResult && <span className="w-4 h-4 rounded-full bg-zinc-100 text-zinc-800 text-[10px] flex items-center justify-center font-bold">✓</span>}
                             </button>
                             {isRunning && progress && (
                                 <span className="inline-flex items-center h-10 text-[10px] text-blue-600 font-mono animate-pulse leading-none self-center">
                                     {progress.message}
                                 </span>
                             )}
-                            <button
-                                onClick={() => setLogTab('error')}
-                                className={clsx(
-                                    "text-xs font-medium border-b-2 transition-all h-10 flex items-center gap-1.5",
-                                    logTab === 'error' ? "border-red-500 text-red-500" : "border-transparent text-gray-500 hover:text-gray-700"
-                                )}
-                            >
-                                错误信息
-                                {errors.length > 0 && <span className="w-4 h-4 rounded-full bg-red-100 text-[10px] flex items-center justify-center font-bold">{errors.length}</span>}
-                            </button>
                             <button
                                 onClick={() => setLogTab('metrics')}
                                 className={clsx(
@@ -2621,6 +2683,16 @@ const AIIDEPage: React.FC = () => {
                                 关键指标
                                 {finalResultSummary && <span className="w-4 h-4 rounded-full bg-emerald-100 text-[10px] flex items-center justify-center font-bold">1</span>}
                             </button>
+                            <button
+                                onClick={() => setLogTab('error')}
+                                className={clsx(
+                                    "text-xs font-medium border-b-2 transition-all h-10 flex items-center gap-1.5",
+                                    logTab === 'error' ? "border-red-500 text-red-500" : "border-transparent text-gray-500 hover:text-gray-700"
+                                )}
+                            >
+                                错误信息
+                                {errors.length > 0 && <span className="w-4 h-4 rounded-full bg-red-100 text-[10px] flex items-center justify-center font-bold">{errors.length}</span>}
+                            </button>
                             {errors.length > 0 && (
                                 <button
                                     onClick={() => {
@@ -2629,9 +2701,6 @@ const AIIDEPage: React.FC = () => {
                                             error_msg: errors.join('\n'),
                                             current_code: editorContent
                                         });
-                                        // Auto switch to chat tab? Actually open chat panel if closed?
-                                        // Ideally we should open the chat panel. 
-                                        // But users can do it manually. I will assume chat panel is visible or user knows.
                                     }}
                                     className="px-2 py-0.5 text-xs bg-purple-100 text-purple-700 rounded-md hover:bg-purple-200 flex items-center gap-1 transition-colors"
                                 >
