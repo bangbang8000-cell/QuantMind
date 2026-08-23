@@ -299,7 +299,7 @@ const DashboardPage: React.FC = () => {
                 >
                     {klineLoading ? (
                         <div style={{ height: 550, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-                            <Spin tip="加载K线数据..." />
+                            <Spin />
                         </div>
                     ) : (
                         <TradingViewChart data={klineData} height={550} />

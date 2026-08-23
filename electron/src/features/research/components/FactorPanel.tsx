@@ -77,6 +77,12 @@ const FIELD_LABELS: Record<string, string> = {
   vol_skew: '波动偏度',
   vol_up_down_ratio: '涨跌波动比',
   // 流动性与资金流
+  turn_1: '1日换手率',
+  turn_3: '3日换手率',
+  turn_5: '5日换手率',
+  turn_10: '10日换手率',
+  turn_20: '20日换手率',
+  turn_60: '60日换手率',
   liq_mfi_14: 'MFI(14)',
   liq_obv_20: 'OBV(20)',
   flow_net_amount: '净流入额',
@@ -123,6 +129,9 @@ const valueTone = (value: number | string | boolean | null): string => {
   if (value < 0) return 'text-emerald-600';
   return 'text-slate-800';
 };
+
+/** 换手率字段：后端已 ×100 转百分数，展示时补 '%' 后缀明确单位 */
+const PERCENT_FIELDS = new Set(['turn_1', 'turn_3', 'turn_5', 'turn_10', 'turn_20', 'turn_60']);
 
 interface FactorPanelProps {
   features: QuantDbFeatures | null;
@@ -244,6 +253,7 @@ export const FactorPanel: React.FC<FactorPanelProps> = ({ features, loading }) =
               </div>
               <div className={`mt-1 truncate text-xs font-black ${valueTone(value)}`}>
                 {formatValue(value)}
+                {PERCENT_FIELDS.has(field) ? '%' : ''}
               </div>
               {lowerQuery && (
                 <div className="mt-0.5 text-[8px] font-bold uppercase text-slate-300">{categoryLabel}</div>

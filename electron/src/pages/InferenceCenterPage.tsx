@@ -203,12 +203,16 @@ export const InferenceCenterPage: React.FC = () => {
         pageSize: options?.pageSize ?? 20,
       });
       setInferenceHistory(resp.items);
+      if (lastInferenceRun === null) {
+        const firstCompleted = resp.items.find((r) => r.status === 'completed') ?? null;
+        setLastInferenceRun(firstCompleted);
+      }
     } catch {
       setInferenceHistory([]);
     } finally {
       setInferenceHistoryLoading(false);
     }
-  }, []);
+  }, [lastInferenceRun]);
 
   const loadAutoSettings = useCallback(async (modelId: string) => {
     try {
@@ -263,6 +267,10 @@ export const InferenceCenterPage: React.FC = () => {
       });
     }
   }, [selectedModel?.model_id, topTab, crossSectionMode, historyRunIdFilter, historyStatusFilter, historyDateFilter, loadInferenceHistory]);
+
+  useEffect(() => {
+    setLastInferenceRun(null);
+  }, [selectedModel?.model_id]);
 
   const handleRunCrossSectionInference = async () => {
     if (!selectedModel || !inferenceDate) return;
@@ -612,7 +620,7 @@ export const InferenceCenterPage: React.FC = () => {
           <div className="flex-1 min-h-0 p-6 overflow-y-auto custom-scrollbar">
             {!selectedModel ? (
               <div className="flex h-full items-center justify-center">
-                <Spin tip="正在加载模型资产..." />
+                <Spin />
               </div>
             ) : crossSectionMode === 'single' ? (
               <InferenceCenterPanel

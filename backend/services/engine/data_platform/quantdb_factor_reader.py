@@ -311,6 +311,25 @@ class QuantDBFactorReader:
     def available_dates(
         self, source: str, *, start: str | None = None, end: str | None = None
     ) -> list[str]:
+        # 快速路径：直接读 hive 分区目录名（dt=YYYYMMDD），
+        # 避免对全量 parquet 做 SELECT DISTINCT 扫描（440万行，30s+ 且阻塞事件循环）。
+        root = self.source_path(source)
+        dates: set[str] = set()
+        if root.is_dir():
+            for entry in root.iterdir():
+                if entry.is_dir() and entry.name.startswith("dt="):
+                    v = entry.name.split("=", 1)[1]
+                    if v.isdigit() and len(v) == 8:
+                        dates.add(f"{v[:4]}-{v[4:6]}-{v[6:]}")
+        if dates:
+            sorted_dates = sorted(dates)
+            if start:
+                sorted_dates = [d for d in sorted_dates if d >= start]
+            if end:
+                sorted_dates = [d for d in sorted_dates if d <= end]
+            return sorted_dates
+
+        # 兜底：非分区存储时退回 DuckDB 全表 DISTINCT 扫描
         status = self.assert_ready(source)
         duckdb = self._duckdb()
         con = duckdb.connect(config={"memory_limit": "2GB", "threads": "2"})

@@ -137,7 +137,7 @@ export const COLUMN_GROUPS: ColumnGroup[] = [
   {
     key: 'returns',
     label: '收益',
-    columns: ['nextDayReturn', 'day3Return', 'return1d', 'return3d', 'return5d'],
+    columns: ['return1d', 'return3d', 'return5d', 'return10d', 'return20d', 'return60d'],
     defaultVisible: true,
   },
   {

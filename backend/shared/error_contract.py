@@ -34,7 +34,18 @@ def _normalize_message(detail: Any, fallback: str) -> str:
     return fallback
 
 
-def _is_client_disconnected(exc: BaseException) -> bool:
+def _is_client_disconnected(
+    exc: BaseException, _seen: set[int] | None = None
+) -> bool:
+    # 异常链（__cause__/__context__/exceptions）可能成环（如 raise x from x、
+    # asyncio TaskGroup 内部引用），递归必须携带已访问集合打断循环，
+    # 否则无限递归持 GIL 导致事件循环饿死、健康检查超时、看门狗误杀。
+    if _seen is None:
+        _seen = set()
+    if id(exc) in _seen:
+        return False
+    _seen.add(id(exc))
+
     if ClientDisconnected is not None and isinstance(exc, ClientDisconnected):
         return True
 
@@ -44,38 +55,51 @@ def _is_client_disconnected(exc: BaseException) -> bool:
     nested = getattr(exc, "exceptions", None)
     if nested:
         try:
-            return any(_is_client_disconnected(inner) for inner in nested if isinstance(inner, BaseException))
+            if any(
+                _is_client_disconnected(inner, _seen)
+                for inner in nested
+                if isinstance(inner, BaseException)
+            ):
+                return True
         except Exception:
             pass
 
     cause = getattr(exc, "__cause__", None)
-    if isinstance(cause, BaseException) and _is_client_disconnected(cause):
+    if isinstance(cause, BaseException) and _is_client_disconnected(cause, _seen):
         return True
 
     context = getattr(exc, "__context__", None)
-    if isinstance(context, BaseException) and _is_client_disconnected(context):
+    if isinstance(context, BaseException) and _is_client_disconnected(context, _seen):
         return True
 
     return False
 
 
-def _json_safe(value: Any) -> Any:
-    """递归清洗非 JSON 安全值（bytes/set/tuple 等），避免 JSONResponse 序列化崩溃。"""
+def _json_safe(value: Any, _seen: set[int] | None = None) -> Any:
+    """递归清洗非 JSON 安全值（bytes/set/tuple 等），避免 JSONResponse 序列化崩溃。
+
+    自引用结构（如 dict 包含自身）会无限递归，用 _seen 打断。
+    """
+    if _seen is None:
+        _seen = set()
+    if isinstance(value, (str, int, float, bool)) or value is None:
+        return value
     if isinstance(value, bytes):
         try:
             return value.decode("utf-8")
         except Exception:
             return f"<{len(value)} bytes>"
+    if id(value) in _seen:
+        return None
+    _seen.add(id(value))
     if isinstance(value, (set, frozenset)):
-        return [_json_safe(v) for v in value]
+        return [_json_safe(v, _seen) for v in value]
     if isinstance(value, tuple):
-        return [_json_safe(v) for v in value]
+        return [_json_safe(v, _seen) for v in value]
     if isinstance(value, list):
-        return [_json_safe(v) for v in value]
+        return [_json_safe(v, _seen) for v in value]
     if isinstance(value, dict):
-        return {str(k): _json_safe(v) for k, v in value.items()}
-    if isinstance(value, (str, int, float, bool)) or value is None:
-        return value
+        return {str(k): _json_safe(v, _seen) for k, v in value.items()}
     # 其他未知类型（如 enum/date）：转字符串兜底
     try:
         return str(value)

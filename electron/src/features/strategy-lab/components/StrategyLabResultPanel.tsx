@@ -480,10 +480,10 @@ const TradeTable: React.FC<{
   return (
     <Table
       size="small"
-      rowKey={(_, i) => String(i)}
+      rowKey="_key"
       pagination={{ pageSize: 50, showSizeChanger: false }}
       scroll={{ y: 280 }}
-      dataSource={trades}
+      dataSource={trades.map((r, i) => ({ ...r, _key: String(i) }))}
       columns={[
         { title: '日期', dataIndex: 'date', width: 100 },
         { title: '代码', dataIndex: 'symbol', width: 100 },

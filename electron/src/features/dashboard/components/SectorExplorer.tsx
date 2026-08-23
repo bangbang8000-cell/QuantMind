@@ -56,16 +56,16 @@ export const SectorExplorer: React.FC<SectorExplorerProps> = ({ market, symbol }
         >
             {loading ? (
                 <div style={{ textAlign: 'center', padding: 40 }}>
-                    <Spin tip="加载行业数据..." />
+                    <Spin />
                 </div>
             ) : data.length > 0 ? (
                 <Table
-                    dataSource={data}
+                    dataSource={data.map((r, i) => ({ ...r, _key: String(i) }))}
                     columns={columns}
                     size="small"
                     scroll={{ x: 'max-content' }}
                     pagination={false}
-                    rowKey={(_, i) => String(i)}
+                    rowKey="_key"
                 />
             ) : (
                 <Empty description="暂无行业板块数据" style={{ padding: 40 }} />

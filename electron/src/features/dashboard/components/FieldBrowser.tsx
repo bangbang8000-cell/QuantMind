@@ -185,16 +185,16 @@ export const FieldBrowser: React.FC<FieldBrowserProps> = ({ market, symbol }) =>
             >
                 {loading ? (
                     <div style={{ textAlign: 'center', padding: 40 }}>
-                        <Spin tip="加载中..." />
+                        <Spin />
                     </div>
                 ) : fieldData && fieldData.data.length > 0 ? (
                     <Table
-                        dataSource={fieldData.data}
+                        dataSource={fieldData.data.map((r, i) => ({ ...r, _key: String(i) }))}
                         columns={tableColumns}
                         size="small"
                         scroll={{ x: 'max-content', y: 380 }}
                         pagination={{ pageSize: 50, showSizeChanger: true, showTotal: (t) => `共 ${t} 条` }}
-                        rowKey={(_, i) => String(i)}
+                        rowKey="_key"
                     />
                 ) : (
                     <Empty

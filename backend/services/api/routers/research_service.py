@@ -8,7 +8,9 @@ import logging
 import math
 import os
 import re
+import threading
 import time
+from concurrent.futures import ThreadPoolExecutor
 from datetime import date, datetime, timedelta
 from pathlib import Path
 from typing import Any
@@ -17,6 +19,7 @@ import httpx
 from fastapi import HTTPException
 from sqlalchemy import text
 
+from backend.services.engine.data_platform.quantdb_hub import _resolve_data_dir
 from backend.shared.database_manager_v2 import get_session
 from backend.shared.inference_stats import compute_score_distribution
 from backend.shared.redis_sentinel_client import get_redis_sentinel_client
@@ -82,29 +85,210 @@ def _redis_set_json(key: str, value: dict[str, Any], ttl_seconds: int) -> None:
 
 
 def _sdl_redis_key(trade_date: date) -> str:
-    # v4：LEFT JOIN stocks 表兜底 stock_name（stock_daily_latest.stock_name 自 2026-06-18 起全为 NULL），
-    # 必须换 key 让 36 小时 TTL 内的旧缓存立即失效。
-    return f"qm:research:sdl:{trade_date.isoformat()}:v4"
+    # v6：主源改为 features_daily 50 维宽表 parquet（PG stock_daily_latest 仅兜底补充字段），
+    # 并叠加 QuantDB instrument_list 的股票名称/行业兜底。
+    return f"qm:research:sdl:{trade_date.isoformat()}:v7"
 
 
 async def _load_sdl_day_map(session, trade_date: date, market: str | None = None) -> dict[str, dict[str, Any]]:
     if trade_date.year != _SDL_REDIS_YEAR:
         return {}
 
-    sdl_table = _get_sdl_table(market)
     cache_key = _sdl_redis_key(trade_date) + f":{market or 'CN'}"
     cached = _redis_get_json(cache_key)
     if cached and "symbols" in cached and isinstance(cached["symbols"], dict):
         symbols = cached["symbols"]
         return symbols if isinstance(symbols, dict) else {}
 
-    # Use 'name' column for non-CN markets, 'stock_name' for CN
+    # features_daily 50 维宽表 parquet 为主源（仅 CN 市场），PG stock_daily_latest 仅兜底补充
+    is_cn = not market or market.upper() == "CN"
+    features_map: dict[str, dict[str, Any]] = {}
+    if is_cn:
+        try:
+            features_map = await _offload_sdl_read(_read_features_daily_day, trade_date)
+        except Exception:
+            logger.warning("读取 features_daily parquet 失败，降级为仅 PG", exc_info=True)
+            features_map = {}
+
+    pg_map = await _load_sdl_pg_map(session, trade_date, market)
+
+    # 名称/行业兜底：stock_daily_latest 与 stocks 表可能为空，以 QuantDB 全量股票列表为准
+    meta_map: dict[str, dict[str, Any]] = {}
+    if is_cn:
+        try:
+            meta_map = await _offload_sdl_read(_load_quantdb_name_industry)
+        except Exception:
+            logger.warning("加载 QuantDB 股票名称/行业失败", exc_info=True)
+            meta_map = {}
+
+    # 合并：PG 提供兜底字段（roe/指数归属/is_st 等 features_daily 缺失项），
+    # features_daily 覆盖同名指标（50 维宽表为准）。
+    symbol_map: dict[str, dict[str, Any]] = {}
+    for symbol in set(features_map) | set(pg_map) | set(meta_map):
+        merged = dict(pg_map.get(symbol) or {})
+        merged.update(features_map.get(symbol) or {})
+        meta = meta_map.get(symbol)
+        if meta:
+            merged.setdefault("stock_name", meta.get("stock_name") or "")
+            merged.setdefault("industry", meta.get("industry") or "")
+        symbol_map[symbol] = merged
+
+    _redis_set_json(
+        cache_key,
+        {"trade_date": trade_date.isoformat(), "symbols": symbol_map, "created_at": datetime.now().isoformat()},
+        _SDL_REDIS_TTL_SECONDS,
+    )
+    return symbol_map
+
+
+# DuckDB 读取 features_daily 的线程池：限制并发，避免阻塞 API 事件循环
+_SDL_FEATURE_EXECUTOR: ThreadPoolExecutor | None = None
+_SDL_FEATURE_EXECUTOR_LOCK = threading.Lock()
+
+
+def _sdl_feature_executor() -> ThreadPoolExecutor:
+    global _SDL_FEATURE_EXECUTOR
+    if _SDL_FEATURE_EXECUTOR is None:
+        with _SDL_FEATURE_EXECUTOR_LOCK:
+            if _SDL_FEATURE_EXECUTOR is None:
+                _SDL_FEATURE_EXECUTOR = ThreadPoolExecutor(
+                    max_workers=2, thread_name_prefix="qm-sdl-features"
+                )
+    return _SDL_FEATURE_EXECUTOR
+
+
+async def _offload_sdl_read(func, *args):
+    return await asyncio.get_running_loop().run_in_executor(
+        _sdl_feature_executor(), func, *args
+    )
+
+
+# features_daily（50 维宽表）→ SDL 字段名映射
+_FEATURES_DAILY_COLUMN_MAP: dict[str, str] = {
+    "close": "close_price",
+    "pe_ttm": "pe",
+    "pb": "pb",
+    "total_mv": "total_mv",
+    "float_mv": "float_mv",
+    "pct_change": "latest_change_pct",
+    "return_1d": "return_1d",
+    "return_3d": "return_3d",
+    "return_5d": "return_5d",
+    "return_10d": "return_10d",
+    "return_20d": "return_20d",
+    "return_60d": "return_60d",
+    "ma5": "ma5",
+    "ma10": "ma10",
+    "ma20": "ma20",
+    "ma60": "ma60",
+    "ma_gap_5": "ma_gap_5",
+    "ma_gap_10": "ma_gap_10",
+    "ma_gap_20": "ma_gap_20",
+    "rsi_14": "rsi_14",
+    "vol_atr_14": "atr",
+    "macd_hist": "macd_hist",
+    "vol_to_ma5": "volume_ratio_5",
+    "vol_to_ma20": "volume_ratio_20",
+    "volume_trend_3d": "volume_trend_3d",
+    "beta_20": "beta_20",
+}
+
+
+def _read_features_daily_day(trade_date: date) -> dict[str, dict[str, Any]]:
+    """DuckDB 读取 features_daily 50 维宽表指定交易日的快照。
+
+    返回 {symbol: {SDL 字段名: 值}}；分区缺失或无数据时返回空字典（优雅降级）。
+    """
+    import duckdb
+
+    root = _resolve_data_dir() / "6_ml_datasets" / "features_daily"
+    day_dir = root / f"dt={trade_date.strftime('%Y%m%d')}"
+    if not day_dir.is_dir():
+        return {}
+
+    glob_pattern = str(day_dir / "*.parquet").replace("'", "''")
+    select_parts = ", ".join(
+        f'"{src}" AS "{tgt}"' for src, tgt in _FEATURES_DAILY_COLUMN_MAP.items()
+    )
+    sql = (
+        f'SELECT "symbol", {select_parts} '
+        f"FROM read_parquet('{glob_pattern}', hive_partitioning=true)"
+    )
+    con = duckdb.connect(config={"memory_limit": "2GB", "threads": "2"})
+    try:
+        frame = con.execute(sql).fetchdf()
+    finally:
+        con.close()
+
+    result: dict[str, dict[str, Any]] = {}
+    for _, row in frame.iterrows():
+        symbol = StockCodeUtil.to_prefix(str(row.get("symbol") or ""))
+        if not symbol:
+            continue
+        payload: dict[str, Any] = {}
+        for target in _FEATURES_DAILY_COLUMN_MAP.values():
+            value = row.get(target)
+            if value is None:
+                payload[target] = None
+                continue
+            if isinstance(value, bool):
+                payload[target] = float(value)
+            elif isinstance(value, float):
+                payload[target] = value if math.isfinite(value) else None
+            else:
+                try:
+                    payload[target] = float(value)
+                except (TypeError, ValueError):
+                    payload[target] = None
+        if payload.get("rsi_14") is not None:
+            payload["rsi"] = payload["rsi_14"]
+        result[symbol] = payload
+    return result
+
+
+def _load_quantdb_name_industry() -> dict[str, dict[str, Any]]:
+    """从 QuantDB instrument_list parquet 加载 {prefix_symbol: {stock_name, industry}}。
+
+    仅用于 CN 市场：stock_daily_latest.stock_name 自 2026-06-18 起全为 NULL，
+    且 stocks 表可能为空，名称与行业需以 QuantDB 全量股票列表为准。
+    """
+    from backend.services.engine.data_platform.quantdb_hub import QuantDBDataHub
+
+    hub = QuantDBDataHub.get_instance()
+    if not hub.available:
+        return {}
+    result: dict[str, dict[str, Any]] = {}
+    try:
+        df = hub.fetch_stock_list()
+    except Exception:  # noqa: BLE001
+        return {}
+    if df is None or df.empty:
+        return {}
+    symbol_col = "Symbol" if "Symbol" in df.columns else ("symbol" if "symbol" in df.columns else None)
+    name_col = "Name" if "Name" in df.columns else ("stock_name" if "stock_name" in df.columns else None)
+    if symbol_col and name_col:
+        for _, row in df[[symbol_col, name_col]].dropna().iterrows():
+            sym = StockCodeUtil.to_prefix(str(row[symbol_col]).strip())
+            nm = str(row[name_col]).strip()
+            if sym and nm:
+                result.setdefault(sym, {})["stock_name"] = nm
+    ind_col = "rs_hyname" if "rs_hyname" in df.columns else None
+    if symbol_col and ind_col:
+        for _, row in df[[symbol_col, ind_col]].dropna().iterrows():
+            sym = StockCodeUtil.to_prefix(str(row[symbol_col]).strip())
+            val = str(row[ind_col]).strip()
+            if sym and val:
+                result.setdefault(sym, {})["industry"] = val
+    return result
+
+
+async def _load_sdl_pg_map(session, trade_date: date, market: str | None) -> dict[str, dict[str, Any]]:
+    """PG stock_daily_latest 兜底字段（features_daily 缺失项）：
+    roe/adj_factor/turnover_rate/amount/listed_days/is_st/指数归属/概念标签/资金流。
+    """
+    sdl_table = _get_sdl_table(market)
     is_cn = not market or market.upper() == "CN"
     name_col = "stock_name" if is_cn else "name"
-    # stocks 表兜底：stock_daily_latest.stock_name 自 2026-06-18 起全为 NULL，
-    # 而 stocks.name 有完整的 A 股名称（如 300998.SZ → 宁波方正）。
-    # 用相关子查询而非 LEFT JOIN —— stocks 与 sdl 共有 symbol/industry 两列，
-    # JOIN 会让下面几十处未加限定的列引用变成 ambiguous。
     stocks_name = (
         f"""COALESCE(sdl.stock_name, (
                 SELECT st.name FROM stocks st
@@ -114,7 +298,6 @@ async def _load_sdl_day_map(session, trade_date: date, market: str | None = None
         if is_cn
         else f"COALESCE({name_col}, '')"
     )
-    # stocks 表补充行业：stock_daily_latest.industry 全为空，stocks.industry 有完整数据
     stocks_industry = (
         f"""COALESCE(NULLIF(sdl.industry, ''), (
                 SELECT st.industry FROM stocks st
@@ -141,11 +324,15 @@ async def _load_sdl_day_map(session, trade_date: date, market: str | None = None
             COALESCE(listed_days, 0) AS listed_days,
             COALESCE(is_st, 0) <> 0 AS is_st,
             COALESCE(idx_hs300, 0) <> 0 AS is_hs300,
-            COALESCE(idx_zz500, 0) <> 0 AS is_csi500,
+            0 <> 0 AS is_csi500,
             COALESCE(idx_zz1000, 0) <> 0 AS is_csi1000,
             COALESCE(pct_change, 0) AS latest_change_pct,
             return_1d,
             return_3d,
+            return_5d,
+            return_10d,
+            return_20d,
+            return_60d,
             COALESCE(ma5, 0) AS ma5,
             COALESCE(ma10, 0) AS ma10,
             COALESCE(ma_gap_5, 0) AS ma_gap_5,
@@ -190,7 +377,6 @@ async def _load_sdl_day_map(session, trade_date: date, market: str | None = None
             COALESCE(
               to_jsonb(array_remove(ARRAY[
                 CASE WHEN COALESCE(idx_hs300, 0) <> 0 THEN '沪深300' END,
-                CASE WHEN COALESCE(idx_zz500, 0) <> 0 THEN '中证500' END,
                 CASE WHEN COALESCE(idx_zz1000, 0) <> 0 THEN '中证1000' END,
                 CASE WHEN COALESCE(idx_chinext, 0) <> 0 THEN '创业板指数' END,
                 CASE WHEN COALESCE(idx_margin, 0) <> 0 THEN '两融标的' END,
@@ -219,19 +405,11 @@ async def _load_sdl_day_map(session, trade_date: date, market: str | None = None
         symbol = StockCodeUtil.to_prefix(str(payload.get("symbol") or ""))
         if not symbol:
             continue
-        # stock_daily_latest 同一只股票同一天可能有两行：前缀格式（SZ002082）带全部指标，
-        # 后缀格式（002082.SZ）只有收盘价与成交量。两者归一化后是同一个 key，
-        # 若简单覆盖则可能留下没有指标的那一行，前端就会显示 “PE 0.0 / ROE 0.0% / RSI 0.0”。
         existing = symbol_map.get(symbol)
         if existing is not None and _info_score(existing) >= _info_score(payload):
             continue
         symbol_map[symbol] = payload
 
-    _redis_set_json(
-        cache_key,
-        {"trade_date": trade_date.isoformat(), "symbols": symbol_map, "created_at": datetime.now().isoformat()},
-        _SDL_REDIS_TTL_SECONDS,
-    )
     return symbol_map
 
 
@@ -425,6 +603,10 @@ def _format_candidate_record(row: dict[str, Any]) -> dict[str, Any]:
     risk_flags = parse_json(row.get("risk_flags"))
     return_1d = _serialize_float(row.get("return_1d"))
     return_3d = _serialize_float(row.get("return_3d"))
+    return_5d = _serialize_float(row.get("return_5d"))
+    return_10d = _serialize_float(row.get("return_10d"))
+    return_20d = _serialize_float(row.get("return_20d"))
+    return_60d = _serialize_float(row.get("return_60d"))
     latest_change_pct = _serialize_float(row.get("latest_change_pct")) or 0.0
 
     def _safe(v, default=0.0):
@@ -508,8 +690,10 @@ def _format_candidate_record(row: dict[str, Any]) -> dict[str, Any]:
         "volumeTrend5d": False,
         "return1d": return_1d,
         "return3d": return_3d,
-        "nextDayReturn": return_1d,
-        "day3Return": return_3d,
+        "return5d": return_5d,
+        "return10d": return_10d,
+        "return20d": return_20d,
+        "return60d": return_60d,
         "mainFlow": round(main_flow_raw / 1000000.0, 2) if main_flow_raw is not None else None,
         "flowNetAmount": round(flow_net_raw / 1000000.0, 2) if flow_net_raw is not None else None,
         "instOwnership": round(inst_own_raw / 1000000.0, 2) if inst_own_raw is not None else None,

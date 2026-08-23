@@ -56,8 +56,6 @@ export interface ResearchStockRow {
   score: number;
   latestChange: number;
   totalReturn?: number | null;
-  nextDayReturn?: number | null;
-  day3Return?: number | null;
   consecutiveLimitUpDays: number;
   volumeTrend3d: number | null;
   volumeTrend5d: boolean;

@@ -157,9 +157,9 @@ export function QuantDBPreviewDrawer({ dataset, onClose }: QuantDBPreviewDrawerP
 
                 {preview && preview.data.length > 0 ? (
                     <Table
-                        dataSource={preview.data}
+                        dataSource={preview.data.map((r, i) => ({ ...r, _key: String(i) }))}
                         columns={columns}
-                        rowKey={(_, index) => String(index)}
+                        rowKey="_key"
                         size="small"
                         loading={loading}
                         pagination={{ pageSize: 20, size: 'small', showSizeChanger: true }}

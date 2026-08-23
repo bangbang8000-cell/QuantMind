@@ -551,7 +551,7 @@ export const InferenceBacktestModule: React.FC<Props> = ({ modelId }) => {
                 label: <span className="flex items-center gap-1"><Zap size={12} />交易流水</span>,
                 children: (
                   <div className="glass-panel rounded-3xl p-5 border border-slate-100/50">
-                    <Table dataSource={result.trades} rowKey={(r, i) => `${r.date}-${r.symbol}-${r.side}-${i}`} columns={tradeColumns} size="small"
+                    <Table dataSource={result.trades.map((r, i) => ({ ...r, _key: `${r.date}-${r.symbol}-${r.side}-${i}` }))} rowKey="_key" columns={tradeColumns} size="small"
                       pagination={{ pageSize: 20 }} scroll={{ x: 800 }} />
                   </div>
                 ),

@@ -152,6 +152,13 @@ _COLUMN_EXPLICIT_CATEGORY: dict[str, str] = {
     "vol_std_20": "volatility",
     "vol_std_60": "volatility",
     "vol_atr_14": "volatility",
+    # 换手率（l1/l2_factors 的 turn_* 为小数，归入流动性并按百分数展示）
+    "turn_1": "liquidity",
+    "turn_3": "liquidity",
+    "turn_5": "liquidity",
+    "turn_10": "liquidity",
+    "turn_20": "liquidity",
+    "turn_60": "liquidity",
 }
 
 # 因子列前缀 → 类别（按前缀长度降序匹配，长前缀优先）
@@ -296,6 +303,12 @@ _UNIT_SCALES: dict[str, float] = {
     "flowSuperNet": 1e-6,
 }
 
+# 换手率字段：l1/l2_factors 的 turn_N 为小数（0.016 = 1.6%），统一 ×100 转为百分数，
+# 与投影路径现算的 turnoverRate（百分比量纲）及 /research/universe 对齐。
+_TURNOVER_PERCENT_FIELDS: frozenset[str] = frozenset(
+    {"turn_1", "turn_3", "turn_5", "turn_10", "turn_20", "turn_60"}
+)
+
 
 def _to_jsonable(value: Any) -> Any:
     """转换为 JSON 安全值：NaN/Inf/NaT → None，numpy 标量 → python 原生类型。"""
@@ -414,6 +427,11 @@ def _apply_unit_scales(values: dict[str, Any]) -> None:
         snake = re.sub(r"(?<!^)(?=[A-Z])", "_", camel_name).lower()
         if snake in values:
             values[snake] = values[snake] * scale
+
+    # 换手率：小数 → 百分数（全量路径的 turn_* 保留 snake_case 列名）
+    for field in _TURNOVER_PERCENT_FIELDS:
+        if field in values:
+            values[field] = values[field] * 100
 
 
 def _build_payload(symbol: str, sources: dict[str, dict[str, Any]]) -> dict[str, Any]:

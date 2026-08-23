@@ -711,7 +711,7 @@ export const ModelEvaluationModule: React.FC<ModelEvaluationModuleProps> = ({ in
       {(loading || multiHorizonLoading) && (
         <Card className="shadow-sm">
           <div className="flex items-center justify-center py-12">
-            <Spin size="large" tip={multiHorizonLoading ? "正在执行多周期对比回测..." : "正在执行回测，请稍候..."} />
+            <Spin size="large" />
           </div>
         </Card>
       )}

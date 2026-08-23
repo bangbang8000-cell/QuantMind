@@ -15,11 +15,7 @@ RUN set -eux; \
       sed -i "s/security.debian.org/mirrors.aliyun.com/g" /etc/apt/sources.list; \
     fi
 
-RUN apt-get update && apt-get install -y --no-install-recommends
-    gcc \
-    libpq-dev \
-    curl \
-    && rm -rf /var/lib/apt/lists/*
+RUN apt-get update && apt-get install -y --no-install-recommends gcc libpq-dev curl && rm -rf /var/lib/apt/lists/*
 
 # 数据源依赖
 RUN pip config set global.index-url https://mirrors.aliyun.com/pypi/simple/

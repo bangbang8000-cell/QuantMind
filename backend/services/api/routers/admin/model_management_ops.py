@@ -62,7 +62,15 @@ def _model_data_context(model_dir: Path) -> tuple[Path, dict[str, Any]]:
     except (OSError, ValueError, TypeError):
         meta = {}
     if str(meta.get("data_source") or "").lower() == "quantdb_factors":
-        return Path(os.getenv("QUANTDB_DATA_DIR", "/app/data/quantdb")), meta
+        # 与 script_runner._resolve_quantdb_data_dir 保持一致：
+        # QUANTDB_DATA_DIR → QM_QUANTDB_DATA_DIR → hub 统一解析。
+        # 仅读 QUANTDB_DATA_DIR 会在容器内落到不存在的默认 /app/data/quantdb，
+        # 导致回测日期发现/交易日期列表拿不到数据。
+        try:
+            from backend.services.engine.inference.script_runner import _resolve_quantdb_data_dir
+            return Path(_resolve_quantdb_data_dir()), meta
+        except Exception:  # pragma: no cover - 兜底
+            return Path(os.getenv("QUANTDB_DATA_DIR", "/app/data/quantdb")), meta
     return Path(os.getcwd()) / "db" / "feature_snapshots", meta
 
 
@@ -987,7 +995,7 @@ async def get_backtest_trading_dates(
     from backend.services.engine.inference.data_loader import get_available_dates
 
     model_dir = next(
-        (d for d in _find_model_directories(MODELS_ROOT) if d.name == model_id), None
+        (Path(d) for d in _find_model_directories(MODELS_ROOT) if Path(d).name == model_id), None
     )
     if model_dir is None:
         raise HTTPException(status_code=404, detail=f"模型 {model_id} 未找到")
@@ -1177,7 +1185,7 @@ async def run_inference_backtest(
     )
 
     model_dir = next(
-        (d for d in _find_model_directories(MODELS_ROOT) if d.name == request.model_id),
+        (Path(d) for d in _find_model_directories(MODELS_ROOT) if Path(d).name == request.model_id),
         None,
     )
     if model_dir is None:
