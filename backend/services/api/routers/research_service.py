@@ -992,6 +992,7 @@ async def get_available_models(tid: str, uid: str, market: str | None = None) ->
                    ) AS has_inference
             FROM qm_user_models um
             WHERE um.tenant_id = :tid AND um.user_id = :uid AND um.status != 'archived'
+              AND BTRIM(COALESCE(um.model_id, '')) <> ''
               AND COALESCE(
                     NULLIF(UPPER(BTRIM(um.metadata_json->>'market')), ''),
                     NULLIF(UPPER(BTRIM(um.metadata_json->'context'->>'market')), ''),

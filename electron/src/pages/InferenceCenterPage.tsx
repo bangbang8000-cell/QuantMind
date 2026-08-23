@@ -349,7 +349,9 @@ export const InferenceCenterPage: React.FC = () => {
       .getAvailableModels(currentMarket)
       .then((list) => {
         if (cancelled) return;
-        const liveModels: ModelCardOption[] = (list || []).map((m) => {
+        const liveModels: ModelCardOption[] = (list || [])
+          .filter((m) => Boolean(m.modelId))
+          .map((m) => {
           const kind = String(m.modelType || m.modelId || '').toLowerCase();
           const isDL =
             kind.includes('ensemble') || kind.includes('stacking') ? false :

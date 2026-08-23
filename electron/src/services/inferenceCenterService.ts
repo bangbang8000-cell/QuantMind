@@ -135,7 +135,7 @@ class InferenceCenterService {
         body?.items ??
         [];
       return items.map((m: any) => ({
-        modelId: m.modelId || m.model_id,
+        modelId: m.modelId ?? m.model_id,
         modelName: m.name || m.modelName || m.model_name || m.modelId,
         modelType: m.modelType || m.model_type || '',
         description: m.description,
