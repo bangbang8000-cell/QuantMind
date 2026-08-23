@@ -408,7 +408,30 @@ class InferenceScriptRunner:
             from backend.services.engine.data_platform.quantdb_factor_reader import QuantDBFactorReader
             data_dir = Path(_resolve_quantdb_data_dir())
             reader = QuantDBFactorReader(data_dir)
-            status = reader.assert_ready(str(meta.get("factor_source") or "l1_l2_factors"), start=trade_date, end=trade_date)
+            source = str(meta.get("factor_source") or "l1_l2_factors")
+            status = reader.describe(source)
+            if not status.ready:
+                return {
+                    "ready": False,
+                    "detail": (
+                        f"QuantDB {source} 不可用: "
+                        + (", ".join(status.missing_required) or status.reason or "未知原因")
+                    ),
+                }
+            # 越界时返回最新可用日期，供 precheck/run 自动回退到数据覆盖范围
+            if trade_date:
+                if status.max_date and trade_date > status.max_date:
+                    return {
+                        "ready": False,
+                        "detail": f"QuantDB {source} 最新可用 {status.max_date}，请求 {trade_date} 超出数据范围",
+                        "latest_available_date": status.max_date,
+                    }
+                if status.min_date and trade_date < status.min_date:
+                    return {
+                        "ready": False,
+                        "detail": f"QuantDB {source} 最早 {status.min_date}，请求 {trade_date} 早于数据起点",
+                        "latest_available_date": status.min_date,
+                    }
             schema_hash = str(meta.get("factor_schema_hash") or "")
             if schema_hash and schema_hash != status.schema_hash:
                 return {"ready": False, "detail": "QuantDB schema hash differs from model metadata"}

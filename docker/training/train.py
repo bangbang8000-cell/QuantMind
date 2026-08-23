@@ -690,6 +690,13 @@ def load_data(
         from backend.services.engine.data_platform.quantdb_factor_reader import QuantDBFactorReader
 
         reader = QuantDBFactorReader(quantdb_dir or os.getenv("QUANTDB_DATA_DIR") or None)
+        # 标签构建缓冲(range_start)可能早于数据可用起点(如 train_start 恰为数据首日)。
+        # 数据缺失部分无法提供，钳制到数据起点即可，避免 assert_ready 越界抛错。
+        _status = reader.describe(direct_factor_source)
+        if _status.min_date:
+            range_start = max(range_start, pd.Timestamp(_status.min_date))
+        if _status.max_date:
+            range_end = min(range_end, pd.Timestamp(_status.max_date))
         df = reader.read_range(
             direct_factor_source,
             features=features,

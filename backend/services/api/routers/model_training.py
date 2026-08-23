@@ -491,7 +491,15 @@ def _get_model_data_dir(model_dir: Path, metadata: dict | None = None) -> str:
     # evaluated before historical qlib_data_path/context compatibility hints.
     if metadata:
         if str(metadata.get("data_source") or "").lower() == "quantdb_factors":
-            return os.getenv("QUANTDB_DATA_DIR", "/app/data/quantdb")
+            # 与 script_runner._resolve_quantdb_data_dir 保持一致：
+            # QUANTDB_DATA_DIR → QM_QUANTDB_DATA_DIR → hub 统一解析。
+            # 仅读 QUANTDB_DATA_DIR 会在容器内落到不存在的默认 /app/data/quantdb，
+            # 导致推理数据目录预检阻断。
+            try:
+                from backend.services.engine.inference.script_runner import _resolve_quantdb_data_dir
+                return _resolve_quantdb_data_dir()
+            except Exception:  # pragma: no cover - 兜底
+                return os.getenv("QUANTDB_DATA_DIR", "/app/data/quantdb")
         qlib_data_path = metadata.get("qlib_data_path")
         if qlib_data_path:
             return qlib_data_path
@@ -514,7 +522,11 @@ def _get_model_data_dir(model_dir: Path, metadata: dict | None = None) -> str:
         try:
             meta = json.loads(meta_file.read_text(encoding="utf-8"))
             if str(meta.get("data_source") or "").lower() == "quantdb_factors":
-                return os.getenv("QUANTDB_DATA_DIR", "/app/data/quantdb")
+                try:
+                    from backend.services.engine.inference.script_runner import _resolve_quantdb_data_dir
+                    return _resolve_quantdb_data_dir()
+                except Exception:  # pragma: no cover - 兜底
+                    return os.getenv("QUANTDB_DATA_DIR", "/app/data/quantdb")
             qlib_data_path = meta.get("qlib_data_path")
             if qlib_data_path:
                 return qlib_data_path
@@ -1178,17 +1190,6 @@ def _build_precheck_items(
             "passed": script_exists,
             "severity": "hard",
             "detail": str(script_path),
-        }
-    )
-
-    expected_feature_dim = runner._resolve_expected_feature_dim()
-    items.append(
-        {
-            "key": "expected_feature_dim",
-            "label": "期望特征维度",
-            "passed": True,
-            "severity": "soft",
-            "detail": str(expected_feature_dim),
         }
     )
 

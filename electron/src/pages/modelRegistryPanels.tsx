@@ -549,7 +549,7 @@ export const ModelDetailPanel: React.FC<{ model: UserModelRecord }> = ({ model }
                 </div>
                 <div className="flex flex-col items-center gap-0.5 p-2 bg-white/70 rounded-xl border border-slate-100/60">
                   <Text className="text-[8px] text-slate-400 uppercase tracking-wider">漂移特征</Text>
-                  <Text className="text-base font-black font-mono text-slate-700">
+                  <Text className="text-[12px] font-black font-mono text-slate-700 whitespace-nowrap">
                     稳 {meta.drift.drift?.stable ?? 0} / 中 {meta.drift.drift?.medium ?? 0} / 重 {meta.drift.drift?.severe ?? 0}
                   </Text>
                 </div>

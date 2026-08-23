@@ -63,7 +63,11 @@ RUN pip install --no-cache-dir \
       pyyaml \
       requests \
       psutil \
-      shap
+      shap \
+      duckdb
+
+# 拷贝后端包（QuantDB 因子直读等训练依赖 backend 模块）
+COPY backend /app/backend
 
 # 拷贝训练脚本及预处理函数
 COPY docker/training/train.py /app/train.py
