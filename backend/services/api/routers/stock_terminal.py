@@ -62,6 +62,11 @@ _concept_cache: dict[str, Any] = {"ts": 0.0, "symbol_map": {}}
 # 概念板块展示上限：单只股票概念过多时截断（板块成员表全市场概念归属）
 _MAX_CONCEPTS = 24
 
+# 默认信号日覆盖阈值（distinct symbol 数）：低于此值视为「部分推理」，
+# 默认列表回退到最近一个覆盖充分的推理日，避免最新日只推理了几十只
+# 导致列表第 1 页之后得分/仓位/信号全部为空
+_MIN_SIGNAL_COVERAGE = 1000
+
 
 def _classify_board(symbol: str) -> str:
     """按代码归类市场板块：SH 主板/科创板、SZ 主板/创业板、BJ 北交所。"""
@@ -1382,16 +1387,32 @@ async def list_stocks(
             async with get_session() as session:
                 from sqlalchemy import text as _txt
 
+                # 默认信号日：优先最近一个覆盖充分的推理日（COUNT(DISTINCT symbol)
+                # >= _MIN_SIGNAL_COVERAGE），避免最新日只推理了少数股票导致列表
+                # 第 1 页之后分数全空；无覆盖达标日时回退最近任意有分数日
                 _d0 = (
                     await session.execute(
                         _txt(
                             "SELECT trade_date FROM engine_signal_scores e "
                             f"WHERE e.tenant_id='default' {mwhere} "
-                            "GROUP BY trade_date ORDER BY trade_date DESC LIMIT 1"
+                            "GROUP BY trade_date "
+                            "HAVING COUNT(DISTINCT symbol) >= :min_cov "
+                            "ORDER BY trade_date DESC LIMIT 1"
                         ),
-                        mparams,
+                        {**mparams, "min_cov": _MIN_SIGNAL_COVERAGE},
                     )
                 ).scalar_one_or_none()
+                if _d0 is None:
+                    _d0 = (
+                        await session.execute(
+                            _txt(
+                                "SELECT trade_date FROM engine_signal_scores e "
+                                f"WHERE e.tenant_id='default' {mwhere} "
+                                "GROUP BY trade_date ORDER BY trade_date DESC LIMIT 1"
+                            ),
+                            mparams,
+                        )
+                    ).scalar_one_or_none()
             latest = _d0
             _signal_date = str(_d0)[:10] if _d0 else None
         if latest is not None:
@@ -1586,7 +1607,7 @@ async def list_stocks(
                                 "FROM engine_signal_scores e "
                                 "JOIN qm_model_inference_runs r ON r.run_id = e.run_id "
                                 "WHERE e.tenant_id='default' AND e.trade_date >= :d_from "
-                                "GROUP BY r.model_id ORDER BY latest DESC LIMIT 20"
+                                "GROUP BY r.model_id ORDER BY latest DESC LIMIT 200"
                             ),
                             {"d_from": _from},
                         )
