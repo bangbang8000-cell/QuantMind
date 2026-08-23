@@ -712,6 +712,14 @@ export const ModelRegistryPage: React.FC = () => {
                     </div>
                     <div className="flex gap-2 flex-shrink-0">
                       <Button
+                        type="primary"
+                        icon={<Cpu size={13} />}
+                        className="rounded-xl h-9 px-4 font-bold bg-blue-600 border-none text-xs shadow-sm shadow-blue-200"
+                        onClick={() => navigate('/inference-center', { state: { modelId: selectedModel.model_id, tab: 'cross-section' } })}
+                      >
+                        前往推理中心
+                      </Button>
+                      <Button
                         icon={<Sparkles size={13} />}
                         className="rounded-xl h-9 px-4 font-bold border-blue-200 text-blue-600 bg-blue-50/50 hover:bg-blue-100 text-xs"
                         onClick={() => setShowPublishModal(true)}
@@ -816,6 +824,26 @@ export const ModelRegistryPage: React.FC = () => {
                         ),
                         children: (
                           <div>
+                            <div className="flex items-center justify-between p-3.5 mb-4 bg-gradient-to-r from-blue-50 to-indigo-50/50 rounded-2xl border border-blue-100">
+                              <div className="flex items-center gap-2.5">
+                                <div className="w-8 h-8 rounded-xl bg-blue-600 text-white flex items-center justify-center shadow-xs">
+                                  <Cpu size={16} />
+                                </div>
+                                <div>
+                                  <div className="text-xs font-bold text-slate-800">独立推理中心已上线</div>
+                                  <div className="text-[10px] text-slate-500">支持全市场截面预测、批量多日以及个股多维深度推理看板</div>
+                                </div>
+                              </div>
+                              <Button
+                                size="small"
+                                type="primary"
+                                className="rounded-xl text-xs font-bold h-7 bg-blue-600 border-none shadow-xs shadow-blue-200"
+                                onClick={() => navigate('/inference-center', { state: { modelId: selectedModel.model_id, tab: 'cross-section' } })}
+                              >
+                                打开独立推理中心
+                              </Button>
+                            </div>
+
                             <div className="flex items-center gap-2 mb-4">
                               <Button
                                 size="small"
