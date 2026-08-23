@@ -29,7 +29,9 @@ router = APIRouter()
 
 _INTERNAL_SECRET = get_internal_call_secret()
 _MAX_CODE_BYTES = 200 * 1024  # 200 KB
-_ID_PATTERN = re.compile(r"^[a-z0-9_]{1,64}$")
+# 历史内置模板包含 StopLoss / VolatilityWeighted 等驼峰 ID；
+# 仍限制为文件名安全字符，但不能因大小写拒绝管理员对已有模板的 CRUD。
+_ID_PATTERN = re.compile(r"^[A-Za-z0-9_]{1,64}$")
 
 
 # ---------------------------------------------------------------------------
@@ -97,7 +99,7 @@ def _validate_id(template_id: str) -> None:
     if not _ID_PATTERN.match(template_id):
         raise HTTPException(
             status_code=422,
-            detail=f"模板 ID 只允许小写字母、数字和下划线，长度 1-64，收到: {template_id!r}",
+            detail=f"模板 ID 只允许字母、数字和下划线，长度 1-64，收到: {template_id!r}",
         )
 
 
