@@ -2,7 +2,7 @@ FROM docker.1ms.run/library/node:22-alpine AS builder
 
 WORKDIR /app
 
-COPY electron/package*.json ./electron/
+COPY .npmrc electron/package*.json ./electron/
 COPY scripts/frontend ./scripts/frontend
 
 WORKDIR /app/electron
