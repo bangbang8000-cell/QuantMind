@@ -62,20 +62,6 @@ export const strategyTemplates: StrategyTemplate[] = [
             { name: 'take_profit', type: 'float', default: 0.15, description: '止盈触发阈值' },
         ],
     },
-    {
-        id: 'VolatilityWeighted',
-        name: '波动率加权 TopK 策略',
-        category: '风险控制',
-        description: '在 Top-K 选股基础上，以近期实现波动率的倒数分配仓位权重。低波动标的自动获得更高权重，降低组合整体波动率与尾部风险。',
-        difficulty: 'intermediate',
-        tags: ['波动率', '风险加权', 'Top-K'],
-        code: `"""\n波动率加权 TopK 策略 (Volatility-Weighted Top-K)\n[Native] 核心逻辑：Top-K 选股 + 波动率倒数权重分配\n低波动标的获得更高权重（低波动溢价），高波动标的自动降权，降低组合整体风险。\n"""\nSTRATEGY_CONFIG = {\n    "class": "RedisVolatilityWeightedStrategy",\n    "kwargs": {\n        "signal": "<PRED>",\n        "topk": 50,\n        "vol_lookback": 20,\n        "max_weight": 0.10,\n        "min_score": 0.0,\n    }\n}`,
-        parameters: [
-            { name: 'topk', type: 'int', default: 50, description: '候选选股数量' },
-            { name: 'vol_lookback', type: 'int', default: 20, description: '波动率回看天数' },
-            { name: 'max_weight', type: 'float', default: 0.10, description: '单只股票持仓权重上限' },
-        ],
-    },
 
     // --- Intermediate (中级) ---
     {
