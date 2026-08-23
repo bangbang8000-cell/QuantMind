@@ -981,6 +981,36 @@ export const InferenceCenterPanel: React.FC<{
     ? currentModelName
     : modelIdToDisplayName(latestInferenceRun?.model_id);
 
+  // 本次推理排名：单日推理完成后自动拉取该 run 的排名结果并展示在右侧
+  const [rankingResult, setRankingResult] = useState<InferenceRankingResult | null>(null);
+  const [rankingLoading, setRankingLoading] = useState(false);
+
+  useEffect(() => {
+    const runId = lastRun?.run_id;
+    if (!runId || lastRun?.status !== 'completed') {
+      setRankingResult(null);
+      return;
+    }
+    let cancelled = false;
+    setRankingLoading(true);
+    modelTrainingService
+      .getInferenceResult(runId)
+      .then((r) => {
+        if (!cancelled) setRankingResult(r);
+      })
+      .catch(() => {
+        if (!cancelled) setRankingResult(null);
+      })
+      .finally(() => {
+        if (!cancelled) setRankingLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [lastRun?.run_id, lastRun?.status]);
+
+  const topRankings = rankingResult?.rankings?.slice(0, 10) ?? [];
+
   return (
     <div className="pt-0 pb-10">
       {/* 这里的 items-stretch 是关键，让左右两列等高 */}
@@ -1160,6 +1190,64 @@ export const InferenceCenterPanel: React.FC<{
                   );
                 })()}
               </Spin>
+           </div>
+
+           {/* 本次推理排名 */}
+           <div className="glass-panel rounded-2xl p-4 border border-slate-100/50 bg-white flex-1 flex flex-col overflow-hidden">
+              <div className="flex items-center justify-between mb-3">
+                <Text className="text-[9px] font-black text-slate-400 uppercase tracking-widest">本次推理排名</Text>
+                {rankingLoading && <Spin size="small" />}
+                {!rankingLoading && rankingResult && (
+                  <Tag className="m-0 border-0 text-[9px] font-black px-2 rounded-md bg-blue-50 text-blue-600">
+                    {rankingResult.target_date} · {rankingResult.rankings.length} 只
+                  </Tag>
+                )}
+              </div>
+              {rankingLoading ? (
+                <div className="flex-1 flex items-center justify-center py-8">
+                  <Text className="text-[10px] text-slate-400">正在加载排名...</Text>
+                </div>
+              ) : topRankings.length > 0 ? (
+                <div className="flex-1 min-h-0 overflow-y-auto custom-scrollbar -mx-1 px-1">
+                  <div className="flex flex-col gap-1">
+                    {topRankings.map((r) => (
+                      <div
+                        key={r.code}
+                        className="flex items-center gap-2 px-2 py-1.5 rounded-lg bg-slate-50/70 border border-slate-100/60 hover:bg-blue-50/40 transition-colors"
+                      >
+                        <span className={clsx(
+                          'w-5 h-5 rounded-md flex items-center justify-center text-[9px] font-black shrink-0',
+                          r.rank <= 3 ? 'bg-rose-500 text-white' : 'bg-slate-200 text-slate-600',
+                        )}>
+                          {r.rank}
+                        </span>
+                        <div className="min-w-0 flex-1">
+                          <div className="flex items-center gap-1.5">
+                            <Text className="text-[11px] font-black text-slate-800 font-mono truncate">{r.code}</Text>
+                            <Text className="text-[10px] text-slate-500 truncate">{r.name || ''}</Text>
+                          </div>
+                          {r.industry && (
+                            <Text className="text-[8px] text-slate-400 truncate block">{r.industry}</Text>
+                          )}
+                        </div>
+                        <div className="flex flex-col items-end shrink-0">
+                          <Text className={clsx('text-[11px] font-mono font-black', r.score >= 0 ? 'text-rose-600' : 'text-emerald-600')}>
+                            {r.score.toFixed(4)}
+                          </Text>
+                          <Text className={clsx('text-[8px] font-black', r.signal === 'buy' ? 'text-rose-500' : r.signal === 'sell' ? 'text-emerald-500' : 'text-slate-400')}>
+                            {r.signal === 'buy' ? '买入' : r.signal === 'sell' ? '卖出' : '观望'}
+                          </Text>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              ) : (
+                <div className="flex-1 flex flex-col items-center justify-center py-8 bg-slate-50/50 rounded-xl border border-dashed border-slate-200">
+                  <TrendingUp size={16} className="text-slate-300 mb-2" />
+                  <Text className="text-[9px] text-slate-400 font-bold">执行单日推理后显示排名</Text>
+                </div>
+              )}
            </div>
 
            <div className="glass-panel rounded-2xl p-4 border border-slate-100/50 flex items-center justify-between">

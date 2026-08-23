@@ -34,14 +34,35 @@ import os
 import re
 import subprocess
 import sys
+import threading
+import time
 import uuid
 from dataclasses import dataclass, field
 from datetime import date, datetime, timedelta
 from pathlib import Path
-from typing import Optional
+from typing import Any, Optional
 
 import exchange_calendars as xcals
 from sqlalchemy import create_engine, text
+
+# QuantDB factor describe 结果缓存（TTL 300s）
+# describe() 会全量扫描 parquet 求 min/max/schema，单次 ~2.6s；
+# 预检/就绪检查高频调用时缓存以避免阻塞单 worker 事件循环。
+_DESCRIBE_TTL = 300.0
+_describe_cache: dict[str, tuple[float, Any]] = {}
+_describe_lock = threading.Lock()
+
+
+def _cached_describe(reader, source: str) -> Any:
+    now = time.monotonic()
+    with _describe_lock:
+        hit = _describe_cache.get(source)
+        if hit and now - hit[0] < _DESCRIBE_TTL:
+            return hit[1]
+    status = reader.describe(source)
+    with _describe_lock:
+        _describe_cache[source] = (time.monotonic(), status)
+    return status
 from sqlalchemy.orm import sessionmaker
 
 from backend.services.engine.services.event_stream import EngineSignalStreamPublisher
@@ -409,7 +430,8 @@ class InferenceScriptRunner:
             data_dir = Path(_resolve_quantdb_data_dir())
             reader = QuantDBFactorReader(data_dir)
             source = str(meta.get("factor_source") or "l1_l2_factors")
-            status = reader.describe(source)
+            # describe() 会全量扫描 parquet 求 min/max，开销大；做 TTL 缓存避免每次预检 2.6s
+            status = _cached_describe(reader, source)
             if not status.ready:
                 return {
                     "ready": False,

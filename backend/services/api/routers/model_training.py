@@ -1,3 +1,4 @@
+import asyncio
 import json
 import logging
 import os
@@ -2309,25 +2310,33 @@ async def get_model_inference_run_detail(
         # ── 市值标注（QuantDB features_daily parquet）──
         # 市值分档：微盘<30亿 / 小盘30-100亿 / 中盘100-300亿 / 大盘300-1000亿 / 超大盘>1000亿
         try:
-            import duckdb as _duckdb
-
             data_date = run.get("data_trade_date") or run.get("inference_date")
             _d = str(data_date)[:10] if data_date else ""
             dt_int = int(_d.replace("-", "")) if _d else 0
-            if dt_int:
-                qdb_dir = os.getenv("QM_QUANTDB_DATA_DIR", "/data/quantdb")
-                fpath = f"{qdb_dir}/6_ml_datasets/features_daily/**/*.parquet"
-                mv_rows = (
-                    _duckdb.connect()
-                    .execute(
-                        f"""
-                    SELECT symbol, total_mv, float_mv
-                    FROM read_parquet('{fpath}', hive_partitioning=true)
-                    WHERE dt = {dt_int}
-                    """
-                    )
-                    .fetchdf()
-                )
+            qdb_dir = os.getenv("QM_QUANTDB_DATA_DIR", "/data/quantdb")
+            fd_dir = Path(qdb_dir) / "6_ml_datasets" / "features_daily"
+            # features_daily 目录缺失/为空时直接跳过，避免 DuckDB 对空 glob 的内部卡顿
+            parquet_exists = fd_dir.is_dir() and any(fd_dir.rglob("*.parquet"))
+            if dt_int and parquet_exists:
+                fpath = f"{fd_dir}/**/*.parquet"
+
+                def _load_mv():
+                    import duckdb as _duckdb
+
+                    con = _duckdb.connect()
+                    try:
+                        return con.execute(
+                            f"""
+                            SELECT symbol, total_mv, float_mv
+                            FROM read_parquet('{fpath}', hive_partitioning=true)
+                            WHERE dt = {dt_int}
+                            """
+                        ).fetchdf()
+                    finally:
+                        con.close()
+
+                # 在线程中执行，避免同步 DuckDB 查询阻塞 API 事件循环
+                mv_rows = await asyncio.to_thread(_load_mv)
                 mv_map: dict[str, dict] = {}
                 for _, row in mv_rows.iterrows():
                     raw_sym = str(row["symbol"]).strip().upper()

@@ -83,6 +83,11 @@ async def lifespan(app: FastAPI):
         )
 
         await model_inference_persistence.ensure_tables()
+        from backend.services.engine.services.model_inference_batch_persistence import (
+            model_inference_batch_persistence,
+        )
+
+        await model_inference_batch_persistence.ensure_tables()
         # from backend.services.api.routers.research import ensure_research_tables
         # await ensure_research_tables()
 
