@@ -903,13 +903,22 @@ export const InferenceCenterPage: React.FC = () => {
                         <div className="p-3.5 bg-gradient-to-br from-slate-50 to-blue-50/30 rounded-2xl border border-slate-200/80">
                           <div className="flex items-center justify-between mb-2">
                             <span className="text-xs font-bold text-slate-700">分位数区间</span>
-                            <Tooltip title="当前注册模型未输出分位数回归结果，因此不展示估算区间。">
+                            <Tooltip title={prediction.p10_return != null && prediction.p90_return != null ? '真实 LightGBM 分位回归结果，区间已按验证集校准。' : '当前注册模型未启用分位推理，因此不展示估算区间。'}>
                               <Sparkles className="w-3.5 h-3.5 text-slate-400 cursor-pointer" />
                             </Tooltip>
                           </div>
-                          <p className="text-[11px] leading-relaxed text-slate-400 m-0">
-                            当前生产模型输出真实信号分数；支持通过集成模型与历史回测验证信号稳定性。
-                          </p>
+                          {prediction.p10_return != null && prediction.p90_return != null ? (
+                            <>
+                              <div className="grid grid-cols-3 gap-2 text-center">
+                                <div><div className="text-[10px] text-emerald-600">P10 下界</div><div className="font-mono text-xs font-bold text-emerald-700">{prediction.p10_return.toFixed(2)}%</div></div>
+                                <div><div className="text-[10px] text-blue-600">P50 中枢</div><div className="font-mono text-xs font-bold text-blue-700">{(prediction.p50_return ?? 0).toFixed(2)}%</div></div>
+                                <div><div className="text-[10px] text-rose-600">P90 上界</div><div className="font-mono text-xs font-bold text-rose-700">{prediction.p90_return.toFixed(2)}%</div></div>
+                              </div>
+                              <p className="mt-2 text-[10px] text-slate-400 m-0">验证集校准覆盖率：{prediction.confidence > 0 ? `${(prediction.confidence * 100).toFixed(1)}%` : '—'}</p>
+                            </>
+                          ) : (
+                            <p className="text-[11px] leading-relaxed text-slate-400 m-0">该模型未启用分位推理；当前仅提供真实信号分数。</p>
+                          )}
                         </div>
                       </div>
 
@@ -948,4 +957,3 @@ export const InferenceCenterPage: React.FC = () => {
 };
 
 export default InferenceCenterPage;
-

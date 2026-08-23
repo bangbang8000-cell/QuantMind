@@ -111,6 +111,7 @@ export const ParameterConfig: React.FC<ParameterConfigProps> = ({
                     model_type: primary,
                     model_types: selected,
                     ensemble_method: selected.length > 1 ? (params.ensemble_method || 'none') : 'none',
+                    prediction_mode: selected.length === 1 && primary === 'lightgbm' ? params.prediction_mode : 'point',
                   };
                   if (dlDefaults.dl_hidden_size !== undefined) {
                     Object.assign(updated, dlDefaults);
@@ -190,6 +191,24 @@ export const ParameterConfig: React.FC<ParameterConfigProps> = ({
                   })}
                 </div>
               )}
+              <div className="rounded-xl border border-indigo-100 bg-indigo-50/50 p-3">
+                <div className="flex items-center justify-between gap-3">
+                  <div>
+                    <div className="text-sm font-semibold text-slate-700">收益率分位推理（P10 / P50 / P90）</div>
+                    <div className="mt-1 text-[11px] leading-relaxed text-slate-500">
+                      训练三个 LightGBM 分位模型并做验证集校准。P50 保持作为交易信号；区间仅用于个股推理展示。
+                    </div>
+                  </div>
+                  <Switch
+                    checked={params.prediction_mode === 'quantile'}
+                    disabled={market !== 'CN' || params.model_types.length !== 1 || params.model_type !== 'lightgbm'}
+                    onChange={(checked) => onParamsChange({ ...params, prediction_mode: checked ? 'quantile' : 'point' })}
+                  />
+                </div>
+                {(market !== 'CN' || params.model_types.length !== 1 || params.model_type !== 'lightgbm') && (
+                  <div className="mt-2 text-[11px] text-amber-600">首版仅支持 A 股单 LightGBM；目标类型还需选择“回归目标（未来收益率）”。</div>
+                )}
+              </div>
               {params.model_types.length > 1 && (() => {
                 const hasTree = params.model_types.some(mt => {
                   const opt = MODEL_TYPE_OPTIONS.find(m => m.value === mt);

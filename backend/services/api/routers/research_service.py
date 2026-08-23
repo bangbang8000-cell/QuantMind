@@ -1958,7 +1958,7 @@ async def predict_single_stock(
                 await session.execute(
                     text(
                         """
-                        SELECT e.fusion_score, e.signal_side, e.score_rank,
+                        SELECT e.fusion_score, e.signal_side, e.score_rank, e.quality,
                                e.expected_price, r.model_id AS run_model_id,
                                e.run_id, e.trade_date
                         FROM engine_signal_scores e
@@ -2056,12 +2056,42 @@ async def predict_single_stock(
         drivers = shap_drivers
         drivers_source = "shap"
 
-    # 当前生产模型输出的是横截面 signal score，而不是分位数回归价格。
-    # 因此不把波动率公式伪装成 P10/P50/P90，也不生成未来价格曲线。
+    # 只有真实分位模型才返回区间；旧模型仍绝不将波动率公式伪装成分位数。
     p50_ret = round(fusion_score, 4)
     confidence = 0.0
     forecast_curve: list[dict[str, Any]] = []
     curr_p = latest_close if latest_close > 0 else 100.0
+    quantile_prediction: dict[str, Any] | None = None
+    if main_row is not None:
+        quality = main_row.get("quality")
+        if isinstance(quality, str):
+            try:
+                quality = json.loads(quality)
+            except (TypeError, ValueError):
+                quality = None
+        if isinstance(quality, dict):
+            detail = quality.get("detail")
+            candidate = detail.get("quantile_prediction") if isinstance(detail, dict) else None
+            if isinstance(candidate, dict):
+                try:
+                    values = [float(candidate[key]) for key in ("p10", "p50", "p90")]
+                    if all(math.isfinite(value) for value in values):
+                        p10_ret, p50_ret, p90_ret = sorted(values)
+                        quantile_prediction = candidate
+                        confidence = float(candidate.get("calibrated_coverage") or 0.0)
+                        target_day = date.fromisoformat(resolved_date) + timedelta(days=max(1, int(horizon)))
+                        forecast_curve = [{
+                            "step": int(horizon),
+                            "date": target_day.isoformat(),
+                            "p10": round(p10_ret * 100, 4),
+                            "p50": round(p50_ret * 100, 4),
+                            "p90": round(p90_ret * 100, 4),
+                            "predicted_price": round(curr_p * (1 + p50_ret), 4),
+                            "upper_price": round(curr_p * (1 + p90_ret), 4),
+                            "lower_price": round(curr_p * (1 + p10_ret), 4),
+                        }]
+                except (KeyError, TypeError, ValueError):
+                    quantile_prediction = None
 
     # 7. 多模型共识（真实当日各模型分数）
     consensus = []
@@ -2105,9 +2135,9 @@ async def predict_single_stock(
         "expected_return": p50_ret,
         "confidence": confidence,
         "rating": rating,
-        "p10_return": None,
+        "p10_return": round(p10_ret * 100, 2) if quantile_prediction else None,
         "p50_return": round(p50_ret * 100, 2),
-        "p90_return": None,
+        "p90_return": round(p90_ret * 100, 2) if quantile_prediction else None,
         "forecast_curve": forecast_curve,
         "drivers": drivers,
         "consensus": consensus,

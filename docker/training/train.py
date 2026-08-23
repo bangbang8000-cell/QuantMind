@@ -1473,6 +1473,118 @@ def _train_lgb(cfg: dict, features: list[str], X_train: np.ndarray, y_train: np.
     return model
 
 
+_QUANTILE_LEVELS = (0.1, 0.5, 0.9)
+
+
+def _quantile_mode_enabled(cfg: dict) -> bool:
+    """Whether this run requests the deliberately narrow v1 quantile contract."""
+    return str((cfg.get("model", {}) or {}).get("prediction_mode") or "point").lower() == "quantile"
+
+
+def _validate_quantile_config(cfg: dict, model_type: str) -> None:
+    """Reject unsupported combinations before any expensive training work starts."""
+    if not _quantile_mode_enabled(cfg):
+        return
+    context = cfg.get("context", {}) or {}
+    target_mode = str((cfg.get("label", {}) or {}).get("target_mode") or "return").lower()
+    model_types = (cfg.get("model", {}) or {}).get("types") or [model_type]
+    if (
+        model_type != "lightgbm"
+        or len(model_types) != 1
+        or str(model_types[0]).lower() != "lightgbm"
+        or target_mode != "return"
+        or str(context.get("market") or "CN").upper() != "CN"
+    ):
+        raise ValueError(
+            "prediction_mode=quantile 仅支持 A 股(CN)单 LightGBM 的未来收益率回归模型"
+        )
+
+
+def _pinball_loss(y_true: np.ndarray, prediction: np.ndarray, alpha: float) -> float:
+    error = np.asarray(y_true, dtype=float) - np.asarray(prediction, dtype=float)
+    return float(np.mean(np.maximum(alpha * error, (alpha - 1.0) * error)))
+
+
+def _train_lgb_quantiles(
+    cfg: dict,
+    features: list[str],
+    X_train: np.ndarray,
+    y_train: np.ndarray,
+    X_val: np.ndarray,
+    y_val: np.ndarray,
+    val_dates: pd.Series,
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    """Train P10/P50/P90 LightGBM models and calibrate the outer interval.
+
+    The latest 20% of validation trading days is held out from early stopping and
+    used only for conformal calibration.  This keeps the reported test coverage
+    out-of-sample and avoids turning a volatility heuristic into a fake interval.
+    """
+    unique_dates = np.sort(pd.to_datetime(val_dates).dropna().unique())
+    if len(unique_dates) < 5:
+        raise ValueError("分位推理需要至少 5 个验证交易日用于早停和校准")
+    calibration_days = max(1, int(np.ceil(len(unique_dates) * 0.2)))
+    calibration_start = unique_dates[-calibration_days]
+    calibration_mask = pd.to_datetime(val_dates).to_numpy() >= calibration_start
+    early_stop_mask = ~calibration_mask
+    if int(early_stop_mask.sum()) < 20 or int(calibration_mask.sum()) < 20:
+        raise ValueError("分位推理验证集不足：早停段和校准段各至少需要 20 个样本")
+
+    model_cfg = cfg.get("model", {}) or {}
+    models: dict[str, Any] = {}
+    raw_predictions: dict[str, np.ndarray] = {}
+    for alpha, key in zip(_QUANTILE_LEVELS, ("p10", "p50", "p90"), strict=True):
+        quantile_cfg = dict(cfg)
+        quantile_model_cfg = dict(model_cfg)
+        quantile_params = {
+            **DEFAULT_LGB_PARAMS,
+            **(model_cfg.get("params") or {}),
+            "objective": "quantile",
+            "metric": "quantile",
+            "alpha": alpha,
+        }
+        quantile_model_cfg["params"] = quantile_params
+        quantile_cfg["model"] = quantile_model_cfg
+        models[key] = _train_lgb(
+            quantile_cfg, features, X_train, y_train,
+            X_val[early_stop_mask], y_val[early_stop_mask],
+        )
+        raw_predictions[key] = models[key].predict(X_val, num_iteration=models[key].best_iteration)
+
+    raw_p10 = raw_predictions["p10"]
+    raw_p50 = raw_predictions["p50"]
+    raw_p90 = raw_predictions["p90"]
+    ordered = np.sort(np.column_stack((raw_p10, raw_p50, raw_p90)), axis=1)
+    raw_p10, raw_p50, raw_p90 = ordered[:, 0], ordered[:, 1], ordered[:, 2]
+    cal_y = y_val[calibration_mask]
+    nonconformity = np.maximum(raw_p10[calibration_mask] - cal_y, cal_y - raw_p90[calibration_mask])
+    # Finite-sample conformal quantile for a target central 80% interval.
+    q_index = min(len(nonconformity) - 1, int(np.ceil((len(nonconformity) + 1) * 0.8)) - 1)
+    conformal_offset = float(np.partition(nonconformity, q_index)[q_index])
+    calibrated_p10 = raw_p10 - conformal_offset
+    calibrated_p90 = raw_p90 + conformal_offset
+    calibrated = np.sort(np.column_stack((calibrated_p10, raw_p50, calibrated_p90)), axis=1)
+    coverage_raw = float(np.mean((y_val >= raw_p10) & (y_val <= raw_p90)))
+    coverage_calibrated = float(np.mean((y_val >= calibrated[:, 0]) & (y_val <= calibrated[:, 2])))
+    calibration = {
+        "method": "conformalized_quantile_regression",
+        "central_coverage": 0.8,
+        "calibration_fraction": 0.2,
+        "calibration_start": str(pd.Timestamp(calibration_start).date()),
+        "sample_count": int(calibration_mask.sum()),
+        "offset": conformal_offset,
+        "raw_coverage": coverage_raw,
+        "calibrated_coverage": coverage_calibrated,
+        "mean_interval_width": float(np.mean(calibrated[:, 2] - calibrated[:, 0])),
+        "pinball_loss": {
+            "p10": _pinball_loss(y_val, raw_p10, 0.1),
+            "p50": _pinball_loss(y_val, raw_p50, 0.5),
+            "p90": _pinball_loss(y_val, raw_p90, 0.9),
+        },
+    }
+    return models, calibration
+
+
 def _train_xgb(cfg: dict, features: list[str], X_train: np.ndarray, y_train: np.ndarray,
                X_val: np.ndarray, y_val: np.ndarray) -> Any:
     """XGBoost 训练。"""
@@ -2677,6 +2789,7 @@ def train_model(df: pd.DataFrame, features: list[str], cfg: dict, hardware: dict
 
     if model_type not in _ALL_MODEL_TYPES:
         raise ValueError(f"Unsupported model_type: {model_type}")
+    _validate_quantile_config(cfg, model_type)
 
     # 检查深度学习模型是否有 GPU
     if model_type in _DL_MODEL_TYPES and hardware and not hardware.get("gpu_available"):
@@ -2713,7 +2826,15 @@ def train_model(df: pd.DataFrame, features: list[str], cfg: dict, hardware: dict
                     _model_cfg["catboost_params"] = {**(_model_cfg.get("catboost_params") or {}), **_best}
                 _merge_cfg["model"] = _model_cfg
                 cfg = _merge_cfg
-        if model_type == "lightgbm":
+        quantile_result: dict[str, Any] | None = None
+        if model_type == "lightgbm" and _quantile_mode_enabled(cfg):
+            quantile_models, calibration = _train_lgb_quantiles(
+                cfg, features, X_train, y_train, X_val, y_val, val_df["trade_date"]
+            )
+            # P50 intentionally remains the platform score used by ranking/trading.
+            model = quantile_models["p50"]
+            quantile_result = {"models": quantile_models, "calibration": calibration}
+        elif model_type == "lightgbm":
             model = _train_lgb(cfg, features, X_train, y_train, X_val, y_val)
         elif model_type == "xgboost":
             model = _train_xgb(cfg, features, X_train, y_train, X_val, y_val)
@@ -2870,6 +2991,7 @@ def train_model(df: pd.DataFrame, features: list[str], cfg: dict, hardware: dict
         },
         model_type,
         _optuna_result,
+        quantile_result if model_type == "lightgbm" and _quantile_mode_enabled(cfg) else None,
     )
 
 
@@ -3958,8 +4080,12 @@ def main() -> int:
         else:
             # ── 单模型训练路径（向后兼容） ──
             train_result = train_model(df, valid_features, cfg, hardware=hardware)
-            # train_model 返回 10-tuple (树模型含 optuna) / 9-tuple (DL 含 dl_metadata) / 8-tuple
-            if len(train_result) == 10:
+            # train_model 返回 11-tuple (分位 LightGBM) / 10-tuple (树模型含 optuna)
+            # / 9-tuple (DL 含 dl_metadata) / 8-tuple。
+            quantile_result = None
+            if len(train_result) == 11:
+                model, fill_values, train_m, val_m, test_m, pred_df, split_frames, actual_model_type, dl_metadata, optuna_result, quantile_result = train_result
+            elif len(train_result) == 10:
                 model, fill_values, train_m, val_m, test_m, pred_df, split_frames, actual_model_type, dl_metadata, optuna_result = train_result
             elif len(train_result) == 9:
                 model, fill_values, train_m, val_m, test_m, pred_df, split_frames, actual_model_type, dl_metadata = train_result
@@ -3983,6 +4109,15 @@ def main() -> int:
             workspace = Path("/workspace")
             model_filename = _save_model(model, actual_model_type, workspace)
             logger.info(f"Model saved to {workspace / model_filename}")
+            quantile_model_files: dict[str, str] = {}
+            if quantile_result:
+                for quantile_key, quantile_model in quantile_result["models"].items():
+                    filename = f"model_{quantile_key}.lgb"
+                    quantile_model.save_model(str(workspace / filename))
+                    quantile_model_files[quantile_key] = filename
+                # `model.lgb` remains P50 for every existing consumer.
+                model_filename = quantile_model_files["p50"]
+                logger.info("Quantile model artifacts saved: %s", quantile_model_files)
 
             # 保存预测结果（parquet 压缩用于存档，比 pickle 小 ~10x）
             pred_path = Path("/workspace/pred.parquet")
@@ -4066,6 +4201,7 @@ def main() -> int:
                 "target_horizon_days": int((cfg.get("label", {}) or {}).get("target_horizon_days") or 1),
                 "execution_lag_days": _EXECUTION_LAG_DAYS,
                 "target_mode": str((cfg.get("label", {}) or {}).get("target_mode") or "return"),
+                "prediction_mode": "quantile" if quantile_result else "point",
                 "preprocessing": (cfg.get("preprocessing") or {}) if (cfg.get("preprocessing") or {}).get("enabled") else None,
                 "label_formula": str((cfg.get("label", {}) or {}).get("label_formula") or ""),
                 "effective_trade_date": str((cfg.get("label", {}) or {}).get("effective_trade_date") or ""),
@@ -4086,6 +4222,16 @@ def main() -> int:
             # Optuna 搜索结果写入 metadata（若启用）
             if optuna_result:
                 metadata["optuna"] = optuna_result
+            if quantile_result:
+                metadata.update({
+                    "prediction_contract": {
+                        "kind": "quantile_return",
+                        "quantiles": list(_QUANTILE_LEVELS),
+                        "primary_score": "p50",
+                    },
+                    "quantile_models": quantile_model_files,
+                    "calibration": quantile_result["calibration"],
+                })
             # DL 模型特有元数据 (model_class_name, model_params, input_spec 等)
             if dl_metadata:
                 metadata.update(dl_metadata)
@@ -4327,6 +4473,10 @@ if __name__ == "__main__":
                     {"name": "inference.py",  "local": "/workspace/inference.py"},
                     {"name": "config.yaml",   "local": "/workspace/config.yaml"},
                     {"name": "result.json",   "local": "/workspace/result.json"},
+                ] + [
+                    {"name": filename, "local": f"/workspace/{filename}"}
+                    for filename in quantile_model_files.values()
+                    if filename != model_filename
                 ],
                 "summary": {
                     "status": "训练完成",

@@ -615,8 +615,24 @@ def main():
         print(msg, file=sys.stderr)
         sys.exit(2)
 
-    # 3. 加载模型
-    model_type, model = load_model(model_dir, meta)
+    # 3. 加载模型。分位模型仍以 P50 作为平台主分数，但同时读取三个产物。
+    is_quantile_model = (
+        isinstance(meta.get("prediction_contract"), dict)
+        and meta["prediction_contract"].get("kind") == "quantile_return"
+    )
+    if is_quantile_model:
+        if lgb is None:
+            logger.error("分位 LightGBM 模型推理需要 lightgbm")
+            sys.exit(1)
+        quantile_files = meta.get("quantile_models") or {}
+        required = ("p10", "p50", "p90")
+        if not all(isinstance(quantile_files.get(key), str) and (model_dir / quantile_files[key]).is_file() for key in required):
+            logger.error("分位模型产物不完整: %s", quantile_files)
+            sys.exit(1)
+        quantile_models = {key: lgb.Booster(model_file=str(model_dir / quantile_files[key])) for key in required}
+        model_type, model = "lgb_quantile", quantile_models["p50"]
+    else:
+        model_type, model = load_model(model_dir, meta)
 
     # 4. 预处理
     X_df, symbols = preprocess(day_df, meta)
@@ -631,7 +647,21 @@ def main():
     best_iter = meta.get("best_iteration")
     X_values = X_df.values.astype(np.float32)
 
-    if model_type == "xgb":
+    quantile_values: np.ndarray | None = None
+    if model_type == "lgb_quantile":
+        raw = np.column_stack([
+            quantile_models["p10"].predict(X_values),
+            quantile_models["p50"].predict(X_values),
+            quantile_models["p90"].predict(X_values),
+        ])
+        raw = np.sort(raw, axis=1)
+        calibration = meta.get("calibration") or {}
+        offset = float(calibration.get("offset") or 0.0)
+        raw[:, 0] -= offset
+        raw[:, 2] += offset
+        quantile_values = np.sort(raw, axis=1)
+        scores = quantile_values[:, 1]
+    elif model_type == "xgb":
         dmat = xgb.DMatrix(X_values, feature_names=list(X_df.columns))
         scores = model.predict(dmat, iteration_range=(0, best_iter) if best_iter else None)
     elif model_type == "catboost":
@@ -706,15 +736,29 @@ def main():
     # 方向纠正：如果训练时检测到 IC < 0（模型反向），翻转分数使正分=看涨
     score_direction = meta.get("score_direction", "")
     if score_direction == "reversed":
+        if quantile_values is not None:
+            quantile_values = np.column_stack((-quantile_values[:, 2], -quantile_values[:, 1], -quantile_values[:, 0]))
         scores = -scores
         logger.info("检测到反向模型 (score_direction=reversed)，已翻转分数")
 
     # 6. 输出 JSON
-    signals = [
-        {"symbol": sym, "score": float(score)}
-        for sym, score in zip(symbols, scores)
-        if not (isinstance(score, float) and (score != score))  # 过滤 NaN
-    ]
+    signals = []
+    for idx, (sym, score) in enumerate(zip(symbols, scores)):
+        if not np.isfinite(score):
+            continue
+        signal: dict[str, object] = {"symbol": sym, "score": float(score)}
+        if quantile_values is not None:
+            p10, p50, p90 = quantile_values[idx]
+            if np.isfinite(p10) and np.isfinite(p50) and np.isfinite(p90):
+                signal["detail"] = {
+                    "quantile_prediction": {
+                        "p10": float(p10), "p50": float(p50), "p90": float(p90),
+                        "calibrated": True,
+                        "central_coverage": float((meta.get("calibration") or {}).get("central_coverage") or 0.8),
+                        "calibrated_coverage": (meta.get("calibration") or {}).get("calibrated_coverage"),
+                    }
+                }
+        signals.append(signal)
 
     # 按 score 降序（辅助调试，不影响功能）
     signals.sort(key=lambda x: x["score"], reverse=True)

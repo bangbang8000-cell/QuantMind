@@ -576,6 +576,7 @@ class RemoteSSHOrchestrator(TrainingOrchestrator):
                 "type": payload.get("model_type", "lightgbm"),
                 "types": payload.get("model_types"),
                 "ensemble": payload.get("ensemble", "none"),
+                "prediction_mode": payload.get("prediction_mode", "point"),
                 "num_boost_round": payload.get("num_boost_round", 1000),
                 "early_stopping_rounds": payload.get("early_stopping_rounds", 100),
                 "val_ratio": payload.get("val_ratio", 0.15),

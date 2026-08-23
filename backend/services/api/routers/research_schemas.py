@@ -90,9 +90,9 @@ class SingleStockPredictionResponse(BaseModel):
     expected_return: float
     confidence: float
     rating: str
-    p10_return: float
-    p50_return: float
-    p90_return: float
+    p10_return: float | None = None
+    p50_return: float | None = None
+    p90_return: float | None = None
     forecast_curve: list[ForecastPoint]
     drivers: list[FeatureDriverItem]
     consensus: list[ModelConsensusItem]

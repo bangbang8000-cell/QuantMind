@@ -129,6 +129,8 @@ export interface TrainingParams {
   /** Optuna 自动超参搜索 */
   optunaEnabled?: boolean;
   optunaTrials?: number;
+  /** 点预测（默认）或 P10/P50/P90 收益率分位推理。 */
+  prediction_mode?: 'point' | 'quantile';
 }
 
 export interface TrainingContext {
@@ -554,6 +556,7 @@ export const LEGACY_DEFAULT_TIME_PERIODS: TimePeriodMap = {
 export const DEFAULT_PARAMS: TrainingParams = {
   model_type: 'lightgbm',
   model_types: ['lightgbm'],
+  prediction_mode: 'point',
   ensemble_method: 'none',
   learning_rate: 0.02,
   num_leaves: 31,
@@ -1048,6 +1051,7 @@ export const buildBackendTrainingPayload = (
     feature_categories: request.featureCategories,
     target_horizon_days: request.target.horizonDays,
     target_mode: request.target.mode,
+    prediction_mode: request.params.prediction_mode ?? 'point',
     label_formula: request.labelFormula,
     effective_trade_date: request.effectiveTradeDate,
     training_window: request.trainingWindow,
