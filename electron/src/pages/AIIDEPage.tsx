@@ -35,7 +35,6 @@ import {
     Sparkles,
     Bug,
     Search as SearchIcon,
-    BrainCircuit,
 } from 'lucide-react';
 import { message, Modal, Input } from 'antd';
 import { clsx } from 'clsx';
@@ -2499,7 +2498,6 @@ const AIIDEPage: React.FC = () => {
                                     className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full bg-blue-50 text-blue-600 border border-blue-100 text-[11px] font-medium whitespace-nowrap"
                                     title={`回测默认使用的模型: ${defaultModelName}`}
                                 >
-                                    <BrainCircuit className="h-3 w-3 shrink-0" />
                                     <span>模型: {defaultModelName.length > 20 ? defaultModelName.substring(0, 20) + '...' : defaultModelName}</span>
                                 </span>
                             ) : null}
