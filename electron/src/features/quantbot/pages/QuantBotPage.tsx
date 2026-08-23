@@ -15,7 +15,7 @@ import { isElectronEnv, SERVICE_URLS } from '../../../config/services';
 
 const QWENPAW_UI_PATH = '/api/v1/qwenpaw-ui/';
 /** 无任何服务器配置时的兜底地址（QwenPaw 容器宿主映射端口） */
-const QWENPAW_LOCAL_FALLBACK_URL = 'http://127.0.0.1:8089/';
+const QWENPAW_LOCAL_FALLBACK_URL = 'http://127.0.0.1:8088/';
 
 /** iframe 加载超时时间（毫秒） */
 const IFRAME_LOAD_TIMEOUT_MS = 15_000;
@@ -29,14 +29,18 @@ const QuantBotPage: React.FC = () => {
   const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const embedUrl = useMemo(() => {
-    // Web 模式：走当前访问域名的 nginx 代理，天然支持局域网/公网访问
-    if (!isElectronEnv() && typeof window !== 'undefined') {
-      return `${window.location.origin}${QWENPAW_UI_PATH}`;
-    }
-    // 桌面端：走用户配置的服务器地址代理，避免硬编码 127.0.0.1 在远程/局域网场景拒连
-    const gateway = SERVICE_URLS.API_GATEWAY;
-    if (gateway) {
-      return `${gateway}${QWENPAW_UI_PATH}`;
+    // 优先使用直连 8088 端口（原生应用根路径，杜绝 Vite 动态 import 与静态图标 404）
+    if (typeof window !== 'undefined') {
+      const hostname = window.location.hostname || '127.0.0.1';
+      if (hostname === 'localhost' || hostname === '127.0.0.1') {
+        return QWENPAW_LOCAL_FALLBACK_URL;
+      }
+      // 远程/局域网场景：若有自定义网关且非本地则走代理，否则走对应宿主机的 8088 端口
+      const gateway = SERVICE_URLS.API_GATEWAY;
+      if (gateway && !gateway.includes('localhost') && !gateway.includes('127.0.0.1')) {
+        return `${gateway}${QWENPAW_UI_PATH}`;
+      }
+      return `http://${hostname}:8088/`;
     }
     return QWENPAW_LOCAL_FALLBACK_URL;
   }, []);
@@ -92,31 +96,49 @@ const QuantBotPage: React.FC = () => {
   }, [iframeKey, clearTimer]);
 
   return (
-    <div className="w-full h-full flex flex-col overflow-hidden bg-[#1a1a1a] pt-[30px]">
-      {/* 顶部工具栏 — 极简，最大保留内容区域 */}
-      <div className="h-[40px] flex-shrink-0 bg-[#1e1e1e] border-b border-[#333] flex items-center justify-between px-4">
-        <div className="flex items-center gap-2">
-          <div className="w-6 h-6 rounded-lg bg-gradient-to-br from-blue-500 to-purple-600 flex items-center justify-center">
-            <Bot className="w-4 h-4 text-white" />
+    <div className="w-full h-full flex flex-col overflow-hidden bg-[#f8fafc] pt-12 pb-[74px] px-3 sm:px-4">
+      {/* 顶部工具栏 — 清爽融合，规避 TitleBar 遮挡 */}
+      <div className="h-10 flex-shrink-0 bg-white border border-slate-200/80 rounded-t-xl px-4 flex items-center justify-between shadow-xs">
+        <div className="flex items-center gap-2.5">
+          <div className="w-5 h-5 rounded-md bg-gradient-to-br from-blue-500 to-indigo-600 flex items-center justify-center shadow-xs">
+            <Bot className="w-3.5 h-3.5 text-white" />
           </div>
-          <span className="text-sm font-medium text-gray-300">QuantBot · QwenPaw</span>
+          <span className="text-xs font-bold text-slate-800 tracking-tight">QuantBot · QwenPaw</span>
+          <span className="text-[10px] font-medium text-slate-400 bg-slate-100 px-1.5 py-0.5 rounded">AI 智能助理</span>
         </div>
 
         <div className="flex items-center gap-2">
-          <div className={`flex items-center gap-1 text-xs ${connected ? 'text-emerald-400' : timedOut ? 'text-red-400' : loading ? 'text-amber-400' : 'text-red-400'}`}>
-            {connected ? <Wifi className="w-3.5 h-3.5" /> : timedOut ? <AlertTriangle className="w-3.5 h-3.5" /> : loading ? <div className="w-3.5 h-3.5 border-2 border-amber-400 border-t-transparent rounded-full animate-spin" /> : <WifiOff className="w-3.5 h-3.5" />}
-            <span>{connected ? '已连接' : timedOut ? '连接超时' : loading ? '连接中…' : '断开'}</span>
+          <div className={`flex items-center gap-1 text-xs font-medium px-2 py-0.5 rounded-full ${
+            connected 
+              ? 'bg-emerald-50 text-emerald-600 border border-emerald-200/60' 
+              : timedOut 
+                ? 'bg-rose-50 text-rose-600 border border-rose-200/60' 
+                : loading 
+                  ? 'bg-amber-50 text-amber-600 border border-amber-200/60' 
+                  : 'bg-slate-100 text-slate-500'
+          }`}>
+            {connected ? (
+              <Wifi className="w-3 h-3 text-emerald-500" />
+            ) : timedOut ? (
+              <AlertTriangle className="w-3 h-3 text-rose-500" />
+            ) : loading ? (
+              <div className="w-3 h-3 border-2 border-amber-500 border-t-transparent rounded-full animate-spin" />
+            ) : (
+              <WifiOff className="w-3 h-3 text-slate-400" />
+            )}
+            <span className="text-[11px]">{connected ? '已连接' : timedOut ? '连接超时' : loading ? '连接中…' : '断开'}</span>
           </div>
+
           <button
             onClick={handleOpenExternal}
-            className="flex items-center gap-1 rounded px-2 py-1 text-xs text-gray-400 hover:text-gray-200 hover:bg-[#333] transition-colors"
+            className="flex items-center gap-1 rounded-md px-2 py-1 text-xs font-medium text-slate-600 hover:text-blue-600 hover:bg-slate-100 transition-colors"
             title="在外部浏览器打开"
           >
             <ExternalLink className="w-3.5 h-3.5" />
           </button>
           <button
             onClick={handleReload}
-            className="flex items-center gap-1 rounded px-2 py-1 text-xs text-gray-400 hover:text-gray-200 hover:bg-[#333] transition-colors"
+            className="flex items-center gap-1 rounded-md px-2 py-1 text-xs font-medium text-slate-600 hover:text-blue-600 hover:bg-slate-100 transition-colors"
             title="重新加载"
           >
             <RefreshCw className="w-3.5 h-3.5" />
@@ -124,40 +146,40 @@ const QuantBotPage: React.FC = () => {
         </div>
       </div>
 
-      {/* iframe 内容区域— 无缝全屏嵌入 */}
-      <div className="flex-1 relative overflow-hidden bg-[#1a1a1a]">
+      {/* iframe 内容区域 — 避开底部 Dock 悬浮栏 */}
+      <div className="flex-1 relative overflow-hidden bg-white border-x border-b border-slate-200/80 rounded-b-xl shadow-xs">
         {loading && !timedOut && (
-          <div className="absolute inset-0 z-10 flex items-center justify-center bg-[#1a1a1a]">
-            <div className="flex flex-col items-center gap-4">
-              <div className="w-12 h-12 border-4 border-blue-500 border-t-transparent rounded-full animate-spin" />
+          <div className="absolute inset-0 z-10 flex items-center justify-center bg-white/90 backdrop-blur-xs">
+            <div className="flex flex-col items-center gap-3">
+              <div className="w-10 h-10 border-3 border-blue-500 border-t-transparent rounded-full animate-spin" />
               <div className="text-center">
-                <p className="text-sm text-gray-400">QwenPaw 智能体加载中…</p>
-                <p className="text-xs text-gray-500 mt-1">AI Brain · Code · Backtest · Factor · Data</p>
+                <p className="text-xs font-semibold text-slate-700">QwenPaw 智能体加载中…</p>
+                <p className="text-[11px] text-slate-400 mt-0.5">AI Brain · Code · Backtest · Factor · Data</p>
               </div>
             </div>
           </div>
         )}
 
         {timedOut && !connected && (
-          <div className="absolute inset-0 z-10 flex items-center justify-center bg-[#1a1a1a]">
-            <div className="flex flex-col items-center gap-4 max-w-md text-center">
-              <div className="w-14 h-14 rounded-full bg-red-500/10 flex items-center justify-center">
-                <AlertTriangle className="w-7 h-7 text-red-400" />
+          <div className="absolute inset-0 z-10 flex items-center justify-center bg-white/95">
+            <div className="flex flex-col items-center gap-3.5 max-w-md text-center px-4">
+              <div className="w-12 h-12 rounded-full bg-rose-50 border border-rose-100 flex items-center justify-center">
+                <AlertTriangle className="w-6 h-6 text-rose-500" />
               </div>
               <div>
-                <p className="text-sm font-medium text-gray-300">QwenPaw 未部署或未启动</p>
-                <p className="text-xs text-gray-400 mt-2">
-                  请按文档部署并启动 QwenPaw 智能体服务：
+                <p className="text-sm font-bold text-slate-800">QwenPaw 服务未响应</p>
+                <p className="text-xs text-slate-500 mt-1.5 leading-relaxed">
+                  请检查后端 QwenPaw 容器状态：
                 </p>
-                <code className="block mt-2 px-3 py-1.5 bg-[#2a2a2a] rounded text-xs text-emerald-400/90 font-mono">
-                  docker-compose up -d qwenpaw
+                <code className="block mt-2 px-3 py-1.5 bg-slate-50 border border-slate-200 rounded-lg text-xs text-emerald-600 font-mono">
+                  docker compose up -d qwenpaw
                 </code>
               </div>
               <button
                 onClick={handleReload}
-                className="flex items-center gap-2 mt-2 px-4 py-2 rounded-lg bg-blue-600 hover:bg-blue-500 text-white text-sm font-medium transition-colors"
+                className="flex items-center gap-1.5 mt-1 px-4 py-1.5 rounded-lg bg-blue-600 hover:bg-blue-500 text-white text-xs font-medium transition-colors shadow-xs"
               >
-                <RefreshCw className="w-4 h-4" />
+                <RefreshCw className="w-3.5 h-3.5" />
                 重新连接
               </button>
             </div>

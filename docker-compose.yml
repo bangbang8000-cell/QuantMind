@@ -55,14 +55,14 @@ services:
         TORCH_DEVICE: ${TORCH_DEVICE:-cpu}
         TORCH_CPU_INDEX_URL: ${TORCH_CPU_INDEX_URL:-https://mirrors.aliyun.com/pytorch-wheels/cpu}
     platform: linux/amd64
-    # GPU 直通：宿主机已安装 nvidia-container-toolkit（RTX 5880 Ada）
-    deploy:
-      resources:
-        reservations:
-          devices:
-            - driver: nvidia
-              count: all
-              capabilities: [gpu]
+    # GPU 直通：宿主机已安装 nvidia-container-toolkit 时可开启
+    # deploy:
+    #   resources:
+    #     reservations:
+    #       devices:
+    #         - driver: nvidia
+    #           count: all
+    #           capabilities: [gpu]
     container_name: quantmind
     depends_on:
       db:
@@ -265,6 +265,9 @@ services:
     volumes:
       # 运行时数据
       - ./data:/data
+      # QuantDB 数据源挂载 (宿主机 D:\quant_data / WSL: /mnt/d/quant_data)
+      - ${QM_QUANTDB_HOST_DIR:-/mnt/d/quant_data}:/data/quantdb
+      - ${QM_QUANTDB_HOST_DIR:-/mnt/d/quant_data}:/mnt/d/quant_data:ro
       # AI 模型文件 (按需下载)
       - ./models:/app/models
       # Qlib 历史数据 (按需下载)
@@ -422,6 +425,9 @@ services:
     volumes:
       # 运行时数据
       - ./data:/data
+      # QuantDB 数据源挂载 (宿主机 D:\quant_data / WSL: /mnt/d/quant_data)
+      - ${QM_QUANTDB_HOST_DIR:-/mnt/d/quant_data}:/data/quantdb
+      - ${QM_QUANTDB_HOST_DIR:-/mnt/d/quant_data}:/mnt/d/quant_data:ro
       # AI 模型文件
       - ./models:/app/models
       # Qlib 历史数据
@@ -493,6 +499,8 @@ services:
       - ./scripts:/app/scripts
       - ./logs:/app/logs
       - ./data:/data
+      - ${QM_QUANTDB_HOST_DIR:-/mnt/d/quant_data}:/data/quantdb
+      - ${QM_QUANTDB_HOST_DIR:-/mnt/d/quant_data}:/mnt/d/quant_data:ro
       - ./db:/app/db
     command: celery -A backend.services.engine.qlib_app.celery_config:celery_app beat --loglevel=info --schedule=/tmp/celerybeat-schedule
     healthcheck:
@@ -573,6 +581,8 @@ services:
       - HUNTLY_PASSWORD=${HUNTLY_PASSWORD:-changeme}
     volumes:
       - ./data:/data
+      - ${QM_QUANTDB_HOST_DIR:-/mnt/d/quant_data}:/data/quantdb
+      - ${QM_QUANTDB_HOST_DIR:-/mnt/d/quant_data}:/mnt/d/quant_data:ro
       - ./db:/app/db
       - ./dashboard:/app/dashboard
     healthcheck:
@@ -650,7 +660,7 @@ services:
     image: docker.1ms.run/agentscope/qwenpaw:latest
     container_name: qwenpaw
     ports:
-      - "0.0.0.0:8089:8088"
+      - "${QWENPAW_PORT:-8088}:8088"
     networks:
       quantmind-net:
         aliases:
@@ -679,7 +689,7 @@ services:
       - QUANTMIND_ENGINE_URL=http://quantmind:8001
       - QUANTMIND_USER_ID=qwenpaw
       - QWENPAW_SHARED_FILES_DIR=/qwenpaw-shared
-      - QWENPAW_CORS_ORIGINS=http://192.168.31.68:3080,http://localhost:3080,http://127.0.0.1:3080,http://192.168.31.68:8089,http://localhost:8089
+      - QWENPAW_CORS_ORIGINS=http://192.168.31.68:3080,http://localhost:3080,http://127.0.0.1:3080,http://192.168.31.68:8088,http://localhost:8088,http://127.0.0.1:8088
       # 远程数据源（用于数据同步脚本）
       - SOURCE_DATABASE_URL=${SOURCE_DATABASE_URL:-postgresql://user:pass@localhost:5432/quantmind}
       - SYNC_MAX_DAYS=30

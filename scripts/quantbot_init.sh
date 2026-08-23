@@ -13,14 +13,14 @@
 #   bash scripts/quantbot_init.sh --persona-only            # 只写人格
 #
 # 环境变量（可选，默认自动探测）：
-#   QWENPAW_BASE_URL    QwenPaw API 地址（默认 http://127.0.0.1:8089）
+#   QWENPAW_BASE_URL    QwenPaw API 地址（默认 http://127.0.0.1:8088）
 #   QWENPAW_AGENT_ID    目标工作区（默认 default）
 # ============================================================================
 set -euo pipefail
 
 SKILLS_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)/.claude/skills"
 PERSONA_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)/config/qwenpaw"
-QWENPAW_BASE_URL="${QWENPAW_BASE_URL:-http://127.0.0.1:8089}"
+QWENPAW_BASE_URL="${QWENPAW_BASE_URL:-http://127.0.0.1:8088}"
 QWENPAW_AGENT_ID="${QWENPAW_AGENT_ID:-default}"
 TMP_DIR="$(mktemp -d)"
 trap 'rm -rf "$TMP_DIR"' EXIT

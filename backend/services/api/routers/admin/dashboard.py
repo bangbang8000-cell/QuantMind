@@ -70,7 +70,7 @@ INFRA_SERVICES = [
         "service": "qwenpaw",
         "host": os.getenv("ADMIN_DASHBOARD_QWENPAW_HOST", "qwenpaw"),
         "port": int(os.getenv("ADMIN_DASHBOARD_QWENPAW_PORT", "8088")),
-        "desc": "QwenPaw AI 助手 (8089)",
+        "desc": "QwenPaw AI 助手 (8088)",
     },
     {
         "service": "rsshub",

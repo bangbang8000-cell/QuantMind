@@ -268,6 +268,20 @@ async def proxy_qwenpaw_ui_index(request: Request):
     return await _proxy_static("", accept)
 
 
+@router.get("/assets/{path:path}")
+async def proxy_qwenpaw_root_assets(path: str, request: Request):
+    """兜底代理 QwenPaw Vite 动态 import 产生的根路径 /assets/* 请求。"""
+    accept = request.headers.get("accept", "*/*")
+    return await _proxy_static(f"assets/{path}", accept)
+
+
+@router.get("/{filename:path}.svg")
+async def proxy_qwenpaw_root_svg(filename: str, request: Request):
+    """兜底代理 QwenPaw 页面内引用的根路径 *.svg 图标（如 logo-light.svg）。"""
+    accept = request.headers.get("accept", "*/*")
+    return await _proxy_static(f"{filename}.svg", accept)
+
+
 # ---------- QwenPaw API 代理路由 ----------
 
 _QWENPAW_API_PREFIX = "/api/v1/qwenpaw-api/"
