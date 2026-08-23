@@ -40,7 +40,9 @@ RUN set -eux; \
 # 安装 PyTorch 与核心训练依赖
 RUN python -m pip install --upgrade pip setuptools wheel && \
     if [ "$TORCH_DEVICE" = "cpu" ]; then \
-      pip install --no-cache-dir torch torchvision torchaudio --index-url ${TORCH_CPU_INDEX_URL}; \
+      # torch 本体走 PyTorch 官方 CPU 源，依赖包仍走默认索引（阿里云）
+      pip install --no-cache-dir --no-deps torch torchvision torchaudio --index-url ${TORCH_CPU_INDEX_URL}; \
+      pip install --no-cache-dir torch torchvision torchaudio; \
     else \
       # 用 --extra-index-url 仅让 torch 本体走 cu128 源，传递依赖仍走默认索引（阿里云）
       pip install --no-cache-dir \

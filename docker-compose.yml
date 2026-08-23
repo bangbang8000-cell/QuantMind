@@ -55,15 +55,14 @@ services:
         TORCH_DEVICE: ${TORCH_DEVICE:-cpu}
         TORCH_CPU_INDEX_URL: ${TORCH_CPU_INDEX_URL:-https://mirrors.aliyun.com/pytorch-wheels/cpu}
     platform: linux/amd64
-    # GPU 可选：无 NVIDIA 驱动的主机请保持注释。
-    # 有 GPU 加速训练需求时取消注释（需安装 nvidia-container-toolkit）。
-    # deploy:
-    #   resources:
-    #     reservations:
-    #       devices:
-    #         - driver: nvidia
-    #           count: 1
-    #           capabilities: [gpu]
+    # GPU 直通：宿主机已安装 nvidia-container-toolkit（RTX 5880 Ada）
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
     container_name: quantmind
     depends_on:
       db:
@@ -255,6 +254,10 @@ services:
       - HUNTLY_USERNAME=${HUNTLY_USERNAME:-changeme}
       - HUNTLY_PASSWORD=${HUNTLY_PASSWORD:-changeme}
 
+      # 资讯情绪识别 (FinBERT 中文金融模型, 本地离线权重)
+      - NEWS_USE_FINBERT=true
+      - FINBERT_ZH_MODEL=/app/models/finbert-zh-base
+
       # 数据平台 - 第三方离线数据源根目录
       - QM_TDX_DIR=${QM_TDX_DIR:-/data/third_party/tdx}
       - QM_INVESTMENT_DATA_DIR=${QM_INVESTMENT_DATA_DIR:-/data/third_party/investment_data}
@@ -391,6 +394,21 @@ services:
       - QM_QUANTDB_DATA_DIR=/data/quantdb
       # QuantDB 同步状态库（避免容器内空库导致全量重下）
       - QUANTDB_STATE_DIR=/data/quantdb/.sync_state
+
+      # Huntly 资讯 enrich (news_enrich_recent 任务在 worker 执行, 需要凭据)
+      - HUNTLY_BASE_URL=${HUNTLY_BASE_URL:-http://quantmind-huntly}
+      - HUNTLY_USERNAME=${HUNTLY_USERNAME:-changeme}
+      - HUNTLY_PASSWORD=${HUNTLY_PASSWORD:-changeme}
+      # enricher 直连 PG 写入 news_article_enrichment
+      - POSTGRES_HOST=db
+      - POSTGRES_PORT=5432
+      - POSTGRES_USER=${DB_USER:-quantmind}
+      - POSTGRES_PASSWORD=${DB_PASSWORD:-quantmind2026}
+      - POSTGRES_DB=${DB_NAME:-quantmind}
+
+      # 资讯情绪识别 (FinBERT 中文金融模型, 本地离线权重)
+      - NEWS_USE_FINBERT=true
+      - FINBERT_ZH_MODEL=/app/models/finbert-zh-base
 
       # 数据同步定时任务
       - DAILY_SYNC_ENABLED=true
