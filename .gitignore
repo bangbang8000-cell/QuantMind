@@ -231,3 +231,4 @@ config/training_nodes.yaml
 docker/training/fonts/*.ttc
 docker/training/fonts/NotoSansCJK-*.ttf
 docker/training/fonts/NotoSansCJKSC-*.ttf
+data/images/

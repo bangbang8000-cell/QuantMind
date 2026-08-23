@@ -422,7 +422,11 @@ export const InferenceCenterPage: React.FC = () => {
       }
     } catch (e: any) {
       console.error('获取真实推理数据失败:', e);
-      message.error(`推理接口异常: ${e?.message || '未知错误'}`);
+      const apiMessage =
+        e?.response?.data?.detail ||
+        e?.response?.data?.error?.message ||
+        e?.response?.data?.message;
+      message.error(apiMessage || `推理接口异常: ${e?.message || '未知错误'}`);
     } finally {
       setSingleStockLoading(false);
     }

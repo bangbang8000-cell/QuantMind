@@ -1,4 +1,4 @@
-FROM docker.1ms.run/library/node:22-alpine AS builder
+FROM node:22-alpine AS builder
 
 WORKDIR /app
 
@@ -17,7 +17,7 @@ COPY electron ./
 RUN node -e "const fs=require('fs');const p=JSON.parse(fs.readFileSync('package.json','utf8'));delete p.overrides;fs.writeFileSync('package.json',JSON.stringify(p,null,2));"
 RUN node ../scripts/frontend/copy-monaco-assets.js && npx vite build
 
-FROM docker.1ms.run/library/nginx:1.25-alpine
+FROM nginx:1.25-alpine
 
 # Remove the default server block that conflicts with our nginx.conf
 RUN rm -f /etc/nginx/conf.d/default.conf

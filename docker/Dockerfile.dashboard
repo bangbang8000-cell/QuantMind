@@ -1,4 +1,4 @@
-FROM docker.1ms.run/library/python:3.11-slim
+FROM python:3.11-slim
 
 ENV PIP_INDEX_URL=https://pypi.tuna.tsinghua.edu.cn/simple/ \
     PIP_TRUSTED_HOST=pypi.tuna.tsinghua.edu.cn
