@@ -64,7 +64,9 @@ def run_batch_inference(model_id="model_qlib", target_date=None):
     data_dir = (
         pinned_dir
         if pinned_dir.is_dir()
-        else Path(os.getenv("QUANTDB_DATA_DIR", str(PROJECT_ROOT / "data" / "quantdb")))
+        else Path(os.getenv("QUANTDB_DATA_DIR")
+                  or os.getenv("QM_QUANTDB_DATA_DIR")
+                  or str(PROJECT_ROOT / "data" / "quantdb"))
     )
     if target_date is None:
         available = get_available_dates(data_dir=data_dir, meta=metadata)

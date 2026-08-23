@@ -54,6 +54,23 @@ logger = logging.getLogger(__name__)
 # 只有最终写库串行，既保留加速又避免锁冲突。
 _INFER_PERSIST_LOCK = __import__("threading").Lock()
 
+
+def _resolve_quantdb_data_dir() -> str:
+    """QuantDB 因子数据目录：QUANTDB_DATA_DIR → QM_QUANTDB_DATA_DIR → hub 统一解析。
+
+    历史默认值 /app/data/quantdb 在容器内不存在（真实挂载为 /data/quantdb），
+    曾导致 quantdb_factors 模型推理前置检查永远失败、推理按钮置灰。
+    """
+    for key in ("QUANTDB_DATA_DIR", "QM_QUANTDB_DATA_DIR"):
+        val = os.getenv(key, "").strip()
+        if val and Path(val).is_dir():
+            return val
+    try:
+        from backend.services.engine.data_platform.quantdb_hub import _resolve_data_dir
+        return str(_resolve_data_dir())
+    except Exception:  # noqa: BLE001
+        return "/data/quantdb"
+
 _PARQUET_TEMPLATE_MARKERS = (
     "QuantMind Parquet 数据源推理脚本 (inference.py 模板)",
     "QuantMind Parquet 数据源推理脚本\n=================================\n由训练流水线自动生成",
@@ -378,7 +395,7 @@ class InferenceScriptRunner:
                 or os.getenv("MODEL_TRAINING_DATA_DIR", "/app/db/feature_snapshots")
             )
         if data_source == "quantdb_factors":
-            return str(os.getenv("QUANTDB_DATA_DIR", "/app/data/quantdb"))
+            return _resolve_quantdb_data_dir()
         try:
             from backend.shared.qlib_paths import resolve_qlib_provider_uri
             return resolve_qlib_provider_uri("CN")
@@ -389,7 +406,7 @@ class InferenceScriptRunner:
         meta = self._read_primary_metadata()
         try:
             from backend.services.engine.data_platform.quantdb_factor_reader import QuantDBFactorReader
-            data_dir = Path(os.getenv("QUANTDB_DATA_DIR", "/app/data/quantdb"))
+            data_dir = Path(_resolve_quantdb_data_dir())
             reader = QuantDBFactorReader(data_dir)
             status = reader.assert_ready(str(meta.get("factor_source") or "l1_l2_factors"), start=trade_date, end=trade_date)
             schema_hash = str(meta.get("factor_schema_hash") or "")
@@ -990,7 +1007,7 @@ class InferenceScriptRunner:
         # to model_features_*.parquet.
         primary_meta = self._read_primary_metadata()
         parquet_data_dir = (
-            os.getenv("QUANTDB_DATA_DIR", "/app/data/quantdb")
+            _resolve_quantdb_data_dir()
             if data_source == "quantdb_factors" else str(
                 primary_meta.get("data_dir")
                 or os.getenv("MODEL_TRAINING_DATA_DIR", "/app/db/feature_snapshots")
