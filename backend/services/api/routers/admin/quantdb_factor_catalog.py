@@ -7,7 +7,6 @@ import re
 import uuid
 import json
 from datetime import date, datetime, timezone
-from pathlib import Path
 from typing import Any, Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Query
@@ -29,6 +28,39 @@ router = APIRouter(dependencies=[Depends(require_admin)])
 
 _VALID_SOURCE = set(FACTOR_SOURCE_DIRS)
 _VALID_STATUS = {"draft", "published", "archived"}
+
+# 新建草稿时的默认勾选集（default_selected）。
+# 挑选原则（共 48 个，基于 l1_l2_factors 实际发现字段）：
+#   1. 每个 子类族 只保留一个代表因子，避免高度冗余拖慢 LightGBM 训练；
+#   2. 覆盖 10 大分类，时序+截面、价量+基本面均衡；
+#   3. 全部为日线可计算、定义清晰的稳健因子；
+#   4. micro_*/flow_*(L2 高频) 与 concept_*(题材噪音) 默认不选，
+#      需要时由管理员在草稿中手动勾选。
+DEFAULT_SELECTED_FACTORS = frozenset({
+    # 动量 (9): 收益阶梯 + 均线偏离 + 趋势/超买超卖代表
+    "mom_ret_1d", "mom_ret_5d", "mom_ret_10d", "mom_ret_20d", "mom_ret_60d",
+    "mom_ma_gap_5", "mom_ma_gap_20", "mom_macd_hist", "mom_rsi_14",
+    # 波动与风险 (6): 短/中标准差、真实波幅、振幅、极值与 OHLC 波动率
+    "vol_std_5", "vol_std_20", "vol_atr_14",
+    "vol_amp_20", "vol_parkinson_20", "vol_gk_20",
+    # 成交量与换手率 (6): 日内量能结构与分布形态
+    "vol_tick_density", "vol_gini", "vol_skew",
+    "vol_persistence", "vol_up_down_ratio", "vol_weighted_price",
+    # 成交额与资金 (5): 活跃度水平、放量、短长额比、资金流强弱
+    "amt_log", "amt_ma_20", "amt_z_20", "amt_ratio_5_20", "mfi_14",
+    # 换手与流动性 (4): 换手水平、突变与标准化偏离
+    "turn_1", "turn_20", "turn_ratio_1_5", "turn_z_20",
+    # 技术指标 (4): 布林位置、CCI、趋势强度、回撤路径
+    "tech_bb_pos", "tech_cci_20", "tech_adx_14", "tech_max_drawdown_20",
+    # 基本面与估值 (5): 估值双雄 + 盈利/成长/规模
+    "fun_pe", "fun_pb", "fun_roe", "fun_np_growth", "fun_mv_rank",
+    # 截面风格 (3): Beta、特质波动、残差动量
+    "style_beta_20", "style_idio_vol_20", "style_residual_ret_20",
+    # 行业轮动 (3): 行业动量、强度、拥挤度
+    "ind_ret_20", "ind_strength_20", "ind_crowding_20",
+    # 筹码分布 (3): 获利盘、集中度、成本带宽
+    "chip_profit_ratio_20", "chip_concentration_20", "chip_cost_90_width",
+})
 
 # 数据源元信息属于后端训练数据契约；前端不得硬编码来源或默认项。
 FACTOR_SOURCE_LABELS = {
@@ -139,37 +171,6 @@ def _category_for(column: str) -> tuple[str, str]:
         "micro": ("microstructure", "微观结构"), "flow": ("money_flow", "资金流"),
     }
     return categories.get(prefix, ("other", "其他因子"))
-
-
-def _legacy_catalog_defaults() -> dict[str, dict[str, Any]]:
-    """One-time seed aid: retain existing category/default choices if a raw
-    QuantDB column has the same logical key.  The database is authoritative
-    after the draft is created and published.
-    """
-    candidates = [
-        Path(__file__).resolve().parents[5] / "config" / "features" / "model_training_feature_catalog_v1.json",
-        Path.cwd() / "config" / "features" / "model_training_feature_catalog_v1.json",
-    ]
-    for path in candidates:
-        try:
-            raw = json.loads(path.read_text(encoding="utf-8"))
-            defaults: dict[str, dict[str, Any]] = {}
-            for category in raw.get("categories") or []:
-                for feature in category.get("features") or []:
-                    key = str(feature.get("key") or "")
-                    if key:
-                        defaults[key] = {
-                            "category_id": str(category.get("id") or "other"),
-                            "category_name": str(category.get("name") or "其他因子"),
-                            "display_name": str(feature.get("description") or key),
-                            "enabled": bool(feature.get("enabled", True)),
-                            "default_selected": bool(feature.get("default_selected", False)),
-                            "sort_order": int(feature.get("order_no") or 0),
-                        }
-            return defaults
-        except Exception:
-            continue
-    return {}
 
 
 async def _ensure_schema(session) -> None:
@@ -663,7 +664,9 @@ async def clone_factor_catalog(version_id: str, payload: CatalogVersionClone, cu
 async def seed_draft_mappings(version_id: str, current_user: dict = Depends(require_admin)):
     """Convenience endpoint: add all discovered factor columns to a draft as mappings.
 
-    草稿显示全部发现因子，但默认不勾选（default_selected=False），enabled 默认 False 由管理员开启。
+    新建草稿后：全部发现字段默认启用（enabled=True），
+    其中 DEFAULT_SELECTED_FACTORS 里的 48 个核心因子额外默认勾选
+    （default_selected=True），其余因子由管理员手动勾选。
     """
     _ = current_user
     async with get_session() as session:
@@ -680,21 +683,21 @@ async def seed_draft_mappings(version_id: str, current_user: dict = Depends(requ
             WHERE market = 'CN' AND dataset_id = :dataset_id AND is_present
             ORDER BY column_name
         """), {"dataset_id": version["source_dataset"]})).scalars().all()
-        legacy_defaults = _legacy_catalog_defaults()
         count = 0
+        default_selected_count = 0
         for column in fields:
             if column in KEY_COLUMNS or column in REQUIRED_COLUMNS:
                 continue
             definition = definition_for(str(column))
             cat_id = str(definition["category_id"])
             cat_name = str(definition["category_name"])
-            inherited = legacy_defaults.get(str(column), {})
+            is_default_selected = str(column) in DEFAULT_SELECTED_FACTORS
             await session.execute(text("""
                 INSERT INTO qm_training_factor_mapping
                  (mapping_id, version_id, source_dataset, source_column, feature_key, display_name,
                   category_id, category_name, enabled, default_selected, required, sort_order)
                 VALUES (:mapping_id, :version_id, :source_dataset, :source_column, :feature_key, :display_name,
-                        :category_id, :category_name, :enabled, :default_selected, FALSE, :sort_order)
+                        :category_id, :category_name, TRUE, :default_selected, FALSE, :sort_order)
                 ON CONFLICT (version_id, source_dataset, source_column) DO NOTHING
             """), {
                 "mapping_id": uuid.uuid4().hex, "version_id": version_id,
@@ -703,9 +706,12 @@ async def seed_draft_mappings(version_id: str, current_user: dict = Depends(requ
                 "category_name": cat_name,
                 "category_id": cat_id,
                 "display_name": str(definition["display_name"]),
-                "enabled": bool(inherited.get("enabled", False)),
-                "default_selected": False,
+                "default_selected": is_default_selected,
                 "sort_order": int(definition["sort_order"]) + count,
             })
             count += 1
-    return {"version_id": version_id, "seeded_fields": count}
+            default_selected_count += int(is_default_selected)
+    return {
+        "version_id": version_id, "seeded_fields": count,
+        "enabled_fields": count, "default_selected_fields": default_selected_count,
+    }

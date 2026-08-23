@@ -144,7 +144,7 @@ export const AdminTrainingDatasets: React.FC = () => {
       await adminService.seedQuantDBFactorDraft(created.version_id);
       setDraft(await adminService.getQuantDBFactorCatalog(source, created.version_id));
       setCreating(false);
-      message.success('草稿已创建，全部发现字段已导入为待配置映射');
+      message.success('草稿已创建：全部字段已默认启用，其中 48 个核心因子已默认勾选');
     } catch (error: any) {
       setCreating(false);
       if (error?.errorFields) return;
