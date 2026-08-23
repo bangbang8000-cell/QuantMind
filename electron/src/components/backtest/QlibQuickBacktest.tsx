@@ -6,7 +6,8 @@
 import React, { useState, useRef, useEffect, useMemo } from 'react';
 import { motion } from 'framer-motion';
 import {
-  Play, RefreshCw, BarChart3, Settings2, Info, AlertCircle, Copy, Check, ExternalLink, CalendarRange, Cpu
+  Play, RefreshCw, BarChart3, Settings2, Info, AlertCircle, Copy, Check, ExternalLink, CalendarRange, Cpu,
+  ChevronDown,
 } from 'lucide-react';
 
 import type { BacktestConfig } from '../../services/backtestService';
@@ -69,6 +70,7 @@ export const QlibQuickBacktest: React.FC = () => {
 
   // 策略相关状态
   const [strategyInfo, setStrategyInfo] = useState<StrategyFile | null>(null);
+  const [signalModelOpen, setSignalModelOpen] = useState(false);
 
   // 基础配置
   const [universePath, setUniversePath] = useState<string>('all');
@@ -506,8 +508,7 @@ export const QlibQuickBacktest: React.FC = () => {
               <Info className="w-4 h-4 text-blue-600" />
             </div>
             <div>
-              <div className="text-[11px] font-semibold text-blue-500 uppercase tracking-wider mb-1">快速回测</div>
-              <div className="text-lg font-bold text-slate-800 tracking-tight">标准参数模式</div>
+              <div className="text-lg font-bold text-slate-800 tracking-tight">快速回测（标准参数模式）</div>
               <div className="text-xs text-slate-500 leading-relaxed mt-1">
                 默认使用标准 Top-K 选股模板；前端显式参数优先，后端会自动做补全与兼容修复，适合快速验证截面信号的盈利表现。
               </div>
@@ -519,39 +520,46 @@ export const QlibQuickBacktest: React.FC = () => {
             initial={{ opacity: 0, y: 8 }}
             animate={{ opacity: 1, y: 0 }}
             transition={{ duration: 0.25, delay: 0.1 }}
-            className="space-y-3 rounded-2xl border border-gray-200 bg-white p-5 shadow-sm"
+            className="rounded-2xl border border-gray-200 bg-white shadow-sm"
           >
-            <div>
-              <div className="text-[11px] font-semibold text-gray-500 uppercase tracking-wider mb-1">Signal Model</div>
-              <h3 className="flex items-center gap-2 text-lg font-bold text-slate-800 tracking-tight">
-                <span className="w-8 h-8 rounded-xl bg-indigo-500/10 flex items-center justify-center"><Cpu className="w-4 h-4 text-indigo-600" /></span> 选择模型
-              </h3>
-            </div>
-            <p className="text-xs text-gray-500 -mt-1">
-              选择训练好的 ML 模型，其预测分数将作为策略信号（signal=&lt;PRED&gt;）
-            </p>
-            <select
-              value={selectedModelId}
-              onChange={(e) => setSelectedModelId(e.target.value)}
-              disabled={modelsLoading}
-              className="w-full px-3 py-2.5 bg-gray-50 border border-gray-200 rounded-xl text-sm focus:outline-none focus:border-blue-500"
+            <button
+              type="button"
+              onClick={() => setSignalModelOpen((o) => !o)}
+              className="w-full flex items-center justify-between gap-2 px-5 py-4 text-left"
             >
-              {modelsLoading && <option value="">加载中...</option>}
-              {!modelsLoading && filteredModels.length === 0 && <option value="">暂无可用模型</option>}
-              {filteredModels.map((m) => {
-                const meta = (m.metadata_json || {}) as Record<string, any>;
-                const name = String(meta.display_name || m.model_id);
-                const fw = String(meta.framework || '');
-                const fc = meta.feature_count ? `${meta.feature_count}D` : '';
-                const mkt = String(meta.market || '');
-                return (
-                  <option key={m.model_id} value={m.model_id}>
-                    {name}{fw ? ` (${fw}` : ''}{fc ? ` ${fc}` : ''}{mkt ? ` ${mkt}` : ''}{fw ? ')' : ''}
-                    {m.is_default ? ' ★' : ''}
-                  </option>
-                );
-              })}
-            </select>
+              <div className="flex items-center gap-2 text-lg font-bold text-slate-800 tracking-tight">
+                <span className="w-8 h-8 rounded-xl bg-indigo-500/10 flex items-center justify-center"><Cpu className="w-4 h-4 text-indigo-600" /></span>
+                Signal Model
+              </div>
+              <ChevronDown className={`w-5 h-5 text-gray-400 transition-transform ${signalModelOpen ? '' : '-rotate-90'}`} />
+            </button>
+            {signalModelOpen && (
+              <div className="space-y-3 px-5 pb-5">
+                <p className="text-xs text-gray-500 -mt-1">
+                  选择训练好的 ML 模型，其预测分数将作为策略信号（signal=&lt;PRED&gt;）
+                </p>
+                <select
+                  value={selectedModelId}
+                  onChange={(e) => setSelectedModelId(e.target.value)}
+                  disabled={modelsLoading}
+                  className="w-full px-3 py-2.5 bg-gray-50 border border-gray-200 rounded-xl text-sm focus:outline-none focus:border-blue-500"
+                >
+                  {modelsLoading && <option value="">加载中...</option>}
+                  {!modelsLoading && filteredModels.length === 0 && <option value="">暂无可用模型</option>}
+                  {filteredModels.map((m) => {
+                    const meta = (m.metadata_json || {}) as Record<string, any>;
+                    const name = String(meta.display_name || m.model_id);
+                    const fw = String(meta.framework || '');
+                    const fc = meta.feature_count ? `${meta.feature_count}D` : '';
+                    const mkt = String(meta.market || '');
+                    return (
+                      <option key={m.model_id} value={m.model_id}>
+                        {name}{fw ? ` (${fw}` : ''}{fc ? ` ${fc}` : ''}{mkt ? ` ${mkt}` : ''}{fw ? ')' : ''}
+                        {m.is_default ? ' ★' : ''}
+                      </option>
+                    );
+                  })}
+                </select>
 
             {/* 模型详情卡片 */}
             {selectedModelId && (() => {
@@ -728,6 +736,8 @@ export const QlibQuickBacktest: React.FC = () => {
                 </div>
               );
             })()}
+              </div>
+            )}
           </motion.div>
 
           <motion.div
