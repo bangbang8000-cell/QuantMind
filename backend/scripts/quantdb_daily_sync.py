@@ -982,8 +982,7 @@ def run_daily_sync(
         # 上游历史 L1 分区只有因子，不含 OHLCV。每次同步后修复最近窗口，
         # 防止增量文件重新覆盖后让训练标签再次为空；历史全量由专用脚本执行。
         includes_l1 = datasets is None or "l1_factors" in datasets
-        includes_daily = datasets is None or "daily_backward" in datasets
-        if includes_l1 and includes_daily and not dry_run:
+        if includes_l1 and not dry_run:
             try:
                 from backend.scripts.backfill_l1_ohlcv import backfill_l1_ohlcv
 
