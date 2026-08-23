@@ -29,6 +29,7 @@ FACTOR_SOURCE_DIRS: dict[FactorSource, str] = {
     "l2_factors": "6_ml_datasets/l2_factors",
     "l1_l2_factors": "6_ml_datasets/l1_l2_factors",
 }
+DAILY_BACKWARD_DIR = "1_kline_data/daily_backward"
 DEFAULT_FACTOR_SOURCE: FactorSource = "l1_l2_factors"
 REQUIRED_COLUMNS = (
     "symbol",
@@ -112,6 +113,14 @@ class QuantDBFactorReader:
         parquet_glob = str(root / "**" / "*.parquet").replace("'", "''")
         return f"read_parquet('{parquet_glob}', hive_partitioning=true, union_by_name=true)"
 
+    def _daily_backward_relation(self) -> str | None:
+        """返回后复权日线关系；数据未部署时保持因子表原有行为。"""
+        root = self.data_dir / DAILY_BACKWARD_DIR
+        if not root.is_dir() or not any(root.rglob("*.parquet")):
+            return None
+        parquet_glob = str(root / "**" / "*.parquet").replace("'", "''")
+        return f"read_parquet('{parquet_glob}', hive_partitioning=true)"
+
     def describe(self, source: str) -> FactorSourceStatus:
         source = self.validate_source(source)
         files = self._files(source)
@@ -190,6 +199,16 @@ class QuantDBFactorReader:
             return "strptime(CAST(\"dt\" AS VARCHAR), '%Y%m%d')::DATE"
         raise QuantDBFactorError("Factor source has neither date nor dt")
 
+    @staticmethod
+    def _qualified_date_expression(columns: Iterable[str], alias: str) -> str:
+        """与 _date_expression 相同，但返回带表别名的安全 SQL 表达式。"""
+        cols = set(columns)
+        if "date" in cols:
+            return f'CAST({alias}."date" AS DATE)'
+        if "dt" in cols:
+            return f"strptime(CAST({alias}.\"dt\" AS VARCHAR), '%Y%m%d')::DATE"
+        raise QuantDBFactorError("Factor source has neither date nor dt")
+
     def assert_ready(
         self,
         source: str,
@@ -255,16 +274,28 @@ class QuantDBFactorReader:
                 f"{source} is missing mapped fields: {', '.join(missing[:10])}"
             )
 
+        factor_relation = self._relation(source)
+        factor_date = self._qualified_date_expression(status.columns, "f")
         selected = [
-            '"symbol"',
-            f"{self._date_expression(status.columns)} AS trade_date",
+            'f."symbol"',
+            f"{factor_date} AS trade_date",
         ]
+        daily_relation = self._daily_backward_relation()
         if include_ohlcv:
-            selected.extend(_quote(column) for column in REQUIRED_COLUMNS[2:])
+            for column in REQUIRED_COLUMNS[2:]:
+                factor_column = f'f.{_quote(column)}'
+                if daily_relation:
+                    # 历史 l1 分区有因子但 OHLCV 均为 NULL；必须用后复权日线
+                    # 补齐，才能构造无泄漏的未来收益标签。新分区的原值优先保留。
+                    selected.append(
+                        f"COALESCE({factor_column}, k.{_quote(column)}) AS {_quote(column)}"
+                    )
+                else:
+                    selected.append(f"{factor_column} AS {_quote(column)}")
         selected.extend(
-            f"{_quote(source_column)} AS {_quote(feature)}"
+            f"f.{_quote(source_column)} AS {_quote(feature)}"
             if source_column != feature
-            else _quote(feature)
+            else f"f.{_quote(feature)}"
             for feature, source_column in source_columns.items()
         )
         start_s, end_s = str(start)[:10], str(end)[:10]
@@ -272,10 +303,18 @@ class QuantDBFactorReader:
         duckdb = self._duckdb()
         con = duckdb.connect(config={"memory_limit": "8GB", "threads": "4"})
         try:
-            relation = self._relation(source)
-            date_expr = self._date_expression(status.columns)
+            date_expr = factor_date
+            from_clause = f"{factor_relation} AS f"
+            if daily_relation:
+                # factors.date 为实际交易日，daily_backward.dt 为 hive 分区整数。
+                # 用日期格式化连接可同时兼容 int/string 两种 dt 物理类型。
+                from_clause += (
+                    f" LEFT JOIN {daily_relation} AS k"
+                    " ON k.symbol = f.symbol"
+                    f" AND CAST(k.dt AS VARCHAR) = strftime({date_expr}, '%Y%m%d')"
+                )
             sql = (
-                f"SELECT {', '.join(selected)} FROM {relation} "
+                f"SELECT {', '.join(selected)} FROM {from_clause} "
                 f"WHERE {date_expr} BETWEEN CAST(? AS DATE) AND CAST(? AS DATE)"
             )
             frame = con.execute(sql, [start_s, end_s]).fetchdf()
