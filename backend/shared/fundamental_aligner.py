@@ -5,6 +5,8 @@ from typing import Any
 
 import pandas as pd
 
+from backend.shared.stock_utils import StockCodeUtil
+
 logger = logging.getLogger(__name__)
 
 
@@ -12,10 +14,13 @@ class FundamentalAligner:
     """
     统一基本面对齐器 (Unified Fundamental Aligner)
 
-    从统一的 Parquet 文件读取预计算基本面特征，确保回测与实盘执行口径一致。
+    优先从 QuantDB ``features_daily`` 按交易日读取特征，确保训练、回测和
+    实盘筛选使用同一份宽表。旧的 ``fundamental_aligned.parquet`` 仅在新表缺少
+    对应交易日时作为兼容回退。
     """
 
     DEFAULT_PATH = "db/custom/fundamental_aligned.parquet"
+    DEFAULT_FEATURES_DAILY_PATH = "data/quantdb/6_ml_datasets/features_daily"
 
     def __init__(self, parquet_path: str | None = None):
         self.parquet_path = parquet_path or os.getenv(
@@ -28,6 +33,18 @@ class FundamentalAligner:
             self.full_path = Path(self.parquet_path)
         else:
             self.full_path = self._project_root / self.parquet_path
+
+        configured_features_path = os.getenv("FEATURES_DAILY_PATH", "").strip()
+        feature_candidates = [
+            Path(configured_features_path) if configured_features_path else None,
+            Path("/data/6_ml_datasets/features_daily"),
+            self._project_root / self.DEFAULT_FEATURES_DAILY_PATH,
+        ]
+        self.features_daily_path = next(
+            (path for path in feature_candidates if path is not None and path.exists()),
+            self._project_root / self.DEFAULT_FEATURES_DAILY_PATH,
+        )
+        self._feature_snapshot_cache: dict[pd.Timestamp, pd.DataFrame] = {}
 
     def _find_project_root(self) -> Path:
         curr = Path(__file__).resolve().parent
@@ -73,23 +90,85 @@ class FundamentalAligner:
             self._data = pd.DataFrame()
         return self._data
 
+    def _load_features_daily_snapshot(self, current_date: Any) -> pd.DataFrame:
+        """读取一个交易日的 features_daily 分区，并转换为 Qlib 的前缀代码。"""
+        dt = pd.to_datetime(current_date).normalize()
+        cached = self._feature_snapshot_cache.get(dt)
+        if cached is not None:
+            return cached
+
+        day_dir = self.features_daily_path / f"dt={dt.strftime('%Y%m%d')}"
+        files = sorted(day_dir.glob("*.parquet")) if day_dir.is_dir() else []
+        if not files:
+            return pd.DataFrame()
+
+        try:
+            snapshot = pd.read_parquet(files)
+        except Exception as exc:
+            logger.warning(
+                "FundamentalAligner: 读取 features_daily 失败 (%s): %s",
+                day_dir,
+                exc,
+            )
+            return pd.DataFrame()
+
+        if snapshot.empty or "symbol" not in snapshot.columns:
+            return pd.DataFrame()
+
+        snapshot = snapshot.copy()
+        snapshot["symbol"] = snapshot["symbol"].map(
+            lambda value: StockCodeUtil.to_prefix(str(value or ""))
+        )
+        snapshot = snapshot[snapshot["symbol"] != ""]
+        snapshot = snapshot.drop_duplicates(subset="symbol", keep="last").set_index("symbol")
+
+        # 只缓存有限个交易日，长期回测不会无限占用 worker 内存。
+        self._feature_snapshot_cache[dt] = snapshot
+        if len(self._feature_snapshot_cache) > 8:
+            oldest = min(self._feature_snapshot_cache)
+            self._feature_snapshot_cache.pop(oldest, None)
+        logger.debug(
+            "FundamentalAligner: 使用 features_daily %s，字段数=%s",
+            dt.date(),
+            len(snapshot.columns),
+        )
+        return snapshot
+
+    @staticmethod
+    def _normalize_instrument(symbol: Any) -> str:
+        return StockCodeUtil.to_prefix(str(symbol or ""))
+
+    def _snapshot_for_date(self, current_date: Any) -> pd.DataFrame:
+        """新宽表优先；没有分区时回退至历史对齐文件。"""
+        feature_snapshot = self._load_features_daily_snapshot(current_date)
+        if not feature_snapshot.empty:
+            return feature_snapshot
+
+        data = self._load_data()
+        if data.empty:
+            return pd.DataFrame()
+        dt = pd.to_datetime(current_date).normalize()
+        try:
+            snapshot = data.loc[dt].copy()
+        except KeyError:
+            return pd.DataFrame()
+        snapshot.index = pd.Index(
+            [self._normalize_instrument(symbol) for symbol in snapshot.index], name="symbol"
+        )
+        return snapshot
+
     def filter_instruments(
         self,
         current_date: Any,
         instruments: list[str],
         constraints: dict[str, Any] | None = None,
     ) -> list[str]:
-        data = self._load_data()
-        if data.empty:
-            return instruments
-
-        dt = pd.to_datetime(current_date).normalize()
-        try:
-            snapshot = data.loc[dt]
-        except KeyError:
-            return instruments
-
         if not constraints:
+            return instruments
+
+        snapshot = self._snapshot_for_date(current_date)
+        if snapshot.empty:
+            # 数据缺失时保持历史行为：不因数据源暂不可用而清空组合。
             return instruments
 
         mask = pd.Series(True, index=snapshot.index)
@@ -128,7 +207,11 @@ class FundamentalAligner:
                 mask &= col_data == target_val
 
         valid_symbols = set(snapshot[mask].index)
-        return [symbol for symbol in instruments if symbol in valid_symbols]
+        return [
+            symbol
+            for symbol in instruments
+            if self._normalize_instrument(symbol) in valid_symbols
+        ]
 
 
 fundamental_aligner = FundamentalAligner()
