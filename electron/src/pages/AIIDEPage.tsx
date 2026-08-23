@@ -2469,8 +2469,15 @@ const AIIDEPage: React.FC = () => {
             <main className="flex-1 flex flex-col min-w-0 gap-4">
                 {/* Editor Toolbar */}
                 <div className="h-14 flex-shrink-0 bg-white border border-gray-200 rounded-[32px] shadow-sm flex items-center justify-between px-6 relative z-10">
-                    <div className="flex items-center gap-1.5 text-xs text-gray-500">
-                        <span className="font-bold text-gray-800">
+                    <div className="flex flex-col justify-center gap-1 min-w-0">
+                        <span
+                            className="font-bold text-gray-800 text-xs leading-none truncate max-w-[420px]"
+                            title={(() => {
+                                return activeTab === 'local'
+                                    ? (selectedFile?.name || '未选择文件')
+                                    : (selectedRemote?.name || '未选择策略');
+                            })()}
+                        >
                             {(() => {
                                 const rawName = activeTab === 'local'
                                     ? (selectedFile?.name || '未选择文件')
@@ -2480,11 +2487,13 @@ const AIIDEPage: React.FC = () => {
                         </span>
                         {defaultModelName ? (
                             <span
-                                className="ml-2 inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-blue-50 text-blue-600 border border-blue-100 font-medium"
+                                className="inline-flex w-fit max-w-full items-center gap-1 px-2 py-0.5 rounded-full bg-blue-50 text-blue-600 border border-blue-100 font-medium"
                                 title="回测默认使用的模型"
                             >
-                                <BrainCircuit className="h-3 w-3" />
-                                默认模型: {defaultModelName.length > 26 ? defaultModelName.substring(0, 26) + '...' : defaultModelName}
+                                <BrainCircuit className="h-3 w-3 shrink-0" />
+                                <span className="truncate max-w-[320px] leading-none">
+                                    默认模型: {defaultModelName.length > 26 ? defaultModelName.substring(0, 26) + '...' : defaultModelName}
+                                </span>
                             </span>
                         ) : null}
                     </div>
