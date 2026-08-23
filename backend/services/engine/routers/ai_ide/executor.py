@@ -549,7 +549,11 @@ import sys
 import traceback
 
 STRATEGY_PATH = "/app/strategy.py"
-QLIB_DATA_PATH = os.getenv("AI_IDE_BACKTEST_PROVIDER_URI", "/app/db/qlib_data")
+try:
+    from backend.shared.qlib_paths import resolve_qlib_provider_uri as _resolve_qlib
+    QLIB_DATA_PATH = os.getenv("AI_IDE_BACKTEST_PROVIDER_URI", "") or _resolve_qlib("CN")
+except Exception:  # noqa: BLE001
+    QLIB_DATA_PATH = os.getenv("AI_IDE_BACKTEST_PROVIDER_URI", "/app/db/qlib_data")
 
 
 def _is_docstring_expr(node):

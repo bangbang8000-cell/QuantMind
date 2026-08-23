@@ -506,7 +506,11 @@ async def precheck_inference(
         }
     )
 
-    qlib_data_dir = Path(os.path.join(os.getcwd(), "db", "qlib_data"))
+    try:
+        from backend.shared.qlib_paths import resolve_qlib_provider_uri
+        qlib_data_dir = Path(resolve_qlib_provider_uri("CN"))
+    except Exception:  # noqa: BLE001
+        qlib_data_dir = Path(os.path.join(os.getcwd(), "db", "qlib_data"))
     qlib_data_exists = qlib_data_dir.exists() and qlib_data_dir.is_dir()
     checks.append(
         {
