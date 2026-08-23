@@ -92,7 +92,7 @@ const QuantBotPage: React.FC = () => {
   }, [iframeKey, clearTimer]);
 
   return (
-    <div className="w-full h-full flex flex-col overflow-hidden bg-[#1a1a1a]">
+    <div className="w-full h-full flex flex-col overflow-hidden bg-[#1a1a1a] pt-[30px]">
       {/* 顶部工具栏 — 极简，最大保留内容区域 */}
       <div className="h-[40px] flex-shrink-0 bg-[#1e1e1e] border-b border-[#333] flex items-center justify-between px-4">
         <div className="flex items-center gap-2">

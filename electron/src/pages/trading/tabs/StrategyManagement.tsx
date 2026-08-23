@@ -700,19 +700,19 @@ const StrategyManagement: React.FC<StrategyManagementProps> = ({
 
     return (
         <div className="h-full overflow-y-auto custom-scrollbar">
-            <div className={`p-6 flex flex-col gap-6 ${selectedStrategy ? 'pb-32' : 'pb-16'}`}>
+            <div className={`p-4 flex flex-col gap-4 ${selectedStrategy ? 'pb-28' : 'pb-12'}`}>
                 {/* Header Control Bar */}
-                <div className="bg-white rounded-2xl shadow-sm border border-slate-100 p-8 flex flex-col md:flex-row items-center justify-between gap-6">
+                <div className="bg-white rounded-2xl shadow-xs border border-slate-200/80 p-4 px-6 flex flex-col md:flex-row items-center justify-between gap-4">
                     <div className="flex-1">
-                        <div className="flex items-center gap-3 mb-2">
+                        <div className="flex items-center gap-3 mb-1.5">
                             <div className={`w-2.5 h-2.5 rounded-full ${isRunning ? 'bg-green-500 animate-pulse' : 'bg-slate-300'}`}></div>
-                            <h2 className="text-xl font-bold text-slate-800">
+                            <h2 className="text-lg font-bold text-slate-800">
                                 {isGlobalSim ? '全自动实盘模拟控制台' : '实盘模拟策略控制台'}
                             </h2>
                         </div>
-                        <div className="flex items-center gap-4 text-slate-500 text-sm">
+                        <div className="flex items-center gap-4 text-slate-500 text-xs">
                             <span className="flex items-center gap-1.5">
-                                <Activity size={14} className={isGlobalSim ? 'text-indigo-500' : 'text-rose-500'} />
+                                <Activity size={13} className={isGlobalSim ? 'text-indigo-500' : 'text-rose-500'} />
                                 模式: <span className={`font-bold ${isGlobalSim ? 'text-indigo-600' : 'text-rose-600'}`}>
                                     {isGlobalSim ? '实盘模拟运行' : '实盘模拟交易'}
                                 </span>
@@ -730,41 +730,41 @@ const StrategyManagement: React.FC<StrategyManagementProps> = ({
                         </div>
                     </div>
 
-                    <div className="flex flex-wrap items-center gap-4 justify-end">
+                    <div className="flex flex-wrap items-center gap-3 justify-end">
                         {!isRunning ? (
-                            <div className="flex flex-col items-end gap-2">
-                                <div className="flex items-center gap-3">
-                                    <div className="w-64">
+                            <div className="flex flex-col items-end gap-1.5">
+                                <div className="flex items-center gap-2.5">
+                                    <div className="w-60">
                                         <Select
                                             value={selectedStrategyId || undefined}
                                             onChange={(value) => setSelectedStrategyId(String(value))}
                                             options={strategyOptions}
                                             placeholder="选择已验证策略..."
                                             className="w-full custom-antd-select-v2"
-                                            size="large"
+                                            size="middle"
                                             showSearch
                                         />
                                     </div>
-                                    <button onClick={loadStrategies} className="p-2.5 text-slate-400 hover:text-blue-600 border border-slate-200 rounded-xl">
-                                        <RefreshCw size={18} className={loading ? 'animate-spin' : ''} />
+                                    <button onClick={loadStrategies} className="p-2 text-slate-400 hover:text-blue-600 border border-slate-200 rounded-xl">
+                                        <RefreshCw size={16} className={loading ? 'animate-spin' : ''} />
                                     </button>
                                     {!isGlobalSim && (
-                                        <div className="flex items-center gap-2 px-3 py-2 bg-slate-50 rounded-xl border border-slate-100">
+                                        <div className="flex items-center gap-2 px-2.5 py-1.5 bg-slate-50 rounded-xl border border-slate-100">
                                             <span className="text-[10px] font-bold text-slate-600 tracking-wide whitespace-nowrap">影子模式</span>
                                             <button
                                                 type="button"
                                                 role="switch"
                                                 aria-checked={isShadowMode}
                                                 onClick={() => setIsShadowMode(!isShadowMode)}
-                                                className={`relative inline-flex h-6 w-10 shrink-0 items-center rounded-full border transition-all focus:outline-none focus:ring-2 focus:ring-indigo-200 focus:ring-offset-0 ${
+                                                className={`relative inline-flex h-5 w-9 shrink-0 items-center rounded-full border transition-all focus:outline-none focus:ring-2 focus:ring-indigo-200 focus:ring-offset-0 ${
                                                     isShadowMode
                                                         ? 'bg-indigo-500 border-indigo-400'
                                                         : 'bg-slate-200 border-slate-300'
                                                 }`}
                                             >
                                                 <span
-                                                    className={`inline-block h-4 w-4 transform rounded-full bg-white shadow-sm transition-transform ${
-                                                        isShadowMode ? 'translate-x-5' : 'translate-x-1'
+                                                    className={`inline-block h-3.5 w-3.5 transform rounded-full bg-white shadow-sm transition-transform ${
+                                                        isShadowMode ? 'translate-x-4' : 'translate-x-0.5'
                                                     }`}
                                                 />
                                             </button>
@@ -773,58 +773,58 @@ const StrategyManagement: React.FC<StrategyManagementProps> = ({
                                     <button
                                         onClick={handleDeploy}
                                         disabled={isDeployDisabled}
-                                        className={`px-8 py-2.5 rounded-xl text-sm font-bold text-white transition-all ${isDeployDisabled ? 'bg-slate-300' : (isShadowMode || isGlobalSim ? 'bg-indigo-500 hover:bg-indigo-600' : 'bg-blue-600 hover:bg-blue-700')}`}
+                                        className={`px-6 py-2 rounded-xl text-xs font-bold text-white transition-all ${isDeployDisabled ? 'bg-slate-300' : (isShadowMode || isGlobalSim ? 'bg-indigo-500 hover:bg-indigo-600' : 'bg-blue-600 hover:bg-blue-700')}`}
                                     >
-                                        <Play size={18} className="inline mr-2" />
+                                        <Play size={16} className="inline mr-1.5" />
                                         {selectedStrategy?.is_verified ? (isGlobalSim ? '开启实时模拟' : (isShadowMode ? '开启影子运行' : '启动模拟交易')) : '未经验证'}
                                     </button>
                                 </div>
                                 {error && <div className="text-[11px] text-rose-500 flex items-center gap-1"><AlertCircle size={10} /> {error}</div>}
                             </div>
                         ) : (
-                            <button onClick={onStop} className="px-10 py-3 bg-rose-500 hover:bg-rose-600 text-white rounded-xl font-bold shadow-lg shadow-rose-100 flex items-center gap-2">
-                                <Square size={20} fill="currentColor" /> 停止运行
+                            <button onClick={onStop} className="px-8 py-2.5 bg-rose-500 hover:bg-rose-600 text-white rounded-xl font-bold shadow-lg shadow-rose-100 flex items-center gap-2 text-xs">
+                                <Square size={16} fill="currentColor" /> 停止运行
                             </button>
                         )}
                     </div>
                 </div>
 
                 {/* 6-Module Grid */}
-                <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+                <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
                     {/* Module 1: Execution Params */}
-                    <div className="bg-white rounded-2xl p-6 border border-slate-100 shadow-sm flex flex-col">
-                        <div className="flex items-center gap-3 mb-6 h-9">
-                            <div className="p-2 bg-indigo-50 rounded-lg">
-                                <Settings2 className="text-indigo-600" size={18} />
+                    <div className="bg-white rounded-2xl p-4 border border-slate-200/80 shadow-xs flex flex-col">
+                        <div className="flex items-center gap-2.5 mb-3 h-8">
+                            <div className="p-1.5 bg-indigo-50 rounded-lg">
+                                <Settings2 className="text-indigo-600" size={16} />
                             </div>
-                            <h3 className="font-bold text-slate-800">策略执行参数</h3>
+                            <h3 className="font-bold text-slate-800 text-sm">策略执行参数</h3>
                         </div>
-                        <div className="flex-1 space-y-4">
-                            <div className="grid grid-cols-2 gap-3 text-sm">
-                                <div className="rounded-xl bg-slate-50/70 p-3 border border-slate-100/50">
-                                    <div className="text-[10px] font-black text-slate-400 uppercase mb-1">当前调仓周期</div>
+                        <div className="flex-1 space-y-3">
+                            <div className="grid grid-cols-2 gap-2.5 text-xs">
+                                <div className="rounded-xl bg-slate-50/70 p-2.5 border border-slate-100/50">
+                                    <div className="text-[10px] font-black text-slate-400 uppercase mb-0.5">当前调仓周期</div>
                                     <div className="font-bold text-slate-700 text-xs truncate" title={scheduleText}>{scheduleText}</div>
                                 </div>
-                                <div className="rounded-xl bg-slate-50/70 p-3 border border-slate-100/50">
-                                    <div className="text-[10px] font-black text-slate-400 uppercase mb-1">当前买卖时点</div>
+                                <div className="rounded-xl bg-slate-50/70 p-2.5 border border-slate-100/50">
+                                    <div className="text-[10px] font-black text-slate-400 uppercase mb-0.5">当前买卖时点</div>
                                     <div className="font-bold text-slate-700 text-xs truncate">
                                         {activeLiveTradeConfig?.sell_time && activeLiveTradeConfig?.buy_time
                                             ? `${activeLiveTradeConfig.sell_time} / ${activeLiveTradeConfig.buy_time}`
                                             : '启动后显示'}
                                     </div>
                                 </div>
-                                <div className="rounded-xl bg-slate-50/70 p-3 border border-slate-100/50">
-                                    <div className="text-[10px] font-black text-slate-400 uppercase mb-1">当前委托方式</div>
+                                <div className="rounded-xl bg-slate-50/70 p-2.5 border border-slate-100/50">
+                                    <div className="text-[10px] font-black text-slate-400 uppercase mb-0.5">当前委托方式</div>
                                     <div className="font-bold text-slate-700 text-xs truncate">{orderTypeText}</div>
                                 </div>
-                                <div className="rounded-xl bg-slate-50/70 p-3 border border-slate-100/50">
-                                    <div className="text-[10px] font-black text-slate-400 uppercase mb-1">单轮最大委托</div>
+                                <div className="rounded-xl bg-slate-50/70 p-2.5 border border-slate-100/50">
+                                    <div className="text-[10px] font-black text-slate-400 uppercase mb-0.5">单轮最大委托</div>
                                     <div className="font-bold text-slate-700 text-xs truncate">{maxOrdersText}</div>
                                 </div>
                             </div>
                             {activeExecutionConfig && (
-                                <div className="rounded-xl border border-indigo-100 bg-indigo-50/30 p-3">
-                                    <div className="text-[10px] font-black text-indigo-400 uppercase mb-1 tracking-wider">生效风控参数预览</div>
+                                <div className="rounded-xl border border-indigo-100 bg-indigo-50/30 p-2.5">
+                                    <div className="text-[10px] font-black text-indigo-400 uppercase mb-0.5 tracking-wider">生效风控参数预览</div>
                                     <div className="flex items-center gap-3 text-[11px] font-bold text-indigo-700">
                                         <span>Max Buy Drop: {typeof activeExecutionConfig.max_buy_drop === 'number' ? `${(activeExecutionConfig.max_buy_drop * 100).toFixed(2)}%` : 'N/A'}</span>
                                         <span className="w-1 h-1 rounded-full bg-indigo-200"></span>
@@ -836,22 +836,22 @@ const StrategyManagement: React.FC<StrategyManagementProps> = ({
                     </div>
 
                     {/* Module 2: Production Batch Summary */}
-                    <div className="bg-white rounded-2xl p-6 border border-slate-100 shadow-sm flex flex-col">
-                        <div className="flex items-center justify-between gap-3 mb-5 h-9">
-                            <div className="flex items-center gap-3">
-                                <div className="p-2 bg-slate-50 rounded-lg">
-                                    <Cpu className="text-slate-600" size={18} />
+                    <div className="bg-white rounded-2xl p-4 border border-slate-200/80 shadow-xs flex flex-col">
+                        <div className="flex items-center justify-between gap-2.5 mb-3 h-8">
+                            <div className="flex items-center gap-2.5">
+                                <div className="p-1.5 bg-slate-50 rounded-lg">
+                                    <Cpu className="text-slate-600" size={16} />
                                 </div>
                                 <div className="flex flex-col">
-                                    <h3 className="font-bold text-slate-800">生产批次摘要</h3>
-                                    <span className="text-[10px] font-medium text-slate-400">固定展示关键字段，避免重复操作</span>
+                                    <h3 className="font-bold text-slate-800 text-sm">生产批次摘要</h3>
+                                    <span className="text-[9px] font-medium text-slate-400">固定展示关键字段，避免重复操作</span>
                                 </div>
                             </div>
-                            <div className="flex items-center gap-2">
+                            <div className="flex items-center gap-1.5">
                                 <button
                                     type="button"
                                     onClick={() => setBatchRuleExpanded(!batchRuleExpanded)}
-                                    className={`w-5 h-5 inline-flex items-center justify-center rounded-full border text-[11px] font-black transition-colors ${
+                                    className={`w-4 h-4 inline-flex items-center justify-center rounded-full border text-[10px] font-black transition-colors ${
                                         batchRuleExpanded
                                             ? 'border-emerald-200 text-emerald-700 bg-emerald-50'
                                             : 'border-slate-200 text-slate-400 hover:text-emerald-700 hover:border-emerald-200 hover:bg-emerald-50'
@@ -861,12 +861,12 @@ const StrategyManagement: React.FC<StrategyManagementProps> = ({
                                     ?
                                 </button>
                                 {latestInferenceRunIsNew && (
-                                    <span className="text-[10px] font-black px-2 py-0.5 rounded-full border bg-amber-50 text-amber-700 border-amber-200">
+                                    <span className="text-[10px] font-black px-1.5 py-0.5 rounded-full border bg-amber-50 text-amber-700 border-amber-200">
                                         NEW
                                     </span>
                                 )}
                                 {batchSummaryHasData && (
-                                    <span className={`text-[10px] font-black px-2 py-0.5 rounded-full border ${latestInferenceRun.matched_model === false ? 'bg-amber-50 text-amber-600 border-amber-200' : 'bg-emerald-50 text-emerald-600 border-emerald-200'}`}>
+                                    <span className={`text-[10px] font-black px-1.5 py-0.5 rounded-full border ${latestInferenceRun.matched_model === false ? 'bg-amber-50 text-amber-600 border-amber-200' : 'bg-emerald-50 text-emerald-600 border-emerald-200'}`}>
                                         {latestInferenceRun.matched_model === false ? '模型不匹配' : '批次已匹配'}
                                     </span>
                                 )}
@@ -874,53 +874,53 @@ const StrategyManagement: React.FC<StrategyManagementProps> = ({
                         </div>
                         <div className="flex-1">
                             {batchRuleExpanded && (
-                                <div className="mb-3 rounded-lg border border-emerald-100 bg-emerald-50/60 px-3 py-2">
-                                    <div className="text-[11px] font-semibold text-emerald-800 leading-relaxed">
+                                <div className="mb-2.5 rounded-lg border border-emerald-100 bg-emerald-50/60 px-2.5 py-1.5">
+                                    <div className="text-[10px] font-semibold text-emerald-800 leading-relaxed">
                                         自动托管仅消费默认模型生产批次，不消费模型管理页生成的调试批次。
                                     </div>
                                 </div>
                             )}
                             {batchSummaryHasData ? (
-                                <div className="space-y-3">
-                                    <div className="rounded-xl bg-slate-50/70 p-3 border border-slate-100/50">
-                                        <div className="grid grid-cols-2 gap-3">
+                                <div className="space-y-2.5">
+                                    <div className="rounded-xl bg-slate-50/70 p-2.5 border border-slate-100/50">
+                                        <div className="grid grid-cols-2 gap-2">
                                             <div>
-                                                <div className="text-[10px] font-black text-slate-400 uppercase mb-1">RUN_ID</div>
-                                                <div className="font-mono text-[11px] font-bold text-slate-700 truncate" title={batchSummaryRunId}>
+                                                <div className="text-[10px] font-black text-slate-400 uppercase mb-0.5">RUN_ID</div>
+                                                <div className="font-mono text-[10px] font-bold text-slate-700 truncate" title={batchSummaryRunId}>
                                                     {shortenTextId(batchSummaryRunId)}
                                                 </div>
                                             </div>
                                             <div>
-                                                <div className="text-[10px] font-black text-slate-400 uppercase mb-1">交易日</div>
+                                                <div className="text-[10px] font-black text-slate-400 uppercase mb-0.5">交易日</div>
                                                 <div className="font-bold text-slate-700 text-xs truncate">
                                                     {latestInferenceRun.prediction_trade_date || '-'}
                                                 </div>
                                             </div>
                                             <div>
-                                                <div className="text-[10px] font-black text-slate-400 uppercase mb-1">更新时间</div>
+                                                <div className="text-[10px] font-black text-slate-400 uppercase mb-0.5">更新时间</div>
                                                 <div className="font-bold text-slate-700 text-xs truncate">
                                                     {formatDateTime(latestInferenceRun.updated_at)}
                                                 </div>
                                             </div>
                                             <div>
-                                                <div className="text-[10px] font-black text-slate-400 uppercase mb-1">批次状态</div>
-                                                <span className={`inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-black border ${inferenceStatusTone(latestInferenceRun.status)}`}>
+                                                <div className="text-[10px] font-black text-slate-400 uppercase mb-0.5">批次状态</div>
+                                                <span className={`inline-flex items-center px-1.5 py-0.5 rounded-full text-[10px] font-black border ${inferenceStatusTone(latestInferenceRun.status)}`}>
                                                     {formatInferenceStatus(latestInferenceRun.status)}
                                                 </span>
                                             </div>
                                         </div>
                                     </div>
-                                    <div className="rounded-xl border border-slate-100 bg-white p-3">
+                                    <div className="rounded-xl border border-slate-100 bg-white p-2.5">
                                         <div className="grid grid-cols-2 gap-2">
-                                            <div className="rounded-lg bg-slate-50 p-2.5 border border-slate-100">
-                                                <div className="text-[10px] font-black text-slate-400 uppercase mb-1">模型 ID</div>
-                                                <div className="text-[11px] font-bold text-slate-700 truncate" title={latestInferenceRun.model_id || '-'}>
+                                            <div className="rounded-lg bg-slate-50 p-2 border border-slate-100">
+                                                <div className="text-[10px] font-black text-slate-400 uppercase mb-0.5">模型 ID</div>
+                                                <div className="text-[10px] font-bold text-slate-700 truncate" title={latestInferenceRun.model_id || '-'}>
                                                     {latestInferenceRun.model_id || '-'}
                                                 </div>
                                             </div>
-                                            <div className="rounded-lg bg-slate-50 p-2.5 border border-slate-100">
-                                                <div className="text-[10px] font-black text-slate-400 uppercase mb-1">目标日期</div>
-                                                <div className="text-[11px] font-bold text-slate-700 truncate">
+                                            <div className="rounded-lg bg-slate-50 p-2 border border-slate-100">
+                                                <div className="text-[10px] font-black text-slate-400 uppercase mb-0.5">目标日期</div>
+                                                <div className="text-[10px] font-bold text-slate-700 truncate">
                                                     {latestInferenceRun.target_date || '-'}
                                                 </div>
                                             </div>
@@ -928,10 +928,10 @@ const StrategyManagement: React.FC<StrategyManagementProps> = ({
                                     </div>
                                 </div>
                             ) : (
-                                <div className="h-full flex flex-col items-center justify-center text-slate-400 text-xs gap-2 border border-dashed border-slate-100 rounded-xl min-h-[120px]">
-                                    <Cpu size={20} className="opacity-20" />
-                                    <span>{latestInferenceRunLoading ? '正在检索生产批次...' : '暂无可用生产批次'}</span>
-                                    <span className="text-[11px] text-slate-300 text-center px-2">
+                                <div className="h-full flex flex-col items-center justify-center text-slate-400 text-xs gap-1.5 border border-dashed border-slate-100 rounded-xl min-h-[100px] p-2">
+                                    <Cpu size={18} className="opacity-20" />
+                                    <span className="text-xs">{latestInferenceRunLoading ? '正在检索生产批次...' : '暂无可用生产批次'}</span>
+                                    <span className="text-[10px] text-slate-300 text-center px-2">
                                         {latestInferenceRunLoading
                                             ? '请等待默认模型批次查询完成'
                                             : (signalSourceMessage || '当前默认模型尚无推理结果可被自动托管消费')}
@@ -942,19 +942,19 @@ const StrategyManagement: React.FC<StrategyManagementProps> = ({
                     </div>
 
                     {/* Module 3: Environment */}
-                    <div className="bg-white rounded-2xl p-6 border border-slate-100 shadow-sm flex flex-col">
-                        <div className="flex items-center gap-3 mb-6 h-9">
-                            <div className="p-2 bg-blue-50 rounded-lg">
-                                <Activity className="text-blue-600" size={18} />
+                    <div className="bg-white rounded-2xl p-4 border border-slate-200/80 shadow-xs flex flex-col">
+                        <div className="flex items-center gap-2.5 mb-3 h-8">
+                            <div className="p-1.5 bg-blue-50 rounded-lg">
+                                <Activity className="text-blue-600" size={16} />
                             </div>
-                            <h3 className="font-bold text-slate-800">环境监控</h3>
+                            <h3 className="font-bold text-slate-800 text-sm">环境监控</h3>
                         </div>
                         <div className="flex-1 flex items-center">
-                            <div className="w-full grid grid-cols-2 gap-3">
+                            <div className="w-full grid grid-cols-2 gap-2.5">
                                 {envChecks.map((item) => (
-                                    <div key={item.label} className="col-span-2 rounded-xl bg-slate-50/70 p-3 border border-slate-100/50 flex items-center justify-between gap-3 min-h-[62px]">
+                                    <div key={item.label} className="col-span-2 rounded-xl bg-slate-50/70 p-2.5 border border-slate-100/50 flex items-center justify-between gap-2.5 min-h-[50px]">
                                         <div className="min-w-0">
-                                            <div className="text-[10px] font-black text-slate-400 uppercase mb-1.5">{item.label}</div>
+                                            <div className="text-[10px] font-black text-slate-400 uppercase mb-0.5">{item.label}</div>
                                             <div className={`text-xs font-bold font-mono truncate ${item.ok === false ? 'text-rose-600' : 'text-slate-700'}`} title={item.value}>
                                                 {item.value || '-'}
                                             </div>
@@ -972,15 +972,15 @@ const StrategyManagement: React.FC<StrategyManagementProps> = ({
                     </div>
 
                     {/* Module 4: Connectivity */}
-                    <div className="bg-white rounded-2xl p-6 border border-slate-100 shadow-sm flex flex-col min-h-[320px]">
-                        <div className="flex items-center justify-between gap-3 mb-6 h-9">
-                            <div className="flex items-center gap-3">
-                                <div className="p-2 bg-purple-50 rounded-lg">
-                                    <RefreshCw className="text-purple-600" size={18} />
+                    <div className="bg-white rounded-2xl p-4 border border-slate-200/80 shadow-xs flex flex-col">
+                        <div className="flex items-center justify-between gap-2.5 mb-3 h-8">
+                            <div className="flex items-center gap-2.5">
+                                <div className="p-1.5 bg-purple-50 rounded-lg">
+                                    <RefreshCw className="text-purple-600" size={16} />
                                 </div>
-                                <h3 className="font-bold text-slate-800">链路质量看板</h3>
+                                <h3 className="font-bold text-slate-800 text-sm">链路质量看板</h3>
                             </div>
-                            <span className={`px-2.5 py-0.5 rounded-full text-[10px] font-black border ${
+                            <span className={`px-2 py-0.5 rounded-full text-[10px] font-black border ${
                                 connectionAttentionCount === 0
                                     ? 'bg-emerald-50 text-emerald-700 border-emerald-200'
                                     : 'bg-amber-50 text-amber-700 border-amber-200'
@@ -988,35 +988,35 @@ const StrategyManagement: React.FC<StrategyManagementProps> = ({
                                 {connectionAttentionCount === 0 ? '链路稳定' : `关注 ${connectionAttentionCount} 项`}
                             </span>
                         </div>
-                        <div className="flex-1 space-y-4">
-                            <div className={`rounded-2xl border p-4 shadow-sm ${
+                        <div className="flex-1 space-y-2.5">
+                            <div className={`rounded-xl border p-3 shadow-xs ${
                                 connectionAttentionCount === 0
                                     ? 'bg-emerald-50/40 border-emerald-100'
                                     : 'bg-amber-50/30 border-amber-100'
                             }`}>
-                                <div className="flex items-center justify-between gap-4">
+                                <div className="flex items-center justify-between gap-3">
                                     <div className="min-w-0">
-                                        <div className="text-[10px] font-black text-slate-400 uppercase tracking-widest mb-1">链路总览</div>
-                                        <div className="text-sm font-bold text-slate-700">
+                                        <div className="text-[10px] font-black text-slate-400 uppercase tracking-widest mb-0.5">链路总览</div>
+                                        <div className="text-xs font-bold text-slate-700">
                                             {connectionAttentionCount === 0
                                                 ? '当前核心链路均处于可用状态'
-                                                : `当前有 ${connectionAttentionCount} 项链路需要优先关注`}
+                                                : `当前有 ${connectionAttentionCount} 项链路需关注`}
                                         </div>
                                     </div>
                                     <div className="text-right shrink-0">
-                                        <div className="text-[10px] font-black text-slate-400 uppercase tracking-widest mb-1">健康数</div>
-                                        <div className="text-2xl font-black leading-none text-slate-900">
+                                        <div className="text-[10px] font-black text-slate-400 uppercase tracking-widest mb-0.5">健康数</div>
+                                        <div className="text-xl font-black leading-none text-slate-900">
                                             {connectionHealthyCount}
-                                            <span className="text-sm font-bold text-slate-400">/{connectionChecks.length}</span>
+                                            <span className="text-xs font-bold text-slate-400">/{connectionChecks.length}</span>
                                         </div>
                                     </div>
                                 </div>
                             </div>
-                            <div className="grid grid-cols-2 gap-3">
+                            <div className="grid grid-cols-2 gap-2">
                                 {connectionChecks.map((item) => (
                                     <div
                                         key={item.label}
-                                        className={`rounded-xl p-3 border shadow-sm ${
+                                        className={`rounded-lg p-2 border shadow-xs ${
                                             item.level === 'red'
                                                 ? 'bg-rose-50/70 border-rose-100'
                                                 : item.level === 'yellow'
@@ -1024,20 +1024,19 @@ const StrategyManagement: React.FC<StrategyManagementProps> = ({
                                                     : 'bg-emerald-50/70 border-emerald-100'
                                         }`}
                                     >
-                                        <div className="flex items-center justify-between gap-2 mb-2">
-                                            <span className="min-w-0 text-[11px] font-black text-slate-400 tracking-[0.12em] leading-none whitespace-nowrap truncate">
+                                        <div className="flex items-center justify-between gap-1.5 mb-1">
+                                            <span className="min-w-0 text-[10px] font-black text-slate-400 tracking-[0.1em] leading-none whitespace-nowrap truncate">
                                                 {item.label}
                                             </span>
                                             <span
-                                                className={`shrink-0 w-3 h-3 rounded-full border ${
+                                                className={`shrink-0 w-2.5 h-2.5 rounded-full border ${
                                                     item.level === 'red'
-                                                        ? 'bg-rose-500 border-rose-300 shadow-[0_0_0_4px_rgba(244,63,94,0.10)]'
+                                                        ? 'bg-rose-500 border-rose-300'
                                                         : item.level === 'yellow'
-                                                            ? 'bg-amber-400 border-amber-300 shadow-[0_0_0_4px_rgba(251,191,36,0.14)]'
-                                                            : 'bg-emerald-500 border-emerald-300 shadow-[0_0_0_4px_rgba(16,185,129,0.10)]'
+                                                            ? 'bg-amber-400 border-amber-300'
+                                                            : 'bg-emerald-500 border-emerald-300'
                                                 }`}
                                                 title={item.level === 'red' ? '红灯' : item.level === 'yellow' ? '黄灯' : '绿灯'}
-                                                aria-label={item.level === 'red' ? '红灯' : item.level === 'yellow' ? '黄灯' : '绿灯'}
                                             />
                                         </div>
                                         <div className={`text-xs font-bold leading-tight ${
@@ -1056,15 +1055,15 @@ const StrategyManagement: React.FC<StrategyManagementProps> = ({
                     </div>
 
                     {/* Module 5: Automation Readiness */}
-                    <div className="bg-white rounded-2xl p-6 border border-slate-100 shadow-sm flex flex-col min-h-[240px]">
-                        <div className="flex items-center justify-between gap-3 mb-5 h-9">
-                            <div className="flex items-center gap-3">
-                                <div className="p-2 bg-emerald-50 rounded-lg">
-                                    <Clock3 className="text-emerald-600" size={18} />
+                    <div className="bg-white rounded-2xl p-4 border border-slate-200/80 shadow-xs flex flex-col">
+                        <div className="flex items-center justify-between gap-2.5 mb-3 h-8">
+                            <div className="flex items-center gap-2.5">
+                                <div className="p-1.5 bg-emerald-50 rounded-lg">
+                                    <Clock3 className="text-emerald-600" size={16} />
                                 </div>
                                 <div className="flex flex-col">
-                                    <h3 className="font-bold text-slate-800">自动托管就绪度</h3>
-                                    <span className="text-[10px] font-medium text-slate-400">先看是否可执行，再看阻塞原因</span>
+                                    <h3 className="font-bold text-slate-800 text-sm">自动托管就绪度</h3>
+                                    <span className="text-[9px] font-medium text-slate-400">先看是否可执行，再看阻塞原因</span>
                                 </div>
                             </div>
                             <span className={`px-2 py-0.5 rounded-full text-[10px] font-black border ${
@@ -1073,21 +1072,21 @@ const StrategyManagement: React.FC<StrategyManagementProps> = ({
                                 {signalSourceStateText}
                             </span>
                         </div>
-                        <div className="flex-1 space-y-4">
-                            <div className={`rounded-2xl border p-4 shadow-sm ${
+                        <div className="flex-1 space-y-2.5">
+                            <div className={`rounded-xl border p-3 shadow-xs ${
                                 signalSource?.available
                                     ? 'bg-emerald-50/35 border-emerald-100'
                                     : 'bg-slate-50/70 border-slate-100/50'
                             }`}>
-                                <div className="space-y-2">
-                                    <div className="flex items-start justify-between gap-3">
+                                <div className="space-y-1.5">
+                                    <div className="flex items-start justify-between gap-2">
                                         <div className="min-w-0">
                                             <div className="text-[10px] font-black text-emerald-500 uppercase tracking-widest">当前结论</div>
-                                            <div className="mt-1 text-base font-black leading-tight text-slate-800">
+                                            <div className="mt-0.5 text-sm font-black leading-tight text-slate-800">
                                                 {signalSourceLabel}
                                             </div>
                                         </div>
-                                        <div className={`shrink-0 text-[10px] font-bold px-2 py-0.5 rounded-full border ${signalSourceBadgeTone}`}>
+                                        <div className={`shrink-0 text-[10px] font-bold px-1.5 py-0.5 rounded-full border ${signalSourceBadgeTone}`}>
                                             {signalSourceStateText}
                                         </div>
                                     </div>
@@ -1095,19 +1094,19 @@ const StrategyManagement: React.FC<StrategyManagementProps> = ({
                                         {renderSignalSourceMessage(signalSourceMessage)}
                                     </div>
                                 </div>
-                                <div className="mt-3 text-[11px] font-semibold text-slate-600">
+                                <div className="mt-2 text-[10px] font-semibold text-slate-600">
                                     下一步：{automationNextAction}
                                 </div>
                             </div>
-                            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                                <div className="rounded-xl bg-slate-50/70 p-3 border border-slate-100/50 shadow-sm">
-                                    <div className="text-[10px] font-black text-slate-400 uppercase tracking-widest mb-1">当前默认模型</div>
+                            <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                                <div className="rounded-lg bg-slate-50/70 p-2 border border-slate-100/50 shadow-xs">
+                                    <div className="text-[10px] font-black text-slate-400 uppercase tracking-widest mb-0.5">当前默认模型</div>
                                     <div className="font-bold text-slate-600 text-xs truncate" title={effectiveModelDisplayName}>
                                         {effectiveModelDisplayName}
                                     </div>
                                 </div>
-                                <div className="rounded-xl bg-slate-50/70 p-3 border border-slate-100/50 shadow-sm">
-                                    <div className="text-[10px] font-black text-slate-400 uppercase tracking-widest mb-1">托管运行状态</div>
+                                <div className="rounded-lg bg-slate-50/70 p-2 border border-slate-100/50 shadow-xs">
+                                    <div className="text-[10px] font-black text-slate-400 uppercase tracking-widest mb-0.5">托管运行状态</div>
                                     <div className="font-bold text-slate-700 text-xs truncate">
                                         {hostedRunStatusLabel}
                                     </div>
@@ -1117,14 +1116,14 @@ const StrategyManagement: React.FC<StrategyManagementProps> = ({
                     </div>
 
                     {/* Module 6: Task Reporting */}
-                    <div className="bg-white rounded-2xl p-6 border border-slate-100 shadow-sm ring-1 ring-blue-500/5 flex flex-col">
-                        <div className="flex items-center justify-between gap-3 mb-6 h-9">
-                            <div className="flex items-center gap-3">
-                                <div className="p-2 bg-amber-50 rounded-lg">
-                                    <FileText className="text-amber-600" size={18} />
+                    <div className="bg-white rounded-2xl p-4 border border-slate-200/80 shadow-xs ring-1 ring-blue-500/5 flex flex-col">
+                        <div className="flex items-center justify-between gap-2.5 mb-3 h-8">
+                            <div className="flex items-center gap-2.5">
+                                <div className="p-1.5 bg-amber-50 rounded-lg">
+                                    <FileText className="text-amber-600" size={16} />
                                 </div>
                                 <div>
-                                    <h3 className="font-bold text-slate-800">最新任务汇报</h3>
+                                    <h3 className="font-bold text-slate-800 text-sm">最新任务汇报</h3>
                                 </div>
                             </div>
                             <button
@@ -1133,34 +1132,34 @@ const StrategyManagement: React.FC<StrategyManagementProps> = ({
                                 className={`p-1.5 rounded-lg border transition-all ${hostedLogsVisible ? 'bg-slate-800 border-slate-700 text-white' : 'bg-white border-slate-200 text-slate-400 hover:text-blue-600'}`}
                                 title={hostedLogsVisible ? '关闭日志流' : '查看实时日志'}
                             >
-                                <TerminalSquare size={16} />
+                                <TerminalSquare size={15} />
                             </button>
                         </div>
 
                         <div className="flex-1">
                             {!latestHostedTask ? (
-                                <div className="h-full flex flex-col items-center justify-center text-slate-400 text-xs gap-3 border border-dashed border-slate-100 rounded-xl bg-slate-50/30 min-h-[200px]">
-                                    <div className="w-10 h-10 rounded-full bg-slate-100/50 flex items-center justify-center">
-                                        <Activity size={20} className="opacity-30" />
+                                <div className="h-full flex flex-col items-center justify-center text-slate-400 text-xs gap-2 border border-dashed border-slate-100 rounded-xl bg-slate-50/30 min-h-[140px] p-3">
+                                    <div className="w-8 h-8 rounded-full bg-slate-100/50 flex items-center justify-center">
+                                        <Activity size={16} className="opacity-30" />
                                     </div>
-                                    <span className="font-bold">今日暂未触发自动化托管任务</span>
+                                    <span className="font-bold text-xs">今日暂未触发自动化托管任务</span>
                                 </div>
                             ) : (
-                                <div className="space-y-4">
-                                    <div className="rounded-2xl border border-slate-200 bg-white text-slate-900 p-4 shadow-sm">
-                                        <div className="flex items-center justify-between gap-4">
+                                <div className="space-y-3">
+                                    <div className="rounded-xl border border-slate-200 bg-white text-slate-900 p-3 shadow-xs">
+                                        <div className="flex items-center justify-between gap-3">
                                             <div className="min-w-0 flex-1">
-                                                <div className="text-[10px] font-black text-slate-400 uppercase mb-1">任务状态</div>
-                                                <span className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-[10px] font-black border ${taskStatusTone(latestHostedTask.status)}`}>
+                                                <div className="text-[10px] font-black text-slate-400 uppercase mb-0.5">任务状态</div>
+                                                <span className={`inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-black border ${taskStatusTone(latestHostedTask.status)}`}>
                                                     {formatTaskStatus(latestHostedTask.status)}
                                                 </span>
                                             </div>
                                             <div className="text-right">
-                                                <div className="text-[10px] font-black text-slate-400 uppercase mb-1">完成度</div>
-                                                <div className="text-2xl font-black leading-none text-slate-900">{Number.isFinite(hostedProgress) ? hostedProgress : 0}%</div>
+                                                <div className="text-[10px] font-black text-slate-400 uppercase mb-0.5">完成度</div>
+                                                <div className="text-xl font-black leading-none text-slate-900">{Number.isFinite(hostedProgress) ? hostedProgress : 0}%</div>
                                             </div>
                                         </div>
-                                        <div className="mt-3 h-2 rounded-full bg-slate-100 overflow-hidden">
+                                        <div className="mt-2.5 h-1.5 rounded-full bg-slate-100 overflow-hidden">
                                             <div
                                                 className="h-full rounded-full bg-gradient-to-r from-blue-500 via-cyan-400 to-emerald-400 transition-all"
                                                 style={{ width: `${Math.max(0, Math.min(100, Number.isFinite(hostedProgress) ? hostedProgress : 0))}%` }}

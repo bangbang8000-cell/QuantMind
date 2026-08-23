@@ -469,79 +469,81 @@ const RealTradingPage: React.FC = () => {
     ];
 
     return (
-        <div className="flex flex-col h-full bg-transparent p-4 pt-2 pb-24 gap-3 font-sans overflow-hidden box-border">
-            {/* Top Section - Account Overview (Enlarged Metric Cards) */}
-            <div className="shrink-0 bg-white/85 backdrop-blur-xl rounded-2xl shadow-xs border border-white/90 overflow-hidden">
-                <TopBar
-                    isConnected={!!status}
-                    strategyStatus={strategyStatus}
-                    tradingMode={tradingMode}
-                    runMode={resolvedRunMode}
-                    orchestrationMode={resolvedOrchestrationMode}
-                    accountInfo={(() => {
-                        return accountInfo ? buildTradingTopBarAccountInfo(accountInfo, status) : undefined;
-                    })()}
-                />
-            </div>
-
-            {/* Bottom Section - Sidebar & Content */}
-            <div className="flex-1 min-h-0 flex bg-white/85 backdrop-blur-xl rounded-2xl shadow-xs border border-white/90 overflow-hidden">
-                {/* Left Sidebar - Navigation */}
-                <div className="w-[230px] flex flex-col border-r border-slate-100 bg-slate-50/50">
-                    <div className="flex-1 overflow-y-auto py-3.5 px-3 space-y-1.5 custom-scrollbar">
-                        <div className="px-3 mb-2.5">
-                            <span className="text-xs font-extrabold text-slate-400 uppercase tracking-wider">功能导航</span>
-                        </div>
-                        {tabs.map(tab => (
-                            <button
-                                key={tab.id}
-                                onClick={() => setActiveTab(tab.id)}
-                                className={`w-full flex items-center gap-3 px-4 py-3 rounded-xl text-[13.5px] font-bold transition-all duration-200
-                                    ${activeTab === tab.id
-                                        ? 'bg-white text-blue-600 border border-blue-200/80 shadow-2xs'
-                                        : 'text-slate-600 hover:text-slate-900 hover:bg-slate-100/70 font-semibold'
-                                    }
-                                `}
-                            >
-                                <tab.icon size={18} className={activeTab === tab.id ? 'text-blue-500' : 'text-slate-400'} />
-                                {tab.label}
-                            </button>
-                        ))}
-                    </div>
-
-                    {/* Bottom Help Center + Trading Mode Disclaimer Popover */}
-                    <div className="p-3.5 border-t border-slate-100 shrink-0 bg-slate-50/80 space-y-2">
-                        <div className="flex items-center justify-between gap-1.5">
-                            <HelpCenterLink className="whitespace-nowrap flex-1 text-xs font-semibold" />
-                            <Popover
-                                title={
-                                    <div className="font-bold text-xs text-slate-800 flex items-center gap-1.5">
-                                        <AlertTriangle size={14} className={tradingMode === 'real' ? 'text-emerald-500' : 'text-amber-500'} />
-                                        {tradingMode === 'real' ? '实盘(通达信) 规则说明' : '模拟盘撮合规则与免责声明'}
-                                    </div>
-                                }
-                                content={
-                                    <div className="max-w-[280px] text-xs leading-relaxed text-slate-600 space-y-1 py-0.5">
-                                        {tradingMode === 'real' ? (
-                                            <p>本页委托通过通达信交易桥下达到 Windows 通达信客户端，<span className="font-bold text-emerald-600">实盘下单需在通达信客户端手动确认</span>。请确保 Windows 桥已启动、通达信已登录交易账号。</p>
-                                        ) : (
-                                            <p>本页全部委托均为本地模拟撮合，基于 quantdb 历史行情与 A 股规则（T+1、涨跌停、停牌、整手、佣金印花税）计算，<span className="font-bold text-amber-600">不接入任何真实资金或券商通道</span>。模拟结果不代表真实收益，不构成投资建议。</p>
-                                        )}
-                                    </div>
-                                }
-                                placement="topRight"
-                            >
-                                <span className={`inline-flex items-center gap-1 px-2.5 py-1 rounded-lg text-xs font-bold border cursor-pointer hover:shadow-2xs transition-all ${tradingMode === 'real' ? 'bg-emerald-50 text-emerald-700 border-emerald-200' : 'bg-amber-50 text-amber-700 border-amber-200'}`}>
-                                    <AlertTriangle size={12} className={tradingMode === 'real' ? 'text-emerald-600' : 'text-amber-600'} />
-                                    {tradingMode === 'real' ? '实盘规则' : '模拟规则'}
-                                </span>
-                            </Popover>
-                        </div>
-                    </div>
+        <div className="w-full h-full bg-[#f8fafc] p-6 flex flex-col overflow-hidden font-sans box-border">
+            {/* Unified Frame Container with 32px Border Radius (BacktestCenter Style) */}
+            <div className="bg-white border border-gray-200 shadow-sm w-full h-full rounded-[32px] flex flex-col overflow-hidden">
+                {/* Integrated Top Header - Account Overview */}
+                <div className="shrink-0 bg-white border-b border-gray-200 overflow-hidden z-10">
+                    <TopBar
+                        isConnected={!!status}
+                        strategyStatus={strategyStatus}
+                        tradingMode={tradingMode}
+                        runMode={resolvedRunMode}
+                        orchestrationMode={resolvedOrchestrationMode}
+                        accountInfo={(() => {
+                            return accountInfo ? buildTradingTopBarAccountInfo(accountInfo, status) : undefined;
+                        })()}
+                    />
                 </div>
 
-                {/* Right Content Area */}
-                <div className="flex-1 overflow-hidden relative bg-white">
+                {/* Bottom Section - Sidebar & Content */}
+                <div className="flex-1 min-h-0 flex overflow-hidden">
+                    {/* Left Sidebar - Navigation */}
+                    <div className="w-[200px] flex flex-col border-r border-gray-200 bg-white shrink-0">
+                        <div className="flex-1 overflow-y-auto py-3.5 px-3 space-y-1.5 custom-scrollbar">
+                            <div className="px-2.5 py-1 mb-1">
+                                <span className="text-[12px] font-black text-slate-400 uppercase tracking-widest">功能导航</span>
+                            </div>
+                            {tabs.map(tab => (
+                                <button
+                                    key={tab.id}
+                                    onClick={() => setActiveTab(tab.id)}
+                                    className={`w-full flex items-center gap-3 px-3.5 py-2.5 rounded-xl text-[17px] tracking-wide transition-all duration-150
+                                        ${activeTab === tab.id
+                                            ? 'bg-blue-50 text-blue-600 border border-blue-200/80 shadow-2xs font-bold'
+                                            : 'text-slate-600 hover:text-slate-900 hover:bg-slate-100/70 font-medium'
+                                        }
+                                    `}
+                                >
+                                    <tab.icon size={19} className={activeTab === tab.id ? 'text-blue-500' : 'text-slate-400'} />
+                                    <span>{tab.label}</span>
+                                </button>
+                            ))}
+                        </div>
+
+                        {/* Bottom Help Center + Trading Mode Disclaimer Popover */}
+                        <div className="p-3 pb-6 border-t border-gray-200 shrink-0 bg-white space-y-1.5">
+                            <div className="flex items-center justify-between gap-1.5">
+                                <HelpCenterLink className="whitespace-nowrap flex-1 text-xs font-semibold tracking-wide" />
+                                <Popover
+                                    title={
+                                        <div className="font-bold text-xs text-slate-800 flex items-center gap-1.5">
+                                            <AlertTriangle size={14} className={tradingMode === 'real' ? 'text-emerald-500' : 'text-amber-500'} />
+                                            {tradingMode === 'real' ? '实盘(通达信) 规则说明' : '模拟盘撮合规则与免责声明'}
+                                        </div>
+                                    }
+                                    content={
+                                        <div className="max-w-[280px] text-xs leading-relaxed text-slate-600 space-y-1 py-0.5">
+                                            {tradingMode === 'real' ? (
+                                                <p>本页委托通过通达信交易桥下达到 Windows 通达信客户端，<span className="font-bold text-emerald-600">实盘下单需在通达信客户端手动确认</span>。请确保 Windows 桥已启动、通达信已登录交易账号。</p>
+                                            ) : (
+                                                <p>本页全部委托均为本地模拟撮合，基于 quantdb 历史行情与 A 股规则（T+1、涨跌停、停牌、整手、佣金印花税）计算，<span className="font-bold text-amber-600">不接入任何真实资金或券商通道</span>。模拟结果不代表真实收益，不构成投资建议。</p>
+                                            )}
+                                        </div>
+                                    }
+                                    placement="topRight"
+                                >
+                                    <span className={`inline-flex items-center gap-1 px-2.5 py-1 rounded-lg text-xs font-bold tracking-wide border cursor-pointer hover:shadow-2xs transition-all ${tradingMode === 'real' ? 'bg-emerald-50 text-emerald-700 border-emerald-200' : 'bg-amber-50 text-amber-700 border-amber-200'}`}>
+                                        <AlertTriangle size={12} className={tradingMode === 'real' ? 'text-emerald-600' : 'text-amber-600'} />
+                                        {tradingMode === 'real' ? '实盘规则' : '模拟规则'}
+                                    </span>
+                                </Popover>
+                            </div>
+                        </div>
+                    </div>
+
+                    {/* Right Content Area */}
+                    <div className="flex-1 overflow-hidden relative bg-gray-50/50">
                     {activeTab === 'manage' && (
                         <StrategyManagement
                             tenantId={tenantId}
@@ -585,6 +587,7 @@ const RealTradingPage: React.FC = () => {
                     {activeTab === 'replay' && <ReplayPage />}
                 </div>
             </div>
+        </div>
 
             <Modal
                 title={preflightStage === 'trading-readiness' ? '交易准备度检测' : '启动前自检详情'}

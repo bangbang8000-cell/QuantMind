@@ -218,12 +218,13 @@ const ReportManagerPage: React.FC = () => {
     }
   };
 
-  const handleMoveSelected = async () => {
-    if (selectedForDelete.size === 0 || !moveTarget) return;
+  const handleMoveSelected = async (targetOverride?: string) => {
+    const target = targetOverride !== undefined ? targetOverride : moveTarget;
+    if (selectedForDelete.size === 0 || (!target && target !== '')) return;
     try {
       await request('/files/move', {
         method: 'POST',
-        body: JSON.stringify({ files: Array.from(selectedForDelete), target_folder: moveTarget }),
+        body: JSON.stringify({ files: Array.from(selectedForDelete), target_folder: target }),
       });
       if (selected && selectedForDelete.has(selected)) setSelected(null);
       setShowMoveFolder(false);
@@ -312,426 +313,304 @@ const ReportManagerPage: React.FC = () => {
   };
 
   return (
-    <div style={{
-      minHeight: '100%',
-      background: 'linear-gradient(135deg, #eef2ff 0%, #e0e7ff 100%)',
-      color: '#1e293b',
-      fontFamily: "'Inter', -apple-system, sans-serif",
-    }}>
-      <div style={{
-        maxWidth: 1500,
-        margin: '0 auto',
-        padding: '16px 20px 28px',
-      }}>
-        {/* ── 顶部引导横幅（仅无文件时显示，可关闭）── */}
-        {showBanner && (
-          <div style={{
-            display: 'flex',
-            alignItems: 'center',
-            gap: 8,
-            padding: '8px 12px',
-            marginBottom: 14,
-            background: 'linear-gradient(90deg, #6366f1, #8b5cf6)',
-            borderRadius: 8,
-            color: '#fff',
-          }}>
-            <Info style={{ width: 14, height: 14, flexShrink: 0 }} />
-            <div style={{ fontSize: 12, lineHeight: 1.5, flex: 1 }}>
-              在 <b>QuantBot</b> 输入「深度分析某只股票」（如：深度分析 002594 比亚迪），
-              分析完成后自动导出 md + PDF 报告，即显示在左侧。
+    <div className="w-full h-full bg-[#f8fafc] p-6 flex flex-col overflow-hidden font-sans box-border select-none">
+      {/* 主一体化框架 (32px 大圆角) */}
+      <div className="bg-white border border-gray-200 shadow-sm w-full h-full rounded-[32px] flex overflow-hidden">
+        <div className="w-80 shrink-0 flex flex-col border-r border-gray-200 bg-white overflow-hidden">
+          <div className="p-4 border-b border-gray-200">
+            <div className="text-sm font-bold text-slate-800 flex items-center gap-2">
+              <div className="w-7 h-7 rounded-lg bg-indigo-50 border border-indigo-100 flex items-center justify-center text-indigo-600">
+                <FileText className="w-4 h-4" />
+              </div>
+              <span>股票报告档案</span>
+              <button
+                onClick={loadFiles}
+                className="ml-auto border-none bg-transparent text-slate-400 hover:text-slate-700 cursor-pointer p-1 transition-colors"
+                title="刷新列表"
+              >
+                <RefreshCw className="w-3.5 h-3.5" />
+              </button>
+              <span className="text-[10px] font-bold bg-indigo-50 text-indigo-600 px-2 py-0.5 rounded-md border border-indigo-100/80">
+                {rootFiles.length + allFolders.reduce((s, f) => s + countFolderFiles(f), 0)} 份
+              </span>
             </div>
-            <button
-              onClick={() => setBannerDismissed(true)}
-              style={{
-                border: 'none',
-                background: 'rgba(255,255,255,0.25)',
-                color: '#fff',
-                borderRadius: 6,
-                width: 20,
-                height: 20,
-                display: 'flex',
-                alignItems: 'center',
-                justifyContent: 'center',
-                cursor: 'pointer',
-                fontSize: 12,
-                flexShrink: 0,
-              }}
-              title="关闭提示"
-            >
-              ✕
-            </button>
-          </div>
-        )}
-
-        <div style={{ display: 'flex', gap: 18, alignItems: 'stretch' }}>
-          {/* ── 左栏：文件管理 ── */}
-          <div style={{
-            width: 340,
-            flexShrink: 0,
-            display: 'flex',
-            flexDirection: 'column',
-            background: 'rgba(255,255,255,0.9)',
-            borderRadius: 14,
-            border: '1px solid rgba(199,210,254,0.6)',
-            backdropFilter: 'blur(8px)',
-            overflow: 'hidden',
-            minHeight: '88vh',
-            maxHeight: '88vh',
-          }}>
-            {/* 左栏标题 + 工具栏 */}
-            <div style={{ padding: '14px 16px', borderBottom: '1px solid #e0e7ff' }}>
-              <div style={{ fontSize: 16, fontWeight: 700, display: 'flex', alignItems: 'center', gap: 8 }}>
-                <FileText style={{ width: 18, height: 18, color: '#6366f1' }} />
-                分析报告
-                <button
-                  onClick={loadFiles}
-                  style={{
-                    display: 'flex',
-                    alignItems: 'center',
-                    gap: 4,
-                    marginLeft: 'auto',
-                    border: 'none',
-                    background: 'transparent',
-                    color: '#94a3b8',
-                    cursor: 'pointer',
-                    padding: 2,
-                  }}
-                  title="刷新列表"
-                >
-                  <RefreshCw style={{ width: 14, height: 14 }} />
-                </button>
-                <span style={{
-                  fontSize: 11,
+            <div style={{ display: 'flex', gap: 6, marginTop: 12 }}>
+              <button
+                onClick={() => setShowNewFolder(!showNewFolder)}
+                style={{
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: 5,
+                  padding: '5px 10px',
                   background: '#eef2ff',
+                  border: 'none',
+                  borderRadius: 7,
                   color: '#6366f1',
-                  padding: '2px 8px',
-                  borderRadius: 6,
-                }}>
-                  {rootFiles.length + allFolders.reduce((s, f) => s + countFolderFiles(f), 0)} 份
-                </span>
-              </div>
-              <div style={{ display: 'flex', gap: 6, marginTop: 12 }}>
-                <button
-                  onClick={() => setShowNewFolder(!showNewFolder)}
-                  style={{
-                    display: 'flex',
-                    alignItems: 'center',
-                    gap: 5,
-                    padding: '5px 10px',
-                    background: '#eef2ff',
-                    border: 'none',
-                    borderRadius: 7,
-                    color: '#6366f1',
-                    fontSize: 11,
-                    fontWeight: 600,
-                    cursor: 'pointer',
-                  }}
-                >
-                  <FolderPlus style={{ width: 13, height: 13 }} /> 新建文件夹
-                </button>
-                <button
-                  onClick={handleDeleteSelected}
-                  disabled={selectedForDelete.size === 0}
-                  style={{
-                    display: 'flex',
-                    alignItems: 'center',
-                    gap: 5,
-                    padding: '5px 10px',
-                    background: selectedForDelete.size ? '#fee2e2' : '#f1f5f9',
-                    border: 'none',
-                    borderRadius: 7,
-                    color: selectedForDelete.size ? '#dc2626' : '#94a3b8',
-                    fontSize: 11,
-                    fontWeight: 600,
-                    cursor: selectedForDelete.size ? 'pointer' : 'not-allowed',
-                  }}
-                >
-                  <Trash2 style={{ width: 13, height: 13 }} /> 删除({selectedForDelete.size})
-                </button>
-                <button
-                  onClick={() => setShowMoveFolder(!showMoveFolder)}
-                  disabled={selectedForDelete.size === 0}
-                  style={{
-                    display: 'flex',
-                    alignItems: 'center',
-                    gap: 5,
-                    padding: '5px 10px',
-                    background: selectedForDelete.size ? '#eef2ff' : '#f1f5f9',
-                    border: 'none',
-                    borderRadius: 7,
-                    color: selectedForDelete.size ? '#6366f1' : '#94a3b8',
-                    fontSize: 11,
-                    fontWeight: 600,
-                    cursor: selectedForDelete.size ? 'pointer' : 'not-allowed',
-                  }}
-                >
-                  <Folder style={{ width: 13, height: 13 }} /> 移动
-                </button>
-              </div>
-              {showMoveFolder && (
-                <div style={{ display: 'flex', gap: 6, marginTop: 8, alignItems: 'center' }}>
-                  <select
-                    value={moveTarget}
-                    onChange={(e) => setMoveTarget(e.target.value)}
+                  fontSize: 11,
+                  fontWeight: 600,
+                  cursor: 'pointer',
+                }}
+              >
+                <FolderPlus style={{ width: 13, height: 13 }} /> 新建文件夹
+              </button>
+              <button
+                onClick={handleDeleteSelected}
+                disabled={selectedForDelete.size === 0}
+                style={{
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: 5,
+                  padding: '5px 10px',
+                  background: selectedForDelete.size ? '#fee2e2' : '#f1f5f9',
+                  border: 'none',
+                  borderRadius: 7,
+                  color: selectedForDelete.size ? '#dc2626' : '#94a3b8',
+                  fontSize: 11,
+                  fontWeight: 600,
+                  cursor: selectedForDelete.size ? 'pointer' : 'not-allowed',
+                }}
+              >
+                <Trash2 style={{ width: 13, height: 13 }} /> 删除({selectedForDelete.size})
+              </button>
+              <button
+                onClick={() => setShowMoveFolder(!showMoveFolder)}
+                disabled={selectedForDelete.size === 0}
+                style={{
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: 5,
+                  padding: '5px 10px',
+                  background: selectedForDelete.size ? '#eef2ff' : '#f1f5f9',
+                  border: 'none',
+                  borderRadius: 7,
+                  color: selectedForDelete.size ? '#6366f1' : '#94a3b8',
+                  fontSize: 11,
+                  fontWeight: 600,
+                  cursor: selectedForDelete.size ? 'pointer' : 'not-allowed',
+                }}
+              >
+                移动到...
+              </button>
+            </div>
+            {showMoveFolder && (
+              <div style={{
+                marginTop: 8,
+                padding: '8px 10px',
+                background: '#f8fafc',
+                border: '1px solid #e2e8f0',
+                borderRadius: 8,
+                fontSize: 12,
+              }}>
+                <div style={{ fontWeight: 600, color: '#475569', marginBottom: 6 }}>选择目标文件夹：</div>
+                <div style={{ display: 'flex', flexWrap: 'wrap', gap: 4 }}>
+                  <button
+                    onClick={() => handleMoveSelected('')}
                     style={{
-                      flex: 1,
-                      padding: '5px 10px',
-                      border: '1px solid #c7d2fe',
-                      borderRadius: 7,
-                      fontSize: 12,
-                      outline: 'none',
+                      padding: '3px 8px',
                       background: '#fff',
-                    }}
-                  >
-                    <option value="">选择目标文件夹...</option>
-                    {folderPathOptions.map((path) => (
-                      <option key={path} value={path}>{path}</option>
-                    ))}
-                  </select>
-                  <button
-                    onClick={handleMoveSelected}
-                    disabled={!moveTarget}
-                    style={{
-                      padding: '5px 12px',
-                      background: moveTarget ? '#6366f1' : '#cbd5e1',
-                      border: 'none',
-                      borderRadius: 7,
-                      color: '#fff',
-                      fontSize: 11,
-                      cursor: moveTarget ? 'pointer' : 'not-allowed',
-                    }}
-                  >
-                    移动
-                  </button>
-                </div>
-              )}
-              {showNewFolder && (
-                <div style={{ display: 'flex', gap: 6, marginTop: 8 }}>
-                  <input
-                    value={newFolderName}
-                    onChange={(e) => setNewFolderName(e.target.value)}
-                    onKeyDown={(e) => e.key === 'Enter' && handleCreateFolder()}
-                    placeholder="文件夹名（可写 市场/股票名）"
-                    style={{
-                      flex: 1,
-                      padding: '5px 10px',
-                      border: '1px solid #c7d2fe',
-                      borderRadius: 7,
-                      fontSize: 12,
-                      outline: 'none',
-                    }}
-                  />
-                  <button
-                    onClick={handleCreateFolder}
-                    style={{
-                      padding: '5px 12px',
-                      background: '#6366f1',
-                      border: 'none',
-                      borderRadius: 7,
-                      color: '#fff',
+                      border: '1px solid #cbd5e1',
+                      borderRadius: 6,
                       fontSize: 11,
                       cursor: 'pointer',
                     }}
                   >
-                    创建
+                    / 根目录
                   </button>
+                  {allFolders.map((f) => (
+                    <button
+                      key={f.name}
+                      onClick={() => handleMoveSelected(f.name)}
+                      style={{
+                        padding: '3px 8px',
+                        background: '#fff',
+                        border: '1px solid #cbd5e1',
+                        borderRadius: 6,
+                        fontSize: 11,
+                        cursor: 'pointer',
+                      }}
+                    >
+                      📁 {f.name}
+                    </button>
+                  ))}
                 </div>
-              )}
-            </div>
+              </div>
+            )}
+            {showNewFolder && (
+              <div style={{
+                display: 'flex',
+                gap: 6,
+                marginTop: 8,
+                padding: '6px 8px',
+                background: '#f8fafc',
+                borderRadius: 8,
+                border: '1px solid #e2e8f0',
+              }}>
+                <input
+                  type="text"
+                  placeholder="文件夹名称..."
+                  value={newFolderName}
+                  onChange={(e) => setNewFolderName(e.target.value)}
+                  onKeyDown={(e) => e.key === 'Enter' && handleCreateFolder()}
+                  autoFocus
+                  style={{
+                    flex: 1,
+                    border: '1px solid #cbd5e1',
+                    borderRadius: 6,
+                    padding: '4px 8px',
+                    fontSize: 11,
+                    outline: 'none',
+                  }}
+                />
+                <button
+                  onClick={handleCreateFolder}
+                  style={{
+                    padding: '4px 10px',
+                    background: '#6366f1',
+                    border: 'none',
+                    borderRadius: 7,
+                    color: '#fff',
+                    fontSize: 11,
+                    cursor: 'pointer',
+                  }}
+                >
+                  创建
+                </button>
+              </div>
+            )}
+          </div>
 
-            {/* 文件列表 */}
-            <div style={{ flex: 1, overflowY: 'auto', padding: '10px 8px' }}>
-              {loading ? (
-                <div style={{ textAlign: 'center', padding: 40, color: '#94a3b8', fontSize: 13 }}>
-                  加载中...
-                </div>
-              ) : (
-                <>
-                  {/* 根目录文件（未分类） */}
-                  {rootFiles.length > 0 && (
-                    <div style={{ marginBottom: 8 }}>
-                      <div style={{ fontSize: 11, fontWeight: 600, color: '#6366f1', padding: '4px 12px', textTransform: 'uppercase', letterSpacing: 0.5 }}>
-                        全部报告
-                      </div>
-                      {rootFiles.map((f) => renderFileItem(f))}
+          <div style={{ flex: 1, overflowY: 'auto', padding: '10px 8px' }}>
+            {loading ? (
+              <div style={{ textAlign: 'center', padding: 40, color: '#94a3b8', fontSize: 13 }}>
+                加载中...
+              </div>
+            ) : (
+              <>
+                {rootFiles.length > 0 && (
+                  <div style={{ marginBottom: 8 }}>
+                    <div style={{ fontSize: 11, fontWeight: 600, color: '#6366f1', padding: '4px 12px', textTransform: 'uppercase', letterSpacing: 0.5 }}>
+                      全部报告
                     </div>
-                  )}
-
-                  {/* 文件夹（市场 → 股票名 二级） */}
-                  {allFolders.map((folder) => {
-                    const subfolders = folder.subfolders || [];
-                    return (
-                      <div key={folder.name} style={{ marginBottom: 8 }}>
-                        <div
-                          onClick={() => toggleExpand(folder.name)}
-                          style={{
-                            display: 'flex',
-                            alignItems: 'center',
-                            gap: 6,
-                            padding: '6px 12px',
-                            cursor: 'pointer',
-                            borderRadius: 8,
-                            fontSize: 13,
-                            fontWeight: 600,
-                            color: '#334155',
+                    {rootFiles.map((f) => renderFileItem(f))}
+                  </div>
+                )}
+                {allFolders.map((folder) => {
+                  const subfolders = folder.subfolders || [];
+                  return (
+                    <div key={folder.name} style={{ marginBottom: 8 }}>
+                      <div
+                        onClick={() => toggleExpand(folder.name)}
+                        style={{
+                          display: 'flex',
+                          alignItems: 'center',
+                          gap: 6,
+                          padding: '6px 12px',
+                          cursor: 'pointer',
+                          borderRadius: 8,
+                          fontSize: 13,
+                          fontWeight: 600,
+                          color: '#334155',
+                        }}
+                      >
+                        {expandedFolders.has(folder.name) ? (
+                          <ChevronDown style={{ width: 14, height: 14, color: '#94a3b8' }} />
+                        ) : (
+                          <ChevronRight style={{ width: 14, height: 14, color: '#94a3b8' }} />
+                        )}
+                        <Folder style={{ width: 15, height: 15, color: '#f59e0b' }} />
+                        <span style={{ flex: 1 }}>{folder.name}</span>
+                        <span style={{ fontSize: 10, color: '#94a3b8' }}>{countFolderFiles(folder)}</span>
+                        <button
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            handleDeleteFolder(folder.name);
                           }}
+                          style={{
+                            border: 'none',
+                            background: 'transparent',
+                            color: '#cbd5e1',
+                            cursor: 'pointer',
+                            padding: 2,
+                          }}
+                          title={`删除 ${folder.name}`}
                         >
-                          {expandedFolders.has(folder.name) ? (
-                            <ChevronDown style={{ width: 14, height: 14, color: '#94a3b8' }} />
-                          ) : (
-                            <ChevronRight style={{ width: 14, height: 14, color: '#94a3b8' }} />
-                          )}
-                          <Folder style={{ width: 15, height: 15, color: '#f59e0b' }} />
-                          <span style={{ flex: 1 }}>{folder.name}</span>
-                          <span style={{ fontSize: 10, color: '#94a3b8' }}>{countFolderFiles(folder)}</span>
-                          <button
-                            onClick={(e) => {
-                              e.stopPropagation();
-                              handleDeleteFolder(folder.name);
-                            }}
-                            style={{
-                              border: 'none',
-                              background: 'transparent',
-                              color: '#cbd5e1',
-                              cursor: 'pointer',
-                              padding: 2,
-                            }}
-                            title={`删除 ${folder.name}`}
-                          >
-                            <Trash2 style={{ width: 12, height: 12 }} />
-                          </button>
-                        </div>
-                        {expandedFolders.has(folder.name) && (
-                          <div style={{ marginTop: 2 }}>
-                            {folder.files.map((f) => renderFileItem(f, 12))}
-                            {subfolders.map((sub) => {
-                              const subPath = `${folder.name}/${sub.name}`;
-                              const isSubOpen = expandedSubfolders.has(subPath);
-                              return (
-                              <div key={sub.name} style={{ marginTop: 4 }}>
+                          <Trash2 style={{ width: 12, height: 12 }} />
+                        </button>
+                      </div>
+                      {expandedFolders.has(folder.name) && (
+                        <div style={{ marginTop: 2 }}>
+                          {folder.files.map((f) => renderFileItem(f, 12))}
+                          {subfolders.map((sub) => {
+                            const subPath = `${folder.name}/${sub.name}`;
+                            const isSubOpen = expandedSubfolders.has(subPath);
+                            return (
+                              <div key={sub.name} style={{ marginLeft: 12, marginBottom: 4 }}>
                                 <div
                                   onClick={() => toggleSubfolder(subPath)}
                                   style={{
                                     display: 'flex',
                                     alignItems: 'center',
                                     gap: 6,
-                                    padding: '5px 12px 5px 26px',
+                                    padding: '5px 10px',
                                     cursor: 'pointer',
                                     borderRadius: 6,
                                     fontSize: 12,
                                     fontWeight: 500,
                                     color: '#475569',
+                                    background: isSubOpen ? 'rgba(99,102,241,0.05)' : 'transparent',
                                   }}
                                 >
                                   {isSubOpen ? (
-                                    <ChevronDown style={{ width: 13, height: 13, color: '#94a3b8', flexShrink: 0 }} />
+                                    <ChevronDown style={{ width: 12, height: 12, color: '#94a3b8' }} />
                                   ) : (
-                                    <ChevronRight style={{ width: 13, height: 13, color: '#94a3b8', flexShrink: 0 }} />
+                                    <ChevronRight style={{ width: 12, height: 12, color: '#94a3b8' }} />
                                   )}
-                                  <Folder style={{ width: 13, height: 13, color: '#94a3b8', flexShrink: 0 }} />
+                                  <Folder style={{ width: 13, height: 13, color: '#6366f1' }} />
                                   <span style={{ flex: 1 }}>{sub.name}</span>
                                   <span style={{ fontSize: 10, color: '#94a3b8' }}>{sub.files.length}</span>
-                                  <button
-                                    onClick={(e) => {
-                                      e.stopPropagation();
-                                      handleDeleteFolder(subPath);
-                                    }}
-                                    style={{
-                                      border: 'none',
-                                      background: 'transparent',
-                                      color: '#cbd5e1',
-                                      cursor: 'pointer',
-                                      padding: 2,
-                                    }}
-                                    title={`删除 ${sub.name}`}
-                                  >
-                                    <Trash2 style={{ width: 11, height: 11 }} />
-                                  </button>
                                 </div>
-                                {isSubOpen && sub.files.map((f) => renderFileItem(f, 26))}
+                                {isSubOpen && (
+                                  <div style={{ marginTop: 2 }}>
+                                    {sub.files.map((f) => renderFileItem(f, 20))}
+                                  </div>
+                                )}
                               </div>
-                              );
-                            })}
-                          </div>
-                        )}
-                      </div>
-                    );
-                  })}
-
-                  {rootFiles.length === 0 && allFolders.length === 0 && (
-                    <div style={{ textAlign: 'center', padding: 40 }}>
-                      <FileText style={{ width: 40, height: 40, color: '#c7d2fe', margin: '0 auto 12px' }} />
-                      <div style={{ fontSize: 13, color: '#64748b', lineHeight: 1.6 }}>
-                        暂无分析报告<br />
-                        <span style={{ fontSize: 11, color: '#94a3b8' }}>
-                          去 QuantBot 深度分析股票，分析完成后自动导出 PDF 显示在这里
-                        </span>
-                      </div>
+                            );
+                          })}
+                        </div>
+                      )}
                     </div>
-                  )}
-                </>
-              )}
-              {error && (
-                <div style={{ padding: 12, color: '#dc2626', fontSize: 12 }}>
-                  ⚠️ {error}
-                </div>
-              )}
-            </div>
-
-            {/* 底部提示 */}
-            <div style={{
-              padding: '10px 16px',
-              borderTop: '1px solid #e0e7ff',
-              fontSize: 10,
-              color: '#94a3b8',
-              lineHeight: 1.5,
-            }}>
-              提示：勾选文件可多选删除；分析完成后 md + PDF 自动归档到「市场文件夹 → 股票名文件夹」。
-            </div>
+                  );
+                })}
+              </>
+            )}
           </div>
-
-          {/* ── 右栏：PDF 预览 ── */}
           <div style={{
-            flex: 1,
-            minWidth: 0,
-            display: 'flex',
-            flexDirection: 'column',
-            background: 'rgba(255,255,255,0.85)',
-            borderRadius: 14,
-            border: '1px solid rgba(199,210,254,0.6)',
-            backdropFilter: 'blur(8px)',
-            overflow: 'hidden',
-            minHeight: '88vh',
+            padding: '10px 14px',
+            borderTop: '1px solid #f1f5f9',
+            fontSize: 11,
+            color: '#94a3b8',
+            lineHeight: 1.5,
           }}>
-            {selected ? (
-              <>
-                <div style={{
-                  display: 'flex',
-                  alignItems: 'center',
-                  gap: 8,
-                  padding: '10px 14px',
-                  borderBottom: '1px solid #e5e7eb',
-                  background: '#ffffff',
-                }}>
-                  <FileText style={{ width: 15, height: 15, color: '#6366f1' }} />
-                  <span style={{ fontSize: 12, fontWeight: 600, color: '#1e293b' }}>{selected}</span>
-                  <a
-                    href={`${ENGINE_BASE}/files/pdf/${encodeURIComponent(selected)}`}
-                    target="_blank"
-                    rel="noreferrer"
-                    style={{
-                      marginLeft: 'auto',
-                      padding: '4px 10px',
-                      background: '#6366f1',
-                      color: '#fff',
-                      borderRadius: 6,
-                      fontSize: 11,
-                      textDecoration: 'none',
-                    }}
-                  >
-                    新窗口打开
-                  </a>
-                </div>
+            提示：勾选文件可多选删除；分析完成后 md + PDF 自动归档到「市场文件夹 → 股票名文件夹」。
+          </div>
+        </div>
+        <div className="flex-1 min-w-0 flex flex-col bg-gray-50/50 overflow-hidden">
+          {selected ? (
+            <>
+              <div className="flex items-center gap-2 px-5 py-3 border-b border-gray-200 bg-white shrink-0">
+                <FileText className="w-4 h-4 text-indigo-600" />
+                <span className="text-xs font-bold text-slate-800">{selected}</span>
+                <a
+                  href={`${ENGINE_BASE}/files/pdf/${encodeURIComponent(selected)}`}
+                  target="_blank"
+                  rel="noreferrer"
+                  className="ml-auto px-3 py-1 bg-indigo-600 hover:bg-indigo-700 text-white rounded-lg text-xs font-bold transition-colors shadow-2xs no-underline"
+                >
+                  新窗口打开
+                </a>
+              </div>
+              <div className="flex-1 min-h-0 overflow-y-auto p-4 flex flex-col items-center">
                 <PdfErrorBoundary>
                   <PdfPreview
                     key={previewKey}
@@ -739,40 +618,22 @@ const ReportManagerPage: React.FC = () => {
                     filename={selected}
                   />
                 </PdfErrorBoundary>
-              </>
-            ) : (
-              <div style={{
-                flex: 1,
-                display: 'flex',
-                flexDirection: 'column',
-                alignItems: 'center',
-                justifyContent: 'center',
-                textAlign: 'center',
-                padding: 40,
-              }}>
-                <div style={{
-                  width: 72,
-                  height: 72,
-                  borderRadius: 20,
-                  background: 'linear-gradient(135deg, #6366f1, #8b5cf6)',
-                  display: 'flex',
-                  alignItems: 'center',
-                  justifyContent: 'center',
-                  marginBottom: 16,
-                  boxShadow: '0 8px 24px rgba(99,102,241,0.3)',
-                }}>
-                  <FileText style={{ width: 32, height: 32, color: '#fff' }} />
-                </div>
-                <div style={{ fontSize: 18, fontWeight: 700, color: '#1e293b', marginBottom: 8 }}>
-                  选择左侧报告查看 PDF 预览
-                </div>
-                <div style={{ fontSize: 13, color: '#64748b', maxWidth: 360, lineHeight: 1.7 }}>
-                  在 QuantBot 中输入「深度分析某只股票」，分析完成后自动导出 md + PDF，
-                  这里就能预览完整分析内容（7 分析师 → 多空辩论 → 风控评估 → 最终决策）。
-                </div>
               </div>
-            )}
-          </div>
+            </>
+          ) : (
+            <div className="flex-1 flex flex-col items-center justify-center text-center p-10">
+              <div className="w-16 h-16 rounded-2xl bg-gradient-to-br from-indigo-500 to-purple-600 flex items-center justify-center mb-4 shadow-md text-white">
+                <FileText className="w-8 h-8" />
+              </div>
+              <div className="text-base font-black text-slate-800 mb-2">
+                选择左侧报告查看 PDF 预览
+              </div>
+              <div className="text-xs text-slate-400 max-w-sm leading-relaxed">
+                在 QuantBot 中输入「深度分析某只股票」，分析完成后自动导出 md + PDF，
+                这里就能预览完整分析内容（7 分析师 → 多空辩论 → 风控评估 → 最终决策）。
+              </div>
+            </div>
+          )}
         </div>
       </div>
     </div>

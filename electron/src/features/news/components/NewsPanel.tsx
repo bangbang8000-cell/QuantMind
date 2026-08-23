@@ -696,8 +696,9 @@ export const NewsPanel: React.FC = () => {
   // —— render ——
   return (
     <div className="news-panel">
-      {/* ===== Toolbar (single rounded glass capsule) ===== */}
-      <div className="news-toolbar">
+      <div className="news-frame">
+        {/* ===== Toolbar (Integrated Header) ===== */}
+        <div className="news-toolbar">
         <BellOutlined style={{ color: '#6366f1', fontSize: 18 }} />
         <Title level={5} style={{ margin: 0, fontSize: 15, whiteSpace: 'nowrap' }}>资讯监控</Title>
         <Tag color={health?.huntly_status === 'up' ? 'green' : 'red'} style={{ margin: 0 }}>{health?.huntly_status === 'up' ? '已连接' : '未连接'}</Tag>
@@ -1162,6 +1163,7 @@ export const NewsPanel: React.FC = () => {
         </div>
       </div>
     </div>
+  </div>
   );
 };
 

@@ -634,22 +634,14 @@ export const ModelRegistryPage: React.FC = () => {
               )}
             </div>
             {/* 底部操作 */}
-            <div className="px-3 pb-3.5 pt-2.5 border-t border-slate-100 bg-slate-50/50 flex gap-2">
+            <div className="px-4 pb-4 pt-3 border-t border-slate-100 bg-slate-50/50">
               <Button
                 type="primary"
-                icon={<Compass size={14} />}
-                className="flex-1 rounded-xl h-9 bg-blue-600 hover:bg-blue-500 border-none font-bold text-xs shadow-sm flex items-center justify-center gap-1.5"
+                icon={<Compass size={15} />}
+                className="w-full rounded-xl h-9 bg-blue-600 hover:bg-blue-500 border-none font-bold text-xs shadow-sm flex items-center justify-center gap-1.5"
                 onClick={() => navigate('/model-hub')}
               >
                 模型广场
-              </Button>
-              <Button
-                icon={<Brain size={14} />}
-                className="rounded-xl h-9 border-slate-200 text-slate-700 hover:text-blue-600 font-bold text-xs flex items-center justify-center px-3"
-                onClick={() => navigate('/model-training')}
-                title="去训练新模型"
-              >
-                训练
               </Button>
             </div>
           </div>
