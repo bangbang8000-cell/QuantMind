@@ -217,7 +217,7 @@ const StrategyLabAiDrawer: React.FC<Props> = ({ open, onClose, code, lastError, 
       }
       width={460}
       mask={false}
-      destroyOnClose={false}
+      destroyOnHidden={false}
     >
       <div style={{ display: 'flex', flexDirection: 'column', height: '100%' }}>
         <div

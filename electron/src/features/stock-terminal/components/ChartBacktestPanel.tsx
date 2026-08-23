@@ -92,7 +92,7 @@ export function ChartBacktestPanel({ symbol, onResult }: Props) {
         cancelText="关闭"
         title={<span className="text-sm font-black text-slate-800">图表策略回测（表达式 DSL）</span>}
         width={640}
-        destroyOnClose
+        destroyOnHidden
       >
         <div className="flex flex-col gap-3">
           <div className="flex items-center gap-2">

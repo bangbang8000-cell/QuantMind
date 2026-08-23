@@ -336,7 +336,7 @@ export const CloudNodeSettings: React.FC = () => {
         okText="保存"
         cancelText="取消"
         width={520}
-        destroyOnClose
+        destroyOnHidden
       >
         <Form form={form} layout="vertical" initialValues={DEFAULT_FORM} className="!pt-2">
           <div className="grid grid-cols-2 gap-3">

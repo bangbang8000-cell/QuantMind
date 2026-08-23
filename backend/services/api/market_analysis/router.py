@@ -2,12 +2,21 @@
 
 """Market analysis API Router."""
 
+import asyncio
+import concurrent.futures
+import json
+import logging
+import time
 from datetime import date, datetime
+from typing import Any
 
-from fastapi import APIRouter, Depends, HTTPException, Query, status
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
+from fastapi.responses import StreamingResponse
 
 from backend.services.api.user_app.middleware.auth import get_current_user
 from backend.shared.database_manager_v2 import get_session
+
+logger = logging.getLogger(__name__)
 
 from . import quantdb_feed
 from .domain import SectorConflictError, SectorNotFoundError
@@ -364,4 +373,98 @@ async def trigger_market_analysis(
         "message": "已从 QuantDB 读取最新数据并完成市场分析",
         "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
     }
+
+
+def _sse(event: str, data: Any) -> str:
+    """构造一条 SSE 事件（event 名 + JSON data），两步式保持向前兼容。"""
+    payload = json.dumps(data, ensure_ascii=False, default=str)
+    return f"event: {event}\ndata: {payload}\n\n"
+
+
+# 受限分析执行器：最多 2 个并发线程。
+# asyncio.to_thread/run_in_executor 无法取消已启动的线程，客户端断连后线程仍会跑完；
+# 若不限制并发，多次断连会留下大量 DuckDB 重查询线程，打满 CPU/磁盘把 API 事件循环饿死。
+_ANALYSIS_EXECUTOR = concurrent.futures.ThreadPoolExecutor(
+    max_workers=2, thread_name_prefix="qm-market-analysis"
+)
+
+
+async def _run_step(name: str, func, *args) -> Any:
+    """在受限线程池中执行单个分析步骤，避免阻塞 API 事件循环。"""
+    loop = asyncio.get_running_loop()
+    step_start = time.monotonic()
+    result = await loop.run_in_executor(_ANALYSIS_EXECUTOR, func, *args)
+    logger.info(
+        "[market-analysis][stream] step=%s duration_ms=%.0f",
+        name,
+        (time.monotonic() - step_start) * 1000,
+    )
+    return result
+
+
+@router.post("/analyze/stream")
+async def trigger_market_analysis_stream(
+    request: Request,
+    current_user: dict = Depends(get_current_user),
+) -> StreamingResponse:
+    """手动触发市场分析（SSE 流式）。
+
+    清空缓存后按步骤顺序执行，每算完一部分立即推送该部分数据：
+    indices -> breadth -> heatmap -> sankey -> stock_flow -> done。
+    前端边收边渲染，无需等全部分析完成。
+    客户端断连时立即停止后续步骤（当前线程跑完后自然结束，不浪费资源）。
+    """
+    _ = current_user
+
+    async def event_stream():
+        yield _sse("start", {"message": "开始从 QuantDB 读取最新数据并逐步分析…"})
+        try:
+            await asyncio.to_thread(quantdb_feed.clear_cache)
+            latest_dt = await _run_step("trade_date", quantdb_feed._latest_trade_date)
+            if await request.is_disconnected():
+                return
+
+            indices = await _run_step("indices", quantdb_feed.get_indices_overview)
+            yield _sse("indices", {"indices": indices})
+            if await request.is_disconnected():
+                return
+
+            breadth = await _run_step("breadth", quantdb_feed.get_market_breadth)
+            yield _sse("breadth", {"breadth": breadth})
+            if await request.is_disconnected():
+                return
+
+            heatmap = await _run_step("heatmap", quantdb_feed.get_sector_heatmap, "shenwan")
+            yield _sse("heatmap", {"heatmap": heatmap})
+            if await request.is_disconnected():
+                return
+
+            sankey = await _run_step("sankey", quantdb_feed.get_money_flow_sankey)
+            yield _sse("sankey", {"sankey": sankey})
+            if await request.is_disconnected():
+                return
+
+            stock_flow = await _run_step("stock_flow", quantdb_feed.get_stock_money_flow, 20)
+            yield _sse("stock_flow", {"stock_flow": stock_flow})
+            if await request.is_disconnected():
+                return
+
+            yield _sse("done", {
+                "trade_date": latest_dt,
+                "message": "已从 QuantDB 读取最新数据并完成市场分析",
+                "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+            })
+        except Exception as exc:  # pragma: no cover - 兜底
+            logger.exception("[market-analysis][stream] 流式分析执行失败")
+            yield _sse("error", {"message": f"市场分析失败: {exc}"})
+
+    return StreamingResponse(
+        event_stream(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+            "X-Accel-Buffering": "no",
+        },
+    )
 

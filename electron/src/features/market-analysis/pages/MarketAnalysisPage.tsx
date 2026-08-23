@@ -112,14 +112,14 @@ export const MarketAnalysisPage: React.FC = () => {
     }
   };
 
-  /** 手动触发读取 QuantDB 数据并重新执行全市场分析 */
+  /** 手动触发读取 QuantDB 数据，SSE 逐步流式推送，边分析边渲染 */
   const handleTriggerAnalysis = async () => {
     setAnalyzing(true);
     const token = localStorage.getItem('access_token') || '';
     const headers = token ? { Authorization: `Bearer ${token}` } : {};
 
     try {
-      const res = await fetch('/api/v1/market-analysis/analyze', {
+      const res = await fetch('/api/v1/market-analysis/analyze/stream', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -127,13 +127,81 @@ export const MarketAnalysisPage: React.FC = () => {
         },
       });
 
-      if (res.ok) {
-        const result = await res.json();
-        message.success(result.message || '市场分析完成，已同步 QuantDB 最新数据');
-      } else {
+      if (!res.ok || !res.body) {
         message.info('已触发市场分析');
+        await fetchMarketData();
+        return;
       }
-      await fetchMarketData();
+
+      const reader = res.body.getReader();
+      const decoder = new TextDecoder('utf-8');
+      let buffer = '';
+
+      const handleEvent = (eventType: string, evt: any) => {
+        const data = evt?.data;
+        switch (eventType) {
+          case 'indices':
+            if (Array.isArray(data?.indices) && data.indices.length > 0) {
+              setIndices(data.indices);
+            }
+            break;
+          case 'breadth':
+            if (data?.breadth && data.breadth.total_turnover_yi > 0) {
+              setBreadth(data.breadth);
+              setDataDate(data.breadth.trade_date || '');
+            }
+            break;
+          case 'heatmap':
+            if (Array.isArray(data?.heatmap) && data.heatmap.length > 0) {
+              setHeatmapData(data.heatmap);
+            }
+            break;
+          case 'sankey':
+            if (data?.sankey && data.sankey.nodes && data.sankey.nodes.length > 0) {
+              setSankeyData(data.sankey);
+            }
+            break;
+          case 'stock_flow':
+            if (Array.isArray(data?.stock_flow) && data.stock_flow.length > 0) {
+              setStockFlows(data.stock_flow);
+            }
+            break;
+          default:
+            break;
+        }
+        setUpdateTime(new Date().toTimeString().split(' ')[0]);
+      };
+
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        buffer += decoder.decode(value, { stream: true });
+        // SSE 消息以空行分隔；解析完整块后保留尾部未闭合部分
+        const blocks = buffer.split('\n\n');
+        buffer = blocks.pop() || '';
+        for (const block of blocks) {
+          if (!block.trim()) continue;
+          let eventType = '';
+          let dataStr = '';
+          for (const line of block.split('\n')) {
+            const l = line.trim();
+            if (l.startsWith('event:')) {
+              eventType = l.slice(6).trim();
+            } else if (l.startsWith('data:')) {
+              dataStr += l.slice(5).trim();
+            }
+          }
+          if (!dataStr) continue;
+          let evt: any;
+          try {
+            evt = JSON.parse(dataStr);
+          } catch {
+            continue;
+          }
+          handleEvent(eventType, evt);
+        }
+      }
+      message.success('市场分析完成，已同步 QuantDB 最新数据');
     } catch (e) {
       console.error('市场分析触发失败:', e);
       message.error('触发市场分析失败，请检查后端服务状态');

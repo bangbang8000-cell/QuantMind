@@ -295,7 +295,7 @@ export const AdminTagManagement: React.FC = () => {
         onCancel={() => setModalOpen(false)}
         okText="保存"
         cancelText="取消"
-        destroyOnClose
+        destroyOnHidden
       >
         <Form form={form} layout="vertical" style={{ marginTop: 16 }}>
           <Form.Item name="term" label="词条" rules={[{ required: true, message: '请输入词条' }]}>

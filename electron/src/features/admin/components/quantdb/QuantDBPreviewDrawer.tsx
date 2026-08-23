@@ -92,7 +92,7 @@ export function QuantDBPreviewDrawer({ dataset, onClose }: QuantDBPreviewDrawerP
             width="88%"
             title={dataset ? `${dataset.name} · ${dataset.dataset}` : ''}
             footer={null}
-            destroyOnClose
+            destroyOnHidden
         >
             <Space direction="vertical" className="w-full" size="middle">
                 <Space wrap>

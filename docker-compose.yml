@@ -52,7 +52,7 @@ services:
       context: .
       dockerfile: docker/Dockerfile.oss
       args:
-        TORCH_DEVICE: ${TORCH_DEVICE:-cpu}
+        TORCH_DEVICE: ${TORCH_DEVICE:-skip}
         TORCH_CPU_INDEX_URL: ${TORCH_CPU_INDEX_URL:-https://mirrors.aliyun.com/pytorch-wheels/cpu}
     platform: linux/amd64
     # GPU 直通：宿主机已安装 nvidia-container-toolkit 时可开启
@@ -95,6 +95,13 @@ services:
       - DB_USER=${DB_USER:-quantmind}
       - DB_PASSWORD=${DB_PASSWORD:-quantmind2026}
       - DATABASE_URL=postgresql+asyncpg://${DB_USER:-quantmind}:${DB_PASSWORD:-quantmind2026}@db:5432/${DB_NAME:-quantmind}
+
+      # psycopg2 直连配置 (news.py _pg_conn 等同步连接使用)
+      - POSTGRES_HOST=db
+      - POSTGRES_PORT=5432
+      - POSTGRES_USER=${DB_USER:-quantmind}
+      - POSTGRES_PASSWORD=${DB_PASSWORD:-quantmind2026}
+      - POSTGRES_DB=${DB_NAME:-quantmind}
 
       # 远程数据源配置（用于从官方数据库拉取增量数据）
       - SOURCE_DATABASE_URL=${SOURCE_DATABASE_URL:-postgresql://user:pass@localhost:5432/quantmind}

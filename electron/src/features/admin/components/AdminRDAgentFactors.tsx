@@ -668,7 +668,7 @@ export const AdminRDAgentFactors: React.FC = () => {
         width={760}
         open={drawerOpen}
         onClose={() => { setDrawerOpen(false); setSelectedFactor(null); }}
-        destroyOnClose
+        destroyOnHidden
         extra={selectedFactor && (
           <Space>
             <Button icon={<CopyOutlined />} onClick={() => copyCode(selectedFactor.factor_code)}>复制代码</Button>

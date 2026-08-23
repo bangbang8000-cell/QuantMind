@@ -229,6 +229,9 @@ def _load_prices(days: list[str]) -> pd.DataFrame:
     if not t.empty:
         t["dt"] = t["dt"].astype(str)
         k = k.merge(t, on=["symbol", "dt"], how="left")
+    if "pct_change" not in k.columns:
+        # qdb_technical_indicators 缺失/为空时兜底，避免调用方索引该列崩溃
+        k["pct_change"] = 0.0
     return k
 
 

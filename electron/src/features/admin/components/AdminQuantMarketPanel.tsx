@@ -628,7 +628,7 @@ function MarketDataModal({ market, dataset, activeJob, onClose, onRefreshCatalog
             width="88%"
             title={dataset ? `${dataset.name} · ${dataset.dataset}` : ''}
             footer={null}
-            destroyOnClose
+            destroyOnHidden
         >
             {dataset && (
                 <Space direction="vertical" className="w-full" size="middle">

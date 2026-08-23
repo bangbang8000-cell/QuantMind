@@ -490,7 +490,7 @@ export const AdminFeatureCatalog: React.FC = () => {
         open={catModalOpen}
         onOk={handleSaveCategory}
         onCancel={() => setCatModalOpen(false)}
-        destroyOnClose
+        destroyOnHidden
       >
         <Form form={catForm} layout="vertical">
           <Form.Item name="id" label="分类 ID" rules={[{ required: true, message: '请输入分类 ID' }]}>
@@ -511,7 +511,7 @@ export const AdminFeatureCatalog: React.FC = () => {
         open={featModalOpen}
         onOk={handleSaveFeature}
         onCancel={() => setFeatModalOpen(false)}
-        destroyOnClose
+        destroyOnHidden
       >
         <Form form={featForm} layout="vertical">
           <Form.Item name="key" label="特征 Key" rules={[{ required: true, message: '请输入特征 Key' }]}>

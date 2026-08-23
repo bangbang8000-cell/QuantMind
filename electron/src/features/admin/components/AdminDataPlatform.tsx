@@ -903,7 +903,7 @@ export const AdminDataPlatform: React.FC = () => {
                 confirmLoading={sweepLoading}
                 okText={sweepLoading ? '同步中…' : '开始同步'}
                 width={760}
-                destroyOnClose
+                destroyOnHidden
             >
                 <div className="space-y-3">
                     <Alert

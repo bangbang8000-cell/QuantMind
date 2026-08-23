@@ -343,7 +343,7 @@ export default function StockTerminalPage() {
         onCancel={() => setKlineOpen(false)}
         footer={null}
         width={1160}
-        destroyOnClose
+        destroyOnHidden
         title={null}
         style={{ top: 16 }}
         styles={{ body: { height: 560, padding: 0 } }}
