@@ -1,65 +1,25 @@
 {
   "id": "value_growth",
   "name": "价值成长策略",
-  "description": "基于模型信号选股，并叠加基本面过滤：剔除 ST，市值 10 亿-500 亿，PE 低于 25，ROE 高于 12%，上市满一年。",
+  "description": "基于模型信号选股，并以 features_daily 的市值、PE/PB/PS 与 TTM 营收、净利润筛选价值与经营质量兼具的标的。",
   "category": "basic",
   "difficulty": "intermediate",
   "params": [
-    {
-      "name": "topk",
-      "description": "目标持仓股票数",
-      "default": 30,
-      "min": 10,
-      "max": 200
-    },
-    {
-      "name": "n_drop",
-      "description": "每次调仓最大替换数",
-      "default": 5,
-      "min": 1,
-      "max": 50
-    },
-    {
-      "name": "f_pe_ttm_max",
-      "description": "PE 上限",
-      "default": 25,
-      "min": 1,
-      "max": 100
-    },
-    {
-      "name": "f_roe_min",
-      "description": "ROE 下限",
-      "default": 0.12,
-      "min": 0.0,
-      "max": 1.0
-    },
-    {
-      "name": "f_total_mv_min",
-      "description": "总市值下限",
-      "default": 1000000000,
-      "min": 0
-    },
-    {
-      "name": "f_total_mv_max",
-      "description": "总市值上限",
-      "default": 50000000000,
-      "min": 0
-    },
-    {
-      "name": "f_listed_days_min",
-      "description": "最小上市天数",
-      "default": 365,
-      "min": 0,
-      "max": 5000
-    }
+    {"name": "topk", "description": "目标持仓股票数", "default": 30, "min": 10, "max": 200},
+    {"name": "n_drop", "description": "每次调仓最大替换数", "default": 5, "min": 1, "max": 50},
+    {"name": "f_pe_ttm_max", "description": "PE（TTM）上限", "default": 25, "min": 1, "max": 100},
+    {"name": "f_pb_max", "description": "PB 上限", "default": 3.5, "min": 0.1, "max": 20},
+    {"name": "f_ps_ttm_max", "description": "PS（TTM）上限", "default": 6, "min": 0.1, "max": 50},
+    {"name": "f_total_mv_min", "description": "总市值下限（元）", "default": 1000000000, "min": 0},
+    {"name": "f_total_mv_max", "description": "总市值上限（元）", "default": 50000000000, "min": 0},
+    {"name": "f_float_mv_min", "description": "流通市值下限（元）", "default": 500000000, "min": 0},
+    {"name": "f_net_profit_ttm_min", "description": "TTM 净利润下限（元）", "default": 50000000, "min": 0, "max": 100000000000},
+    {"name": "f_revenue_ttm_min", "description": "TTM 营收下限（元）", "default": 500000000, "min": 0, "max": 1000000000000}
   ],
   "execution_defaults": {},
-  "live_defaults": {
-    "topk": 30,
-    "n_drop": 5
-  },
+  "live_defaults": {"topk": 30, "n_drop": 5},
   "live_config_tips": [
-    "策略默认剔除 ST、限制市值区间，并过滤高估值/低盈利公司。",
-    "建议搭配较稳定的中频模型信号，定期检查基本面字段的更新完整性。"
+    "筛选字段来自 features_daily；PE 为负或缺失的标的不会进入候选池。",
+    "TTM 营收和净利润是经营质量门槛，不等同于同比增长率。"
   ]
 }
