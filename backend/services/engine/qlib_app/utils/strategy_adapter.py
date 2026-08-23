@@ -53,7 +53,6 @@ class StrategyAdapter:
         elif strategy_class in (
             "RedisWeightStrategy",
             "SimpleWeightStrategy",
-            "RedisFullAlphaStrategy",
         ):
             kwargs = self._adapt_weight_strategy(kwargs, context)
 

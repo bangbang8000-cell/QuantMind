@@ -516,7 +516,6 @@ export const STRATEGY_NAME_MAP: Record<string, string> = {
   score_weighted: '得分加权组合策略',
   StopLoss: '止损止盈策略',
   LimitFilter: '涨停过滤 Top-K 策略',
-  VolatilityWeighted: '波动率加权 TopK 策略',
   momentum: '趋势动量策略 (Momentum)',
   Momentum: '趋势动量策略 (Momentum)',
   deep_time_series: '深度学习时序策略 (GRU/LSTM)',

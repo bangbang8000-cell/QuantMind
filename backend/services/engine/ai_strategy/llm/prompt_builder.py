@@ -28,7 +28,7 @@ def build_strategy_prompt(body: "GenerateRequest", dsl: str) -> str:
            - RedisTopkStrategy (module_path: backend.services.engine.qlib_app.utils.extended_strategies)
            - RedisRecordingStrategy (module_path: backend.services.engine.qlib_app.utils.recording_strategy)
            - RedisWeightStrategy (module_path: backend.services.engine.qlib_app.utils.recording_strategy)
-           - RedisLongShortTopkStrategy, RedisStopLossStrategy, RedisVolatilityWeightedStrategy, RedisFullAlphaStrategy
+           - RedisLongShortTopkStrategy, RedisStopLossStrategy
         3. 仅当用户明确要求“模型驱动策略/AI 预测信号策略”时，signal 使用 "<PRED>" 表示平台默认预测信号。
         3.1 若用户仅要求“传统技术指标测量/验证”（MACD/RSI/KDJ/BOLL 等），请改为 pandas 指标计算 + 简易收益回测脚本。
             必须输出：累计收益、年化收益、最大回撤、夏普比率、交易次数。

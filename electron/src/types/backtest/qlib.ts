@@ -16,8 +16,7 @@ export type QlibStrategyType =
   | 'momentum'
   | 'EnhancedIndex'
   | 'RiskParity'
-  | 'StopLoss'
-  | 'VolatilityWeighted';
+  | 'StopLoss';
 
 /** Qlib策略参数 */
 export interface QlibStrategyParams {

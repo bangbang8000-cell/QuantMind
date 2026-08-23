@@ -101,10 +101,6 @@ def get_strategy_config():
 - 参数：signal, min_score(0.0), max_weight(0.05)
 - 按预测分数归一化分配权重
 
-**4. RedisVolatilityWeightedStrategy** - 波动率加权策略
-- 参数：topk, vol_lookback(20), max_weight(0.10), min_score
-- 低波动标的获得更高权重
-
 **5. RedisAdvancedAlphaStrategy** - 高级截面 Alpha 策略
 - 继承 RedisTopkStrategy，结合分数权重与 TopK-Dropout
 - 参数：max_weight(0.05), min_score(0.0)
@@ -112,10 +108,6 @@ def get_strategy_config():
 **6. RedisStopLossStrategy** - 止损止盈策略
 - 参数：stop_loss(-0.08), take_profit(0.15)
 - 持仓成本追踪，触发阈值强制卖出
-
-**7. RedisFullAlphaStrategy** - 全量截面策略
-- 参数：topk, max_weight(0.05)
-- 跌出 TopK 全部卖出，不可买入标的自动顺延补位
 
 ### 策略开发规范：
 1. 必须使用 `get_strategy_config()` 或 `STRATEGY_CONFIG` 作为入口

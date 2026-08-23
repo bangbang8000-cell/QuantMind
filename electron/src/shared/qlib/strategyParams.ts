@@ -56,7 +56,7 @@ export function shouldShowNDrop(code: string | undefined, strategyType: string):
   }
 
   // 已知不需要 n_drop 的策略类型
-  const noNDropTypes = ['alpha_cross_section', 'full_alpha_cross_section', 'score_weighted', 'VolatilityWeighted'];
+  const noNDropTypes = ['alpha_cross_section', 'score_weighted'];
   if (noNDropTypes.includes(strategyType)) {
     return false;
   }
@@ -76,7 +76,7 @@ const shouldAutoPopulateNDrop = (strategyType: string, template: StrategyTemplat
   if (paramNames.has('n_drop')) return true;
 
   // 权重型策略（含 max_weight 且未声明 n_drop）不应展示 n_drop。
-  // 例如：alpha_cross_section / full_alpha_cross_section / score_weighted。
+  // 例如：alpha_cross_section / score_weighted。
   if (paramNames.has('max_weight')) return false;
 
   // TopK 轮动类模板即使未显式声明 n_drop，也沿用 20% 默认调仓比例。
@@ -93,7 +93,6 @@ const HARDCODED_FALLBACK_PARAMS: Record<string, QlibStrategyParams> = {
   long_short_topk: { topk: 50, short_topk: 50, signal: '<PRED>', rebalance_days: 3, min_score: 0.0, max_weight: 0.05, long_exposure: 1.0, short_exposure: 1.0, enable_short_selling: true },
   momentum: { topk: 30, n_drop: 6, signal: '<PRED>', rebalance_days: 3, momentum_period: 20, momentum_weight: 0.3, enable_short_selling: false },
   StopLoss: { topk: 30, n_drop: 6, signal: '<PRED>', rebalance_days: 3, stop_loss: -0.10, take_profit: 0.20, enable_short_selling: false },
-  VolatilityWeighted: { topk: 50, vol_lookback: 20, max_weight: 0.08, min_score: 0.0, signal: '<PRED>', rebalance_days: 3, enable_short_selling: false },
   adaptive_drift: { topk: 50, n_drop: 10, signal: '<PRED>', rebalance_days: 3, dynamic_position: true, enable_short_selling: false },
   score_weighted: { topk: 50, signal: '<PRED>', min_score: 0.0, max_weight: 0.05, rebalance_days: 3, enable_short_selling: false },
   deep_time_series: { topk: 30, n_drop: 6, signal: '<PRED>', rebalance_days: 3, enable_short_selling: false },
