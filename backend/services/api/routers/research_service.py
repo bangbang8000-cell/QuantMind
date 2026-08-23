@@ -13,6 +13,7 @@ from datetime import date, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
+import httpx
 from fastapi import HTTPException
 from sqlalchemy import text
 
@@ -31,6 +32,12 @@ _SDL_CACHE_MAX_ENTRIES = 512
 _SDL_CACHE: dict[str, tuple[float, dict[str, Any]]] = {}
 _SDL_REDIS_YEAR = int(os.getenv("RESEARCH_SDL_REDIS_YEAR", "2026"))
 _SDL_REDIS_TTL_SECONDS = int(os.getenv("RESEARCH_SDL_REDIS_TTL_SECONDS", str(36 * 3600)))
+
+# 自选持仓同步：trade 服务地址与 A 股简称映射 TTL 缓存
+TRADE_BASE_URL = os.getenv("TRADE_SERVICE_URL", "http://trade-core:8002").rstrip("/")
+_STOCK_NAMES_TTL_SECONDS = int(os.getenv("QUANTDB_STOCK_NAMES_TTL_SECONDS", "600"))
+_STOCK_NAMES_CACHE: dict[str, Any] | None = None
+_STOCK_NAMES_CACHE_AT = 0.0
 
 # Market-specific stock table mapping
 _MARKET_SDL_TABLE: dict[str, str] = {
@@ -1072,6 +1079,69 @@ async def remove_from_watchlist(tid: str, uid: str, symbol: str) -> dict[str, An
             {"tid": tid, "uid": uid, "s": symbol},
         )
     return {"code": 200, "message": "success"}
+
+
+def _get_quantdb_stock_names() -> dict[str, str]:
+    """QuantDB 股票简称映射（suffix -> name），带 TTL 缓存避免每次同步重读 parquet。"""
+    global _STOCK_NAMES_CACHE, _STOCK_NAMES_CACHE_AT  # noqa: PLW0603
+    now = time.time()
+    if _STOCK_NAMES_CACHE is not None and now - _STOCK_NAMES_CACHE_AT < _STOCK_NAMES_TTL_SECONDS:
+        return _STOCK_NAMES_CACHE
+    names = _load_quantdb_stock_names()
+    if names:
+        _STOCK_NAMES_CACHE = names
+        _STOCK_NAMES_CACHE_AT = now
+    return names
+
+
+async def _fetch_simulation_positions(authorization: str, x_user_id: str, x_tenant_id: str) -> list[str]:
+    """拉取模拟盘当前持仓（prefix 格式）。任何异常 fail-soft 返回空列表。"""
+    headers = {
+        "Authorization": authorization,
+        "X-User-Id": str(x_user_id),
+        "X-Tenant-Id": str(x_tenant_id),
+    }
+    try:
+        async with httpx.AsyncClient(timeout=10.0, trust_env=False) as client:
+            resp = await client.get(f"{TRADE_BASE_URL}/api/v1/simulation/account", headers=headers)
+        resp.raise_for_status()
+        data = (resp.json() or {}).get("data") or {}
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("sync watchlist positions: fetch simulation account failed: %s", exc)
+        return []
+
+    positions: list[str] = []
+    for key in (data.get("positions") or {}).keys():
+        base = str(key).split("::", 1)[0]  # 兼容 margin 仓位的侧标（SH600036::long）
+        prefix = StockCodeUtil.to_prefix(base)
+        if re.match(r"^(SH|SZ|BJ)\d{6}$", prefix):
+            positions.append(prefix)
+    return sorted(set(positions))
+
+
+async def _upsert_watchlist_position(tid: str, uid: str, symbol: str, stock_name: str | None) -> None:
+    """专用 upsert：只回填 stock_name/updated_at，不动 features_snapshot 与 source_run_id。"""
+    async with get_session() as session:
+        await session.execute(
+            text(
+                "INSERT INTO qm_user_watchlist (tenant_id, user_id, symbol, stock_name, updated_at) "
+                "VALUES (:tid, :uid, :s, :n, NOW()) "
+                "ON CONFLICT (tenant_id, user_id, symbol) "
+                "DO UPDATE SET stock_name = COALESCE(EXCLUDED.stock_name, qm_user_watchlist.stock_name), updated_at = NOW()"
+            ),
+            {"tid": tid, "uid": uid, "s": symbol, "n": stock_name},
+        )
+
+
+async def sync_watchlist_positions_service(tid: str, uid: str, authorization: str) -> dict[str, Any]:
+    """模拟盘持仓自动加入自选：拉持仓 -> 补名 -> 专用 upsert；返回当前持仓 prefix 列表。"""
+    positions = await _fetch_simulation_positions(authorization, uid, tid)
+    if positions:
+        names = _get_quantdb_stock_names()
+        for symbol in positions:
+            name = names.get(StockCodeUtil.to_suffix(symbol)) or None
+            await _upsert_watchlist_position(tid, uid, symbol, name)
+    return {"code": 200, "data": {"positions": positions}}
 
 
 async def get_user_research_pool(tid: str, uid: str, status: str | None, limit: int, offset: int) -> dict[str, Any]:
