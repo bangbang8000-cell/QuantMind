@@ -964,6 +964,7 @@ def run_daily_sync(
     result = {
         "started": datetime.now().isoformat(),
         "parquet": None,
+        "l1_ohlcv_backfill": None,
         "pg_fill": None,
         "qlib_cache": None,
         "feature_snapshot": None,
@@ -977,6 +978,22 @@ def run_daily_sync(
             all_ds = V2_DATASETS + V1_DATASETS
             ds_list = [ds for ds in all_ds if ds["sub_category"] in datasets]
         result["parquet"] = sync_parquet(ds_list, dry_run=dry_run, progress_cb=progress_cb)
+
+        # 上游历史 L1 分区只有因子，不含 OHLCV。每次同步后修复最近窗口，
+        # 防止增量文件重新覆盖后让训练标签再次为空；历史全量由专用脚本执行。
+        includes_l1 = datasets is None or "l1_factors" in datasets
+        includes_daily = datasets is None or "daily_backward" in datasets
+        if includes_l1 and includes_daily and not dry_run:
+            try:
+                from backend.scripts.backfill_l1_ohlcv import backfill_l1_ohlcv
+
+                result["l1_ohlcv_backfill"] = backfill_l1_ohlcv(
+                    QUANTDB_DATA_DIR,
+                    start=date.today() - timedelta(days=10),
+                )
+            except Exception as exc:
+                log.warning("L1 OHLCV backfill failed: %s", exc)
+                result["l1_ohlcv_backfill"] = {"status": "error", "reason": str(exc)}
 
     # Phase 1.5: 额外数据源（北向/南向，按数据源勾选控制；逐数据集路径只同步请求项）
     result["sources"] = _sync_extra_sources(dry_run=dry_run, datasets=datasets)
