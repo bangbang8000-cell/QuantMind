@@ -66,12 +66,14 @@ def _resolve_stock_name(ticker: str, market: str) -> str:
             try:
                 import pandas as pd
 
-                detail_path = (
+                detail_dir = (
                     Path(os.getenv("QM_QUANTDB_DATA_DIR", "/data/quantdb").strip())
                     / "2_base_sector"
                     / "instrument_detail"
-                    / "instrument_detail.parquet"
                 )
+                detail_path = detail_dir / "instrument_list.parquet"
+                if not detail_path.exists():
+                    detail_path = detail_dir / "instrument_detail.parquet"
                 if detail_path.exists():
                     df = pd.read_parquet(detail_path, columns=["Symbol", "Name"])
                     hit = df[df["Symbol"] == code]

@@ -100,6 +100,11 @@ class AShareAdapter(MarketAdapter):
         JSON 文件（feature_name -> expression/description）。供 LLM 在因子挖掘时
         参考已有因子作为构建基础。
 
+        L2 高频因子（资金流/微观结构/已实现波动率）在 QuantDB 已预计算为日频值，
+        但 RD-Agent coder 只能写 Qlib 表达式（基于 OHLCV+amount），无法直接引用
+        这些 parquet 列。因此 L2 因子以「Qlib 表达式近似」形式提供给 LLM 作为
+        挖掘种子——LLM 可据此在微观结构/资金流概念空间里挖掘并改造因子。
+
         Returns:
             生成的文件路径，失败返回 None。
         """
@@ -135,11 +140,15 @@ class AShareAdapter(MarketAdapter):
             known_expr = self._fallback_factors()
             factors.update(known_expr)
 
+            # L2 高频因子的 Qlib 表达式近似（核心增量：让 AI 能挖 L2 概念因子）
+            l2_expr = self._l2_factor_expressions()
+            factors.update(l2_expr)
+
             for feat in all_features:
                 feat_key = feat.get("key", "")
                 if not feat_key or feat_key in factors:
                     continue
-                # catalog 因子已在 QuantDB 预计算，给 LLM 提供分类/含义/公式作为参考
+                # catalog 中剩余因子（L1 预计算值）：给 LLM 提供分类/含义/公式作为参考
                 parts = [feat.get("_category", "因子")]
                 desc = (feat.get("description") or "").strip()
                 if desc:
@@ -160,8 +169,8 @@ class AShareAdapter(MarketAdapter):
                 _json.dump(factors, f, ensure_ascii=False, indent=2)
             import logging
             logging.getLogger(__name__).info(
-                "[%s] Generated base_factors.json: %d factors -> %s",
-                self.market_id, len(factors), json_path,
+                "[%s] Generated base_factors.json: %d factors (L2 expr: %d) -> %s",
+                self.market_id, len(factors), len(l2_expr), json_path,
             )
             return json_path
 
@@ -171,6 +180,45 @@ class AShareAdapter(MarketAdapter):
                 "[%s] Failed to generate base_factors.json: %s", self.market_id, e
             )
             return None
+
+    @staticmethod
+    def _l2_factor_expressions() -> dict[str, str]:
+        """L2 高频因子的 Qlib 表达式近似（日频 OHLCV+amount 可计算的部分）。
+
+        QuantDB 的 L2 parquet 有 219 列真实高频因子，但 RD-Agent coder 只能写
+        Qlib 表达式，无法引用这些列。这里把可近似的 L2 概念翻译成 Qlib 表达式，
+        作为 LLM 挖掘微观结构/资金流/已实现波动率类因子的种子。LLM 可在此基础上
+        改造、组合、调参。不可近似的（如档口深度、VPIN 桶）不列入。
+        """
+        return {
+            # ---- 已实现波动率族（L2 高频波动率的日频近似）----
+            "L2_RV5": "Std($close/Ref($close,1)-1, 5) * Sqrt(252)",
+            "L2_RV20": "Std($close/Ref($close,1)-1, 20) * Sqrt(252)",
+            "L2_Jump": "Abs($close/Ref($close,1)-1) - Std($close/Ref($close,1)-1, 20)",
+            "L2_RetSkew": "Mean(Power($close/Ref($close,1)-1, 3), 20) / Power(Std($close/Ref($close,1)-1, 20), 3)",
+            "L2_RetKurt": "Mean(Power($close/Ref($close,1)-1, 4), 20) / Power(Std($close/Ref($close,1)-1, 20), 4)",
+            "L2_VolPersist": "Corr(Std($close/Ref($close,1)-1, 5), Ref(Std($close/Ref($close,1)-1, 5), 5), 20)",
+            "L2_UpDnVolRatio": "Sum($volume * ($close>Ref($close,1)), 5) / (Sum($volume * ($close<Ref($close,1)), 5) + 1)",
+            # ---- 资金流族（L2 逐单资金流的日频近似）----
+            "L2_FlowNetRatio": "Sum($amount * ($close-Ref($close,1))/Ref($close,1), 5) / Sum($amount, 5)",
+            "L2_FlowLarge": "Sum($amount * ($close>Ref($close,1)) * ($volume > Mean($volume, 20)), 10) / Sum($amount, 10)",
+            "L2_FlowImbalance": "(Sum($volume * ($close>=Ref($close,1)), 10) - Sum($volume * ($close<Ref($close,1)), 10)) / Sum($volume, 10)",
+            "L2_FlowConsistency": "Corr($close/Ref($close,1)-1, $volume/Ref($volume,1)-1, 10)",
+            "L2_MFI": "Mean($amount * ($close-Ref($close,1))/Ref($close,1), 14) / (Std($amount, 14) + 1e-12)",
+            "L2_BigTradeRatio": "Sum($volume * ($volume > Mean($volume, 20) * 2), 10) / Sum($volume, 10)",
+            # ---- 微观结构族（L2 档口/价差的日频近似）----
+            "L2_Amihud": "Mean(Abs($close/Ref($close,1)-1)/($amount + 1e-12), 20)",
+            "L2_PriceImpact": "Abs($close/Ref($close,1)-1) / (Log($volume/Ref($volume,1)+1) + 1e-12)",
+            "L2_KyleLambda": "Cov($close/Ref($close,1)-1, $volume/Ref($volume,1)-1, 20) / (Var($volume/Ref($volume,1)-1, 20) + 1e-12)",
+            "L2_SpreadProxy": "($high - $low) / ($close + 1e-12)",
+            "L2_BidAskVolRatio": "Sum($volume * ($close>Ref($close,1)), 5) / Sum($volume * ($close<Ref($close,1)), 5)",
+            "L2_OpenGap": "($open - Ref($close, 1)) / Ref($close, 1)",
+            "L2_BuyPressure": "Sum(($close-$low)/($high-$low+1e-12) * $volume, 10) / Sum($volume, 10)",
+            "L2_SellPressure": "Sum(($high-$close)/($high-$low+1e-12) * $volume, 10) / Sum($volume, 10)",
+            "L2_OrderToxicity": "Abs($close/Ref($close,1)-1) * $volume / (Mean(Abs($close/Ref($close,1)-1), 20) * Mean($volume, 20) + 1e-12)",
+            "L2_InformedRatio": "Sum(Abs($close/Ref($close,1)-1) * $volume, 5) / (Std(Abs($close/Ref($close,1)-1), 20) * Sum($volume, 5) + 1e-12)",
+            "L2_JumpCount": "Sum(Abs($close/Ref($close,1)-1) > Mean(Abs($close/Ref($close,1)-1), 20) * 3, 20)",
+        }
 
     @staticmethod
     def _fallback_factors() -> dict[str, str]:

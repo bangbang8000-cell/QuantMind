@@ -169,7 +169,7 @@ def _load_symbol_map(use_akshare: bool = True) -> dict[str, str]:
     symbol_map: dict[str, str] = {}
     inst_dir = _quantdb_root() / "2_base_sector" / "instrument_detail"
     df = None
-    for f in (inst_dir / "instrument_detail.parquet", inst_dir / "instrument.parquet"):
+    for f in (inst_dir / "instrument_list.parquet", inst_dir / "instrument_detail.parquet", inst_dir / "instrument.parquet"):
         if f.is_file():
             try:
                 df = pd.read_parquet(f)

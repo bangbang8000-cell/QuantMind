@@ -1,6 +1,6 @@
 ---
 name: quantdb-fields
-description: "QuantDB 字段单位速查手册 — 全部数据集实测验证的单位、口径与陷阱（个股 volume=股/amount=万元、指数 volume=手、technical % vs l1 小数、dividend_rate 百分数、PG 前缀 symbol）。用 QuantDB 数据做分析/回测/报告、判断成交量/成交额/股息率/换手率单位、排查数据口径不一致时使用。触发词：字段单位、成交量单位、成交额单位、股还是手、万元、股息率、数据口径"
+description: "QuantDB 字段单位速查手册 — 全部数据集实测验证的单位、口径与陷阱（个股 volume=股/amount=万元、指数 volume=手、L2原始逐笔 l2_data/tick_data、technical % vs l1 小数、dividend_rate 百分数、PG 前缀 symbol）。用 QuantDB 数据做分析/回测/报告、判断成交量/成交额/股息率/换手率单位、读逐笔委托/成交/十档盘口、排查数据口径不一致时使用。触发词：字段单位、成交量单位、成交额单位、股还是手、万元、股息率、数据口径、L2、逐笔、委托、成交明细、十档盘口、tick_data、wind"
 ---
 
 # quantdb-fields — QuantDB 字段单位速查手册
@@ -33,7 +33,72 @@ description: "QuantDB 字段单位速查手册 — 全部数据集实测验证�
 
 **min1/min5**：同单位（volume=股、amount=万元），但数据**停滞在 2026-07-24**，用前先查最新日期。
 
-## 三、1_kline_data/index_daily 指数日线（⚠️ 与个股相反）
+## 三、L2 原始逐笔与十档盘口（1_kline_data/l2_data + tick_data，2026-08 新增）
+
+万得(Wind) L2 数据，`backend/scripts/wind_l2_import.py` 从**逐日 7z 压缩包**（`20260511.7z`）导入。
+**当前实测只有 1 个交易日 20260511**（order 1950 + trade 1721 = 3671 文件，部分标的仅其一），
+用前先查日期覆盖：`ls data/quantdb/1_kline_data/l2_data/ | grep -oE '[0-9]{8}' | sort -u`。
+
+文件命名：`order_{code}_{date}.parquet` / `trade_{code}_{date}.parquet`，code 为**下划线**格式
+`000001_SZ`（对应后缀 `000001.SZ`）。`time` 单位统一为 **UTC 毫秒**（万得 hhmmssmmm 转 UTC，
+北京 09:15:00 = 01:15:00 UTC），覆盖 09:15 集合竞价到 15:00 收盘。
+
+### 逐笔委托 order_
+| 字段 | 单位/格式 | 说明 |
+|---|---|---|
+| `time` | UTC ms | 09:15 集合竞价 → 15:00 收盘 |
+| `order_id` | int | 交易所委托号（可与 trade_.ask_order_id/bid_order_id 配对） |
+| `channel` | str | 委托编号 |
+| `order_type` | str | `'0'`=普通委托、`'U'`=撤单、`'1'`=其余 |
+| `direction` | str | `'B'`=买 / `'S'`=卖 |
+| `price` | **元** | 万得 ×10000 → 元（已归一）；集合竞价未定价委托 price=0 |
+| `volume` | **股** | |
+
+### 逐笔成交 trade_
+| 字段 | 单位/格式 | 说明 |
+|---|---|---|
+| `time` | UTC ms | 同上 |
+| `trade_id` | int | 成交编号 |
+| `trade_type` | str | `'C'`=**集合竞价**成交 / `'0'`=连续竞价 |
+| `direction` | str | `'B'`/`'S'`/`' '`（集合竞价段=空格） |
+| `price` | **元，未复权** | 与 `daily_unadjusted` 对齐（实测 000001.SZ 20260511 末笔 11.28 = unadjusted close 11.28）；与 `daily_forward` 前复权 close 有除权差（有分红送转者差数十%） |
+| `volume` | **股** | ⚠️ 沪≈日线量、深≈2×日线量（见坑1） |
+| `ask_order_id` / `bid_order_id` | int | 叫卖/叫买序号 → 配对逐笔↔委托 |
+
+### tick_data 十档盘口快照（18 列）
+| 列 | 单位 | 说明 |
+|---|---|---|
+| `lastPrice/open/high/low/lastClose` | 元 | |
+| `amount` | **混源** | ⚠️ 见坑2 |
+| `volume` | **混源** | 当日累计成交量 |
+| `pvolume` | 笔 | 连续竞价成交笔数（wind 导入有值）；旧导入=0（**可作来源判据**） |
+| `askPrice/bidPrice` | array(10) | 十档价，元 |
+| `askVol/bidVol` | array(10) | 十档量，股 |
+| `stockStatus` | int | BS 标志 |
+| `openInt/settlementPrice/lastSettlementPrice` | — | 期货占位字段，A股多为 0 |
+
+### ⚠️ 三个必踩的坑
+1. **沪/深成交量双口径**：逐笔成交 volume 求和，**沪 SH = 日线 volume（实测 600714.SH 求和 34825501≈日线 34825500）**；
+   **深 SZ ≈ 1.8~2.1× 日线 volume（实测 002830 1.92×、300521 2.11×、000999 1.79×、000001 1.88×）**。
+   → 逐笔求和**不能**当当日成交量，深市除 ~2 或直接与日线对账。
+2. **tick_data 单位混源**：同一目录内**单位不统一**——wind_l2_import 导入的（如 20260511）volume=**股**、amount=**万元**；
+   更早 QuantDB tick 同步的（如 20260720）volume=**手**、amount=**元**。
+   实测：20260511 最后快照 volume 93186521≈日线 93186520 股、amount 104743.53≈104743.54 万；
+   20260720 volume 1567304 手×100=156730400 股、amount 1713460189 元=171346.02 万。
+   → 用前**必须**拿最后一条快照对账日线，或按 `pvolume`（0=旧/手·元，>0=wind/股·万元）区分。
+3. **价格=未复权真实成交**：有除权除息时与前复权日线差一个复权因子
+   （实测 002830.SZ 20260511 L2 末笔 24.08 vs 前复权 close 17.06）；算收益需先统一复权口径。
+
+### 导入命令（手动增量，**不吃 quantdb_daily_sync**）
+```bash
+python backend/scripts/wind_l2_import.py --archive /path/to/20260511.7z                      # 全市场
+python backend/scripts/wind_l2_import.py --archive ... --symbols 000001.SZ,600519.SH         # 指定标的
+python backend/scripts/wind_l2_import.py --archive ... --force                               # 覆盖重导
+```
+文件名即日期（`20260511.7z` → 20260511），流式逐股解压导入、可断点续跑（已存在三件套自动跳过）。
+容器内 7z 默认 `/opt/p7zip-legacy/bin/7z`，数据目录自动探测 `/data/quantdb` 或本地 `data/quantdb`。
+
+## 四、1_kline_data/index_daily 指数日线（⚠️ 与个股相反）
 
 | 字段 | 单位 | 实测依据 |
 |---|---|---|
@@ -43,7 +108,7 @@ description: "QuantDB 字段单位速查手册 — 全部数据集实测验证�
 
 > 反推：指数平均股价 = close×100/(close×volume/amount) = close×100/19808 ≈ 19.8 元/股，符合 A 股平均股价，故 volume 必为手。
 
-## 四、5_technical_derived 技术衍生
+## 五、5_technical_derived 技术衍生
 
 ### valuation（估值）
 | 字段 | 单位 | 注意 |
@@ -75,7 +140,7 @@ description: "QuantDB 字段单位速查手册 — 全部数据集实测验证�
 | `turnover_rate` 等比率 | 小数（0.02 = 2%） |
 | `momentum_*` | %（百分数值） |
 
-## 五、6_ml_datasets 因子
+## 六、6_ml_datasets 因子
 
 ### features_daily（技术+估值合并表）
 | 字段 | 单位 | 注意 |
@@ -99,9 +164,9 @@ description: "QuantDB 字段单位速查手册 — 全部数据集实测验证�
 | `flow_net_amount / flow_super_net / flow_large_net / flow_medium_net / flow_small_net` | **元** | 600519 flow_net_amount=-274109797.7 元 = -2.74 亿；flow_net_amount/(amount×1e4)=flow_net_ratio ✓ |
 | `flow_*_ratio` | 小数 | |
 | `vol_turnover_total` | **股** | 与 kline volume 完全相等 ✓ |
-| 分区 | **停滞在 dt=20260227** | 用前先查最新分区日期 |
+| 分区 | 已恢复日更（2026-08-19 实测至 20260818，flow_net 5098 distinct 有区分度） | ⚠️ 此前「停更 2026-02-27」结论过时；top 少数几只净流入会厂商同值（如 165564181），属口径非 bug |
 
-## 六、PG 表 stock_daily_latest（API 服务数据源）
+## 七、PG 表 stock_daily_latest（API 服务数据源）
 
 | 列 | 单位 / 格式 | 实测依据 |
 |---|---|---|
@@ -114,7 +179,7 @@ description: "QuantDB 字段单位速查手册 — 全部数据集实测验证�
 
 **flow 灌入口径**（update_sdl_complete_pipeline.py）：`main_flow = flow_large_net_amount/1e6`（**百万元**），`flow_net_amount = flow_net_amount/1e6`（**百万元**）——与 l2 parquet 的元不同，读 PG 时注意。
 
-## 七、research API 换算表（/research/features 等接口返回）
+## 八、research API 换算表（/research/features 等接口返回）
 
 API 层 `_UNIT_SCALES` 把部分字段缩放后输出：
 
@@ -127,7 +192,7 @@ API 层 `_UNIT_SCALES` 把部分字段缩放后输出：
 
 > ⚠️ **fundFlow 类别内单位不一致**：flowSuperNet 是元，其余 flow* 是百万元。skill 分析时要统一换算后再比。
 
-## 八、3_financial_data 财务数据
+## 九、3_financial_data 财务数据
 
 | 数据集 | 字段 | 单位 |
 |---|---|---|
@@ -138,7 +203,7 @@ API 层 `_UNIT_SCALES` 把部分字段缩放后输出：
 | `dividend_factors` | `stockBonus / stockGift / allotNum` | 每10股送/转/配股数 |
 | `dividend_factors` | `dr` | 除权因子（复权用） |
 
-## 九、2_base_sector
+## 十、2_base_sector
 
 | 数据集 | 字段 | 单位 | 注意 |
 |---|---|---|---|
@@ -154,7 +219,7 @@ API 层 `_UNIT_SCALES` 把部分字段缩放后输出：
 | `index_weights` | `Weight` | **%** | 文件名 `000300.SH.parquet` 不是 `000300.parquet` |
 | `trading_calendar` | `TradingDate` | YYYYMMDD int | |
 
-## 十、其他数据集
+## 十一、其他数据集
 
 | 数据集 | 字段 | 单位 | 状态 |
 |---|---|---|---|
@@ -162,18 +227,20 @@ API 层 `_UNIT_SCALES` 把部分字段缩放后输出：
 | | `slo_volume / slo_net` | 股 | |
 | `hsgt_north` | `holding_quantity` 股 / `holding_value` 元 / 比率 % | | **停滞 2024-08**（北向改季度披露后） |
 
-## 十一、已知数据缺口（2026-08 实测）
+## 十二、已知数据缺口（2026-08 实测）
 
 1. **min1/min5** 分钟线停更（最新 2026-07-24）
-2. **l2_factors** 分区停更（dt 止于 20260227）
+2. ~~l2_factors 分区停更~~ —— **已恢复**（2026-08-19 实测至 20260818）
 3. **hsgt_north** 北向明细停更（2024-08，改季度披露所致）
 4. **instrument_detail** HqDate 滞后（20260720）
 5. **dt=20260729~20260802** 个股日线有同步缺口（非交易日+同步中断）
 5b. **valuation dt=20260813** 只有 101 行（同步缺口，dividend_rate 全 NaN），features_daily 同日 5543 行正常
 6. **technical_indicators.return_1d/return_20d** 全 NaN
 7. **stock_daily_latest** 的 turnover_rate/flow_net_amount/main_flow 常为 NULL
+8. **l2_data 原始逐笔仅 20260511 单日** —— 万得按日 7z 手动导入（`wind_l2_import.py`），非自动日更
+9. **tick_data 单位混源** —— wind=股/万元，旧同步=手/元，对账前勿直接用
 
-## 十二、分析前检查清单
+## 十三、分析前检查清单
 
 - [ ] 确认数据源是 parquet 还是 PG/API（单位体系不同）
 - [ ] symbol 格式匹配数据源（parquet 后缀 / PG 前缀）
@@ -185,3 +252,5 @@ API 层 `_UNIT_SCALES` 把部分字段缩放后输出：
 - [ ] 市值：parquet 是元，instrument_detail 是亿元/万股，API 是亿元
 - [ ] 财务：financials 是元，instrument_detail J_* 是万元
 - [ ] 用前查数据最新日期（分钟线、l2、hsgt 都可能已停更）
+- [ ] L2 原始逐笔（l2_data）：先查日期覆盖（当前仅 20260511 单日），价格是未复权，逐笔求和沪≈日线量/深≈2×，别当成交量
+- [ ] tick_data：先拿最后一条快照对账日线（wind=股/万元 vs 旧同步=手/元，单位混源）

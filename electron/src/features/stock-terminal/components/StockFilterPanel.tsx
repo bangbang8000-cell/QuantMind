@@ -4,6 +4,7 @@ import { useEffect, useState } from 'react';
 import { SlidersHorizontal, X, RotateCcw } from 'lucide-react';
 import { Select } from 'antd';
 import { stockTerminalService } from '../services/stockTerminalService';
+import { MarketCalendarFilter } from './MarketCalendarFilter';
 
 export interface ListFilters {
   board?: string;
@@ -20,6 +21,7 @@ export interface ListFilters {
   tagId?: string;
   tagName?: string;
   side?: string;       // 信号方向 BUY/SELL/HOLD（列表表头筛选）
+  excludeSt?: boolean; // 排除 ST 股
 }
 
 export const BOARD_OPTIONS = ['沪市主板', '深市主板', '科创板', '创业板', '北交所'];
@@ -66,9 +68,13 @@ interface Props {
   optionCounts?: Record<string, Record<string, number>>;
   /** 表头列筛选模式：面板只留「推理模型 + 概念板块」两列（板块/行业/市值/趋势/得分/信号移到列表表头） */
   columnOnly?: boolean;
+  /** 概念板块与推理模型之间显示大盘 MA20 日历图标（按日期筛选推理排序） */
+  showMarketCalendar?: boolean;
+  /** 日历补推理完成后回调（外层刷新列表） */
+  onInferred?: () => void;
 }
 
-export function StockFilterPanel({ filters, onChange, total, fullTotal, models: modelOptions = [], compact = false, optionCounts = {}, columnOnly = false }: Props) {
+export function StockFilterPanel({ filters, onChange, total, fullTotal, models: modelOptions = [], compact = false, optionCounts = {}, columnOnly = false, showMarketCalendar = false, onInferred }: Props) {
   const [industries, setIndustries] = useState<string[]>([]);
   const [concepts, setConcepts] = useState<string[]>([]);
 
@@ -115,16 +121,26 @@ export function StockFilterPanel({ filters, onChange, total, fullTotal, models: 
           <span className="text-[10px] text-slate-400 font-bold">
             {fullTotal > 0 && <>命中 <b className="text-blue-600">{total}</b> / {fullTotal} 只</>}
           </span>
+          <button
+            onClick={() => set({ excludeSt: !filters.excludeSt })}
+            className={`text-[10px] font-bold px-1.5 py-0.5 rounded border transition-colors ${
+              filters.excludeSt
+                ? 'bg-amber-50 text-amber-600 border-amber-200'
+                : 'bg-slate-50 text-slate-400 border-slate-200 hover:border-slate-300'
+            }`}
+          >
+            {filters.excludeSt ? '已排除ST' : '排除ST'}
+          </button>
         </div>
-        {activeChips.length > 0 && (
+        {(activeChips.length > 0 || filters.excludeSt) && (
           <button onClick={() => onChange({})} className="flex items-center gap-1 text-[10px] font-bold text-slate-400 hover:text-rose-500 transition-colors">
             <RotateCcw className="w-3 h-3" /> 清空
           </button>
         )}
       </div>
 
-      {/* 筛选下拉网格：columnOnly 只留 模型+概念 两列，其余维度在列表表头筛选 */}
-      <div className={`grid gap-1.5 ${compact ? 'grid-cols-2' : 'grid-cols-4'}`}>
+      {/* 筛选下拉网格：columnOnly 只留 概念+日历+模型，其余维度在列表表头筛选 */}
+      <div className={`grid gap-1.5 items-center ${compact ? (showMarketCalendar ? 'grid-cols-[1fr_auto_1fr]' : 'grid-cols-2') : 'grid-cols-4'}`}>
         {!columnOnly && (
           <>
             <Select allowClear size="small" placeholder="板块" value={filters.board || undefined}
@@ -145,6 +161,14 @@ export function StockFilterPanel({ filters, onChange, total, fullTotal, models: 
           optionFilterProp="label" onChange={v => set({ concept: v })}
           options={concepts.map(c => ({ label: c, value: c }))}
           maxTagCount={1} listHeight={200} />
+        {showMarketCalendar && (
+          <MarketCalendarFilter
+            date={filters.date}
+            model={filters.model}
+            onPickDate={d => set({ date: d })}
+            onInferred={onInferred}
+          />
+        )}
         <Select allowClear showSearch size="small" placeholder="推理模型" value={filters.model || undefined}
           optionFilterProp="label" onChange={v => set({ model: v })}
           options={modelOptions.map(m => ({ label: m.display_name || m.model_id, value: m.model_id }))} />

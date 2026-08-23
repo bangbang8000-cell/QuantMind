@@ -38,6 +38,8 @@ class StockTerminalService {
     tag?: string;
     index_code?: string;
     side?: string;
+    /** 排除 ST 股 */
+    exclude_st?: boolean;
     page?: number;
     page_size?: number;
     /** 附带各筛选下拉选项的命中数（option_counts） */
@@ -126,6 +128,18 @@ class StockTerminalService {
       return resp.data?.data ?? null;
     } catch {
       return null;
+    }
+  }
+
+  /** 大盘 MA20 日历（上证收盘/MA20/偏离度 + 当日推理概况），供日期筛选弹层着色 */
+  async getMarketCalendar(months = 12, model?: string, refresh = false): Promise<MarketCalendarData> {
+    try {
+      const resp = await this.client.get('/stock-terminal/market-calendar', {
+        params: { months, ...(model ? { model } : {}), ...(refresh ? { refresh: true } : {}) },
+      });
+      return resp.data?.data ?? { index_symbol: '000001.SH', index_name: '上证指数', days: [] };
+    } catch {
+      return { index_symbol: '000001.SH', index_name: '上证指数', days: [] };
     }
   }
 
@@ -246,6 +260,20 @@ export interface IndexMa {
   ma60: number | null;
   above_ma20: boolean;
   status: string;
+}
+export interface MarketCalendarDay {
+  date: string;          // YYYY-MM-DD
+  close: number;
+  ma20: number;
+  dev_pct: number;       // (close-ma20)/ma20*100，正=高于均线
+  signal_count?: number; // 当日有分数的信号行数
+  top10_avg?: number | null;  // 当日 Top10 推理信号平均分
+  has_inference?: boolean;
+}
+export interface MarketCalendarData {
+  index_symbol: string;
+  index_name: string;
+  days: MarketCalendarDay[];
 }
 export interface FinancialsResponse {
   symbol: string;

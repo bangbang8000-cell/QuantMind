@@ -11,6 +11,7 @@ preset 引用多个 tag id，logic ∈ {any, all}。
 
 from __future__ import annotations
 
+import threading
 import time
 from typing import Any
 
@@ -82,7 +83,9 @@ def _build_metrics() -> pd.DataFrame:
 
     # instrument_detail 静态列（行业/板块/标识）
     d = hub.data_dir
-    detail_file = d / "2_base_sector" / "instrument_detail" / "instrument_detail.parquet"
+    detail_file = d / "2_base_sector" / "instrument_detail" / "instrument_list.parquet"
+    if not detail_file.exists():
+        detail_file = d / "2_base_sector" / "instrument_detail" / "instrument_detail.parquet"
     if detail_file.exists():
         try:
             det_cols = ["Symbol", "Name", "rs_hyname", "BelongHS300", "Zsz", "Ltsz", "DynaPE", "PB_MRQ"]
@@ -135,6 +138,15 @@ def _build_metrics() -> pd.DataFrame:
 # ---------------------------------------------------------------------------
 
 _metrics_cache: dict[str, Any] = {"df": None, "ts": 0.0}
+# 标签命中结果缓存：stocks_for_tag 每次调用都 df.apply 全市场逐行（1-3s 同步），
+# 在列表接口中被反复调用会拖垮并发——按 (tag_id, limit) 缓存结果，TTL 与指标缓存一致
+_tag_stocks_cache: dict[tuple[str, int], tuple[float, list[dict[str, Any]]]] = {}
+# 最近信号日全市场分数缓存：并发 tag 请求共用一次 psycopg2 查询
+_scores_cache: dict[str, Any] = {"v": None, "ts": 0.0}
+# 指标重建锁：_build_metrics 读 8+ parquet，并发过期时只重建一次
+_metrics_lock = threading.Lock()
+# 标签命中锁：stocks_for_tag 的 apply 全市场逐行昂贵，并发时只算一次
+_tag_stocks_lock = threading.Lock()
 _TTL = 300.0
 
 
@@ -142,9 +154,14 @@ def _get_metrics() -> pd.DataFrame:
     now = time.time()
     if _metrics_cache["df"] is not None and now - _metrics_cache["ts"] < _TTL:
         return _metrics_cache["df"]
-    df = _build_metrics()
-    _metrics_cache.update({"df": df, "ts": now})
-    return df
+    with _metrics_lock:
+        # 双重检查：并发请求同时过期时只重建一次（读 8+ parquet 很贵）
+        now = time.time()
+        if _metrics_cache["df"] is not None and now - _metrics_cache["ts"] < _TTL:
+            return _metrics_cache["df"]
+        df = _build_metrics()
+        _metrics_cache.update({"df": df, "ts": now})
+        return df
 
 
 def _num(v: Any) -> float | None:
@@ -333,7 +350,13 @@ def preset_matched(symbol: str) -> list[dict[str, Any]]:
 def _latest_signal_scores() -> dict[str, dict]:
     """最近有分数交易日 全市场 fusion/side（纯数字 symbol -> {fusion, side, date}）。
     同步 psycopg2 直连（本函数在 to_thread 中调用，不可用 async 会话）。
+    结果缓存 _TTL：并发 tag 请求共用一次查询，避免连接风暴。
     """
+    now = time.time()
+    cached = _scores_cache.get("v")
+    if cached is not None and now - _scores_cache["ts"] < _TTL:
+        return cached
+
     import os
     import urllib.parse
 
@@ -349,7 +372,7 @@ def _latest_signal_scores() -> dict[str, dict]:
             f"postgresql://{os.getenv('DB_USER')}:{urllib.parse.quote_plus(os.getenv('DB_PASSWORD',''))}"
             f"@{os.getenv('DB_HOST')}:{os.getenv('DB_PORT')}/{os.getenv('DB_NAME')}"
         )
-    conn = psycopg2.connect(db_url)
+    conn = psycopg2.connect(db_url, connect_timeout=5)
     try:
         with conn.cursor() as cur:
             cur.execute(
@@ -373,40 +396,59 @@ def _latest_signal_scores() -> dict[str, dict]:
     for r in rows:
         out[str(r[0])] = {"fusion": float(r[1]) if r[1] is not None else None,
                           "side": str(r[2] or "HOLD"), "date": str(d0)[:10]}
+    _scores_cache["v"] = out
+    _scores_cache["ts"] = time.time()
     return out
 
 
 def stocks_for_tag(tag_id: str, limit: int = 50) -> list[dict[str, Any]]:
-    """标签同类股票（全市场匹配后按 sort_key 排序，叠加最近推理分数）。"""
-    tag = get_tag_by_id(tag_id)
-    if tag is None:
-        raise ValueError(f"未知标签 {tag_id}")
-    df = _get_metrics()
-    if df.empty:
-        return []
-    mask = df.apply(lambda r: tag.match(r)[0], axis=1)
-    hit = df[mask].copy()
-    if tag.category not in _EXCLUDE_ST_CATEGORIES and "_st" in hit.columns:
-        hit = hit[~hit["_st"].fillna(False)]
-    if tag.sort_key and tag.sort_key in hit.columns:
-        hit = hit.sort_values(tag.sort_key, ascending=tag.sort_asc)
-    scores = _latest_signal_scores()
-    out: list[dict[str, Any]] = []
-    for _, r in hit.head(limit).iterrows():
-        _, v = tag.match(r)
-        sym = str(r.get("symbol") or "")
-        code = sym.split(".")[0]
-        sc = scores.get(sym) or scores.get(code) or {}
-        out.append({
-            "symbol": sym,
-            "name": r.get("Name"),
-            "industry": r.get("rs_hyname"),
-            "close": _num(r.get("close")),
-            "pct_change": _num(r.get("pct_change")),
-            "total_mv": _num(r.get("total_mv_yi")) or _num(r.get("Zsz")),
-            "metric": v,
-            "fusion": sc.get("fusion"),
-            "side": sc.get("side"),
-            "signal_date": sc.get("date"),
-        })
-    return out
+    """标签同类股票（全市场匹配后按 sort_key 排序，叠加最近推理分数）。
+
+    结果按 (tag_id, limit) 缓存 _TTL 秒——df.apply 逐行匹配开销大且列表接口
+    每次筛选都调用，不缓存会让连续筛选重复全市场扫描。锁内双重检查：
+    并发请求同时过期时只执行一次 apply，其余等待后直接取缓存。
+    """
+    now = time.time()
+    cached = _tag_stocks_cache.get((tag_id, limit))
+    if cached is not None and now - cached[0] < _TTL:
+        return cached[1]
+
+    with _tag_stocks_lock:
+        now = time.time()
+        cached = _tag_stocks_cache.get((tag_id, limit))
+        if cached is not None and now - cached[0] < _TTL:
+            return cached[1]
+
+        tag = get_tag_by_id(tag_id)
+        if tag is None:
+            raise ValueError(f"未知标签 {tag_id}")
+        df = _get_metrics()
+        if df.empty:
+            return []
+        mask = df.apply(lambda r: tag.match(r)[0], axis=1)
+        hit = df[mask].copy()
+        if tag.category not in _EXCLUDE_ST_CATEGORIES and "_st" in hit.columns:
+            hit = hit[~hit["_st"].fillna(False)]
+        if tag.sort_key and tag.sort_key in hit.columns:
+            hit = hit.sort_values(tag.sort_key, ascending=tag.sort_asc)
+        scores = _latest_signal_scores()
+        out: list[dict[str, Any]] = []
+        for _, r in hit.head(limit).iterrows():
+            _, v = tag.match(r)
+            sym = str(r.get("symbol") or "")
+            code = sym.split(".")[0]
+            sc = scores.get(sym) or scores.get(code) or {}
+            out.append({
+                "symbol": sym,
+                "name": r.get("Name"),
+                "industry": r.get("rs_hyname"),
+                "close": _num(r.get("close")),
+                "pct_change": _num(r.get("pct_change")),
+                "total_mv": _num(r.get("total_mv_yi")) or _num(r.get("Zsz")),
+                "metric": v,
+                "fusion": sc.get("fusion"),
+                "side": sc.get("side"),
+                "signal_date": sc.get("date"),
+            })
+        _tag_stocks_cache[(tag_id, limit)] = (time.time(), out)
+        return out

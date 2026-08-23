@@ -366,9 +366,11 @@ def _build_snapshot(year: int, dry_run: bool = False) -> dict | None:
     _log(f"读取 QuantDB l2_factors ({year})...")
     l2_path = f"{qdb}/6_ml_datasets/l2_factors"
     try:
+        # union_by_name: 2026-03-02 前老分区无 OHLC 行情列，之后的分区有，
+        # 跨分区 glob 会因 schema 不一致报错（unified 按位置对齐会串列）。
         query_l2 = f"""
         SELECT * EXCLUDE (time, release_id, published_at)
-        FROM read_parquet('{l2_path}/**/*.parquet', hive_partitioning=true)
+        FROM read_parquet('{l2_path}/**/*.parquet', hive_partitioning=true, union_by_name=true)
         WHERE dt BETWEEN {year_start} AND {year_end}
         """
         df_l2 = con.execute(query_l2).fetchdf()

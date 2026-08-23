@@ -145,7 +145,7 @@ services:
       - REAL_TRADING_SERVICE_URL=http://127.0.0.1:8002
 
       # 通达信(TDX)交易桥配置（Windows 桥地址/token，与 Windows 侧 setup.bat 一致）
-      - TDX_BRIDGE_URL=${TDX_BRIDGE_URL:-http://192.168.31.39:8550}
+      - TDX_BRIDGE_URL=${TDX_BRIDGE_URL:-http://192.168.31.22:8550}
       - TDX_BRIDGE_TOKEN=${TDX_BRIDGE_TOKEN:-}
       - ENABLE_TDX_PUSH=${ENABLE_TDX_PUSH:-false}
       - ENABLE_REAL_TRADING=${ENABLE_REAL_TRADING:-false}
@@ -282,6 +282,10 @@ services:
       - ./strategy_templates:/app/strategy_templates
       # 用户股票池文件 (AI策略生成)
       - ./user_pools_local:/app/user_pools_local
+      # RD-Agent conda shim：把 rdagent4qlib 环境映射到容器当前 python（容器内手动改会被重建覆盖）
+      - ./docker/conda-shim:/usr/local/bin/conda:ro
+      # litellm+pydantic 兼容补丁（因子挖掘 LLM 调用用，见 docker/litellm_sitecustomize.py）
+      - ./docker/litellm_sitecustomize.py:/usr/local/lib/python3.10/site-packages/sitecustomize.py:ro
       # RD-Agent 已 pip install 到镜像中，不再需要运行时挂载
       # 允许 API 容器调用宿主机 Docker 启动训练容器
       - /var/run/docker.sock:/var/run/docker.sock
@@ -392,7 +396,7 @@ services:
       - DAILY_SYNC_ENABLED=true
 
       # 通达信(TDX)交易桥配置（自动推理完成后推送 Top N 选股到通达信）
-      - TDX_BRIDGE_URL=${TDX_BRIDGE_URL:-http://192.168.31.39:8550}
+      - TDX_BRIDGE_URL=${TDX_BRIDGE_URL:-http://192.168.31.22:8550}
       - TDX_BRIDGE_TOKEN=${TDX_BRIDGE_TOKEN:-}
       - ENABLE_TDX_PUSH=${ENABLE_TDX_PUSH:-false}
       - TDX_ACCOUNT=${TDX_ACCOUNT:-}

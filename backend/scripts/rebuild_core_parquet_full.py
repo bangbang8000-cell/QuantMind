@@ -76,7 +76,9 @@ def _load_industry_map() -> pd.DataFrame | None:
         DATA_DIR / "2_base_sector",
     ]
     for base in candidates:
-        path = base / "instrument_detail" / "instrument_detail.parquet"
+        path = base / "instrument_detail" / "instrument_list.parquet"
+        if not path.exists():
+            path = base / "instrument_detail" / "instrument_detail.parquet"
         if not path.exists():
             continue
         detail = pd.read_parquet(path)
@@ -129,6 +131,7 @@ def _build_schema(feature_cols: list[str]) -> pa.Schema:
 def main() -> None:
     parser = argparse.ArgumentParser(description="重建 core parquet")
     parser.add_argument("--dry-run", action="store_true", help="只打印列集合，不写文件")
+    parser.add_argument("--all", action="store_true", help="包含年度文件并集的全部列（解锁 catalog 之外的 L2/微观结构特征）")
     args = parser.parse_args()
 
     print("=" * 70)
@@ -142,22 +145,34 @@ def main() -> None:
 
     schemas = {f: set(pq.ParquetFile(f).schema_arrow.names) for f in files}
     common = set.intersection(*schemas.values())
+    all_cols = set.union(*schemas.values())
 
-    default_features = _load_default_features()
-    wanted = list(dict.fromkeys(default_features + LABEL_COLUMNS))
+    if args.all:
+        # 全量模式：年度文件并集即特征集（catalog 勾选与否不影响 core 内容）
+        _EXCLUDE = set(BASE_COLUMNS) | set(INDUSTRY_COLUMNS) | {
+            "trade_date", "symbol", "date",
+            # 全历史 notna=0 的死列（catalog 同步排除）
+            "concept_flow_rank", "ind_netflow_rank_20",
+        }
+        default_features, wanted = [], sorted(all_cols - _EXCLUDE)
+    else:
+        default_features = _load_default_features()
+        wanted = list(dict.fromkeys(default_features + LABEL_COLUMNS))
 
-    # 只保留全年份都有的列：缺列的年份会整段变 NaN，等于污染训练集
-    feature_cols = [c for c in wanted if c in common and c not in BASE_COLUMNS]
-    dropped = [c for c in wanted if c not in common]
+    # 因子列用并集：L2 因子 2023-01 才上线，2016-2022 年份缺列时填 NaN
+    # （树模型原生处理 NaN，训练时 fill_values 兜底；交集会直接丢掉 L2）。
+    feature_cols = [c for c in wanted if c in all_cols and c not in BASE_COLUMNS]
+    dropped = [c for c in wanted if c not in all_cols]
     # is_st / volume 用于行过滤，独立于因子集合
-    passthrough = [c for c in BASE_COLUMNS if c not in ("trade_date", "symbol") and c in common]
+    # is_st 在年份文件中普遍缺失，从 instrument_detail 的 IsSTGP 生成（写入时按 symbol 映射）
+    passthrough = [c for c in BASE_COLUMNS if c not in ("trade_date", "symbol") and c in all_cols]
     # 行业编码由 instrument_detail 映射生成，不依赖逐年 parquet（仅 2026 带这两列）
     feature_cols = list(dict.fromkeys(feature_cols + passthrough + INDUSTRY_COLUMNS))
 
-    print(f"\n输入: {len(files)} 个年度文件, 各年共有列 {len(common)}")
+    print(f"\n输入: {len(files)} 个年度文件, 各年共有列 {len(common)}, 并集列 {len(all_cols)}")
     print(f"默认勾选因子: {len(default_features)}")
     if dropped:
-        print(f"⚠️ 因非全年份覆盖而剔除 {len(dropped)} 列: {dropped}")
+        print(f"⚠️ 因所有年份均不存在而剔除 {len(dropped)} 列: {dropped}")
     missing_base = [c for c in BASE_COLUMNS if c not in common]
     if missing_base:
         print(f"⚠️ 基础列缺失（非全年份存在）: {missing_base}")

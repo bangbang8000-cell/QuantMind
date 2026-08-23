@@ -1444,6 +1444,17 @@ class InferenceScriptRunner:
                     inference_date=inference_date,
                     signal_sides=self._resolve_signal_sides(scores, consensus_list, confidence_list),
                 )
+            # 信号落库后：按当日截面算 position_score（凯利仓位建议）写回 quality JSONB。
+            # 失败不影响主流程（信号已落库），仅告警。
+            try:
+                from backend.services.engine.inference.position_signal import (
+                    compute_position_scores,
+                    batch_update_quality,
+                )
+                preds = compute_position_scores(symbols, scores, signal_sides)
+                batch_update_quality(db, run_id, tenant_id, user_id, preds)
+            except Exception as exc:
+                logger.warning("[InferenceScriptRunner] position_score 计算失败（信号已落库，忽略）: %s", exc)
         except Exception as exc:
             logger.error(f"[InferenceScriptRunner] 写库失败: {exc}")
             db.rollback()

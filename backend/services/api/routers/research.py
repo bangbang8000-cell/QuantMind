@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Depends, Query, Request
 
 import backend.services.api.routers.research_service as _research_service
 from backend.services.api.routers.research_schemas import (
@@ -30,6 +30,7 @@ from backend.services.api.routers.research_service import (
     predict_single_stock as predict_single_stock_service,
     remove_from_research_pool as remove_from_research_pool_service,
     remove_from_watchlist as remove_from_watchlist_service,
+    sync_watchlist_positions_service,
 )
 from backend.services.api.user_app.middleware.auth import get_current_user
 from backend.shared.database_manager_v2 import get_session
@@ -97,6 +98,15 @@ async def get_user_watchlist(
 ):
     tid, uid = str(current_user["tenant_id"]), str(current_user["user_id"])
     return await get_user_watchlist_service(tid, uid, limit, offset)
+
+
+@router.post("/watchlist/sync-positions")
+async def sync_watchlist_positions(request: Request, current_user: dict = Depends(get_current_user)):
+    """模拟盘持仓自动加入自选。放 {symbol} 路由之前，避免被当作 symbol 捕获。"""
+    auth = request.headers.get("authorization") or request.headers.get("Authorization") or ""
+    return await sync_watchlist_positions_service(
+        str(current_user["tenant_id"]), str(current_user["user_id"]), auth
+    )
 
 
 @router.post("/watchlist/{symbol}")

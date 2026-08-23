@@ -663,7 +663,7 @@ async def get_orders(
         )
         uid = _parse_user_id(resolved_user_id)
         stmt = select(Order).where(
-            Order.user_id == uid_int, Order.tenant_id == resolved_tenant_id
+            Order.user_id == uid, Order.tenant_id == resolved_tenant_id
         )
 
         if status:
@@ -699,7 +699,7 @@ async def get_trade_history(
         )
         uid = _parse_user_id(resolved_user_id)
         stmt = select(Trade).where(
-            Trade.user_id == uid_int, Trade.tenant_id == resolved_tenant_id
+            Trade.user_id == uid, Trade.tenant_id == resolved_tenant_id
         )
         stmt = stmt.order_by(desc(Trade.executed_at)).limit(limit)
 

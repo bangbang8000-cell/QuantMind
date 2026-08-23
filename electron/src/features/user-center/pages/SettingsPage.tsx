@@ -2,16 +2,25 @@
  * 设置中心页面
  */
 
-import React from 'react';
+import React, { useEffect, useState } from 'react';
 import { useUserConfig, useNotificationSettings, usePrivacySettings } from '../hooks';
 import { Form, Switch, message, Spin, Alert } from 'antd';
-import { Bell, ShieldCheck, Mail, Smartphone, Zap, Globe, MessageCircle, BarChart3, Users, RefreshCw } from 'lucide-react';
+import { Bell, ShieldCheck, Mail, Smartphone, Zap, Globe, MessageCircle, BarChart3, Users, RefreshCw, Info } from 'lucide-react';
+import { systemService } from '../../../services/systemService';
 
 interface SettingsPageProps {
   userId: string;
 }
 
 const SettingsPage: React.FC<SettingsPageProps> = ({ userId }) => {
+  const [versionInfo, setVersionInfo] = useState<{ version: string; edition: string } | null>(null);
+
+  useEffect(() => {
+    systemService
+      .getVersion()
+      .then((v) => setVersionInfo(v))
+      .catch(() => setVersionInfo(null));
+  }, []);
   const { config, isLoading, error } = useUserConfig(userId);
   const {
     settings: notificationSettings,
@@ -62,6 +71,24 @@ const SettingsPage: React.FC<SettingsPageProps> = ({ userId }) => {
 
   return (
     <div className="settings-page max-w-4xl mx-auto space-y-8">
+      {/* 系统信息 */}
+      <div className="bg-white rounded-2xl border border-gray-200 shadow-sm overflow-hidden">
+        <div className="p-6 border-b border-gray-100 bg-slate-50/50 flex items-center gap-3">
+          <Info className="w-5 h-5 text-slate-500" />
+          <h2 className="text-base font-black text-slate-800 uppercase tracking-widest">系统信息</h2>
+        </div>
+        <div className="p-6 flex items-center gap-6 text-sm">
+          <div className="flex items-center gap-2">
+            <span className="text-slate-400 font-medium">版本</span>
+            <span className="font-bold text-slate-700">{versionInfo ? versionInfo.version : '—'}</span>
+          </div>
+          <div className="flex items-center gap-2">
+            <span className="text-slate-400 font-medium">版本类型</span>
+            <span className="font-bold text-slate-700">{versionInfo ? versionInfo.edition.toUpperCase() : '—'}</span>
+          </div>
+        </div>
+      </div>
+
       {/* 通知设置 */}
       <div className="bg-white rounded-2xl border border-gray-200 shadow-sm overflow-hidden">
         <div className="p-6 border-b border-gray-100 bg-slate-50/50 flex items-center gap-3">

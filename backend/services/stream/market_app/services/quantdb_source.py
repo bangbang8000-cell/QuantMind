@@ -200,7 +200,10 @@ class QuantDBDataSource(DataSourceAdapter):
             )
 
             hub = QuantDBDataHub.get_instance()
-            file_path = hub.data_dir / "2_base_sector" / "instrument_detail" / "instrument_detail.parquet"
+            detail_dir = hub.data_dir / "2_base_sector" / "instrument_detail"
+            file_path = detail_dir / "instrument_list.parquet"
+            if not file_path.exists():
+                file_path = detail_dir / "instrument_detail.parquet"
             if not file_path.exists():
                 logger.warning(f"[quantdb] instrument_detail 缺失: {file_path}")
                 return []

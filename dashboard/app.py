@@ -140,7 +140,7 @@ with st.sidebar:
     )
     st.session_state.trading_mode = selected
     if selected == "REAL":
-        st.caption(f"通达信桥: {os.getenv('TDX_BRIDGE_URL', 'http://192.168.31.39:8550')}")
+        st.caption(f"通达信桥: {os.getenv('TDX_BRIDGE_URL', 'http://192.168.31.22:8550')}")
         st.caption("实盘下单需通达信客户端确认")
     st.markdown("---")
 

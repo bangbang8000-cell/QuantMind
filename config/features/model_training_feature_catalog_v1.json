@@ -1,8 +1,8 @@
 {
   "version": "v2.0",
-  "version_name": "QM Feature Set v2.0 (full QuantDB l1+l2, 20260803)",
+  "version_name": "QM Feature Set v2.1 (L2/microstructure unlocked, 20260820)",
   "description": "完整 QuantDB 特征集 (daily_forward + features_daily + l1_factors + l2_factors), 164 个可用特征",
-  "feature_count": 297,
+  "feature_count": 521,
   "categories": [
     {
       "id": "ohlcv",
@@ -1258,7 +1258,7 @@
             "CN"
           ],
           "order_no": 23,
-          "default_selected": false,
+          "default_selected": true,
           "coverage_ratio": 0.99
         },
         {
@@ -1272,7 +1272,7 @@
             "CN"
           ],
           "order_no": 24,
-          "default_selected": false,
+          "default_selected": true,
           "coverage_ratio": 0.99
         },
         {
@@ -1286,7 +1286,7 @@
             "CN"
           ],
           "order_no": 25,
-          "default_selected": false,
+          "default_selected": true,
           "coverage_ratio": 0.99
         },
         {
@@ -1300,7 +1300,7 @@
             "CN"
           ],
           "order_no": 26,
-          "default_selected": false,
+          "default_selected": true,
           "coverage_ratio": 0.99
         },
         {
@@ -1314,7 +1314,7 @@
             "CN"
           ],
           "order_no": 27,
-          "default_selected": false,
+          "default_selected": true,
           "coverage_ratio": 0.99
         },
         {
@@ -1328,7 +1328,7 @@
             "CN"
           ],
           "order_no": 28,
-          "default_selected": false,
+          "default_selected": true,
           "coverage_ratio": 0.99
         },
         {
@@ -1342,7 +1342,7 @@
             "CN"
           ],
           "order_no": 29,
-          "default_selected": false,
+          "default_selected": true,
           "coverage_ratio": 0.99
         },
         {
@@ -1494,6 +1494,272 @@
           "order_no": 39,
           "default_selected": true,
           "coverage_ratio": 0.99
+        },
+        {
+          "feature_id": "feat_volatility_1001",
+          "key": "vol_amp_1",
+          "description": "量价因子",
+          "formula": "",
+          "source": "QuantDB L2/衍生特征 (2023-2026 快照回填)",
+          "enabled": true,
+          "markets": [
+            "CN"
+          ],
+          "order_no": 1001,
+          "default_selected": false,
+          "coverage_ratio": 0.9495
+        },
+        {
+          "feature_id": "feat_volatility_1002",
+          "key": "vol_amp_20",
+          "description": "量价因子",
+          "formula": "",
+          "source": "QuantDB L2/衍生特征 (2023-2026 快照回填)",
+          "enabled": true,
+          "markets": [
+            "CN"
+          ],
+          "order_no": 1002,
+          "default_selected": false,
+          "coverage_ratio": 0.9483
+        },
+        {
+          "feature_id": "feat_volatility_1003",
+          "key": "vol_gini",
+          "description": "量价因子",
+          "formula": "",
+          "source": "QuantDB L2/衍生特征 (2023-2026 快照回填)",
+          "enabled": true,
+          "markets": [
+            "CN"
+          ],
+          "order_no": 1003,
+          "default_selected": false,
+          "coverage_ratio": 0.9471
+        },
+        {
+          "feature_id": "feat_volatility_1004",
+          "key": "vol_large_trade_intensity",
+          "description": "量价因子",
+          "formula": "",
+          "source": "QuantDB L2/衍生特征 (2023-2026 快照回填)",
+          "enabled": true,
+          "markets": [
+            "CN"
+          ],
+          "order_no": 1004,
+          "default_selected": false,
+          "coverage_ratio": 0.9471
+        },
+        {
+          "feature_id": "feat_volatility_1005",
+          "key": "vol_price_corr",
+          "description": "量价因子",
+          "formula": "",
+          "source": "QuantDB L2/衍生特征 (2023-2026 快照回填)",
+          "enabled": true,
+          "markets": [
+            "CN"
+          ],
+          "order_no": 1005,
+          "default_selected": false,
+          "coverage_ratio": 0.947
+        },
+        {
+          "feature_id": "feat_volatility_1006",
+          "key": "vol_price_divergence",
+          "description": "量价因子",
+          "formula": "",
+          "source": "QuantDB L2/衍生特征 (2023-2026 快照回填)",
+          "enabled": true,
+          "markets": [
+            "CN"
+          ],
+          "order_no": 1006,
+          "default_selected": false,
+          "coverage_ratio": 0.9471
+        },
+        {
+          "feature_id": "feat_volatility_1007",
+          "key": "vol_realized_10min",
+          "description": "已实现波动率（日内）",
+          "formula": "",
+          "source": "QuantDB L2/衍生特征 (2023-2026 快照回填)",
+          "enabled": true,
+          "markets": [
+            "CN"
+          ],
+          "order_no": 1007,
+          "default_selected": false,
+          "coverage_ratio": 0.9471
+        },
+        {
+          "feature_id": "feat_volatility_1008",
+          "key": "vol_realized_15min",
+          "description": "已实现波动率（日内）",
+          "formula": "",
+          "source": "QuantDB L2/衍生特征 (2023-2026 快照回填)",
+          "enabled": true,
+          "markets": [
+            "CN"
+          ],
+          "order_no": 1008,
+          "default_selected": false,
+          "coverage_ratio": 0.9471
+        },
+        {
+          "feature_id": "feat_volatility_1009",
+          "key": "vol_realized_am",
+          "description": "已实现波动率（日内）",
+          "formula": "",
+          "source": "QuantDB L2/衍生特征 (2023-2026 快照回填)",
+          "enabled": true,
+          "markets": [
+            "CN"
+          ],
+          "order_no": 1009,
+          "default_selected": false,
+          "coverage_ratio": 0.9471
+        },
+        {
+          "feature_id": "feat_volatility_1010",
+          "key": "vol_realized_closing",
+          "description": "已实现波动率（日内）",
+          "formula": "",
+          "source": "QuantDB L2/衍生特征 (2023-2026 快照回填)",
+          "enabled": true,
+          "markets": [
+            "CN"
+          ],
+          "order_no": 1010,
+          "default_selected": false,
+          "coverage_ratio": 0.9432
+        },
+        {
+          "feature_id": "feat_volatility_1011",
+          "key": "vol_realized_opening",
+          "description": "已实现波动率（日内）",
+          "formula": "",
+          "source": "QuantDB L2/衍生特征 (2023-2026 快照回填)",
+          "enabled": true,
+          "markets": [
+            "CN"
+          ],
+          "order_no": 1011,
+          "default_selected": false,
+          "coverage_ratio": 0.9471
+        },
+        {
+          "feature_id": "feat_volatility_1012",
+          "key": "vol_realized_pm",
+          "description": "已实现波动率（日内）",
+          "formula": "",
+          "source": "QuantDB L2/衍生特征 (2023-2026 快照回填)",
+          "enabled": true,
+          "markets": [
+            "CN"
+          ],
+          "order_no": 1012,
+          "default_selected": false,
+          "coverage_ratio": 0.9471
+        },
+        {
+          "feature_id": "feat_volatility_1013",
+          "key": "vol_tick_density",
+          "description": "量价因子",
+          "formula": "",
+          "source": "QuantDB L2/衍生特征 (2023-2026 快照回填)",
+          "enabled": true,
+          "markets": [
+            "CN"
+          ],
+          "order_no": 1013,
+          "default_selected": false,
+          "coverage_ratio": 0.9471
+        },
+        {
+          "feature_id": "feat_volatility_1014",
+          "key": "vol_to_ma5",
+          "description": "量价因子",
+          "formula": "",
+          "source": "QuantDB L2/衍生特征 (2023-2026 快照回填)",
+          "enabled": true,
+          "markets": [
+            "CN"
+          ],
+          "order_no": 1014,
+          "default_selected": false,
+          "coverage_ratio": 0.9997
+        },
+        {
+          "feature_id": "feat_volatility_1015",
+          "key": "vol_turnover_am_pm",
+          "description": "成交分布（日内）",
+          "formula": "",
+          "source": "QuantDB L2/衍生特征 (2023-2026 快照回填)",
+          "enabled": true,
+          "markets": [
+            "CN"
+          ],
+          "order_no": 1015,
+          "default_selected": false,
+          "coverage_ratio": 0.9471
+        },
+        {
+          "feature_id": "feat_volatility_1016",
+          "key": "vol_turnover_close",
+          "description": "成交分布（日内）",
+          "formula": "",
+          "source": "QuantDB L2/衍生特征 (2023-2026 快照回填)",
+          "enabled": true,
+          "markets": [
+            "CN"
+          ],
+          "order_no": 1016,
+          "default_selected": false,
+          "coverage_ratio": 0.9471
+        },
+        {
+          "feature_id": "feat_volatility_1017",
+          "key": "vol_turnover_concentration",
+          "description": "成交分布（日内）",
+          "formula": "",
+          "source": "QuantDB L2/衍生特征 (2023-2026 快照回填)",
+          "enabled": true,
+          "markets": [
+            "CN"
+          ],
+          "order_no": 1017,
+          "default_selected": false,
+          "coverage_ratio": 0.9471
+        },
+        {
+          "feature_id": "feat_volatility_1018",
+          "key": "vol_turnover_open",
+          "description": "成交分布（日内）",
+          "formula": "",
+          "source": "QuantDB L2/衍生特征 (2023-2026 快照回填)",
+          "enabled": true,
+          "markets": [
+            "CN"
+          ],
+          "order_no": 1018,
+          "default_selected": false,
+          "coverage_ratio": 0.9471
+        },
+        {
+          "feature_id": "feat_volatility_1019",
+          "key": "vol_turnover_total",
+          "description": "成交分布（日内）",
+          "formula": "",
+          "source": "QuantDB L2/衍生特征 (2023-2026 快照回填)",
+          "enabled": true,
+          "markets": [
+            "CN"
+          ],
+          "order_no": 1019,
+          "default_selected": false,
+          "coverage_ratio": 0.9471
         }
       ]
     },
@@ -1984,6 +2250,230 @@
           "coverage_ratio": 0.9997,
           "measured_ic": -0.0544,
           "measured_icir": -0.3027
+        },
+        {
+          "feature_id": "feat_liquidity_1020",
+          "key": "turn_1",
+          "description": "换手率因子",
+          "formula": "",
+          "source": "QuantDB L2/衍生特征 (2023-2026 快照回填)",
+          "enabled": true,
+          "markets": [
+            "CN"
+          ],
+          "order_no": 1020,
+          "default_selected": false,
+          "coverage_ratio": 0.9495
+        },
+        {
+          "feature_id": "feat_liquidity_1021",
+          "key": "turn_10",
+          "description": "换手率因子",
+          "formula": "",
+          "source": "QuantDB L2/衍生特征 (2023-2026 快照回填)",
+          "enabled": true,
+          "markets": [
+            "CN"
+          ],
+          "order_no": 1021,
+          "default_selected": false,
+          "coverage_ratio": 0.9492
+        },
+        {
+          "feature_id": "feat_liquidity_1022",
+          "key": "turn_20",
+          "description": "换手率因子",
+          "formula": "",
+          "source": "QuantDB L2/衍生特征 (2023-2026 快照回填)",
+          "enabled": true,
+          "markets": [
+            "CN"
+          ],
+          "order_no": 1022,
+          "default_selected": false,
+          "coverage_ratio": 0.9489
+        },
+        {
+          "feature_id": "feat_liquidity_1023",
+          "key": "turn_3",
+          "description": "换手率因子",
+          "formula": "",
+          "source": "QuantDB L2/衍生特征 (2023-2026 快照回填)",
+          "enabled": true,
+          "markets": [
+            "CN"
+          ],
+          "order_no": 1023,
+          "default_selected": false,
+          "coverage_ratio": 0.9494
+        },
+        {
+          "feature_id": "feat_liquidity_1024",
+          "key": "turn_5",
+          "description": "换手率因子",
+          "formula": "",
+          "source": "QuantDB L2/衍生特征 (2023-2026 快照回填)",
+          "enabled": true,
+          "markets": [
+            "CN"
+          ],
+          "order_no": 1024,
+          "default_selected": false,
+          "coverage_ratio": 0.9494
+        },
+        {
+          "feature_id": "feat_liquidity_1025",
+          "key": "turn_60",
+          "description": "换手率因子",
+          "formula": "",
+          "source": "QuantDB L2/衍生特征 (2023-2026 快照回填)",
+          "enabled": true,
+          "markets": [
+            "CN"
+          ],
+          "order_no": 1025,
+          "default_selected": false,
+          "coverage_ratio": 0.9476
+        },
+        {
+          "feature_id": "feat_liquidity_1026",
+          "key": "turn_acc_20",
+          "description": "累计换手率",
+          "formula": "",
+          "source": "QuantDB L2/衍生特征 (2023-2026 快照回填)",
+          "enabled": true,
+          "markets": [
+            "CN"
+          ],
+          "order_no": 1026,
+          "default_selected": false,
+          "coverage_ratio": 0.9482
+        },
+        {
+          "feature_id": "feat_liquidity_1027",
+          "key": "turn_acc_5",
+          "description": "累计换手率",
+          "formula": "",
+          "source": "QuantDB L2/衍生特征 (2023-2026 快照回填)",
+          "enabled": true,
+          "markets": [
+            "CN"
+          ],
+          "order_no": 1027,
+          "default_selected": false,
+          "coverage_ratio": 0.9492
+        },
+        {
+          "feature_id": "feat_liquidity_1028",
+          "key": "turn_breakout_20",
+          "description": "换手率因子",
+          "formula": "",
+          "source": "QuantDB L2/衍生特征 (2023-2026 快照回填)",
+          "enabled": true,
+          "markets": [
+            "CN"
+          ],
+          "order_no": 1028,
+          "default_selected": false,
+          "coverage_ratio": 0.9489
+        },
+        {
+          "feature_id": "feat_liquidity_1029",
+          "key": "turn_high_days_10",
+          "description": "换手率因子",
+          "formula": "",
+          "source": "QuantDB L2/衍生特征 (2023-2026 快照回填)",
+          "enabled": true,
+          "markets": [
+            "CN"
+          ],
+          "order_no": 1029,
+          "default_selected": false,
+          "coverage_ratio": 0.9488
+        },
+        {
+          "feature_id": "feat_liquidity_1030",
+          "key": "turn_hl_pos_20",
+          "description": "换手率因子",
+          "formula": "",
+          "source": "QuantDB L2/衍生特征 (2023-2026 快照回填)",
+          "enabled": true,
+          "markets": [
+            "CN"
+          ],
+          "order_no": 1030,
+          "default_selected": false,
+          "coverage_ratio": 0.9488
+        },
+        {
+          "feature_id": "feat_liquidity_1031",
+          "key": "turn_ratio_1_20",
+          "description": "换手率因子",
+          "formula": "",
+          "source": "QuantDB L2/衍生特征 (2023-2026 快照回填)",
+          "enabled": true,
+          "markets": [
+            "CN"
+          ],
+          "order_no": 1031,
+          "default_selected": false,
+          "coverage_ratio": 0.9489
+        },
+        {
+          "feature_id": "feat_liquidity_1032",
+          "key": "turn_ratio_1_5",
+          "description": "换手率因子",
+          "formula": "",
+          "source": "QuantDB L2/衍生特征 (2023-2026 快照回填)",
+          "enabled": true,
+          "markets": [
+            "CN"
+          ],
+          "order_no": 1032,
+          "default_selected": false,
+          "coverage_ratio": 0.9494
+        },
+        {
+          "feature_id": "feat_liquidity_1033",
+          "key": "turn_std_20",
+          "description": "换手率因子",
+          "formula": "",
+          "source": "QuantDB L2/衍生特征 (2023-2026 快照回填)",
+          "enabled": true,
+          "markets": [
+            "CN"
+          ],
+          "order_no": 1033,
+          "default_selected": false,
+          "coverage_ratio": 0.9489
+        },
+        {
+          "feature_id": "feat_liquidity_1034",
+          "key": "turn_trend_5_20",
+          "description": "换手率因子",
+          "formula": "",
+          "source": "QuantDB L2/衍生特征 (2023-2026 快照回填)",
+          "enabled": true,
+          "markets": [
+            "CN"
+          ],
+          "order_no": 1034,
+          "default_selected": false,
+          "coverage_ratio": 0.9489
+        },
+        {
+          "feature_id": "feat_liquidity_1035",
+          "key": "turn_z_20",
+          "description": "换手率因子",
+          "formula": "",
+          "source": "QuantDB L2/衍生特征 (2023-2026 快照回填)",
+          "enabled": true,
+          "markets": [
+            "CN"
+          ],
+          "order_no": 1035,
+          "default_selected": false,
+          "coverage_ratio": 0.9488
         }
       ]
     },
@@ -2054,7 +2544,7 @@
           "description": "因子: flow_large_net_ratio",
           "formula": "",
           "source": "feature_snapshots/model_features_*.parquet",
-          "enabled": false,
+          "enabled": true,
           "markets": [
             "CN"
           ],
@@ -2069,7 +2559,7 @@
           "description": "因子: flow_medium_net_amount",
           "formula": "",
           "source": "feature_snapshots/model_features_*.parquet",
-          "enabled": false,
+          "enabled": true,
           "markets": [
             "CN"
           ],
@@ -2084,7 +2574,7 @@
           "description": "因子: flow_medium_net_ratio",
           "formula": "",
           "source": "feature_snapshots/model_features_*.parquet",
-          "enabled": false,
+          "enabled": true,
           "markets": [
             "CN"
           ],
@@ -2099,7 +2589,7 @@
           "description": "因子: flow_small_net_amount",
           "formula": "",
           "source": "feature_snapshots/model_features_*.parquet",
-          "enabled": false,
+          "enabled": true,
           "markets": [
             "CN"
           ],
@@ -2114,7 +2604,7 @@
           "description": "因子: flow_small_net_ratio",
           "formula": "",
           "source": "feature_snapshots/model_features_*.parquet",
-          "enabled": false,
+          "enabled": true,
           "markets": [
             "CN"
           ],
@@ -2165,7 +2655,7 @@
           "description": "因子: flow_large_net_order",
           "formula": "",
           "source": "feature_snapshots/model_features_*.parquet",
-          "enabled": false,
+          "enabled": true,
           "markets": [
             "CN"
           ],
@@ -2180,7 +2670,7 @@
           "description": "因子: flow_large_order_ratio",
           "formula": "",
           "source": "feature_snapshots/model_features_*.parquet",
-          "enabled": false,
+          "enabled": true,
           "markets": [
             "CN"
           ],
@@ -2267,7 +2757,7 @@
           "description": "因子: flow_qsp",
           "formula": "",
           "source": "feature_snapshots/model_features_*.parquet",
-          "enabled": false,
+          "enabled": true,
           "markets": [
             "CN"
           ],
@@ -2282,7 +2772,7 @@
           "description": "因子: flow_esp",
           "formula": "",
           "source": "feature_snapshots/model_features_*.parquet",
-          "enabled": false,
+          "enabled": true,
           "markets": [
             "CN"
           ],
@@ -2297,7 +2787,7 @@
           "description": "因子: flow_aqsp",
           "formula": "",
           "source": "feature_snapshots/model_features_*.parquet",
-          "enabled": false,
+          "enabled": true,
           "markets": [
             "CN"
           ],
@@ -2312,7 +2802,7 @@
           "description": "因子: flow_qsp_time",
           "formula": "",
           "source": "feature_snapshots/model_features_*.parquet",
-          "enabled": false,
+          "enabled": true,
           "markets": [
             "CN"
           ],
@@ -2327,7 +2817,7 @@
           "description": "因子: flow_esp_time",
           "formula": "",
           "source": "feature_snapshots/model_features_*.parquet",
-          "enabled": false,
+          "enabled": true,
           "markets": [
             "CN"
           ],
@@ -2365,7 +2855,7 @@
             "CN"
           ],
           "order_no": 23,
-          "default_selected": false,
+          "default_selected": true,
           "coverage_ratio": 0.99,
           "coverage_note": "仅 2026 年起有数据 (l2_factors)，跨年训练前请确认覆盖范围"
         },
@@ -2380,7 +2870,7 @@
             "CN"
           ],
           "order_no": 24,
-          "default_selected": false,
+          "default_selected": true,
           "coverage_ratio": 0.99,
           "coverage_note": "仅 2026 年起有数据 (l2_factors)，跨年训练前请确认覆盖范围"
         },
@@ -2395,7 +2885,7 @@
             "CN"
           ],
           "order_no": 25,
-          "default_selected": false,
+          "default_selected": true,
           "coverage_ratio": 0.99
         },
         {
@@ -2409,7 +2899,7 @@
             "CN"
           ],
           "order_no": 26,
-          "default_selected": false,
+          "default_selected": true,
           "coverage_ratio": 0.99
         },
         {
@@ -2423,7 +2913,7 @@
             "CN"
           ],
           "order_no": 27,
-          "default_selected": false,
+          "default_selected": true,
           "coverage_ratio": 0.99
         },
         {
@@ -2437,7 +2927,7 @@
             "CN"
           ],
           "order_no": 28,
-          "default_selected": false,
+          "default_selected": true,
           "coverage_ratio": 0.99
         },
         {
@@ -2451,7 +2941,7 @@
             "CN"
           ],
           "order_no": 29,
-          "default_selected": false,
+          "default_selected": true,
           "coverage_ratio": 0.99
         },
         {
@@ -2465,7 +2955,7 @@
             "CN"
           ],
           "order_no": 30,
-          "default_selected": false,
+          "default_selected": true,
           "coverage_ratio": 0.99
         },
         {
@@ -2479,7 +2969,7 @@
             "CN"
           ],
           "order_no": 31,
-          "default_selected": false,
+          "default_selected": true,
           "coverage_ratio": 0.99,
           "coverage_note": "仅 2026 年起有数据 (l2_factors)，跨年训练前请确认覆盖范围"
         },
@@ -2494,7 +2984,7 @@
             "CN"
           ],
           "order_no": 32,
-          "default_selected": false,
+          "default_selected": true,
           "coverage_ratio": 0.99
         },
         {
@@ -2508,7 +2998,7 @@
             "CN"
           ],
           "order_no": 33,
-          "default_selected": false,
+          "default_selected": true,
           "coverage_ratio": 0.99
         },
         {
@@ -2522,7 +3012,7 @@
             "CN"
           ],
           "order_no": 34,
-          "default_selected": false,
+          "default_selected": true,
           "coverage_ratio": 0.99
         },
         {
@@ -2536,7 +3026,7 @@
             "CN"
           ],
           "order_no": 35,
-          "default_selected": false,
+          "default_selected": true,
           "coverage_ratio": 0.99
         },
         {
@@ -2550,7 +3040,7 @@
             "CN"
           ],
           "order_no": 36,
-          "default_selected": false,
+          "default_selected": true,
           "coverage_ratio": 0.99,
           "coverage_note": "仅 2026 年起有数据 (l2_factors)，跨年训练前请确认覆盖范围"
         },
@@ -2565,7 +3055,7 @@
             "CN"
           ],
           "order_no": 37,
-          "default_selected": false,
+          "default_selected": true,
           "coverage_ratio": 0.99
         },
         {
@@ -2579,7 +3069,7 @@
             "CN"
           ],
           "order_no": 38,
-          "default_selected": false,
+          "default_selected": true,
           "coverage_ratio": 0.99,
           "coverage_note": "仅 2026 年起有数据 (l2_factors)，跨年训练前请确认覆盖范围"
         },
@@ -2594,7 +3084,7 @@
             "CN"
           ],
           "order_no": 39,
-          "default_selected": false,
+          "default_selected": true,
           "coverage_ratio": 0.99
         },
         {
@@ -2608,7 +3098,7 @@
             "CN"
           ],
           "order_no": 40,
-          "default_selected": false,
+          "default_selected": true,
           "coverage_ratio": 0.99
         },
         {
@@ -2622,8 +3112,302 @@
             "CN"
           ],
           "order_no": 41,
-          "default_selected": false,
+          "default_selected": true,
           "coverage_ratio": 0.99
+        },
+        {
+          "feature_id": "feat_fund_flow_1036",
+          "key": "amt_close_pos",
+          "description": "收盘时段成交占比",
+          "formula": "",
+          "source": "QuantDB L2/衍生特征 (2023-2026 快照回填)",
+          "enabled": true,
+          "markets": [
+            "CN"
+          ],
+          "order_no": 1036,
+          "default_selected": false,
+          "coverage_ratio": 0.9478
+        },
+        {
+          "feature_id": "feat_fund_flow_1037",
+          "key": "amt_high_days_10",
+          "description": "近10日成交额新高天数",
+          "formula": "",
+          "source": "QuantDB L2/衍生特征 (2023-2026 快照回填)",
+          "enabled": true,
+          "markets": [
+            "CN"
+          ],
+          "order_no": 1037,
+          "default_selected": false,
+          "coverage_ratio": 0.9488
+        },
+        {
+          "feature_id": "feat_fund_flow_1038",
+          "key": "amt_log",
+          "description": "成交额对数",
+          "formula": "",
+          "source": "QuantDB L2/衍生特征 (2023-2026 快照回填)",
+          "enabled": true,
+          "markets": [
+            "CN"
+          ],
+          "order_no": 1038,
+          "default_selected": false,
+          "coverage_ratio": 0.9495
+        },
+        {
+          "feature_id": "feat_fund_flow_1039",
+          "key": "amt_ma_20",
+          "description": "N日平均成交额",
+          "formula": "",
+          "source": "QuantDB L2/衍生特征 (2023-2026 快照回填)",
+          "enabled": true,
+          "markets": [
+            "CN"
+          ],
+          "order_no": 1039,
+          "default_selected": false,
+          "coverage_ratio": 0.9489
+        },
+        {
+          "feature_id": "feat_fund_flow_1040",
+          "key": "amt_ma_5",
+          "description": "N日平均成交额",
+          "formula": "",
+          "source": "QuantDB L2/衍生特征 (2023-2026 快照回填)",
+          "enabled": true,
+          "markets": [
+            "CN"
+          ],
+          "order_no": 1040,
+          "default_selected": false,
+          "coverage_ratio": 0.9494
+        },
+        {
+          "feature_id": "feat_fund_flow_1041",
+          "key": "amt_ma_60",
+          "description": "N日平均成交额",
+          "formula": "",
+          "source": "QuantDB L2/衍生特征 (2023-2026 快照回填)",
+          "enabled": true,
+          "markets": [
+            "CN"
+          ],
+          "order_no": 1041,
+          "default_selected": false,
+          "coverage_ratio": 0.9476
+        },
+        {
+          "feature_id": "feat_fund_flow_1042",
+          "key": "amt_net_flow_20",
+          "description": "N日净资金流（成交额口径）",
+          "formula": "",
+          "source": "QuantDB L2/衍生特征 (2023-2026 快照回填)",
+          "enabled": true,
+          "markets": [
+            "CN"
+          ],
+          "order_no": 1042,
+          "default_selected": false,
+          "coverage_ratio": 0.9482
+        },
+        {
+          "feature_id": "feat_fund_flow_1043",
+          "key": "amt_net_flow_5",
+          "description": "N日净资金流（成交额口径）",
+          "formula": "",
+          "source": "QuantDB L2/衍生特征 (2023-2026 快照回填)",
+          "enabled": true,
+          "markets": [
+            "CN"
+          ],
+          "order_no": 1043,
+          "default_selected": false,
+          "coverage_ratio": 0.9492
+        },
+        {
+          "feature_id": "feat_fund_flow_1044",
+          "key": "amt_ratio_1_20",
+          "description": "成交额比值（短/长窗口）",
+          "formula": "",
+          "source": "QuantDB L2/衍生特征 (2023-2026 快照回填)",
+          "enabled": true,
+          "markets": [
+            "CN"
+          ],
+          "order_no": 1044,
+          "default_selected": false,
+          "coverage_ratio": 0.9489
+        },
+        {
+          "feature_id": "feat_fund_flow_1045",
+          "key": "amt_ratio_1_5",
+          "description": "成交额比值（短/长窗口）",
+          "formula": "",
+          "source": "QuantDB L2/衍生特征 (2023-2026 快照回填)",
+          "enabled": true,
+          "markets": [
+            "CN"
+          ],
+          "order_no": 1045,
+          "default_selected": false,
+          "coverage_ratio": 0.9494
+        },
+        {
+          "feature_id": "feat_fund_flow_1046",
+          "key": "amt_ratio_5_20",
+          "description": "成交额比值（短/长窗口）",
+          "formula": "",
+          "source": "QuantDB L2/衍生特征 (2023-2026 快照回填)",
+          "enabled": true,
+          "markets": [
+            "CN"
+          ],
+          "order_no": 1046,
+          "default_selected": false,
+          "coverage_ratio": 0.9489
+        },
+        {
+          "feature_id": "feat_fund_flow_1047",
+          "key": "amt_skew_20",
+          "description": "成交额偏度",
+          "formula": "",
+          "source": "QuantDB L2/衍生特征 (2023-2026 快照回填)",
+          "enabled": true,
+          "markets": [
+            "CN"
+          ],
+          "order_no": 1047,
+          "default_selected": false,
+          "coverage_ratio": 0.9489
+        },
+        {
+          "feature_id": "feat_fund_flow_1048",
+          "key": "amt_up_ratio_20",
+          "description": "上涨日成交额占比",
+          "formula": "",
+          "source": "QuantDB L2/衍生特征 (2023-2026 快照回填)",
+          "enabled": true,
+          "markets": [
+            "CN"
+          ],
+          "order_no": 1048,
+          "default_selected": false,
+          "coverage_ratio": 0.9483
+        },
+        {
+          "feature_id": "feat_fund_flow_1049",
+          "key": "amt_up_ratio_5",
+          "description": "上涨日成交额占比",
+          "formula": "",
+          "source": "QuantDB L2/衍生特征 (2023-2026 快照回填)",
+          "enabled": true,
+          "markets": [
+            "CN"
+          ],
+          "order_no": 1049,
+          "default_selected": false,
+          "coverage_ratio": 0.9492
+        },
+        {
+          "feature_id": "feat_fund_flow_1050",
+          "key": "amt_vol_ratio_20",
+          "description": "成交额/波动比",
+          "formula": "",
+          "source": "QuantDB L2/衍生特征 (2023-2026 快照回填)",
+          "enabled": true,
+          "markets": [
+            "CN"
+          ],
+          "order_no": 1050,
+          "default_selected": false,
+          "coverage_ratio": 0.9488
+        },
+        {
+          "feature_id": "feat_fund_flow_1051",
+          "key": "amt_z_20",
+          "description": "成交额20日Z分数",
+          "formula": "",
+          "source": "QuantDB L2/衍生特征 (2023-2026 快照回填)",
+          "enabled": true,
+          "markets": [
+            "CN"
+          ],
+          "order_no": 1051,
+          "default_selected": false,
+          "coverage_ratio": 0.9489
+        },
+        {
+          "feature_id": "feat_fund_flow_1052",
+          "key": "flow_buy_amount",
+          "description": "主动买入金额",
+          "formula": "",
+          "source": "QuantDB L2/衍生特征 (2023-2026 快照回填)",
+          "enabled": true,
+          "markets": [
+            "CN"
+          ],
+          "order_no": 1052,
+          "default_selected": false,
+          "coverage_ratio": 0.9471
+        },
+        {
+          "feature_id": "feat_fund_flow_1053",
+          "key": "flow_buy_ratio",
+          "description": "主动买入占比",
+          "formula": "",
+          "source": "QuantDB L2/衍生特征 (2023-2026 快照回填)",
+          "enabled": true,
+          "markets": [
+            "CN"
+          ],
+          "order_no": 1053,
+          "default_selected": false,
+          "coverage_ratio": 0.9471
+        },
+        {
+          "feature_id": "feat_fund_flow_1054",
+          "key": "flow_sell_amount",
+          "description": "主动卖出金额",
+          "formula": "",
+          "source": "QuantDB L2/衍生特征 (2023-2026 快照回填)",
+          "enabled": true,
+          "markets": [
+            "CN"
+          ],
+          "order_no": 1054,
+          "default_selected": false,
+          "coverage_ratio": 0.9471
+        },
+        {
+          "feature_id": "feat_fund_flow_1055",
+          "key": "flow_sell_ratio",
+          "description": "主动卖出占比",
+          "formula": "",
+          "source": "QuantDB L2/衍生特征 (2023-2026 快照回填)",
+          "enabled": true,
+          "markets": [
+            "CN"
+          ],
+          "order_no": 1055,
+          "default_selected": false,
+          "coverage_ratio": 0.9471
+        },
+        {
+          "feature_id": "feat_fund_flow_1056",
+          "key": "flow_super_ratio",
+          "description": "L2资金流因子",
+          "formula": "",
+          "source": "QuantDB L2/衍生特征 (2023-2026 快照回填)",
+          "enabled": true,
+          "markets": [
+            "CN"
+          ],
+          "order_no": 1056,
+          "default_selected": false,
+          "coverage_ratio": 0.4531
         }
       ]
     },
@@ -2711,7 +3495,7 @@
           "description": "因子: style_smb",
           "formula": "",
           "source": "feature_snapshots/model_features_*.parquet",
-          "enabled": false,
+          "enabled": true,
           "markets": [
             "CN"
           ],
@@ -2726,7 +3510,7 @@
           "description": "因子: style_hml",
           "formula": "",
           "source": "feature_snapshots/model_features_*.parquet",
-          "enabled": false,
+          "enabled": true,
           "markets": [
             "CN"
           ],
@@ -2741,7 +3525,7 @@
           "description": "因子: style_mkt_premium",
           "formula": "",
           "source": "feature_snapshots/model_features_*.parquet",
-          "enabled": false,
+          "enabled": true,
           "markets": [
             "CN"
           ],
@@ -2891,7 +3675,7 @@
           "description": "因子: style_size_percentile",
           "formula": "",
           "source": "feature_snapshots/model_features_*.parquet",
-          "enabled": false,
+          "enabled": true,
           "markets": [
             "CN"
           ],
@@ -2946,6 +3730,20 @@
           "coverage_ratio": 0.99,
           "measured_ic": 0.0367,
           "measured_icir": 0.23
+        },
+        {
+          "feature_id": "feat_style_1057",
+          "key": "beta_20",
+          "description": "20日Beta（对市场）",
+          "formula": "",
+          "source": "QuantDB L2/衍生特征 (2023-2026 快照回填)",
+          "enabled": true,
+          "markets": [
+            "CN"
+          ],
+          "order_no": 1057,
+          "default_selected": false,
+          "coverage_ratio": 0.9983
         }
       ]
     },
@@ -3263,6 +4061,7 @@
           "source": "feature_snapshots/model_features_*.parquet",
           "enabled": true,
           "markets": [
+            "CN",
             "HK",
             "FUTURES"
           ],
@@ -3279,6 +4078,7 @@
           "source": "feature_snapshots/model_features_*.parquet",
           "enabled": true,
           "markets": [
+            "CN",
             "HK",
             "FUTURES"
           ],
@@ -3519,7 +4319,7 @@
           "description": "因子: micro_aqsp_equal",
           "formula": "",
           "source": "feature_snapshots/model_features_*.parquet",
-          "enabled": false,
+          "enabled": true,
           "markets": [
             "CN"
           ],
@@ -3590,7 +4390,7 @@
           "description": "因子: micro_qsp_amount",
           "formula": "",
           "source": "feature_snapshots/model_features_*.parquet",
-          "enabled": false,
+          "enabled": true,
           "markets": [
             "CN"
           ],
@@ -3605,7 +4405,7 @@
           "description": "因子: micro_esp_amount",
           "formula": "",
           "source": "feature_snapshots/model_features_*.parquet",
-          "enabled": false,
+          "enabled": true,
           "markets": [
             "CN"
           ],
@@ -3620,7 +4420,7 @@
           "description": "因子: micro_effective_spread",
           "formula": "",
           "source": "feature_snapshots/model_features_*.parquet",
-          "enabled": false,
+          "enabled": true,
           "markets": [
             "CN"
           ],
@@ -3635,7 +4435,7 @@
           "description": "因子: micro_quoted_spread",
           "formula": "",
           "source": "feature_snapshots/model_features_*.parquet",
-          "enabled": false,
+          "enabled": true,
           "markets": [
             "CN"
           ],
@@ -3650,7 +4450,7 @@
           "description": "因子: micro_spread_vol_20",
           "formula": "",
           "source": "feature_snapshots/model_features_*.parquet",
-          "enabled": false,
+          "enabled": true,
           "markets": [
             "CN"
           ],
@@ -3665,7 +4465,7 @@
           "description": "因子: micro_imbalance_volume",
           "formula": "",
           "source": "feature_snapshots/model_features_*.parquet",
-          "enabled": false,
+          "enabled": true,
           "markets": [
             "CN"
           ],
@@ -3680,7 +4480,7 @@
           "description": "因子: micro_imbalance_amount",
           "formula": "",
           "source": "feature_snapshots/model_features_*.parquet",
-          "enabled": false,
+          "enabled": true,
           "markets": [
             "CN"
           ],
@@ -3695,7 +4495,7 @@
           "description": "因子: micro_imbalance_count",
           "formula": "",
           "source": "feature_snapshots/model_features_*.parquet",
-          "enabled": false,
+          "enabled": true,
           "markets": [
             "CN"
           ],
@@ -3710,7 +4510,7 @@
           "description": "因子: micro_imbalance_large",
           "formula": "",
           "source": "feature_snapshots/model_features_*.parquet",
-          "enabled": false,
+          "enabled": true,
           "markets": [
             "CN"
           ],
@@ -3725,7 +4525,7 @@
           "description": "因子: micro_imbalance_medium",
           "formula": "",
           "source": "feature_snapshots/model_features_*.parquet",
-          "enabled": false,
+          "enabled": true,
           "markets": [
             "CN"
           ],
@@ -3740,7 +4540,7 @@
           "description": "因子: micro_imbalance_small",
           "formula": "",
           "source": "feature_snapshots/model_features_*.parquet",
-          "enabled": false,
+          "enabled": true,
           "markets": [
             "CN"
           ],
@@ -3769,7 +4569,7 @@
           "description": "因子: micro_pressure_score",
           "formula": "",
           "source": "feature_snapshots/model_features_*.parquet",
-          "enabled": false,
+          "enabled": true,
           "markets": [
             "CN"
           ],
@@ -3789,7 +4589,7 @@
             "CN"
           ],
           "order_no": 21,
-          "default_selected": false,
+          "default_selected": true,
           "coverage_ratio": 0.99,
           "coverage_note": "仅 2026 年起有数据 (l2_factors)，跨年训练前请确认覆盖范围"
         },
@@ -3804,7 +4604,7 @@
             "CN"
           ],
           "order_no": 22,
-          "default_selected": false,
+          "default_selected": true,
           "coverage_ratio": 0.99
         },
         {
@@ -3818,7 +4618,7 @@
             "CN"
           ],
           "order_no": 23,
-          "default_selected": false,
+          "default_selected": true,
           "coverage_ratio": 0.99
         },
         {
@@ -3832,7 +4632,7 @@
             "CN"
           ],
           "order_no": 24,
-          "default_selected": false,
+          "default_selected": true,
           "coverage_ratio": 0.99
         },
         {
@@ -3846,7 +4646,7 @@
             "CN"
           ],
           "order_no": 25,
-          "default_selected": false,
+          "default_selected": true,
           "coverage_ratio": 0.99
         },
         {
@@ -3860,7 +4660,7 @@
             "CN"
           ],
           "order_no": 26,
-          "default_selected": false,
+          "default_selected": true,
           "coverage_ratio": 0.99
         },
         {
@@ -3874,7 +4674,7 @@
             "CN"
           ],
           "order_no": 27,
-          "default_selected": false,
+          "default_selected": true,
           "coverage_ratio": 0.99
         },
         {
@@ -3888,7 +4688,7 @@
             "CN"
           ],
           "order_no": 28,
-          "default_selected": false,
+          "default_selected": true,
           "coverage_ratio": 0.99
         },
         {
@@ -3902,7 +4702,7 @@
             "CN"
           ],
           "order_no": 29,
-          "default_selected": false,
+          "default_selected": true,
           "coverage_ratio": 0.99
         },
         {
@@ -3916,7 +4716,7 @@
             "CN"
           ],
           "order_no": 30,
-          "default_selected": false,
+          "default_selected": true,
           "coverage_ratio": 0.99
         },
         {
@@ -3930,7 +4730,7 @@
             "CN"
           ],
           "order_no": 31,
-          "default_selected": false,
+          "default_selected": true,
           "coverage_ratio": 0.99
         },
         {
@@ -3944,7 +4744,7 @@
             "CN"
           ],
           "order_no": 32,
-          "default_selected": false,
+          "default_selected": true,
           "coverage_ratio": 0.99
         },
         {
@@ -3958,7 +4758,7 @@
             "CN"
           ],
           "order_no": 33,
-          "default_selected": false,
+          "default_selected": true,
           "coverage_ratio": 0.99,
           "coverage_note": "仅 2026 年起有数据 (l2_factors)，跨年训练前请确认覆盖范围"
         },
@@ -3973,7 +4773,7 @@
             "CN"
           ],
           "order_no": 34,
-          "default_selected": false,
+          "default_selected": true,
           "coverage_ratio": 0.99
         },
         {
@@ -3987,7 +4787,7 @@
             "CN"
           ],
           "order_no": 35,
-          "default_selected": false,
+          "default_selected": true,
           "coverage_ratio": 0.99
         },
         {
@@ -4001,7 +4801,7 @@
             "CN"
           ],
           "order_no": 36,
-          "default_selected": false,
+          "default_selected": true,
           "coverage_ratio": 0.99
         },
         {
@@ -4015,7 +4815,7 @@
             "CN"
           ],
           "order_no": 37,
-          "default_selected": false,
+          "default_selected": true,
           "coverage_ratio": 0.99
         },
         {
@@ -4029,7 +4829,7 @@
             "CN"
           ],
           "order_no": 38,
-          "default_selected": false,
+          "default_selected": true,
           "coverage_ratio": 0.99
         },
         {
@@ -4043,7 +4843,7 @@
             "CN"
           ],
           "order_no": 39,
-          "default_selected": false,
+          "default_selected": true,
           "coverage_ratio": 0.99
         },
         {
@@ -4057,8 +4857,1898 @@
             "CN"
           ],
           "order_no": 40,
-          "default_selected": false,
+          "default_selected": true,
           "coverage_ratio": 0.99
+        },
+        {
+          "feature_id": "feat_microstructure_1058",
+          "key": "flow_cancel_buy_rate",
+          "description": "买单撤单率",
+          "formula": "",
+          "source": "QuantDB L2/衍生特征 (2023-2026 快照回填)",
+          "enabled": true,
+          "markets": [
+            "CN"
+          ],
+          "order_no": 1058,
+          "default_selected": false,
+          "coverage_ratio": 0.9449
+        },
+        {
+          "feature_id": "feat_microstructure_1059",
+          "key": "flow_cancel_cluster",
+          "description": "撤单聚集度",
+          "formula": "",
+          "source": "QuantDB L2/衍生特征 (2023-2026 快照回填)",
+          "enabled": true,
+          "markets": [
+            "CN"
+          ],
+          "order_no": 1059,
+          "default_selected": false,
+          "coverage_ratio": 0.9058
+        },
+        {
+          "feature_id": "feat_microstructure_1060",
+          "key": "flow_cancel_depth_dist",
+          "description": "撤单距盘口深度",
+          "formula": "",
+          "source": "QuantDB L2/衍生特征 (2023-2026 快照回填)",
+          "enabled": true,
+          "markets": [
+            "CN"
+          ],
+          "order_no": 1060,
+          "default_selected": false,
+          "coverage_ratio": 0.86
+        },
+        {
+          "feature_id": "feat_microstructure_1061",
+          "key": "flow_cancel_hft_ratio",
+          "description": "高频撤单占比",
+          "formula": "",
+          "source": "QuantDB L2/衍生特征 (2023-2026 快照回填)",
+          "enabled": true,
+          "markets": [
+            "CN"
+          ],
+          "order_no": 1061,
+          "default_selected": false,
+          "coverage_ratio": 0.9076
+        },
+        {
+          "feature_id": "feat_microstructure_1062",
+          "key": "flow_cancel_imbalance",
+          "description": "撤单方向不平衡",
+          "formula": "",
+          "source": "QuantDB L2/衍生特征 (2023-2026 快照回填)",
+          "enabled": true,
+          "markets": [
+            "CN"
+          ],
+          "order_no": 1062,
+          "default_selected": false,
+          "coverage_ratio": 0.9302
+        },
+        {
+          "feature_id": "feat_microstructure_1063",
+          "key": "flow_cancel_lifetime",
+          "description": "撤单前挂单存活时间",
+          "formula": "",
+          "source": "QuantDB L2/衍生特征 (2023-2026 快照回填)",
+          "enabled": true,
+          "markets": [
+            "CN"
+          ],
+          "order_no": 1063,
+          "default_selected": false,
+          "coverage_ratio": 0.9471
+        },
+        {
+          "feature_id": "feat_microstructure_1064",
+          "key": "flow_cancel_post_price_change",
+          "description": "撤单后价格变动",
+          "formula": "",
+          "source": "QuantDB L2/衍生特征 (2023-2026 快照回填)",
+          "enabled": true,
+          "markets": [
+            "CN"
+          ],
+          "order_no": 1064,
+          "default_selected": false,
+          "coverage_ratio": 0.9222
+        },
+        {
+          "feature_id": "feat_microstructure_1065",
+          "key": "flow_cancel_price_deviation",
+          "description": "撤单价偏离",
+          "formula": "",
+          "source": "QuantDB L2/衍生特征 (2023-2026 快照回填)",
+          "enabled": true,
+          "markets": [
+            "CN"
+          ],
+          "order_no": 1065,
+          "default_selected": false,
+          "coverage_ratio": 0.9282
+        },
+        {
+          "feature_id": "feat_microstructure_1066",
+          "key": "flow_cancel_rate",
+          "description": "总撤单率",
+          "formula": "",
+          "source": "QuantDB L2/衍生特征 (2023-2026 快照回填)",
+          "enabled": true,
+          "markets": [
+            "CN"
+          ],
+          "order_no": 1066,
+          "default_selected": false,
+          "coverage_ratio": 0.9449
+        },
+        {
+          "feature_id": "feat_microstructure_1067",
+          "key": "flow_cancel_sell_rate",
+          "description": "卖单撤单率",
+          "formula": "",
+          "source": "QuantDB L2/衍生特征 (2023-2026 快照回填)",
+          "enabled": true,
+          "markets": [
+            "CN"
+          ],
+          "order_no": 1067,
+          "default_selected": false,
+          "coverage_ratio": 0.9449
+        },
+        {
+          "feature_id": "feat_microstructure_1068",
+          "key": "flow_cancel_spoof",
+          "description": "幌骗(Spoofing)撤单信号",
+          "formula": "",
+          "source": "QuantDB L2/衍生特征 (2023-2026 快照回填)",
+          "enabled": true,
+          "markets": [
+            "CN"
+          ],
+          "order_no": 1068,
+          "default_selected": false,
+          "coverage_ratio": 0.9471
+        },
+        {
+          "feature_id": "feat_microstructure_1069",
+          "key": "flow_imbalance_autocorr",
+          "description": "委托失衡（时序/盘中）",
+          "formula": "",
+          "source": "QuantDB L2/衍生特征 (2023-2026 快照回填)",
+          "enabled": true,
+          "markets": [
+            "CN"
+          ],
+          "order_no": 1069,
+          "default_selected": false,
+          "coverage_ratio": 0.9456
+        },
+        {
+          "feature_id": "feat_microstructure_1070",
+          "key": "flow_imbalance_close",
+          "description": "委托失衡（时序/盘中）",
+          "formula": "",
+          "source": "QuantDB L2/衍生特征 (2023-2026 快照回填)",
+          "enabled": true,
+          "markets": [
+            "CN"
+          ],
+          "order_no": 1070,
+          "default_selected": false,
+          "coverage_ratio": 0.9432
+        },
+        {
+          "feature_id": "feat_microstructure_1071",
+          "key": "flow_imbalance_mid_am",
+          "description": "委托失衡（时序/盘中）",
+          "formula": "",
+          "source": "QuantDB L2/衍生特征 (2023-2026 快照回填)",
+          "enabled": true,
+          "markets": [
+            "CN"
+          ],
+          "order_no": 1071,
+          "default_selected": false,
+          "coverage_ratio": 0.9471
+        },
+        {
+          "feature_id": "feat_microstructure_1072",
+          "key": "flow_imbalance_mid_pm",
+          "description": "委托失衡（时序/盘中）",
+          "formula": "",
+          "source": "QuantDB L2/衍生特征 (2023-2026 快照回填)",
+          "enabled": true,
+          "markets": [
+            "CN"
+          ],
+          "order_no": 1072,
+          "default_selected": false,
+          "coverage_ratio": 0.9471
+        },
+        {
+          "feature_id": "feat_microstructure_1073",
+          "key": "flow_imbalance_open",
+          "description": "委托失衡（时序/盘中）",
+          "formula": "",
+          "source": "QuantDB L2/衍生特征 (2023-2026 快照回填)",
+          "enabled": true,
+          "markets": [
+            "CN"
+          ],
+          "order_no": 1073,
+          "default_selected": false,
+          "coverage_ratio": 0.9471
+        },
+        {
+          "feature_id": "feat_microstructure_1074",
+          "key": "flow_imbalance_revert_speed",
+          "description": "委托失衡（时序/盘中）",
+          "formula": "",
+          "source": "QuantDB L2/衍生特征 (2023-2026 快照回填)",
+          "enabled": true,
+          "markets": [
+            "CN"
+          ],
+          "order_no": 1074,
+          "default_selected": false,
+          "coverage_ratio": 0.932
+        },
+        {
+          "feature_id": "feat_microstructure_1075",
+          "key": "flow_large_pct",
+          "description": "大单成交占比",
+          "formula": "",
+          "source": "QuantDB L2/衍生特征 (2023-2026 快照回填)",
+          "enabled": true,
+          "markets": [
+            "CN"
+          ],
+          "order_no": 1075,
+          "default_selected": false,
+          "coverage_ratio": 0.9471
+        },
+        {
+          "feature_id": "feat_microstructure_1076",
+          "key": "flow_order_arrival_rate",
+          "description": "订单到达速率",
+          "formula": "",
+          "source": "QuantDB L2/衍生特征 (2023-2026 快照回填)",
+          "enabled": true,
+          "markets": [
+            "CN"
+          ],
+          "order_no": 1076,
+          "default_selected": false,
+          "coverage_ratio": 0.9471
+        },
+        {
+          "feature_id": "feat_microstructure_1077",
+          "key": "flow_order_book_rebuild",
+          "description": "盘口重建速度",
+          "formula": "",
+          "source": "QuantDB L2/衍生特征 (2023-2026 快照回填)",
+          "enabled": true,
+          "markets": [
+            "CN"
+          ],
+          "order_no": 1077,
+          "default_selected": false,
+          "coverage_ratio": 0.9282
+        },
+        {
+          "feature_id": "feat_microstructure_1078",
+          "key": "flow_order_duration_p50",
+          "description": "订单存活时间P50",
+          "formula": "",
+          "source": "QuantDB L2/衍生特征 (2023-2026 快照回填)",
+          "enabled": true,
+          "markets": [
+            "CN"
+          ],
+          "order_no": 1078,
+          "default_selected": false,
+          "coverage_ratio": 0.9471
+        },
+        {
+          "feature_id": "feat_microstructure_1079",
+          "key": "flow_order_duration_p90",
+          "description": "订单存活时间P90",
+          "formula": "",
+          "source": "QuantDB L2/衍生特征 (2023-2026 快照回填)",
+          "enabled": true,
+          "markets": [
+            "CN"
+          ],
+          "order_no": 1079,
+          "default_selected": false,
+          "coverage_ratio": 0.9471
+        },
+        {
+          "feature_id": "feat_microstructure_1080",
+          "key": "flow_order_imbalance",
+          "description": "订单不平衡",
+          "formula": "",
+          "source": "QuantDB L2/衍生特征 (2023-2026 快照回填)",
+          "enabled": true,
+          "markets": [
+            "CN"
+          ],
+          "order_no": 1080,
+          "default_selected": false,
+          "coverage_ratio": 0.9449
+        },
+        {
+          "feature_id": "feat_microstructure_1081",
+          "key": "flow_order_large_ratio",
+          "description": "大单订单占比",
+          "formula": "",
+          "source": "QuantDB L2/衍生特征 (2023-2026 快照回填)",
+          "enabled": true,
+          "markets": [
+            "CN"
+          ],
+          "order_no": 1081,
+          "default_selected": false,
+          "coverage_ratio": 0.9449
+        },
+        {
+          "feature_id": "feat_microstructure_1082",
+          "key": "flow_order_quality",
+          "description": "订单质量",
+          "formula": "",
+          "source": "QuantDB L2/衍生特征 (2023-2026 快照回填)",
+          "enabled": true,
+          "markets": [
+            "CN"
+          ],
+          "order_no": 1082,
+          "default_selected": false,
+          "coverage_ratio": 0.9471
+        },
+        {
+          "feature_id": "feat_microstructure_1083",
+          "key": "flow_order_size_skew",
+          "description": "订单微观属性",
+          "formula": "",
+          "source": "QuantDB L2/衍生特征 (2023-2026 快照回填)",
+          "enabled": true,
+          "markets": [
+            "CN"
+          ],
+          "order_no": 1083,
+          "default_selected": false,
+          "coverage_ratio": 0.9449
+        },
+        {
+          "feature_id": "feat_microstructure_1084",
+          "key": "flow_order_type_diversity",
+          "description": "订单微观属性",
+          "formula": "",
+          "source": "QuantDB L2/衍生特征 (2023-2026 快照回填)",
+          "enabled": true,
+          "markets": [
+            "CN"
+          ],
+          "order_no": 1084,
+          "default_selected": false,
+          "coverage_ratio": 0.9471
+        },
+        {
+          "feature_id": "feat_microstructure_1085",
+          "key": "micro_adverse_selection",
+          "description": "L2微观结构-逆向选择",
+          "formula": "",
+          "source": "QuantDB L2/衍生特征 (2023-2026 快照回填)",
+          "enabled": true,
+          "markets": [
+            "CN"
+          ],
+          "order_no": 1085,
+          "default_selected": false,
+          "coverage_ratio": 0.4849
+        },
+        {
+          "feature_id": "feat_microstructure_1086",
+          "key": "micro_adverse_selection_cost",
+          "description": "L2微观结构-逆向选择",
+          "formula": "",
+          "source": "QuantDB L2/衍生特征 (2023-2026 快照回填)",
+          "enabled": true,
+          "markets": [
+            "CN"
+          ],
+          "order_no": 1086,
+          "default_selected": false,
+          "coverage_ratio": 0.4759
+        },
+        {
+          "feature_id": "feat_microstructure_1087",
+          "key": "micro_call_auction_depth_change",
+          "description": "L2微观结构-集合竞价",
+          "formula": "",
+          "source": "QuantDB L2/衍生特征 (2023-2026 快照回填)",
+          "enabled": true,
+          "markets": [
+            "CN"
+          ],
+          "order_no": 1087,
+          "default_selected": false,
+          "coverage_ratio": 0.4757
+        },
+        {
+          "feature_id": "feat_microstructure_1088",
+          "key": "micro_call_auction_vol_ratio",
+          "description": "L2微观结构-集合竞价",
+          "formula": "",
+          "source": "QuantDB L2/衍生特征 (2023-2026 快照回填)",
+          "enabled": true,
+          "markets": [
+            "CN"
+          ],
+          "order_no": 1088,
+          "default_selected": false,
+          "coverage_ratio": 0.9471
+        },
+        {
+          "feature_id": "feat_microstructure_1089",
+          "key": "micro_close_auction_impact",
+          "description": "L2微观结构-收盘竞价",
+          "formula": "",
+          "source": "QuantDB L2/衍生特征 (2023-2026 快照回填)",
+          "enabled": true,
+          "markets": [
+            "CN"
+          ],
+          "order_no": 1089,
+          "default_selected": false,
+          "coverage_ratio": 0.9432
+        },
+        {
+          "feature_id": "feat_microstructure_1090",
+          "key": "micro_close_squeeze",
+          "description": "L2微观结构-收盘挤压",
+          "formula": "",
+          "source": "QuantDB L2/衍生特征 (2023-2026 快照回填)",
+          "enabled": true,
+          "markets": [
+            "CN"
+          ],
+          "order_no": 1090,
+          "default_selected": false,
+          "coverage_ratio": 0.9471
+        },
+        {
+          "feature_id": "feat_microstructure_1091",
+          "key": "micro_depth_ask",
+          "description": "L2微观结构-盘口深度",
+          "formula": "",
+          "source": "QuantDB L2/衍生特征 (2023-2026 快照回填)",
+          "enabled": true,
+          "markets": [
+            "CN"
+          ],
+          "order_no": 1091,
+          "default_selected": false,
+          "coverage_ratio": 0.9471
+        },
+        {
+          "feature_id": "feat_microstructure_1092",
+          "key": "micro_depth_bid",
+          "description": "L2微观结构-盘口深度",
+          "formula": "",
+          "source": "QuantDB L2/衍生特征 (2023-2026 快照回填)",
+          "enabled": true,
+          "markets": [
+            "CN"
+          ],
+          "order_no": 1092,
+          "default_selected": false,
+          "coverage_ratio": 0.9471
+        },
+        {
+          "feature_id": "feat_microstructure_1093",
+          "key": "micro_depth_close",
+          "description": "L2微观结构-盘口深度",
+          "formula": "",
+          "source": "QuantDB L2/衍生特征 (2023-2026 快照回填)",
+          "enabled": true,
+          "markets": [
+            "CN"
+          ],
+          "order_no": 1093,
+          "default_selected": false,
+          "coverage_ratio": 0.9429
+        },
+        {
+          "feature_id": "feat_microstructure_1094",
+          "key": "micro_depth_concentration_ask",
+          "description": "L2微观结构-盘口深度",
+          "formula": "",
+          "source": "QuantDB L2/衍生特征 (2023-2026 快照回填)",
+          "enabled": true,
+          "markets": [
+            "CN"
+          ],
+          "order_no": 1094,
+          "default_selected": false,
+          "coverage_ratio": 0.9471
+        },
+        {
+          "feature_id": "feat_microstructure_1095",
+          "key": "micro_depth_concentration_bid",
+          "description": "L2微观结构-盘口深度",
+          "formula": "",
+          "source": "QuantDB L2/衍生特征 (2023-2026 快照回填)",
+          "enabled": true,
+          "markets": [
+            "CN"
+          ],
+          "order_no": 1095,
+          "default_selected": false,
+          "coverage_ratio": 0.9471
+        },
+        {
+          "feature_id": "feat_microstructure_1096",
+          "key": "micro_depth_effective",
+          "description": "L2微观结构-盘口深度",
+          "formula": "",
+          "source": "QuantDB L2/衍生特征 (2023-2026 快照回填)",
+          "enabled": true,
+          "markets": [
+            "CN"
+          ],
+          "order_no": 1096,
+          "default_selected": false,
+          "coverage_ratio": 0.9471
+        },
+        {
+          "feature_id": "feat_microstructure_1097",
+          "key": "micro_depth_extreme",
+          "description": "L2微观结构-盘口深度",
+          "formula": "",
+          "source": "QuantDB L2/衍生特征 (2023-2026 快照回填)",
+          "enabled": true,
+          "markets": [
+            "CN"
+          ],
+          "order_no": 1097,
+          "default_selected": false,
+          "coverage_ratio": 0.9471
+        },
+        {
+          "feature_id": "feat_microstructure_1098",
+          "key": "micro_depth_imbalance_10",
+          "description": "L2微观结构-盘口深度",
+          "formula": "",
+          "source": "QuantDB L2/衍生特征 (2023-2026 快照回填)",
+          "enabled": true,
+          "markets": [
+            "CN"
+          ],
+          "order_no": 1098,
+          "default_selected": false,
+          "coverage_ratio": 0.9471
+        },
+        {
+          "feature_id": "feat_microstructure_1099",
+          "key": "micro_depth_mid",
+          "description": "L2微观结构-盘口深度",
+          "formula": "",
+          "source": "QuantDB L2/衍生特征 (2023-2026 快照回填)",
+          "enabled": true,
+          "markets": [
+            "CN"
+          ],
+          "order_no": 1099,
+          "default_selected": false,
+          "coverage_ratio": 0.9412
+        },
+        {
+          "feature_id": "feat_microstructure_1100",
+          "key": "micro_depth_open",
+          "description": "L2微观结构-盘口深度",
+          "formula": "",
+          "source": "QuantDB L2/衍生特征 (2023-2026 快照回填)",
+          "enabled": true,
+          "markets": [
+            "CN"
+          ],
+          "order_no": 1100,
+          "default_selected": false,
+          "coverage_ratio": 0.9452
+        },
+        {
+          "feature_id": "feat_microstructure_1101",
+          "key": "micro_depth_ratio_1",
+          "description": "L2微观结构-盘口深度",
+          "formula": "",
+          "source": "QuantDB L2/衍生特征 (2023-2026 快照回填)",
+          "enabled": true,
+          "markets": [
+            "CN"
+          ],
+          "order_no": 1101,
+          "default_selected": false,
+          "coverage_ratio": 0.9471
+        },
+        {
+          "feature_id": "feat_microstructure_1102",
+          "key": "micro_depth_ratio_10",
+          "description": "L2微观结构-盘口深度",
+          "formula": "",
+          "source": "QuantDB L2/衍生特征 (2023-2026 快照回填)",
+          "enabled": true,
+          "markets": [
+            "CN"
+          ],
+          "order_no": 1102,
+          "default_selected": false,
+          "coverage_ratio": 0.9471
+        },
+        {
+          "feature_id": "feat_microstructure_1103",
+          "key": "micro_depth_ratio_5",
+          "description": "L2微观结构-盘口深度",
+          "formula": "",
+          "source": "QuantDB L2/衍生特征 (2023-2026 快照回填)",
+          "enabled": true,
+          "markets": [
+            "CN"
+          ],
+          "order_no": 1103,
+          "default_selected": false,
+          "coverage_ratio": 0.9471
+        },
+        {
+          "feature_id": "feat_microstructure_1104",
+          "key": "micro_depth_recovery",
+          "description": "L2微观结构-盘口深度",
+          "formula": "",
+          "source": "QuantDB L2/衍生特征 (2023-2026 快照回填)",
+          "enabled": true,
+          "markets": [
+            "CN"
+          ],
+          "order_no": 1104,
+          "default_selected": false,
+          "coverage_ratio": 0.9389
+        },
+        {
+          "feature_id": "feat_microstructure_1105",
+          "key": "micro_depth_volatility",
+          "description": "L2微观结构-盘口深度",
+          "formula": "",
+          "source": "QuantDB L2/衍生特征 (2023-2026 快照回填)",
+          "enabled": true,
+          "markets": [
+            "CN"
+          ],
+          "order_no": 1105,
+          "default_selected": false,
+          "coverage_ratio": 0.9471
+        },
+        {
+          "feature_id": "feat_microstructure_1106",
+          "key": "micro_depth_weighted_ask",
+          "description": "L2微观结构-盘口深度",
+          "formula": "",
+          "source": "QuantDB L2/衍生特征 (2023-2026 快照回填)",
+          "enabled": true,
+          "markets": [
+            "CN"
+          ],
+          "order_no": 1106,
+          "default_selected": false,
+          "coverage_ratio": 0.9471
+        },
+        {
+          "feature_id": "feat_microstructure_1107",
+          "key": "micro_depth_weighted_bid",
+          "description": "L2微观结构-盘口深度",
+          "formula": "",
+          "source": "QuantDB L2/衍生特征 (2023-2026 快照回填)",
+          "enabled": true,
+          "markets": [
+            "CN"
+          ],
+          "order_no": 1107,
+          "default_selected": false,
+          "coverage_ratio": 0.9471
+        },
+        {
+          "feature_id": "feat_microstructure_1108",
+          "key": "micro_impact_decay_half_life",
+          "description": "L2微观结构-价格冲击",
+          "formula": "",
+          "source": "QuantDB L2/衍生特征 (2023-2026 快照回填)",
+          "enabled": true,
+          "markets": [
+            "CN"
+          ],
+          "order_no": 1108,
+          "default_selected": false,
+          "coverage_ratio": 0.9454
+        },
+        {
+          "feature_id": "feat_microstructure_1109",
+          "key": "micro_impact_permanent_ratio",
+          "description": "L2微观结构-价格冲击",
+          "formula": "",
+          "source": "QuantDB L2/衍生特征 (2023-2026 快照回填)",
+          "enabled": true,
+          "markets": [
+            "CN"
+          ],
+          "order_no": 1109,
+          "default_selected": false,
+          "coverage_ratio": 0.9455
+        },
+        {
+          "feature_id": "feat_microstructure_1110",
+          "key": "micro_information_share",
+          "description": "L2微观结构-信息份额",
+          "formula": "",
+          "source": "QuantDB L2/衍生特征 (2023-2026 快照回填)",
+          "enabled": true,
+          "markets": [
+            "CN"
+          ],
+          "order_no": 1110,
+          "default_selected": false,
+          "coverage_ratio": 0.4843
+        },
+        {
+          "feature_id": "feat_microstructure_1111",
+          "key": "micro_jump_cluster",
+          "description": "L2微观结构-价格跳变",
+          "formula": "",
+          "source": "QuantDB L2/衍生特征 (2023-2026 快照回填)",
+          "enabled": true,
+          "markets": [
+            "CN"
+          ],
+          "order_no": 1111,
+          "default_selected": false,
+          "coverage_ratio": 0.9471
+        },
+        {
+          "feature_id": "feat_microstructure_1112",
+          "key": "micro_jump_count_05pct",
+          "description": "L2微观结构-价格跳变",
+          "formula": "",
+          "source": "QuantDB L2/衍生特征 (2023-2026 快照回填)",
+          "enabled": true,
+          "markets": [
+            "CN"
+          ],
+          "order_no": 1112,
+          "default_selected": false,
+          "coverage_ratio": 0.9471
+        },
+        {
+          "feature_id": "feat_microstructure_1113",
+          "key": "micro_jump_recovery_time",
+          "description": "L2微观结构-价格跳变",
+          "formula": "",
+          "source": "QuantDB L2/衍生特征 (2023-2026 快照回填)",
+          "enabled": true,
+          "markets": [
+            "CN"
+          ],
+          "order_no": 1113,
+          "default_selected": false,
+          "coverage_ratio": 0.4902
+        },
+        {
+          "feature_id": "feat_microstructure_1114",
+          "key": "micro_jump_size_max",
+          "description": "L2微观结构-价格跳变",
+          "formula": "",
+          "source": "QuantDB L2/衍生特征 (2023-2026 快照回填)",
+          "enabled": true,
+          "markets": [
+            "CN"
+          ],
+          "order_no": 1114,
+          "default_selected": false,
+          "coverage_ratio": 0.9471
+        },
+        {
+          "feature_id": "feat_microstructure_1115",
+          "key": "micro_jump_size_mean",
+          "description": "L2微观结构-价格跳变",
+          "formula": "",
+          "source": "QuantDB L2/衍生特征 (2023-2026 快照回填)",
+          "enabled": true,
+          "markets": [
+            "CN"
+          ],
+          "order_no": 1115,
+          "default_selected": false,
+          "coverage_ratio": 0.9471
+        },
+        {
+          "feature_id": "feat_microstructure_1116",
+          "key": "micro_jump_skew",
+          "description": "L2微观结构-价格跳变",
+          "formula": "",
+          "source": "QuantDB L2/衍生特征 (2023-2026 快照回填)",
+          "enabled": true,
+          "markets": [
+            "CN"
+          ],
+          "order_no": 1116,
+          "default_selected": false,
+          "coverage_ratio": 0.4327
+        },
+        {
+          "feature_id": "feat_microstructure_1117",
+          "key": "micro_liquidity_amihud_20",
+          "description": "L2微观结构-微观流动性",
+          "formula": "",
+          "source": "QuantDB L2/衍生特征 (2023-2026 快照回填)",
+          "enabled": true,
+          "markets": [
+            "CN"
+          ],
+          "order_no": 1117,
+          "default_selected": false,
+          "coverage_ratio": 0.9471
+        },
+        {
+          "feature_id": "feat_microstructure_1118",
+          "key": "micro_liquidity_amihud_5",
+          "description": "L2微观结构-微观流动性",
+          "formula": "",
+          "source": "QuantDB L2/衍生特征 (2023-2026 快照回填)",
+          "enabled": true,
+          "markets": [
+            "CN"
+          ],
+          "order_no": 1118,
+          "default_selected": false,
+          "coverage_ratio": 0.9471
+        },
+        {
+          "feature_id": "feat_microstructure_1119",
+          "key": "micro_liquidity_close",
+          "description": "L2微观结构-微观流动性",
+          "formula": "",
+          "source": "QuantDB L2/衍生特征 (2023-2026 快照回填)",
+          "enabled": true,
+          "markets": [
+            "CN"
+          ],
+          "order_no": 1119,
+          "default_selected": false,
+          "coverage_ratio": 0.9432
+        },
+        {
+          "feature_id": "feat_microstructure_1120",
+          "key": "micro_liquidity_concentration",
+          "description": "L2微观结构-微观流动性",
+          "formula": "",
+          "source": "QuantDB L2/衍生特征 (2023-2026 快照回填)",
+          "enabled": true,
+          "markets": [
+            "CN"
+          ],
+          "order_no": 1120,
+          "default_selected": false,
+          "coverage_ratio": 0.9471
+        },
+        {
+          "feature_id": "feat_microstructure_1121",
+          "key": "micro_liquidity_cost",
+          "description": "L2微观结构-微观流动性",
+          "formula": "",
+          "source": "QuantDB L2/衍生特征 (2023-2026 快照回填)",
+          "enabled": true,
+          "markets": [
+            "CN"
+          ],
+          "order_no": 1121,
+          "default_selected": false,
+          "coverage_ratio": 0.9471
+        },
+        {
+          "feature_id": "feat_microstructure_1122",
+          "key": "micro_liquidity_daily_pattern",
+          "description": "L2微观结构-微观流动性",
+          "formula": "",
+          "source": "QuantDB L2/衍生特征 (2023-2026 快照回填)",
+          "enabled": true,
+          "markets": [
+            "CN"
+          ],
+          "order_no": 1122,
+          "default_selected": false,
+          "coverage_ratio": 0.946
+        },
+        {
+          "feature_id": "feat_microstructure_1123",
+          "key": "micro_liquidity_extreme",
+          "description": "L2微观结构-微观流动性",
+          "formula": "",
+          "source": "QuantDB L2/衍生特征 (2023-2026 快照回填)",
+          "enabled": true,
+          "markets": [
+            "CN"
+          ],
+          "order_no": 1123,
+          "default_selected": false,
+          "coverage_ratio": 0.9471
+        },
+        {
+          "feature_id": "feat_microstructure_1124",
+          "key": "micro_liquidity_holden",
+          "description": "L2微观结构-微观流动性",
+          "formula": "",
+          "source": "QuantDB L2/衍生特征 (2023-2026 快照回填)",
+          "enabled": true,
+          "markets": [
+            "CN"
+          ],
+          "order_no": 1124,
+          "default_selected": false,
+          "coverage_ratio": 0.9471
+        },
+        {
+          "feature_id": "feat_microstructure_1125",
+          "key": "micro_liquidity_mining",
+          "description": "L2微观结构-微观流动性",
+          "formula": "",
+          "source": "QuantDB L2/衍生特征 (2023-2026 快照回填)",
+          "enabled": true,
+          "markets": [
+            "CN"
+          ],
+          "order_no": 1125,
+          "default_selected": false,
+          "coverage_ratio": 0.4849
+        },
+        {
+          "feature_id": "feat_microstructure_1126",
+          "key": "micro_liquidity_ratio",
+          "description": "L2微观结构-微观流动性",
+          "formula": "",
+          "source": "QuantDB L2/衍生特征 (2023-2026 快照回填)",
+          "enabled": true,
+          "markets": [
+            "CN"
+          ],
+          "order_no": 1126,
+          "default_selected": false,
+          "coverage_ratio": 0.9455
+        },
+        {
+          "feature_id": "feat_microstructure_1127",
+          "key": "micro_liquidity_relative_spread",
+          "description": "L2微观结构-微观流动性",
+          "formula": "",
+          "source": "QuantDB L2/衍生特征 (2023-2026 快照回填)",
+          "enabled": true,
+          "markets": [
+            "CN"
+          ],
+          "order_no": 1127,
+          "default_selected": false,
+          "coverage_ratio": 0.9471
+        },
+        {
+          "feature_id": "feat_microstructure_1128",
+          "key": "micro_liquidity_roll",
+          "description": "L2微观结构-微观流动性",
+          "formula": "",
+          "source": "QuantDB L2/衍生特征 (2023-2026 快照回填)",
+          "enabled": true,
+          "markets": [
+            "CN"
+          ],
+          "order_no": 1128,
+          "default_selected": false,
+          "coverage_ratio": 0.9454
+        },
+        {
+          "feature_id": "feat_microstructure_1129",
+          "key": "micro_liquidity_turnover_decay",
+          "description": "L2微观结构-微观流动性",
+          "formula": "",
+          "source": "QuantDB L2/衍生特征 (2023-2026 快照回填)",
+          "enabled": true,
+          "markets": [
+            "CN"
+          ],
+          "order_no": 1129,
+          "default_selected": false,
+          "coverage_ratio": 0.9471
+        },
+        {
+          "feature_id": "feat_microstructure_1130",
+          "key": "micro_liquidity_twa",
+          "description": "L2微观结构-微观流动性",
+          "formula": "",
+          "source": "QuantDB L2/衍生特征 (2023-2026 快照回填)",
+          "enabled": true,
+          "markets": [
+            "CN"
+          ],
+          "order_no": 1130,
+          "default_selected": false,
+          "coverage_ratio": 0.9471
+        },
+        {
+          "feature_id": "feat_microstructure_1131",
+          "key": "micro_liquidity_volatility",
+          "description": "L2微观结构-微观流动性",
+          "formula": "",
+          "source": "QuantDB L2/衍生特征 (2023-2026 快照回填)",
+          "enabled": true,
+          "markets": [
+            "CN"
+          ],
+          "order_no": 1131,
+          "default_selected": false,
+          "coverage_ratio": 0.9471
+        },
+        {
+          "feature_id": "feat_microstructure_1132",
+          "key": "micro_liquidity_volume_depth_ratio",
+          "description": "L2微观结构-微观流动性",
+          "formula": "",
+          "source": "QuantDB L2/衍生特征 (2023-2026 快照回填)",
+          "enabled": true,
+          "markets": [
+            "CN"
+          ],
+          "order_no": 1132,
+          "default_selected": false,
+          "coverage_ratio": 0.9471
+        },
+        {
+          "feature_id": "feat_microstructure_1133",
+          "key": "micro_lunch_break_gap",
+          "description": "L2微观结构-午休跳空",
+          "formula": "",
+          "source": "QuantDB L2/衍生特征 (2023-2026 快照回填)",
+          "enabled": true,
+          "markets": [
+            "CN"
+          ],
+          "order_no": 1133,
+          "default_selected": false,
+          "coverage_ratio": 0.9471
+        },
+        {
+          "feature_id": "feat_microstructure_1134",
+          "key": "micro_order_imbalance_tox",
+          "description": "L2微观结构-订单不平衡",
+          "formula": "",
+          "source": "QuantDB L2/衍生特征 (2023-2026 快照回填)",
+          "enabled": true,
+          "markets": [
+            "CN"
+          ],
+          "order_no": 1134,
+          "default_selected": false,
+          "coverage_ratio": 0.2147
+        },
+        {
+          "feature_id": "feat_microstructure_1135",
+          "key": "micro_price_discovery",
+          "description": "L2微观结构-价格发现",
+          "formula": "",
+          "source": "QuantDB L2/衍生特征 (2023-2026 快照回填)",
+          "enabled": true,
+          "markets": [
+            "CN"
+          ],
+          "order_no": 1135,
+          "default_selected": false,
+          "coverage_ratio": 0.4849
+        },
+        {
+          "feature_id": "feat_microstructure_1136",
+          "key": "micro_realized_spread",
+          "description": "L2微观结构因子",
+          "formula": "",
+          "source": "QuantDB L2/衍生特征 (2023-2026 快照回填)",
+          "enabled": true,
+          "markets": [
+            "CN"
+          ],
+          "order_no": 1136,
+          "default_selected": false,
+          "coverage_ratio": 0.4849
+        },
+        {
+          "feature_id": "feat_microstructure_1137",
+          "key": "micro_spread_U_shape",
+          "description": "L2微观结构-买卖价差",
+          "formula": "",
+          "source": "QuantDB L2/衍生特征 (2023-2026 快照回填)",
+          "enabled": true,
+          "markets": [
+            "CN"
+          ],
+          "order_no": 1137,
+          "default_selected": false,
+          "coverage_ratio": 0.938
+        },
+        {
+          "feature_id": "feat_microstructure_1138",
+          "key": "micro_spread_close",
+          "description": "L2微观结构-买卖价差",
+          "formula": "",
+          "source": "QuantDB L2/衍生特征 (2023-2026 快照回填)",
+          "enabled": true,
+          "markets": [
+            "CN"
+          ],
+          "order_no": 1138,
+          "default_selected": false,
+          "coverage_ratio": 0.9429
+        },
+        {
+          "feature_id": "feat_microstructure_1139",
+          "key": "micro_spread_decomposition",
+          "description": "L2微观结构-买卖价差",
+          "formula": "",
+          "source": "QuantDB L2/衍生特征 (2023-2026 快照回填)",
+          "enabled": true,
+          "markets": [
+            "CN"
+          ],
+          "order_no": 1139,
+          "default_selected": false,
+          "coverage_ratio": 0.4849
+        },
+        {
+          "feature_id": "feat_microstructure_1140",
+          "key": "micro_spread_mid",
+          "description": "L2微观结构-买卖价差",
+          "formula": "",
+          "source": "QuantDB L2/衍生特征 (2023-2026 快照回填)",
+          "enabled": true,
+          "markets": [
+            "CN"
+          ],
+          "order_no": 1140,
+          "default_selected": false,
+          "coverage_ratio": 0.9421
+        },
+        {
+          "feature_id": "feat_microstructure_1141",
+          "key": "micro_spread_open",
+          "description": "L2微观结构-买卖价差",
+          "formula": "",
+          "source": "QuantDB L2/衍生特征 (2023-2026 快照回填)",
+          "enabled": true,
+          "markets": [
+            "CN"
+          ],
+          "order_no": 1141,
+          "default_selected": false,
+          "coverage_ratio": 0.9457
+        },
+        {
+          "feature_id": "feat_microstructure_1142",
+          "key": "micro_spread_recovery",
+          "description": "L2微观结构-买卖价差",
+          "formula": "",
+          "source": "QuantDB L2/衍生特征 (2023-2026 快照回填)",
+          "enabled": true,
+          "markets": [
+            "CN"
+          ],
+          "order_no": 1142,
+          "default_selected": false,
+          "coverage_ratio": 0.9397
+        },
+        {
+          "feature_id": "feat_microstructure_1143",
+          "key": "micro_spread_slope_1_10",
+          "description": "L2微观结构-买卖价差",
+          "formula": "",
+          "source": "QuantDB L2/衍生特征 (2023-2026 快照回填)",
+          "enabled": true,
+          "markets": [
+            "CN"
+          ],
+          "order_no": 1143,
+          "default_selected": false,
+          "coverage_ratio": 0.9471
+        },
+        {
+          "feature_id": "feat_microstructure_1144",
+          "key": "micro_spread_slope_5_10",
+          "description": "L2微观结构-买卖价差",
+          "formula": "",
+          "source": "QuantDB L2/衍生特征 (2023-2026 快照回填)",
+          "enabled": true,
+          "markets": [
+            "CN"
+          ],
+          "order_no": 1144,
+          "default_selected": false,
+          "coverage_ratio": 0.9459
+        },
+        {
+          "feature_id": "feat_microstructure_1145",
+          "key": "micro_spread_vol_ratio",
+          "description": "L2微观结构-买卖价差",
+          "formula": "",
+          "source": "QuantDB L2/衍生特征 (2023-2026 快照回填)",
+          "enabled": true,
+          "markets": [
+            "CN"
+          ],
+          "order_no": 1145,
+          "default_selected": false,
+          "coverage_ratio": 0.9455
+        },
+        {
+          "feature_id": "feat_microstructure_1146",
+          "key": "micro_toxicity_asymmetry",
+          "description": "L2微观结构-订单流毒性",
+          "formula": "",
+          "source": "QuantDB L2/衍生特征 (2023-2026 快照回填)",
+          "enabled": true,
+          "markets": [
+            "CN"
+          ],
+          "order_no": 1146,
+          "default_selected": false,
+          "coverage_ratio": 0.4849
+        },
+        {
+          "feature_id": "feat_microstructure_1147",
+          "key": "micro_toxicity_persistence",
+          "description": "L2微观结构-订单流毒性",
+          "formula": "",
+          "source": "QuantDB L2/衍生特征 (2023-2026 快照回填)",
+          "enabled": true,
+          "markets": [
+            "CN"
+          ],
+          "order_no": 1147,
+          "default_selected": false,
+          "coverage_ratio": 0.4844
+        },
+        {
+          "feature_id": "feat_microstructure_1148",
+          "key": "micro_trade_arrival_rate",
+          "description": "L2微观结构-成交序列",
+          "formula": "",
+          "source": "QuantDB L2/衍生特征 (2023-2026 快照回填)",
+          "enabled": true,
+          "markets": [
+            "CN"
+          ],
+          "order_no": 1148,
+          "default_selected": false,
+          "coverage_ratio": 0.9471
+        },
+        {
+          "feature_id": "feat_microstructure_1149",
+          "key": "micro_trade_continuation",
+          "description": "L2微观结构-成交序列",
+          "formula": "",
+          "source": "QuantDB L2/衍生特征 (2023-2026 快照回填)",
+          "enabled": true,
+          "markets": [
+            "CN"
+          ],
+          "order_no": 1149,
+          "default_selected": false,
+          "coverage_ratio": 0.9471
+        },
+        {
+          "feature_id": "feat_microstructure_1150",
+          "key": "micro_trade_interval_cv",
+          "description": "L2微观结构-成交序列",
+          "formula": "",
+          "source": "QuantDB L2/衍生特征 (2023-2026 快照回填)",
+          "enabled": true,
+          "markets": [
+            "CN"
+          ],
+          "order_no": 1150,
+          "default_selected": false,
+          "coverage_ratio": 0.9471
+        },
+        {
+          "feature_id": "feat_microstructure_1151",
+          "key": "micro_trade_interval_mean",
+          "description": "L2微观结构-成交序列",
+          "formula": "",
+          "source": "QuantDB L2/衍生特征 (2023-2026 快照回填)",
+          "enabled": true,
+          "markets": [
+            "CN"
+          ],
+          "order_no": 1151,
+          "default_selected": false,
+          "coverage_ratio": 0.9471
+        },
+        {
+          "feature_id": "feat_microstructure_1152",
+          "key": "micro_trade_interval_median",
+          "description": "L2微观结构-成交序列",
+          "formula": "",
+          "source": "QuantDB L2/衍生特征 (2023-2026 快照回填)",
+          "enabled": true,
+          "markets": [
+            "CN"
+          ],
+          "order_no": 1152,
+          "default_selected": false,
+          "coverage_ratio": 0.9471
+        },
+        {
+          "feature_id": "feat_microstructure_1153",
+          "key": "micro_trade_run_length",
+          "description": "L2微观结构-成交序列",
+          "formula": "",
+          "source": "QuantDB L2/衍生特征 (2023-2026 快照回填)",
+          "enabled": true,
+          "markets": [
+            "CN"
+          ],
+          "order_no": 1153,
+          "default_selected": false,
+          "coverage_ratio": 0.9471
+        },
+        {
+          "feature_id": "feat_microstructure_1154",
+          "key": "micro_trade_seq_entropy",
+          "description": "L2微观结构-成交序列",
+          "formula": "",
+          "source": "QuantDB L2/衍生特征 (2023-2026 快照回填)",
+          "enabled": true,
+          "markets": [
+            "CN"
+          ],
+          "order_no": 1154,
+          "default_selected": false,
+          "coverage_ratio": 0.9471
+        },
+        {
+          "feature_id": "feat_microstructure_1155",
+          "key": "micro_trade_sign_autocorr",
+          "description": "L2微观结构-成交序列",
+          "formula": "",
+          "source": "QuantDB L2/衍生特征 (2023-2026 快照回填)",
+          "enabled": true,
+          "markets": [
+            "CN"
+          ],
+          "order_no": 1155,
+          "default_selected": false,
+          "coverage_ratio": 0.9459
+        },
+        {
+          "feature_id": "feat_microstructure_1156",
+          "key": "micro_trade_sign_transition_BB",
+          "description": "L2微观结构-成交序列",
+          "formula": "",
+          "source": "QuantDB L2/衍生特征 (2023-2026 快照回填)",
+          "enabled": true,
+          "markets": [
+            "CN"
+          ],
+          "order_no": 1156,
+          "default_selected": false,
+          "coverage_ratio": 0.9462
+        },
+        {
+          "feature_id": "feat_microstructure_1157",
+          "key": "micro_trade_sign_transition_EB",
+          "description": "L2微观结构-成交序列",
+          "formula": "",
+          "source": "QuantDB L2/衍生特征 (2023-2026 快照回填)",
+          "enabled": true,
+          "markets": [
+            "CN"
+          ],
+          "order_no": 1157,
+          "default_selected": false,
+          "coverage_ratio": 0.9468
+        },
+        {
+          "feature_id": "feat_microstructure_1158",
+          "key": "micro_trade_zero_interval_ratio",
+          "description": "L2微观结构-成交序列",
+          "formula": "",
+          "source": "QuantDB L2/衍生特征 (2023-2026 快照回填)",
+          "enabled": true,
+          "markets": [
+            "CN"
+          ],
+          "order_no": 1158,
+          "default_selected": false,
+          "coverage_ratio": 0.9471
+        },
+        {
+          "feature_id": "feat_microstructure_1159",
+          "key": "micro_volume_sync",
+          "description": "L2微观结构-量价同步",
+          "formula": "",
+          "source": "QuantDB L2/衍生特征 (2023-2026 快照回填)",
+          "enabled": true,
+          "markets": [
+            "CN"
+          ],
+          "order_no": 1159,
+          "default_selected": false,
+          "coverage_ratio": 0.9455
+        },
+        {
+          "feature_id": "feat_microstructure_1160",
+          "key": "micro_vpin_100",
+          "description": "L2微观结构-VPIN 毒性",
+          "formula": "",
+          "source": "QuantDB L2/衍生特征 (2023-2026 快照回填)",
+          "enabled": true,
+          "markets": [
+            "CN"
+          ],
+          "order_no": 1160,
+          "default_selected": false,
+          "coverage_ratio": 0.4849
+        },
+        {
+          "feature_id": "feat_microstructure_1161",
+          "key": "micro_vpin_amount_ratio",
+          "description": "L2微观结构-VPIN 毒性",
+          "formula": "",
+          "source": "QuantDB L2/衍生特征 (2023-2026 快照回填)",
+          "enabled": true,
+          "markets": [
+            "CN"
+          ],
+          "order_no": 1161,
+          "default_selected": false,
+          "coverage_ratio": 0.9471
+        },
+        {
+          "feature_id": "feat_microstructure_1162",
+          "key": "micro_vpin_bayesian",
+          "description": "L2微观结构-VPIN 毒性",
+          "formula": "",
+          "source": "QuantDB L2/衍生特征 (2023-2026 快照回填)",
+          "enabled": true,
+          "markets": [
+            "CN"
+          ],
+          "order_no": 1162,
+          "default_selected": false,
+          "coverage_ratio": 0.4849
+        },
+        {
+          "feature_id": "feat_microstructure_1163",
+          "key": "micro_vpin_conviction",
+          "description": "L2微观结构-VPIN 毒性",
+          "formula": "",
+          "source": "QuantDB L2/衍生特征 (2023-2026 快照回填)",
+          "enabled": true,
+          "markets": [
+            "CN"
+          ],
+          "order_no": 1163,
+          "default_selected": false,
+          "coverage_ratio": 0.4849
+        },
+        {
+          "feature_id": "feat_microstructure_1164",
+          "key": "micro_vpin_entropy",
+          "description": "L2微观结构-VPIN 毒性",
+          "formula": "",
+          "source": "QuantDB L2/衍生特征 (2023-2026 快照回填)",
+          "enabled": true,
+          "markets": [
+            "CN"
+          ],
+          "order_no": 1164,
+          "default_selected": false,
+          "coverage_ratio": 0.4849
+        },
+        {
+          "feature_id": "feat_microstructure_1165",
+          "key": "micro_vpin_hurst",
+          "description": "L2微观结构-VPIN 毒性",
+          "formula": "",
+          "source": "QuantDB L2/衍生特征 (2023-2026 快照回填)",
+          "enabled": true,
+          "markets": [
+            "CN"
+          ],
+          "order_no": 1165,
+          "default_selected": false,
+          "coverage_ratio": 0.4844
+        },
+        {
+          "feature_id": "feat_microstructure_1166",
+          "key": "micro_vpin_kyle",
+          "description": "L2微观结构-VPIN 毒性",
+          "formula": "",
+          "source": "QuantDB L2/衍生特征 (2023-2026 快照回填)",
+          "enabled": true,
+          "markets": [
+            "CN"
+          ],
+          "order_no": 1166,
+          "default_selected": false,
+          "coverage_ratio": 0.4849
+        },
+        {
+          "feature_id": "feat_microstructure_1167",
+          "key": "micro_vpin_quantile_ratio",
+          "description": "L2微观结构-VPIN 毒性",
+          "formula": "",
+          "source": "QuantDB L2/衍生特征 (2023-2026 快照回填)",
+          "enabled": true,
+          "markets": [
+            "CN"
+          ],
+          "order_no": 1167,
+          "default_selected": false,
+          "coverage_ratio": 0.4849
+        },
+        {
+          "feature_id": "feat_microstructure_1168",
+          "key": "micro_vpin_surge",
+          "description": "L2微观结构-VPIN 毒性",
+          "formula": "",
+          "source": "QuantDB L2/衍生特征 (2023-2026 快照回填)",
+          "enabled": true,
+          "markets": [
+            "CN"
+          ],
+          "order_no": 1168,
+          "default_selected": false,
+          "coverage_ratio": 0.9471
+        },
+        {
+          "feature_id": "feat_microstructure_1169",
+          "key": "micro_vpin_tail_risk",
+          "description": "L2微观结构-VPIN 毒性",
+          "formula": "",
+          "source": "QuantDB L2/衍生特征 (2023-2026 快照回填)",
+          "enabled": true,
+          "markets": [
+            "CN"
+          ],
+          "order_no": 1169,
+          "default_selected": false,
+          "coverage_ratio": 0.4849
+        },
+        {
+          "feature_id": "feat_microstructure_1170",
+          "key": "micro_vpin_trend",
+          "description": "L2微观结构-VPIN 毒性",
+          "formula": "",
+          "source": "QuantDB L2/衍生特征 (2023-2026 快照回填)",
+          "enabled": true,
+          "markets": [
+            "CN"
+          ],
+          "order_no": 1170,
+          "default_selected": false,
+          "coverage_ratio": 0.9471
+        },
+        {
+          "feature_id": "feat_microstructure_1171",
+          "key": "micro_vpin_vol_ratio",
+          "description": "L2微观结构-VPIN 毒性",
+          "formula": "",
+          "source": "QuantDB L2/衍生特征 (2023-2026 快照回填)",
+          "enabled": true,
+          "markets": [
+            "CN"
+          ],
+          "order_no": 1171,
+          "default_selected": false,
+          "coverage_ratio": 0.9455
+        },
+        {
+          "feature_id": "feat_microstructure_1172",
+          "key": "micro_vpin_zscore_20",
+          "description": "L2微观结构-VPIN 毒性",
+          "formula": "",
+          "source": "QuantDB L2/衍生特征 (2023-2026 快照回填)",
+          "enabled": true,
+          "markets": [
+            "CN"
+          ],
+          "order_no": 1172,
+          "default_selected": false,
+          "coverage_ratio": 0.944
+        },
+        {
+          "feature_id": "feat_microstructure_1173",
+          "key": "micro_zone_distribution",
+          "description": "L2微观结构-日内时段分布",
+          "formula": "",
+          "source": "QuantDB L2/衍生特征 (2023-2026 快照回填)",
+          "enabled": true,
+          "markets": [
+            "CN"
+          ],
+          "order_no": 1173,
+          "default_selected": false,
+          "coverage_ratio": 0.9471
+        },
+        {
+          "feature_id": "feat_microstructure_1174",
+          "key": "micro_zone_imbalance_am",
+          "description": "L2微观结构-日内时段分布",
+          "formula": "",
+          "source": "QuantDB L2/衍生特征 (2023-2026 快照回填)",
+          "enabled": true,
+          "markets": [
+            "CN"
+          ],
+          "order_no": 1174,
+          "default_selected": false,
+          "coverage_ratio": 0.9471
+        },
+        {
+          "feature_id": "feat_microstructure_1175",
+          "key": "micro_zone_imbalance_pm",
+          "description": "L2微观结构-日内时段分布",
+          "formula": "",
+          "source": "QuantDB L2/衍生特征 (2023-2026 快照回填)",
+          "enabled": true,
+          "markets": [
+            "CN"
+          ],
+          "order_no": 1175,
+          "default_selected": false,
+          "coverage_ratio": 0.9471
+        },
+        {
+          "feature_id": "feat_microstructure_1176",
+          "key": "micro_zone_morning_evening_ratio",
+          "description": "L2微观结构-日内时段分布",
+          "formula": "",
+          "source": "QuantDB L2/衍生特征 (2023-2026 快照回填)",
+          "enabled": true,
+          "markets": [
+            "CN"
+          ],
+          "order_no": 1176,
+          "default_selected": false,
+          "coverage_ratio": 0.9471
+        },
+        {
+          "feature_id": "feat_microstructure_1177",
+          "key": "micro_zone_rv_ratio_AM",
+          "description": "L2微观结构-日内时段分布",
+          "formula": "",
+          "source": "QuantDB L2/衍生特征 (2023-2026 快照回填)",
+          "enabled": true,
+          "markets": [
+            "CN"
+          ],
+          "order_no": 1177,
+          "default_selected": false,
+          "coverage_ratio": 0.9459
+        },
+        {
+          "feature_id": "feat_microstructure_1178",
+          "key": "micro_zone_rv_ratio_PM",
+          "description": "L2微观结构-日内时段分布",
+          "formula": "",
+          "source": "QuantDB L2/衍生特征 (2023-2026 快照回填)",
+          "enabled": true,
+          "markets": [
+            "CN"
+          ],
+          "order_no": 1178,
+          "default_selected": false,
+          "coverage_ratio": 0.9459
+        },
+        {
+          "feature_id": "feat_microstructure_1179",
+          "key": "micro_zone_rv_ratio_close",
+          "description": "L2微观结构-日内时段分布",
+          "formula": "",
+          "source": "QuantDB L2/衍生特征 (2023-2026 快照回填)",
+          "enabled": true,
+          "markets": [
+            "CN"
+          ],
+          "order_no": 1179,
+          "default_selected": false,
+          "coverage_ratio": 0.942
+        },
+        {
+          "feature_id": "feat_microstructure_1180",
+          "key": "micro_zone_rv_ratio_open",
+          "description": "L2微观结构-日内时段分布",
+          "formula": "",
+          "source": "QuantDB L2/衍生特征 (2023-2026 快照回填)",
+          "enabled": true,
+          "markets": [
+            "CN"
+          ],
+          "order_no": 1180,
+          "default_selected": false,
+          "coverage_ratio": 0.9459
+        },
+        {
+          "feature_id": "feat_microstructure_1181",
+          "key": "micro_zone_spread_ratio_close",
+          "description": "L2微观结构-日内时段分布",
+          "formula": "",
+          "source": "QuantDB L2/衍生特征 (2023-2026 快照回填)",
+          "enabled": true,
+          "markets": [
+            "CN"
+          ],
+          "order_no": 1181,
+          "default_selected": false,
+          "coverage_ratio": 0.9419
+        },
+        {
+          "feature_id": "feat_microstructure_1182",
+          "key": "micro_zone_spread_ratio_mid",
+          "description": "L2微观结构-日内时段分布",
+          "formula": "",
+          "source": "QuantDB L2/衍生特征 (2023-2026 快照回填)",
+          "enabled": true,
+          "markets": [
+            "CN"
+          ],
+          "order_no": 1182,
+          "default_selected": false,
+          "coverage_ratio": 0.9421
+        },
+        {
+          "feature_id": "feat_microstructure_1183",
+          "key": "micro_zone_spread_ratio_open",
+          "description": "L2微观结构-日内时段分布",
+          "formula": "",
+          "source": "QuantDB L2/衍生特征 (2023-2026 快照回填)",
+          "enabled": true,
+          "markets": [
+            "CN"
+          ],
+          "order_no": 1183,
+          "default_selected": false,
+          "coverage_ratio": 0.9457
+        },
+        {
+          "feature_id": "feat_microstructure_1184",
+          "key": "micro_zone_vol_ratio_T1",
+          "description": "L2微观结构-日内时段分布",
+          "formula": "",
+          "source": "QuantDB L2/衍生特征 (2023-2026 快照回填)",
+          "enabled": true,
+          "markets": [
+            "CN"
+          ],
+          "order_no": 1184,
+          "default_selected": false,
+          "coverage_ratio": 0.9471
+        },
+        {
+          "feature_id": "feat_microstructure_1185",
+          "key": "micro_zone_vol_ratio_T2",
+          "description": "L2微观结构-日内时段分布",
+          "formula": "",
+          "source": "QuantDB L2/衍生特征 (2023-2026 快照回填)",
+          "enabled": true,
+          "markets": [
+            "CN"
+          ],
+          "order_no": 1185,
+          "default_selected": false,
+          "coverage_ratio": 0.9471
+        },
+        {
+          "feature_id": "feat_microstructure_1186",
+          "key": "micro_zone_vol_ratio_T3",
+          "description": "L2微观结构-日内时段分布",
+          "formula": "",
+          "source": "QuantDB L2/衍生特征 (2023-2026 快照回填)",
+          "enabled": true,
+          "markets": [
+            "CN"
+          ],
+          "order_no": 1186,
+          "default_selected": false,
+          "coverage_ratio": 0.9471
+        },
+        {
+          "feature_id": "feat_microstructure_1187",
+          "key": "micro_zone_vol_ratio_T4",
+          "description": "L2微观结构-日内时段分布",
+          "formula": "",
+          "source": "QuantDB L2/衍生特征 (2023-2026 快照回填)",
+          "enabled": true,
+          "markets": [
+            "CN"
+          ],
+          "order_no": 1187,
+          "default_selected": false,
+          "coverage_ratio": 0.9471
+        },
+        {
+          "feature_id": "feat_microstructure_1188",
+          "key": "micro_zone_vol_ratio_T5",
+          "description": "L2微观结构-日内时段分布",
+          "formula": "",
+          "source": "QuantDB L2/衍生特征 (2023-2026 快照回填)",
+          "enabled": true,
+          "markets": [
+            "CN"
+          ],
+          "order_no": 1188,
+          "default_selected": false,
+          "coverage_ratio": 0.9471
+        },
+        {
+          "feature_id": "feat_microstructure_1189",
+          "key": "micro_zone_vol_ratio_T6",
+          "description": "L2微观结构-日内时段分布",
+          "formula": "",
+          "source": "QuantDB L2/衍生特征 (2023-2026 快照回填)",
+          "enabled": true,
+          "markets": [
+            "CN"
+          ],
+          "order_no": 1189,
+          "default_selected": false,
+          "coverage_ratio": 0.9471
+        },
+        {
+          "feature_id": "feat_microstructure_1190",
+          "key": "micro_zone_vol_ratio_T7",
+          "description": "L2微观结构-日内时段分布",
+          "formula": "",
+          "source": "QuantDB L2/衍生特征 (2023-2026 快照回填)",
+          "enabled": true,
+          "markets": [
+            "CN"
+          ],
+          "order_no": 1190,
+          "default_selected": false,
+          "coverage_ratio": 0.9471
+        },
+        {
+          "feature_id": "feat_microstructure_1191",
+          "key": "micro_zone_vol_ratio_T8",
+          "description": "L2微观结构-日内时段分布",
+          "formula": "",
+          "source": "QuantDB L2/衍生特征 (2023-2026 快照回填)",
+          "enabled": true,
+          "markets": [
+            "CN"
+          ],
+          "order_no": 1191,
+          "default_selected": false,
+          "coverage_ratio": 0.9471
+        },
+        {
+          "feature_id": "feat_microstructure_1192",
+          "key": "micro_zone_vpin_open",
+          "description": "L2微观结构-日内时段分布",
+          "formula": "",
+          "source": "QuantDB L2/衍生特征 (2023-2026 快照回填)",
+          "enabled": true,
+          "markets": [
+            "CN"
+          ],
+          "order_no": 1192,
+          "default_selected": false,
+          "coverage_ratio": 0.9471
         }
       ]
     },
@@ -4070,256 +6760,256 @@
       "features": [
         {
           "feature_id": "feat_gtja_000",
-          "key": "gtja_alpha_016",
+          "key": "gtja_016",
           "description": "GTJA Alpha16: -TSMAX(RANK(CORR(rank(vol),rank(vwap),5)),5)",
           "formula": "GTJA Alpha16: -TSMAX(RANK(CORR(rank(vol),rank(vwap),5)),5)",
           "source": "GTJA Alpha191 (国泰君安) — feature_snapshots/model_features_*.parquet",
-          "enabled": false,
+          "enabled": true,
           "markets": [
             "CN"
           ],
           "order_no": 1,
-          "default_selected": false,
+          "default_selected": true,
           "coverage_ratio": 0.95,
           "tag": "正向",
           "disabled_reason": "数据源中暂无此列，待后续计算或数据补充"
         },
         {
           "feature_id": "feat_gtja_001",
-          "key": "gtja_alpha_032",
+          "key": "gtja_032",
           "description": "GTJA Alpha32: -SUM(RANK(CORR(rank(high),rank(vol),3)),3)",
           "formula": "GTJA Alpha32: -SUM(RANK(CORR(rank(high),rank(vol),3)),3)",
           "source": "GTJA Alpha191 (国泰君安) — feature_snapshots/model_features_*.parquet",
-          "enabled": false,
+          "enabled": true,
           "markets": [
             "CN"
           ],
           "order_no": 2,
-          "default_selected": false,
+          "default_selected": true,
           "coverage_ratio": 0.95,
           "tag": "正向",
           "disabled_reason": "数据源中暂无此列，待后续计算或数据补充"
         },
         {
           "feature_id": "feat_gtja_002",
-          "key": "gtja_alpha_062",
+          "key": "gtja_062",
           "description": "GTJA Alpha62: -CORR(high, rank(vol), 5)",
           "formula": "GTJA Alpha62: -CORR(high, rank(vol), 5)",
           "source": "GTJA Alpha191 (国泰君安) — feature_snapshots/model_features_*.parquet",
-          "enabled": false,
+          "enabled": true,
           "markets": [
             "CN"
           ],
           "order_no": 3,
-          "default_selected": false,
+          "default_selected": true,
           "coverage_ratio": 0.95,
           "tag": "正向",
           "disabled_reason": "数据源中暂无此列，待后续计算或数据补充"
         },
         {
           "feature_id": "feat_gtja_003",
-          "key": "gtja_alpha_083",
+          "key": "gtja_083",
           "description": "GTJA Alpha83: -RANK(COV(rank(high), rank(vol), 5))",
           "formula": "GTJA Alpha83: -RANK(COV(rank(high), rank(vol), 5))",
           "source": "GTJA Alpha191 (国泰君安) — feature_snapshots/model_features_*.parquet",
-          "enabled": false,
+          "enabled": true,
           "markets": [
             "CN"
           ],
           "order_no": 4,
-          "default_selected": false,
+          "default_selected": true,
           "coverage_ratio": 0.95,
           "tag": "正向 - 最强",
           "disabled_reason": "数据源中暂无此列，待后续计算或数据补充"
         },
         {
           "feature_id": "feat_gtja_004",
-          "key": "gtja_alpha_090",
+          "key": "gtja_090",
           "description": "GTJA Alpha90: -RANK(CORR(rank(vwap), rank(vol), 5))",
           "formula": "GTJA Alpha90: -RANK(CORR(rank(vwap), rank(vol), 5))",
           "source": "GTJA Alpha191 (国泰君安) — feature_snapshots/model_features_*.parquet",
-          "enabled": false,
+          "enabled": true,
           "markets": [
             "CN"
           ],
           "order_no": 5,
-          "default_selected": false,
+          "default_selected": true,
           "coverage_ratio": 0.95,
           "tag": "正向",
           "disabled_reason": "数据源中暂无此列，待后续计算或数据补充"
         },
         {
           "feature_id": "feat_gtja_005",
-          "key": "gtja_alpha_099",
+          "key": "gtja_099",
           "description": "GTJA Alpha99: -RANK(COV(rank(close), rank(vol), 5))",
           "formula": "GTJA Alpha99: -RANK(COV(rank(close), rank(vol), 5))",
           "source": "GTJA Alpha191 (国泰君安) — feature_snapshots/model_features_*.parquet",
-          "enabled": false,
+          "enabled": true,
           "markets": [
             "CN"
           ],
           "order_no": 6,
-          "default_selected": false,
+          "default_selected": true,
           "coverage_ratio": 0.95,
           "tag": "正向",
           "disabled_reason": "数据源中暂无此列，待后续计算或数据补充"
         },
         {
           "feature_id": "feat_gtja_006",
-          "key": "gtja_alpha_036",
+          "key": "gtja_036",
           "description": "GTJA Alpha36: RANK(SUM(CORR(rank(vol),rank(vwap),6),2))",
           "formula": "GTJA Alpha36: RANK(SUM(CORR(rank(vol),rank(vwap),6),2))",
           "source": "GTJA Alpha191 (国泰君安) — feature_snapshots/model_features_*.parquet",
-          "enabled": false,
+          "enabled": true,
           "markets": [
             "CN"
           ],
           "order_no": 7,
-          "default_selected": false,
+          "default_selected": true,
           "coverage_ratio": 0.95,
           "tag": "反向",
           "disabled_reason": "数据源中暂无此列，待后续计算或数据补充"
         },
         {
           "feature_id": "feat_gtja_007",
-          "key": "gtja_alpha_070",
+          "key": "gtja_070",
           "description": "GTJA Alpha70: STD(AMOUNT, 6)",
           "formula": "GTJA Alpha70: STD(AMOUNT, 6)",
           "source": "GTJA Alpha191 (国泰君安) — feature_snapshots/model_features_*.parquet",
-          "enabled": false,
+          "enabled": true,
           "markets": [
             "CN"
           ],
           "order_no": 8,
-          "default_selected": false,
+          "default_selected": true,
           "coverage_ratio": 0.95,
           "tag": "反向/分行情",
           "disabled_reason": "数据源中暂无此列，待后续计算或数据补充"
         },
         {
           "feature_id": "feat_gtja_008",
-          "key": "gtja_alpha_074",
+          "key": "gtja_074",
           "description": "GTJA Alpha74: RANK(CORR(SUM(price,20),SUM(MA(vol,40),20),7))+...",
           "formula": "GTJA Alpha74: RANK(CORR(SUM(price,20),SUM(MA(vol,40),20),7))+...",
           "source": "GTJA Alpha191 (国泰君安) — feature_snapshots/model_features_*.parquet",
-          "enabled": false,
+          "enabled": true,
           "markets": [
             "CN"
           ],
           "order_no": 9,
-          "default_selected": false,
+          "default_selected": true,
           "coverage_ratio": 0.95,
           "tag": "反向",
           "disabled_reason": "数据源中暂无此列，待后续计算或数据补充"
         },
         {
           "feature_id": "feat_gtja_009",
-          "key": "gtja_alpha_150",
+          "key": "gtja_150",
           "description": "GTJA Alpha150: (close+high+low)/3 * volume",
           "formula": "GTJA Alpha150: (close+high+low)/3 * volume",
           "source": "GTJA Alpha191 (国泰君安) — feature_snapshots/model_features_*.parquet",
-          "enabled": false,
+          "enabled": true,
           "markets": [
             "CN"
           ],
           "order_no": 10,
-          "default_selected": false,
+          "default_selected": true,
           "coverage_ratio": 0.95,
           "tag": "反向/分行情",
           "disabled_reason": "数据源中暂无此列，待后续计算或数据补充"
         },
         {
           "feature_id": "feat_gtja_010",
-          "key": "gtja_alpha_176",
+          "key": "gtja_176",
           "description": "GTJA Alpha176: CORR(rank(KDJ_RSV_12), rank(vol), 6)",
           "formula": "GTJA Alpha176: CORR(rank(KDJ_RSV_12), rank(vol), 6)",
           "source": "GTJA Alpha191 (国泰君安) — feature_snapshots/model_features_*.parquet",
-          "enabled": false,
+          "enabled": true,
           "markets": [
             "CN"
           ],
           "order_no": 11,
-          "default_selected": false,
+          "default_selected": true,
           "coverage_ratio": 0.95,
           "tag": "反向",
           "disabled_reason": "数据源中暂无此列，待后续计算或数据补充"
         },
         {
           "feature_id": "feat_gtja_011",
-          "key": "gtja_alpha_179",
+          "key": "gtja_179",
           "description": "GTJA Alpha179: RANK(CORR(vwap,vol,4))*RANK(CORR(rank(low),rank(MA(vol,50)),12))",
           "formula": "GTJA Alpha179: RANK(CORR(vwap,vol,4))*RANK(CORR(rank(low),rank(MA(vol,50)),12))",
           "source": "GTJA Alpha191 (国泰君安) — feature_snapshots/model_features_*.parquet",
-          "enabled": false,
+          "enabled": true,
           "markets": [
             "CN"
           ],
           "order_no": 12,
-          "default_selected": false,
+          "default_selected": true,
           "coverage_ratio": 0.95,
           "tag": "反向",
           "disabled_reason": "数据源中暂无此列，待后续计算或数据补充"
         },
         {
           "feature_id": "feat_gtja_012",
-          "key": "gtja_alpha_042",
+          "key": "gtja_042",
           "description": "GTJA Alpha42: -RANK(STD(high,10)) * CORR(high,vol,10)",
           "formula": "GTJA Alpha42: -RANK(STD(high,10)) * CORR(high,vol,10)",
           "source": "GTJA Alpha191 (国泰君安) — feature_snapshots/model_features_*.parquet",
-          "enabled": false,
+          "enabled": true,
           "markets": [
             "CN"
           ],
           "order_no": 13,
-          "default_selected": false,
+          "default_selected": true,
           "coverage_ratio": 0.95,
           "tag": "分行情（牛市增强）",
           "disabled_reason": "数据源中暂无此列，待后续计算或数据补充"
         },
         {
           "feature_id": "feat_gtja_013",
-          "key": "gtja_alpha_095",
+          "key": "gtja_095",
           "description": "GTJA Alpha95: STD(AMOUNT, 20)",
           "formula": "GTJA Alpha95: STD(AMOUNT, 20)",
           "source": "GTJA Alpha191 (国泰君安) — feature_snapshots/model_features_*.parquet",
-          "enabled": false,
+          "enabled": true,
           "markets": [
             "CN"
           ],
           "order_no": 14,
-          "default_selected": false,
+          "default_selected": true,
           "coverage_ratio": 0.95,
           "tag": "分行情",
           "disabled_reason": "数据源中暂无此列，待后续计算或数据补充"
         },
         {
           "feature_id": "feat_gtja_014",
-          "key": "gtja_alpha_158",
+          "key": "gtja_158",
           "description": "GTJA Alpha158: (high-low)/close (基于 EMA(close,15) 推导)",
           "formula": "GTJA Alpha158: (high-low)/close (基于 EMA(close,15) 推导)",
           "source": "GTJA Alpha191 (国泰君安) — feature_snapshots/model_features_*.parquet",
-          "enabled": false,
+          "enabled": true,
           "markets": [
             "CN"
           ],
           "order_no": 15,
-          "default_selected": false,
+          "default_selected": true,
           "coverage_ratio": 0.95,
           "tag": "分行情",
           "disabled_reason": "数据源中暂无此列，待后续计算或数据补充"
         },
         {
           "feature_id": "feat_gtja_015",
-          "key": "gtja_alpha_159",
+          "key": "gtja_159",
           "description": "GTJA Alpha159: 多周期 RSV 加权（牛熊反转因子）",
           "formula": "GTJA Alpha159: 多周期 RSV 加权（牛熊反转因子）",
           "source": "GTJA Alpha191 (国泰君安) — feature_snapshots/model_features_*.parquet",
-          "enabled": false,
+          "enabled": true,
           "markets": [
             "CN"
           ],
           "order_no": 16,
-          "default_selected": false,
+          "default_selected": true,
           "coverage_ratio": 0.95,
           "tag": "分行情（牛熊 flip）",
           "disabled_reason": "数据源中暂无此列，待后续计算或数据补充"
@@ -4777,6 +7467,272 @@
           "coverage_ratio": 1.0,
           "measured_ic": -0.0258,
           "measured_icir": -0.1398
+        },
+        {
+          "feature_id": "feat_technical_1193",
+          "key": "amount",
+          "description": "成交额（元）",
+          "formula": "",
+          "source": "QuantDB L2/衍生特征 (2023-2026 快照回填)",
+          "enabled": true,
+          "markets": [
+            "CN"
+          ],
+          "order_no": 1193,
+          "default_selected": false,
+          "coverage_ratio": 1.0
+        },
+        {
+          "feature_id": "feat_technical_1194",
+          "key": "kdj_j",
+          "description": "KDJ 指标 K/J 线",
+          "formula": "",
+          "source": "QuantDB L2/衍生特征 (2023-2026 快照回填)",
+          "enabled": true,
+          "markets": [
+            "CN"
+          ],
+          "order_no": 1194,
+          "default_selected": false,
+          "coverage_ratio": 0.9993
+        },
+        {
+          "feature_id": "feat_technical_1195",
+          "key": "kdj_k",
+          "description": "KDJ 指标 K/J 线",
+          "formula": "",
+          "source": "QuantDB L2/衍生特征 (2023-2026 快照回填)",
+          "enabled": true,
+          "markets": [
+            "CN"
+          ],
+          "order_no": 1195,
+          "default_selected": false,
+          "coverage_ratio": 0.9993
+        },
+        {
+          "feature_id": "feat_technical_1196",
+          "key": "ma10",
+          "description": "N日均线（后复权）",
+          "formula": "",
+          "source": "QuantDB L2/衍生特征 (2023-2026 快照回填)",
+          "enabled": true,
+          "markets": [
+            "CN"
+          ],
+          "order_no": 1196,
+          "default_selected": false,
+          "coverage_ratio": 0.9992
+        },
+        {
+          "feature_id": "feat_technical_1197",
+          "key": "ma20",
+          "description": "N日均线（后复权）",
+          "formula": "",
+          "source": "QuantDB L2/衍生特征 (2023-2026 快照回填)",
+          "enabled": true,
+          "markets": [
+            "CN"
+          ],
+          "order_no": 1197,
+          "default_selected": false,
+          "coverage_ratio": 0.9984
+        },
+        {
+          "feature_id": "feat_technical_1198",
+          "key": "ma5",
+          "description": "N日均线（后复权）",
+          "formula": "",
+          "source": "QuantDB L2/衍生特征 (2023-2026 快照回填)",
+          "enabled": true,
+          "markets": [
+            "CN"
+          ],
+          "order_no": 1198,
+          "default_selected": false,
+          "coverage_ratio": 0.9997
+        },
+        {
+          "feature_id": "feat_technical_1199",
+          "key": "ma60",
+          "description": "N日均线（后复权）",
+          "formula": "",
+          "source": "QuantDB L2/衍生特征 (2023-2026 快照回填)",
+          "enabled": true,
+          "markets": [
+            "CN"
+          ],
+          "order_no": 1199,
+          "default_selected": false,
+          "coverage_ratio": 0.9951
+        },
+        {
+          "feature_id": "feat_technical_1200",
+          "key": "ma_gap_10",
+          "description": "收盘价相对N日均线的乖离",
+          "formula": "",
+          "source": "QuantDB L2/衍生特征 (2023-2026 快照回填)",
+          "enabled": true,
+          "markets": [
+            "CN"
+          ],
+          "order_no": 1200,
+          "default_selected": false,
+          "coverage_ratio": 0.9992
+        },
+        {
+          "feature_id": "feat_technical_1201",
+          "key": "ma_gap_20",
+          "description": "收盘价相对N日均线的乖离",
+          "formula": "",
+          "source": "QuantDB L2/衍生特征 (2023-2026 快照回填)",
+          "enabled": true,
+          "markets": [
+            "CN"
+          ],
+          "order_no": 1201,
+          "default_selected": false,
+          "coverage_ratio": 0.9984
+        },
+        {
+          "feature_id": "feat_technical_1202",
+          "key": "ma_gap_5",
+          "description": "收盘价相对N日均线的乖离",
+          "formula": "",
+          "source": "QuantDB L2/衍生特征 (2023-2026 快照回填)",
+          "enabled": true,
+          "markets": [
+            "CN"
+          ],
+          "order_no": 1202,
+          "default_selected": false,
+          "coverage_ratio": 0.9997
+        },
+        {
+          "feature_id": "feat_technical_1203",
+          "key": "macd_dea",
+          "description": "MACD DIF/DEA",
+          "formula": "",
+          "source": "QuantDB L2/衍生特征 (2023-2026 快照回填)",
+          "enabled": true,
+          "markets": [
+            "CN"
+          ],
+          "order_no": 1203,
+          "default_selected": false,
+          "coverage_ratio": 1.0
+        },
+        {
+          "feature_id": "feat_technical_1204",
+          "key": "macd_dif",
+          "description": "MACD DIF/DEA",
+          "formula": "",
+          "source": "QuantDB L2/衍生特征 (2023-2026 快照回填)",
+          "enabled": true,
+          "markets": [
+            "CN"
+          ],
+          "order_no": 1204,
+          "default_selected": false,
+          "coverage_ratio": 1.0
+        },
+        {
+          "feature_id": "feat_technical_1205",
+          "key": "mfi_14",
+          "description": "14日资金流量指标 MFI",
+          "formula": "",
+          "source": "QuantDB L2/衍生特征 (2023-2026 快照回填)",
+          "enabled": true,
+          "markets": [
+            "CN"
+          ],
+          "order_no": 1205,
+          "default_selected": false,
+          "coverage_ratio": 0.9486
+        },
+        {
+          "feature_id": "feat_technical_1206",
+          "key": "obv_slope_20",
+          "description": "20日 OBV 斜率",
+          "formula": "",
+          "source": "QuantDB L2/衍生特征 (2023-2026 快照回填)",
+          "enabled": true,
+          "markets": [
+            "CN"
+          ],
+          "order_no": 1206,
+          "default_selected": false,
+          "coverage_ratio": 0.9483
+        },
+        {
+          "feature_id": "feat_technical_1207",
+          "key": "pct_change",
+          "description": "日涨跌幅",
+          "formula": "",
+          "source": "QuantDB L2/衍生特征 (2023-2026 快照回填)",
+          "enabled": true,
+          "markets": [
+            "CN"
+          ],
+          "order_no": 1207,
+          "default_selected": false,
+          "coverage_ratio": 0.9999
+        },
+        {
+          "feature_id": "feat_technical_1208",
+          "key": "rsi_14",
+          "description": "14日 RSI",
+          "formula": "",
+          "source": "QuantDB L2/衍生特征 (2023-2026 快照回填)",
+          "enabled": true,
+          "markets": [
+            "CN"
+          ],
+          "order_no": 1208,
+          "default_selected": false,
+          "coverage_ratio": 0.9999
+        },
+        {
+          "feature_id": "feat_technical_1209",
+          "key": "tech_close_to_high_20",
+          "description": "收盘价距20日新高的位置",
+          "formula": "",
+          "source": "QuantDB L2/衍生特征 (2023-2026 快照回填)",
+          "enabled": true,
+          "markets": [
+            "CN"
+          ],
+          "order_no": 1209,
+          "default_selected": false,
+          "coverage_ratio": 0.9483
+        },
+        {
+          "feature_id": "feat_technical_1210",
+          "key": "tech_max_drawdown_20",
+          "description": "20日最大回撤",
+          "formula": "",
+          "source": "QuantDB L2/衍生特征 (2023-2026 快照回填)",
+          "enabled": true,
+          "markets": [
+            "CN"
+          ],
+          "order_no": 1210,
+          "default_selected": false,
+          "coverage_ratio": 0.9483
+        },
+        {
+          "feature_id": "feat_technical_1211",
+          "key": "vol_weighted_price",
+          "description": "成交量加权均价 VWAP",
+          "formula": "",
+          "source": "QuantDB L2/衍生特征 (2023-2026 快照回填)",
+          "enabled": true,
+          "markets": [
+            "CN"
+          ],
+          "order_no": 1211,
+          "default_selected": false,
+          "coverage_ratio": 0.9471
         }
       ]
     },
@@ -5025,6 +7981,188 @@
           "coverage_ratio": 0.9897,
           "measured_ic": -0.0308,
           "measured_icir": -0.1997
+        },
+        {
+          "feature_id": "feat_fundamental_1212",
+          "key": "annual_net_profit",
+          "description": "年度净利润",
+          "formula": "",
+          "source": "QuantDB L2/衍生特征 (2023-2026 快照回填)",
+          "enabled": true,
+          "markets": [
+            "CN"
+          ],
+          "order_no": 1212,
+          "default_selected": false,
+          "coverage_ratio": 0.9988
+        },
+        {
+          "feature_id": "feat_fundamental_1213",
+          "key": "circulating_capital",
+          "description": "流通股本",
+          "formula": "",
+          "source": "QuantDB L2/衍生特征 (2023-2026 快照回填)",
+          "enabled": true,
+          "markets": [
+            "CN"
+          ],
+          "order_no": 1213,
+          "default_selected": false,
+          "coverage_ratio": 1.0
+        },
+        {
+          "feature_id": "feat_fundamental_1214",
+          "key": "equity",
+          "description": "净资产",
+          "formula": "",
+          "source": "QuantDB L2/衍生特征 (2023-2026 快照回填)",
+          "enabled": true,
+          "markets": [
+            "CN"
+          ],
+          "order_no": 1214,
+          "default_selected": false,
+          "coverage_ratio": 0.9998
+        },
+        {
+          "feature_id": "feat_fundamental_1215",
+          "key": "float_mv",
+          "description": "流通市值",
+          "formula": "",
+          "source": "QuantDB L2/衍生特征 (2023-2026 快照回填)",
+          "enabled": true,
+          "markets": [
+            "CN"
+          ],
+          "order_no": 1215,
+          "default_selected": false,
+          "coverage_ratio": 1.0
+        },
+        {
+          "feature_id": "feat_fundamental_1216",
+          "key": "fun_float_mv",
+          "description": "财务指标（流通市值/净利润增速）",
+          "formula": "",
+          "source": "QuantDB L2/衍生特征 (2023-2026 快照回填)",
+          "enabled": true,
+          "markets": [
+            "CN"
+          ],
+          "order_no": 1216,
+          "default_selected": false,
+          "coverage_ratio": 0.9495
+        },
+        {
+          "feature_id": "feat_fundamental_1217",
+          "key": "fun_np_growth",
+          "description": "财务指标（流通市值/净利润增速）",
+          "formula": "",
+          "source": "QuantDB L2/衍生特征 (2023-2026 快照回填)",
+          "enabled": true,
+          "markets": [
+            "CN"
+          ],
+          "order_no": 1217,
+          "default_selected": false,
+          "coverage_ratio": 0.9461
+        },
+        {
+          "feature_id": "feat_fundamental_1218",
+          "key": "net_profit_ttm",
+          "description": "净利润 TTM",
+          "formula": "",
+          "source": "QuantDB L2/衍生特征 (2023-2026 快照回填)",
+          "enabled": true,
+          "markets": [
+            "CN"
+          ],
+          "order_no": 1218,
+          "default_selected": false,
+          "coverage_ratio": 0.9984
+        },
+        {
+          "feature_id": "feat_fundamental_1219",
+          "key": "pb",
+          "description": "市净率",
+          "formula": "",
+          "source": "QuantDB L2/衍生特征 (2023-2026 快照回填)",
+          "enabled": true,
+          "markets": [
+            "CN"
+          ],
+          "order_no": 1219,
+          "default_selected": false,
+          "coverage_ratio": 0.9998
+        },
+        {
+          "feature_id": "feat_fundamental_1220",
+          "key": "pe_static",
+          "description": "市盈率 TTM/静态",
+          "formula": "",
+          "source": "QuantDB L2/衍生特征 (2023-2026 快照回填)",
+          "enabled": true,
+          "markets": [
+            "CN"
+          ],
+          "order_no": 1220,
+          "default_selected": false,
+          "coverage_ratio": 0.9988
+        },
+        {
+          "feature_id": "feat_fundamental_1221",
+          "key": "pe_ttm",
+          "description": "市盈率 TTM/静态",
+          "formula": "",
+          "source": "QuantDB L2/衍生特征 (2023-2026 快照回填)",
+          "enabled": true,
+          "markets": [
+            "CN"
+          ],
+          "order_no": 1221,
+          "default_selected": false,
+          "coverage_ratio": 0.9984
+        },
+        {
+          "feature_id": "feat_fundamental_1222",
+          "key": "revenue_ttm",
+          "description": "营业收入 TTM",
+          "formula": "",
+          "source": "QuantDB L2/衍生特征 (2023-2026 快照回填)",
+          "enabled": true,
+          "markets": [
+            "CN"
+          ],
+          "order_no": 1222,
+          "default_selected": false,
+          "coverage_ratio": 0.9981
+        },
+        {
+          "feature_id": "feat_fundamental_1223",
+          "key": "total_capital",
+          "description": "总股本",
+          "formula": "",
+          "source": "QuantDB L2/衍生特征 (2023-2026 快照回填)",
+          "enabled": true,
+          "markets": [
+            "CN"
+          ],
+          "order_no": 1223,
+          "default_selected": false,
+          "coverage_ratio": 1.0
+        },
+        {
+          "feature_id": "feat_fundamental_1224",
+          "key": "total_mv",
+          "description": "总市值",
+          "formula": "",
+          "source": "QuantDB L2/衍生特征 (2023-2026 快照回填)",
+          "enabled": true,
+          "markets": [
+            "CN"
+          ],
+          "order_no": 1224,
+          "default_selected": false,
+          "coverage_ratio": 1.0
         }
       ]
     }
@@ -5178,7 +8316,8 @@
       "gtja_alpha_074",
       "gtja_alpha_090"
     ],
-    "known_legacy_correlations": "原有32维与自动追加特征间存在3对既存高相关(非本次引入): mom_ma_gap_5~mom_ret_5d(0.818), chip_peak_distance~mom_ret_5d(0.765), liq_amount~liq_volume(0.760). 树模型有列采样可容忍; 如需彻底消除需调整后端 _TRAINING_BASE_FEATURES 自动追加逻辑."
+    "known_legacy_correlations": "原有32维与自动追加特征间存在3对既存高相关(非本次引入): mom_ma_gap_5~mom_ret_5d(0.818), chip_peak_distance~mom_ret_5d(0.765), liq_amount~liq_volume(0.760). 树模型有列采样可容忍; 如需彻底消除需调整后端 _TRAINING_BASE_FEATURES 自动追加逻辑.",
+    "l2_unlock_note": "2026-08-20: 解锁 250 个 L2/微观结构/资金强度/财务列到目录（default_selected=false）。L2 类列仅 2023-2026 有值（QuantDB L2 数据 2023 年起），2016-2022 为 NaN，选用后训练期须从 2023 开始。死列 concept_flow_rank/ind_netflow_rank_20 已排除。GTJA key 已修正为实际列名(gtja_NNN)。"
   },
   "default_selection_note": "默认集基于 2024 实测 RankIC/ICIR 筛选 + 相关性去重(|rho|<0.75). 全部特征已验证无标签泄漏(|RankIC|<=0.067, mom_ret_Nd 经实证为过去收益 rho~0.98). 训练时后端自动追加 mom_ret_1d/mom_ret_5d/liq_volume, 实际入模 44 维."
 }

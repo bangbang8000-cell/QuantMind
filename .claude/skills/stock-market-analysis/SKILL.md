@@ -73,8 +73,15 @@ curl -s -H "$AUTH" "$BASE/api/v1/market-analysis/tags/by-tag?tag=半导体"
 
 ## 3. 个股研报级深度分析（核心流程）
 
-用户要求"分析/深度分析"某股票时，按 **REFERENCES/quantdb-full-analysis-design.md** 的 6 层框架执行。
+用户要求"分析/深度分析"某股票时，按 **REFERENCES/quantdb-full-analysis-design.md** 的 9 层框架执行（L0 市场 → L1 估值 → L2 财务 → L3 技术 → L4 资金筹码 → **L4b 订单微结构截面** → L5 行业 → L6 模型 → L7 新闻七维）。
 **每层必须有具体数值、必须展示计算公式**，不做泛泛之谈。输出格式见第 7 节研报模板。
+
+> **⚡ 跑全流程先读 `REFERENCES/stock-9layer-runbook.md`**（端到端操作手册）：一键取数 `scripts/stock_9layer_fetch.py {code}` →
+> 九层判读模板 → 跨层合成 → 报告落盘命令 → 双案例校准（法拉电子/振华科技）→ 红线清单。设计原则看 design doc，执行标准看 runbook。
+
+> 两个特化子方法（2026-08 集成）：
+> - **L4b 订单微结构**：按《L2 微观结构因子系统化分析报告》判 IC 方向 + 计算个股 vs 全市场**截面分位**。铁律：VPIN 族是正 IC（高位偏多，别当毒性利空）、vol_persistence/toxicity_persistence 是负 IC（高位偏空）、L2 是 T+5/T+10 持续信号（看状态分位而非单日变化）。
+> - **L7 新闻七维**：按 [[news-sentiment-research]] + `docs/news_sentiment_deep_report.md` §13 做**三步纵深**——①直接消息判定（无则明写）→ ②相关行业归类（禁止冒充个股消息）→ ③21 条规律对照打分（来源/时段/多篇/首日动量/反转/标签/板块）→ 输出明确新闻面结论。
 
 ### 3.1 数据采集（先全量拉取，再按需深挖）
 
@@ -100,6 +107,27 @@ curl -s -H "$AUTH" "$BASE/api/v1/risk/score/600519.SH"
 curl -s -H "$AUTH" "$BASE/api/v1/selection/daily"           # market_state 牛熊+仓位建议
 curl -s -H "$AUTH" "$BASE/api/v1/market/index-kline?symbol=000001.SH&days=60"
 curl -s -H "$AUTH" "$BASE/api/v1/market/overview"           # 多市场指数概览
+
+# ⑥ 订单微结构截面分位（L4b，2026-08 新增；先确认最新分区）
+docker exec quantmind ls /data/quantdb/6_ml_datasets/l2_factors/ | tail -1   # → dt=YYYYMMDD
+docker exec quantmind python3 - <<'EOF'
+import duckdb, pandas as pd
+dt = "YYYYMMDD"   # 上一步最新分区
+mkt = duckdb.connect().execute(f"SELECT * FROM read_parquet('/data/quantdb/6_ml_datasets/l2_factors/dt={dt}/data.parquet')").df()
+s = mkt[mkt.symbol == "600519.SH"].iloc[0]
+for f in ["vol_persistence","micro_vpin_vol_ratio","flow_buy_amount","flow_sell_amount",
+          "micro_toxicity_persistence","flow_order_duration_p90","flow_cancel_lifetime",
+          "flow_order_arrival_rate","micro_trade_interval_mean","vol_tick_density","vol_realized_jump",
+          "micro_vpin_50","micro_vpin_ma_20","vol_realized_rrv"]:
+    print(f, round(float(s[f]),4), f"{round(100*(mkt[f].astype(float)<float(s[f])).mean(),1)}%")
+# 判读：负IC族(v_persist/toxicity_persist/flow_buy/sell/order_arrival/tick_density/realized_jump)≥70%高位=利空；
+#       正IC族(vpin_vol_ratio/order_duration/cancel_lifetime/trade_interval_mean/vpin_50/ma_20)≤40%低位=缺资金
+EOF
+
+# ⑦ 新闻三步纵深（L7，方法论见 docs/news_sentiment_deep_report.md §13）
+#    ①直接消息：Huntly 库按标题/正文搜 {名称}/{代码}（窗口 T-2~T）；②相关行业归类；③21 条规律对照
+curl -s -H "$AUTH" "$BASE/api/v1/news/articles?tickers=600519&industries=白酒&limit=30&strong_only=true"
+curl -s -H "$AUTH" "$BASE/api/v1/news/articles?tickers=600519&sort=sentiment_bullish&limit=10"
 ```
 
 ### 3.2 财务基本面（三表联动 + 每股指标，parquet 直读）
@@ -442,16 +470,18 @@ db/trading_agents_results/{市场名}/{股票名}/{股票名}{代码}_{日期}_�
 | 级别 | 用时 | 内容 |
 |---|---|---|
 | 快速体检 | 1-2 min | L0 市场 + 估值 + 技术 + 默认模型 + 风险卡，输出核心结论表 |
-| 标准分析 | 3-5 min | 全部 6 层 + 财务 4 期 + 估值分位 + 多模型 + 完整研报模板 |
-| 深度尽调 | 10+ min | 标准分析 + 财务 8 期三表 + 5 年估值分位 + 全模型逐拉 + 融资融券 30 日 + 股东户数趋势 + 分红历史 + 多空证据对照 + 情景推演（目标价区间） |
+| 标准分析 | 3-5 min | 全部 9 层 + 财务 4 期 + 估值分位 + 多模型 + **L4b 截面分位 + L7 三步纵深简版** + 完整研报模板 |
+| 深度尽调 | 10+ min | 标准分析 + 财务 8 期三表 + 5 年估值分位 + 全模型逐拉 + 融资融券 30 日 + 股东户数趋势 + 分红历史 + **L4b 全因子截面 + L7 21 条规律对照全量** + 多空证据对照 + 情景推演（目标价区间） |
 
 ## 9. 相关技能联动
 
 - **[[quantdb-fields]]** — **必读**：全部数据集单位/口径速查（本技能计算正确性的前提）
 - **[[quantdb-sdk]]** — QuantDB 数据源（Key 配置、28 数据集、字段清单）
 - **[[smart-strategy-stock-picking]]** — 条件选股（183 字段 DSL 筛选）
+- **[[news-sentiment-research]]** — 新闻七维方法论（本技能 L7 层的底座，21 条规律 + 三步纵深）
 - **[[quantmind-operations]]** — 模型训练/推理/RSS 新闻
 - **[[rd-agent-factor-mining]]** — 因子挖掘深化分析维度
+- **L2 微观结构报告** — `scripts/L2_微观结构因子系统化分析报告.md`（211 因子 IC 方向 + 截面分位框架，本技能 L4b 层的底座）
 
 ## 10. 常见问题
 

@@ -1,22 +1,81 @@
 ---
 name: rd-agent-factor-mining
-description: "自动调用 RD-Agent 进行因子挖掘。在 QuantBot / Claude Code 中启动因子演化任务、查看演化进度、分析挖掘出的因子、对因子回测与导出时使用。触发词：挖因子、因子挖掘、因子演化、RD-Agent、alpha agent、演化因子、挖掘新因子、启动因子任务"
+description: "RD-Agent A股因子挖掘端到端流水线：环境 preflight → 启动演化 → 轮询完成 → 批量回测评估 → IC/Sharpe 排序 → explain 解读 → export 入库 → Markdown 报告。在 QuantBot / Claude Code 中挖因子时使用，一条命令跑完整流程。触发词：挖因子、因子挖掘、挖新因子、因子演化、RD-Agent、alpha agent、自动挖因子、一键挖因子、因子回测、演化因子、启动因子任务"
 ---
 
-# RD-Agent 因子挖掘技能
+# RD-Agent 因子挖掘（端到端流水线）
 
-自动调用 RD-Agent（Alpha Agent）因子演化管线，挖掘新的量化因子。
+调用 RD-Agent（Alpha Agent）自动挖掘 A 股 alpha 因子，覆盖完整链路：
+**preflight → evolve（LLM 演化）→ 轮询 → 批量回测 → 排名 → explain → export → 报告**。
 
-## 前置条件
+## 0. 环境前置（必须，一分钟先过）
 
-需要配置 LLM API Key（`AI_IDE_LLM_API_KEY` 或 `OPENAI_API_KEY`），否则启动会返回 412。
+做任何挖掘前，先跑容器内三项健康检查。任一 FAIL 都要先修再挖。
+
 ```bash
-# 检查是否已配置
-docker exec quantmind env | grep -E "AI_IDE_LLM_API_KEY|OPENAI_API_KEY" | head
+cd ~/projects/quantmind && python3 scripts/alpha_agent/factor_pipeline.py --check-env
+# 期望 3 项全 PASS: conda_shim / litellm_patch / deepseek_key
 ```
 
-## 认证
+| 检查项 | 作用 | 失败处理 |
+|---|---|---|
+| `conda_shim` | RD-Agent LocalEnv 硬编码 `rdagent4qlib` conda 环境，容器无 conda，靠 shim 映射到容器 python | 确认 `docker/conda-shim` 挂载 `/usr/local/bin/conda:ro` 且文件有 `+x` |
+| `litellm_patch` | litellm 1.97 + pydantic 2.13 冲突（`Message is not fully defined`） | 确认 `docker/litellm_sitecustomize.py` 挂载为 `site-packages/sitecustomize.py:ro` |
+| `deepseek_key` | 因子挖掘走 DeepSeek 通道（`llm_env.py` 优先级最高） | 更新 `~/projects/quantmind/.env` 的 `DEEPSEEK_API_KEY`，改后必须 `docker compose up -d quantmind` recreate |
 
+> preflight 机制全在管道脚本内置；手动检修环境见文末「常见问题」。
+
+## 1. 一键管线（推荐入口）
+
+```bash
+cd ~/projects/quantmind
+
+# 最小示例：一个方向，演化+批量回测+排名（默认报告 /tmp/rd_agent_factor_report.md）
+python3 scripts/alpha_agent/factor_pipeline.py --direction "连板高度递减与涨停回封率"
+
+# 全流程：演化 + 回测 + top5 解读 + 最高 |IC| 导出
+python3 scripts/alpha_agent/factor_pipeline.py \
+  --direction "筹码集中度上行伴随低位换手放大" \
+  --universe csi300 --loops 3 \
+  --explain-top 5 --export --min-ic 0.03 \
+  --out /tmp/factor_report.md
+
+# 只看环境
+python3 scripts/alpha_agent/factor_pipeline.py --check-env
+```
+
+**参数**：
+
+| 参数 | 默认 | 说明 |
+|---|---|---|
+| `--direction` | 必填 | 挖掘方向/假设，中文优先（见方向建议库） |
+| `--universe` | `csi300` | csi300/csi500/csi1000/sse50/gem/star/csi800/all_a |
+| `--loops` | 3 | 演化轮数，实际以任务详情为准（可能出现归一值） |
+| `--check-env` | off | 只跑环境健康检查 |
+| `--no-backtest` | off | 演化完成即停，不批量回测 |
+| `--backtest-start` | 2025-01-01 | 回测起始日（到当天） |
+| `--backtest-universe` | =universe | 回测股票池 |
+| `--explain-top N` | 0 | 对 |IC| 排名前 N 因子调 LLM 解读 |
+| `--export` / `--min-ic` | off / 0.0 | 对 |IC|≥min 的最高因子 export 进生产特征库 |
+| `--out` | /tmp/rd_agent_factor_report.md | 报告路径 |
+| `--show-log` | off | 轮询时打印任务日志 |
+
+**管线阶段**（脚本自动执行）：
+1. preflight 三项健康检查
+2. `evolve` 启动演化 → 拿 `task_id`
+3. 轮询 `tasks/{id}` 直到 `completed`（打印 phase/loop/error）
+4. 收集本次 `task_id` 的因子（`metadata.task_id` 过滤）
+5. 逐个 `factor/{id}/backtest` 触发 → 轮询全部 completed
+6. 按 `|IC|` 排序打印排行榜
+7. 对 `--explain-top` 因子 `explain`（LLM 解读，写入报告）
+8. `--export` 最高分因子
+9. 生成 Markdown 报告到 `--out`
+
+一个方向跑完约 **30–90 分钟**（数据管线 + LLM 演化 + 逐因子回测）。
+
+## 2. 手动分步（需要精细控制时用 API）
+
+### 认证
 ```bash
 BASE=http://127.0.0.1:8000
 TOKEN=$(curl -s -X POST $BASE/api/v1/auth/login -H "Content-Type: application/json" \
@@ -25,121 +84,90 @@ TOKEN=$(curl -s -X POST $BASE/api/v1/auth/login -H "Content-Type: application/js
 AUTH="Authorization: Bearer $TOKEN"
 ```
 
-## 1. 查看支持的标的池
-
+### 池子 / 类别 / 数据健康
 ```bash
-# 支持的股票池（universe）
-curl -s -H "$AUTH" "$BASE/api/v1/alpha-agent/universes"
-# 返回: csi300(沪深300)/csi500/csi1000/sse50/gem(创业板)/star(科创板)/csi800/all_a(全A)
-
-# 支持的市场
-curl -s -H "$AUTH" "$BASE/api/v1/alpha-agent/markets"
-
-# 因子类别（挖掘方向参考）
-curl -s -H "$AUTH" "$BASE/api/v1/alpha-agent/factor-categories"
-# 返回类别: momentum(动量)/volatility(波动率)/liquidity(流动性)/fundamental(基本面)/style(风格)/industry(行业)/chip(筹码)/concept(概念)/microstructure(微观结构)
+curl -s -H "$AUTH" "$BASE/api/v1/alpha-agent/universes"        # 支持的股票池
+curl -s -H "$AUTH" "$BASE/api/v1/alpha-agent/markets"          # 支持的市场
+curl -s -H "$AUTH" "$BASE/api/v1/alpha-agent/factor-categories" # 挖掘类别参考
+curl -s -H "$AUTH" "$BASE/api/v1/alpha-agent/data-summary"      # 数据覆盖（日期/股票数）
 ```
 
-## 2. 启动因子演化（核心）
-
+### 启动演化
 ```bash
-curl -s -X POST "$BASE/api/v1/alpha-agent/evolve" \
-  -H "$AUTH" \
+curl -s -X POST "$BASE/api/v1/alpha-agent/evolve" -H "$AUTH" \
   --data-urlencode "market=a_share" \
   --data-urlencode "universe=csi300" \
   --data-urlencode "loop_n=3" \
-  --data-urlencode "direction=动量反转类因子" \
-  --data-urlencode "data_source=" \
+  --data-urlencode "direction=低换手率高动量" \
   -w "\nHTTP %{http_code}\n"
+# 返回 task_id（后续所有步骤用）
 ```
 
-**参数说明**：
-| 参数 | 取值 | 说明 |
-|---|---|---|
-| `market` | `a_share` / `crypto` / `hong_kong` / `us_stock` | 市场 |
-| `universe` | `csi300` / `csi500` / `csi1000` / `sse50` / `gem` / `star` / `csi800` / `all_a` | 股票池 |
-| `loop_n` | 1~20（默认 3） | 演化轮数，越大越深入但耗时越长 |
-| `direction` | 任意文本 | 挖掘方向/假设，如"动量反转"、"低波动"、"资金流异动" |
-| `data_source` | `qlib_bin` / `parquet` / `pg` / 空 | 数据源（留空用默认） |
-
-**返回**：`task_id` + 市场信息。之后用 task_id 轮询进度。
-
-## 3. 查看演化任务进度
-
+### 轮询 / 取消
 ```bash
-# 任务状态
-curl -s -H "$AUTH" "$BASE/api/v1/alpha-agent/tasks/{task_id}"
-
-# 实时日志
-curl -s -H "$AUTH" "$BASE/api/v1/alpha-agent/tasks/{task_id}/log"
-
-# 取消任务
+curl -s -H "$AUTH" "$BASE/api/v1/alpha-agent/tasks/{task_id}"      # 状态 progress/phase/loop/error
+curl -s -H "$AUTH" "$BASE/api/v1/alpha-agent/tasks/{task_id}/log"  # 实时日志（含失败原因）
 curl -s -X POST -H "$AUTH" "$BASE/api/v1/alpha-agent/tasks/{task_id}/cancel"
+# 状态机: pending → running → backtesting → completed | failed
 ```
 
-**任务状态机**：`pending → running → backtesting → completed`（或 `failed`）
-
-## 4. 查看挖掘出的因子
-
+### 因子回测（注意是 query 参数，不是 form）
 ```bash
-# 因子列表（全部）
-curl -s -H "$AUTH" "$BASE/api/v1/alpha-agent/factors"
-
-# 因子详情
-curl -s -H "$AUTH" "$BASE/api/v1/alpha-agent/factors/{factor_id}"
-
-# 因子解释（AI 解读因子逻辑）
-curl -s -X POST -H "$AUTH" "$BASE/api/v1/alpha-agent/factors/{factor_id}/explain"
-
-# 因子回测
-curl -s -X POST -H "$AUTH" "$BASE/api/v1/alpha-agent/factors/{factor_id}/backtest" \
-  --data-urlencode "start=2024-01-01" \
-  --data-urlencode "end=2025-12-31"
-
-# 因子导出（加入生产特征库）
-curl -s -X POST -H "$AUTH" "$BASE/api/v1/alpha-agent/factors/{factor_id}/export"
-
-# 全局统计
-curl -s -H "$AUTH" "$BASE/api/v1/alpha-agent/stats"
-# 返回: total/completed/pending/backtesting/failed + avg_ic/avg_sharpe/best_ic/best_sharpe
-
-# 数据覆盖摘要（启动前确认）
-curl -s -H "$AUTH" "$BASE/api/v1/alpha-agent/data-summary"
+curl -s -X POST -H "$AUTH" "$BASE/api/v1/alpha-agent/factors/{factor_id}/backtest?start_date=2025-01-01&end_date=2026-08-21&universe=csi300&data_source=qlib_bin"
+# factors 列表里 ic_value/sharpe_ratio/rank_ic 回测完成后回填；status 变 completed
 ```
 
-## 4.1 RD-Agent 轻量验证（`/rd-agent`）
-
-RD-Agent 因子挖掘后，可用轻量端点快速验证因子 IC/夏普（不启动完整演化）：
+### 解读 / 导出 / 统计
 ```bash
-# 因子列表（RD-Agent 已验证）
-curl -s -H "$AUTH" "$BASE/api/v1/rd-agent/factors"
-# 因子详情
-curl -s -H "$AUTH" "$BASE/api/v1/rd-agent/factors/{factor_id}"
-# 因子回测（轻量 IC/夏普）
-curl -s -X POST -H "$AUTH" -H "$CT" "$BASE/api/v1/rd-agent/factors/{factor_id}/backtest" \
-  -d '{"start":"2024-01-01","end":"2025-12-31"}'
-# 全局统计
-curl -s -H "$AUTH" "$BASE/api/v1/rd-agent/stats"
+curl -s -X POST -H "$AUTH" "$BASE/api/v1/alpha-agent/factors/{factor_id}/explain"   # LLM 解读因子逻辑
+curl -s -X POST -H "$AUTH" "$BASE/api/v1/alpha-agent/factors/{factor_id}/export"    # 加入生产特征库
+curl -s -H "$AUTH" "$BASE/api/v1/alpha-agent/factors"                               # 全部因子（含本次 task 的）
+curl -s -H "$AUTH" "$BASE/api/v1/alpha-agent/stats"                                 # avg_ic/best_sharpe 等
 ```
 
-## 5. 实战流程
+## 3. 方向建议库（direction 直接用）
 
-当用户要求"挖新因子"时按此流程：
+优先挖 78 核心因子集之外的空白区（筹码/微观结构/连板情绪/隔夜/资金流持续性）：
 
-1. **查池与类别**：`/universes` + `/factor-categories` 了解可选范围
-2. **确认数据健康**：`/alpha-agent/data-summary` 看数据覆盖
-3. **启动演化**：`/evolve` 选 universe + direction（如"低换手率高动量"）
-4. **轮询进度**：`/tasks/{id}` 每 30s 查一次，completed 后停
-5. **查看因子**：`/factors` 筛选 IC/Sharpe 高的
-6. **解释 + 回测**：对高分因子 explain + backtest
-7. **导出**：确认有效后 export 加入生产特征库
+```text
+1. 连板情绪承继   连板高度递增与涨停回封率，捕捉题材情绪承接力由弱转强的启动票
+2. 筹码分布       筹码集中度上行伴随低位换手放大，获利盘充分消化的突破信号
+3. 隔夜/日内背离  隔夜收益与日内收益背离，捕捉大单隔夜布局意图
+4. 资金流持续性   主力大单净流入的天数持续性与金额强度共振
+5. 下行波动偏度   低下行风险与负偏度修正，挖掘低波动异象的非对称变体
+6. 量价微观结构   开盘跳空幅度与量能共振，叠加尾盘动量延续
+7. 动量质量       趋势斜率 R2 与收益动量叠加，过滤高噪音动量
+8. 波动聚簇修正   波动率自相关的反转信号（高低波动切换）
+9. 流动性衰减     换手率衰减速度与跌幅对比
+10. 行业相对强度   个股相对行业指数 20 日超额与行业轮动方向一致
+```
 
-## 6. 常见问题
+每批建议跑 1–3 个方向（串行排队），避免队列过载。
 
-| 现象 | 原因 | 处理 |
+## 4. 验收标准（工具完成后自查）
+
+- [ ] preflight 三项 PASS
+- [ ] 演化任务 `completed`（非 failed）
+- [ ] 有因子入库且完成批量回测（`ic_value` 非空）
+- [ ] 排行榜上 |IC| 高、ICIR 明显 > 0 的因子受关注
+- [ ] 高分因子完成 `explain`，解读与 direction 假设一致（非噪声）
+- [ ] 确认有效的因子已 `export`（日志有导出记录）
+- [ ] 报告落盘（默认 /tmp/rd_agent_factor_report.md）
+
+## 5. 常见问题与踩坑
+
+| 现象 | 根因 | 处理 |
 |---|---|---|
-| 412 API Key 未配置 | 缺 LLM Key | 配 `AI_IDE_LLM_API_KEY` 后重启 |
-| 400 Unknown market | market 参数错 | 用 `/markets` 查可用值 |
-| 400 Unknown universe | universe 参数错 | 用 `/universes` 查可用值 |
-| 任务一直 pending | 队列繁忙 | 查 `/tasks` 看并发任务 |
-| 因子数为 0 | 无完成演化 | 先启动 evolve 并等 completed |
+| `timeout: failed to run command 'python'` + `conda: not found` | 容器无 conda，RD-Agent 需 `rdagent4qlib` env | conda shim 挂载 `/usr/local/bin/conda`；宿主机文件记得 `chmod +x` |
+| `Message is not fully defined` / `ChatCompletionReasoningSummaryTextBlock is not defined` | litellm 1.97 + pydantic 2.13 冲突 | `docker/litellm_sitecustomize.py` 挂载为 sitecustomize |
+| `Authentication Fails ... api key is invalid` | DEEPSEEK_API_KEY 失效 | 换 key 到 `.env`，`docker compose up -d quantmind` recreate 才生效 |
+| 因子 `status=pending` 且 `ic_value=null` | 还没跑回测 | 触发 `backtest`（pipeline `/--no-backtest` 时更是如此） |
+| 任务秒 failed | 先看 `tasks/{id}/log` 尾部具体错误 | 常见上面两类，按表修 |
+| `engine upstream unavailable`(503) | 回测并发把 engine 挤忙 | 稍等重试；少并行任务 |
+| 传 `universe=all_a` 详情显示 `csi300` | 后端对部分池归一 | 以任务详情 universe 为准 |
+
+## 6. 参考文件
+
+- 一键管线：`scripts/alpha_agent/factor_pipeline.py`
+- 环境修复：`docker/conda-shim`、`docker/litellm_sitecustomize.py`（compose 挂载固化）
+- RD-Agent Runner 入口：`scripts/alpha_agent/run_rd_agent.py`

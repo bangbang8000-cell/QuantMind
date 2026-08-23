@@ -10,6 +10,7 @@ TDX Signal Push Service - 把模型推理选股推送到通达信
 """
 import asyncio
 import logging
+import os
 from datetime import datetime
 from typing import Any
 
@@ -26,7 +27,16 @@ logger = logging.getLogger(__name__)
 DEFAULT_TOP_N = 20
 # 融合分数有效数字截断，避免推送超长小数
 _SCORE_DIGITS = 4
-_QUANTDB_NAME_TABLE = "/data/quantdb/2_base_sector/instrument_detail/instrument_detail.parquet"
+_QUANTDB_NAME_DIR = "/data/quantdb/2_base_sector/instrument_detail"
+
+
+def _quantdb_name_table() -> str | None:
+    """SDK 新版落盘 instrument_list.parquet，旧版 instrument_detail.parquet。"""
+    for name in ("instrument_list.parquet", "instrument_detail.parquet"):
+        p = os.path.join(_QUANTDB_NAME_DIR, name)
+        if os.path.exists(p):
+            return p
+    return None
 
 
 def _batch_lookup_names(suffixes: list[str]) -> dict[str, str]:
@@ -51,6 +61,9 @@ def _batch_lookup_names(suffixes: list[str]) -> dict[str, str]:
     missing = [s for s in suffixes if s not in result]
     if not missing:
         return result
+    table_path = _quantdb_name_table()
+    if table_path is None:
+        return result
     try:
         import duckdb
 
@@ -59,7 +72,7 @@ def _batch_lookup_names(suffixes: list[str]) -> dict[str, str]:
             "SELECT Symbol, Name FROM read_parquet(?) WHERE Symbol IN ("
             + ",".join("?" for _ in missing)
             + ")",
-            [_QUANTDB_NAME_TABLE, *missing],
+            [table_path, *missing],
         ).fetchall()
         con.close()
         for symbol, name in rows:

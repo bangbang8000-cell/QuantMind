@@ -61,7 +61,7 @@ with st.sidebar:
     st.divider()
     st.caption(f"模式: {mode_label}")
     if is_real:
-        st.caption(f"桥: {os.getenv('TDX_BRIDGE_URL', 'http://192.168.31.39:8550')}")
+        st.caption(f"桥: {os.getenv('TDX_BRIDGE_URL', 'http://192.168.31.22:8550')}")
         st.caption("实盘下单需通达信客户端确认")
 
     if st.button("🔄 刷新", use_container_width=True):

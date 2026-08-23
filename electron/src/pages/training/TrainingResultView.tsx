@@ -436,61 +436,106 @@ export const TrainingResultView: React.FC<TrainingResultViewProps> = ({
               </div>
             )}
 
-            {result.drift?.enabled && (
-              <div className="rounded-2xl border border-sky-200 bg-white p-4">
-                <div className="mb-3 flex items-center justify-between">
-                  <div className="flex items-center gap-2">
-                    <Activity size={14} className="text-sky-500" />
-                    <div className="text-[10px] font-black uppercase tracking-[0.18em] text-slate-400">
-                      数据漂移检测 (PSI)
+            {result.drift?.enabled && (() => {
+              const s = result.drift.drift?.stable ?? 0;
+              const m = result.drift.drift?.medium ?? 0;
+              const r = result.drift.drift?.severe ?? 0;
+              const tot = Math.max(1, s + m + r);
+              const disp = Number(result.drift.max_psi ?? 0);
+              const overall = result.drift.overall;
+              const badgeText = overall === 'stable' ? '稳定' : overall === 'warning' ? '预警' : '严重漂移';
+              const badgeCls = overall === 'stable' ? 'bg-emerald-50 text-emerald-600' : overall === 'warning' ? 'bg-amber-50 text-amber-600' : 'bg-rose-50 text-rose-600';
+              return (
+                <div className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
+                  {/* ⚡️ 头部 */}
+                  <div className="mb-4 flex items-center justify-between">
+                    <div className="flex items-center gap-2.5">
+                      <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-sky-50 text-sky-600">
+                        <Activity size={15} />
+                      </div>
+                      <div>
+                        <div className="text-xs font-black text-slate-800">数据漂移检测 (PSI)</div>
+                        <div className="text-[10px] text-slate-400">
+                          训练 {result.drift.train_start} ~ {result.drift.train_end}  ×  实盘 {result.drift.recent_start} ~ {result.drift.recent_end}
+                        </div>
+                      </div>
                     </div>
+                    <Tag className={clsx('m-0 rounded-full border-0 px-3 py-1 font-black', badgeCls)}>
+                      {badgeText}
+                    </Tag>
                   </div>
-                  <Tag
-                    className={clsx('m-0 rounded-full border-0 px-2.5 py-0.5', result.drift.overall === 'stable' ? 'bg-emerald-50 text-emerald-600' : result.drift.overall === 'warning' ? 'bg-amber-50 text-amber-600' : 'bg-rose-50 text-rose-600')}
-                  >
-                    {result.drift.overall === 'stable' ? '稳定' : result.drift.overall === 'warning' ? '预警' : '严重漂移'}
-                  </Tag>
-                </div>
 
-                <div className="mb-3 grid grid-cols-2 gap-2">
-                  <div className="rounded-xl bg-slate-50 px-3 py-2 text-center">
-                    <div className="text-[9px] font-semibold uppercase tracking-wider text-slate-400">最大 PSI</div>
-                    <div className={`mt-0.5 text-sm font-bold ${Number(result.drift.max_psi) < 0.1 ? 'text-emerald-600' : Number(result.drift.max_psi) < 0.25 ? 'text-amber-600' : 'text-rose-500'}`}>
-                      {Number(result.drift.max_psi).toFixed(4)}
-                    </div>
-                  </div>
-                  <div className="rounded-xl bg-slate-50 px-3 py-2 text-center">
-                    <div className="text-[9px] font-semibold uppercase tracking-wider text-slate-400">漂移特征</div>
-                    <div className="mt-0.5 text-sm font-bold text-slate-700">
-                      稳定 {result.drift.drift?.stable ?? 0} / 中 {result.drift.drift?.medium ?? 0} / 重 {result.drift.drift?.severe ?? 0}
-                    </div>
-                  </div>
-                </div>
-
-                {result.drift.top_drift_features?.length > 0 && (
-                  <div className="space-y-1">
-                    {result.drift.top_drift_features.slice(0, 8).map((f, i) => (
-                      <div key={i} className="flex items-center gap-2 px-2 py-1 bg-slate-50/60 rounded-lg border border-slate-100/50">
-                        <Text className="text-[9px] font-mono text-slate-500 flex-1 truncate">{f.feature}</Text>
-                        {f.benign_scale && (
-                          <Tag className="m-0 rounded-md border-0 px-1.5 py-0 text-[8px] font-black bg-sky-50 text-sky-500">量能</Tag>
-                        )}
-                        <Text className={`text-[10px] font-black font-mono ${f.level === 'stable' ? 'text-emerald-600' : f.level === 'medium' ? 'text-amber-600' : 'text-rose-500'}`}>
-                          {Number(f.rank_disp ?? f.psi).toFixed(3)}
-                        </Text>
-                        <Tag className={`m-0 rounded-md border-0 px-1.5 py-0 text-[8px] font-black ${f.level === 'stable' ? 'bg-emerald-50 text-emerald-600' : f.level === 'medium' ? 'bg-amber-50 text-amber-600' : 'bg-rose-50 text-rose-600'}`}>
-                          {f.level === 'stable' ? '稳定' : f.level === 'medium' ? '中' : '重'}
-                        </Tag>
+                  {/* 📊 三档分布 + 分布条 */}
+                  <div className="mb-4 grid grid-cols-3 gap-2">
+                    {[
+                      { label: '稳定', n: s, color: 'text-emerald-600', bg: 'bg-emerald-50', ring: 'ring-emerald-100' },
+                      { label: '中', n: m, color: 'text-amber-600', bg: 'bg-amber-50', ring: 'ring-amber-100' },
+                      { label: '重', n: r, color: 'text-rose-600', bg: 'bg-rose-50', ring: 'ring-rose-100' },
+                    ].map((c) => (
+                      <div key={c.label} className={clsx('rounded-xl px-3 py-2.5 text-center ring-1', c.bg, c.ring)}>
+                        <div className={clsx('text-sm font-bold leading-none', c.color)}>{c.n}</div>
+                        <div className="mt-1 text-[9px] font-bold uppercase tracking-wider text-slate-400">{c.label} 漂移</div>
                       </div>
                     ))}
                   </div>
-                )}
+                  <div className="mb-1 flex h-2 w-full gap-1 overflow-hidden rounded-full">
+                    <div className="h-full rounded-full bg-emerald-400" style={{ width: `${(s / tot) * 100}%` }} />
+                    <div className="h-full rounded-full bg-amber-400" style={{ width: `${(m / tot) * 100}%` }} />
+                    <div className="h-full rounded-full bg-rose-400" style={{ width: `${(r / tot) * 100}%` }} />
+                  </div>
+                  <div className="mb-4 flex items-center justify-between text-[10px] text-slate-400">
+                    <span>最大结构漂移 <span className={clsx('font-bold font-mono', disp < 0.1 ? 'text-emerald-600' : disp < 0.25 ? 'text-amber-600' : 'text-rose-500')}>{(disp).toFixed(4)}</span></span>
+                    <span>共 {tot} 个特征</span>
+                  </div>
 
-                <Text className="block mt-2 text-[10px] text-slate-400 leading-relaxed">
-                  对比 {result.drift.train_start} ~ {result.drift.train_end}（训练）与 {result.drift.recent_start} ~ {result.drift.recent_end}（最近实盘）的截面结构。数值为个股截面 rank 位移（0~1），&gt;0.1 结构漂移，&gt;0.2 严重；标记"量能"的是水平膨胀但截面稳定的良性漂移。重训前请结合实盘 RankIC 判断。
-                </Text>
-              </div>
-            )}
+                  {/* 🎯 漂移特征 Top */}
+                  <div className="mb-1 flex items-center gap-2 text-[9px] font-bold uppercase tracking-wider text-slate-400">
+                    <span>漂移特征 Top</span>
+                  </div>
+                  {result.drift.top_drift_features?.length > 0 && (
+                    <div className="space-y-1.5">
+                      {result.drift.top_drift_features.slice(0, 6).map((f, i) => {
+                        const val = Number(f.rank_disp ?? f.psi ?? 0);
+                        const lv = f.level;
+                        const tagCls = lv === 'stable' ? 'bg-emerald-50 text-emerald-600' : lv === 'medium' ? 'bg-amber-50 text-amber-600' : 'bg-rose-50 text-rose-600';
+                        const barCls = lv === 'stable' ? 'bg-emerald-400' : lv === 'medium' ? 'bg-amber-400' : 'bg-rose-400';
+                        return (
+                          <div key={i} className="group flex items-center gap-3 rounded-xl border border-slate-100 bg-slate-50/60 px-3 py-2 transition-colors hover:bg-slate-50">
+                            <span className="w-5 shrink-0 text-center text-[11px] font-black text-slate-300">{i + 1}</span>
+                            <div className="min-w-0 flex-1">
+                              <div className="flex items-center gap-2">
+                                <Text className="truncate font-mono text-[11px] font-semibold text-slate-700">{f.feature}</Text>
+                                {f.benign_scale && (
+                                  <Tag className="m-0 rounded-md border-0 px-1.5 py-0 text-[8px] font-black bg-sky-50 text-sky-500">量能</Tag>
+                                )}
+                              </div>
+                              {/* 相对 0.25 的位移条：>>0.2 严重 >>0.1 中 */}
+                              <div className="mt-1 h-1.5 w-full overflow-hidden rounded-full bg-slate-200/70">
+                                <div className={clsx('h-full rounded-full', barCls)} style={{ width: `${Math.min(100, (val / 0.25) * 100)}%` }} />
+                              </div>
+                            </div>
+                            <div className="shrink-0 text-right">
+                              <div className={clsx('text-[12px] font-black font-mono leading-none', lv === 'stable' ? 'text-emerald-600' : lv === 'medium' ? 'text-amber-600' : 'text-rose-500')}>
+                                {val.toFixed(3)}
+                              </div>
+                              <div className={clsx('mt-0.5 inline-block rounded-md px-1.5 py-0 text-[8px] font-black', tagCls)}>
+                                {lv === 'stable' ? '稳定' : lv === 'medium' ? '中' : '重'}
+                              </div>
+                            </div>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  )}
+
+                  <div className="mt-3 rounded-xl border border-dashed border-slate-200 bg-white px-3 py-2.5">
+                    <Text className="block text-[10px] leading-relaxed text-slate-400">
+                      对比「训练区间」与「最近实盘」的个股截面 rank 位移（0~1）：&gt;0.1 结构漂移、&gt;0.2 严重。标记「量能」为水平膨胀但截面稳定的良性漂移。重训前请结合实盘 RankIC 判断。
+                    </Text>
+                  </div>
+                </div>
+              );
+            })()}
 
             {result.multiHorizon && result.multiHorizon.horizons?.length > 0 && (
               <div className="rounded-2xl border border-indigo-200 bg-white p-4">

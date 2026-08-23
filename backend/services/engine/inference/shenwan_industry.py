@@ -75,10 +75,12 @@ def _load_from_parquet() -> pd.DataFrame | None:
 def _resolve_instrument_detail_path() -> Path | None:
     for base in _DEFAULT_SECTOR_DIRS:
         p = Path(base)
-        if (p / "instrument_detail.parquet").exists():
-            return p / "instrument_detail.parquet"
-        if (p / "instrument_detail" / "instrument_detail.parquet").exists():
-            return p / "instrument_detail" / "instrument_detail.parquet"
+        for name in ("instrument_list.parquet", "instrument_detail.parquet"):
+            if (p / name).exists():
+                return p / name
+        for name in ("instrument_list.parquet", "instrument_detail.parquet"):
+            if (p / "instrument_detail" / name).exists():
+                return p / "instrument_detail" / name
     return None
 
 

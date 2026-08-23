@@ -1,6 +1,6 @@
-/** 概况 Tab：公司信息 + 估值 + 宽基归属 + 概念板块（推理中心玻璃卡风格） */
+/** 概况 Tab：公司信息 + 行情规模 + 估值指标 */
 
-import { Building2, Coins, Layers, Tag, Users } from 'lucide-react';
+import { Building2, Coins, Users } from 'lucide-react';
 import { StockProfile } from '../types';
 
 interface Props {
@@ -28,7 +28,7 @@ export function OverviewTab({ profile }: Props) {
   const v = profile.valuation ?? {};
 
   return (
-    <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
+    <div className="grid grid-cols-2 lg:grid-cols-3 gap-3">
       {/* 基本信息 */}
       <div className="bg-white/70 rounded-2xl border border-slate-100 p-3">
         <div className="flex items-center gap-1.5 pb-2 mb-1 border-b border-slate-100">
@@ -79,7 +79,6 @@ export function OverviewTab({ profile }: Props) {
         <Field label="净利润 TTM" value={v.net_profit_ttm != null ? `${(v.net_profit_ttm / 1e8).toFixed(1)}亿` : '--'} />
         <Field label="营收 TTM" value={v.revenue_ttm != null ? `${(v.revenue_ttm / 1e8).toFixed(1)}亿` : '--'} />
       </div>
-
     </div>
   );
 }

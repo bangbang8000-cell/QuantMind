@@ -5,7 +5,7 @@ Simulation trade service.
 from typing import List, Optional
 from uuid import UUID
 
-from sqlalchemy import and_, case, func, select
+from sqlalchemy import String, and_, case, cast, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.services.trade.simulation.models.trade import SimTrade
@@ -20,7 +20,7 @@ class SimTradeService:
             select(SimTrade).where(
                 and_(
                     SimTrade.tenant_id == tenant_id,
-                    SimTrade.user_id == user_id,
+                    cast(SimTrade.user_id, String) == str(user_id),
                     SimTrade.trade_id == trade_id,
                 )
             )
@@ -37,7 +37,7 @@ class SimTradeService:
         limit: int = 50,
         offset: int = 0,
     ) -> list[SimTrade]:
-        conditions = [SimTrade.tenant_id == tenant_id, SimTrade.user_id == user_id]
+        conditions = [SimTrade.tenant_id == tenant_id, cast(SimTrade.user_id, String) == str(user_id)]
         if portfolio_id is not None:
             conditions.append(SimTrade.portfolio_id == portfolio_id)
         if symbol:
@@ -50,7 +50,7 @@ class SimTradeService:
         return list(result.scalars().all())
 
     async def get_stats(self, tenant_id: str, user_id: int, portfolio_id: int | None = None) -> dict:
-        conditions = [SimTrade.tenant_id == tenant_id, SimTrade.user_id == user_id]
+        conditions = [SimTrade.tenant_id == tenant_id, cast(SimTrade.user_id, String) == str(user_id)]
         if portfolio_id is not None:
             conditions.append(SimTrade.portfolio_id == portfolio_id)
 

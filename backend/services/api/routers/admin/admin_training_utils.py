@@ -401,8 +401,8 @@ def _normalize_payload(payload: dict[str, Any], allowed_features: list[str]) -> 
         val = str(item).strip()
         if val and val not in features:
             features.append(val)
-    if len(features) > 300:
-        raise HTTPException(status_code=422, detail="features length cannot exceed 300")
+    if len(features) > 600:
+        raise HTTPException(status_code=422, detail="features length cannot exceed 600")
     if allowed_features:
         allowed_set = set(allowed_features)
         invalid = [feature for feature in features if feature not in allowed_set]
@@ -518,6 +518,10 @@ def _normalize_payload(payload: dict[str, Any], allowed_features: list[str]) -> 
             "enabled": bool(payload["optuna"].get("enabled", False)),
             "n_trials": _clamp_int(payload["optuna"].get("n_trials"), 20, 5, 100),
         }
+    # 训练时是否停掉其他 Docker 容器（前端开关透传）。
+    # 此前未透传，orchestrator 收到 None 回落到环境变量默认 true，导致开关无效。
+    if "pause_others" in payload:
+        normalized["pause_others"] = bool(payload["pause_others"])
     if isinstance(payload.get("preprocessing"), dict):
         normalized["preprocessing"] = {
             "enabled": bool(payload["preprocessing"].get("enabled", False)),

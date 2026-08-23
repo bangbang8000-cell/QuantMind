@@ -1,0 +1,39 @@
+#!/usr/bin/env bash
+# conda shim for RD-Agent factor mining.
+#
+# Maps the `rdagent4qlib` conda environment that RD-Agent's LocalEnv
+# (rdagent/utils/env.py, QlibCondaEnv) hardcodes onto the container's
+# current Python environment. The OSS image has no conda; without this
+# shim, LocalEnv fails every factor-execution step with
+#   timeout: failed to run command 'python': No such file or directory
+# after trying (and failing) to `conda create -n rdagent4qlib`.
+#
+# mounts into: /usr/local/bin/conda (see docker-compose.yml, quantmind.volumes)
+
+case "${1:-}" in
+  env)
+    if [ "${2:-}" = "list" ]; then
+      echo "rdagent4qlib                  *  /usr/local"
+    fi
+    exit 0
+    ;;
+  run)
+    shift
+    while [ $# -gt 0 ]; do
+      case "$1" in
+        -n|-p|--prefix) shift 2 ;;
+        --no-capture-output|-q|--quiet) shift ;;
+        *) break ;;
+      esac
+    done
+    exec "$@"
+    ;;
+  create|install|remove)
+    # Environment already advertised by `env list`; nothing to build.
+    exit 0
+    ;;
+  *)
+    # Unknown subcommand fallback: execute as-is.
+    exec "$@"
+    ;;
+esac

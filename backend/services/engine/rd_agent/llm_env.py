@@ -44,6 +44,9 @@ def build_llm_env(env: dict[str, Any]) -> dict[str, Any]:
         or env.get("DEEPSEEK_BASE_URL", "").strip()
         or "https://api.deepseek.com/v1"
     )
+    # DeepSeek base URL 必须带 /v1 后缀，否则 /chat/completions 会 404
+    if deepseek_base and not deepseek_base.rstrip("/").endswith("/v1"):
+        deepseek_base = deepseek_base.rstrip("/") + "/v1"
 
     # ---- 决定最终 key / base / model ----
     litellm_key = (

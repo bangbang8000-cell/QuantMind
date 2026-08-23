@@ -151,6 +151,9 @@ tools/bridge-windows/data/
 tools/bridge-windows/execution_reports/
 .codegraph/
 /exports/
+
+# 运行时代码版本（deploy/update.sh 每次更新后生成，避免污染工作区）
+backend/shared/version.txt
 electron/public/data/stocks.json
 electron/public/data/stocks/
 electron/public/fonts/AlibabaPuHuiTi-Bold.ttf

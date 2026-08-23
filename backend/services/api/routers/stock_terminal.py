@@ -14,12 +14,15 @@ K 线数据复用既有 /api/v1/market/kline 与 /api/v1/market/index-kline，
 
 from __future__ import annotations
 
+import asyncio
 import math
+import threading
 import time
 from functools import lru_cache
 from pathlib import Path
 from typing import Any
 
+import numpy as np
 import pandas as pd
 from fastapi import APIRouter, Depends, HTTPException, Query
 
@@ -50,6 +53,10 @@ def _quantdb_dir() -> Path:
 
 _UNIVERSE_TTL = 300.0
 _universe_cache: dict[str, Any] = {"df": None, "ts": 0.0, "trade_date": ""}
+# universe 重建锁：to_thread 并发请求同时过期时只重建一次（读 2 parquet + merge）
+_universe_lock = threading.Lock()
+# 推理模型下拉选项缓存：model JOIN+GROUP BY 2.3s/次，按日频更新，TTL 与 universe 一致
+_model_options_cache: dict[str, Any] = {"v": None, "ts": 0.0}
 _concept_cache: dict[str, Any] = {"ts": 0.0, "symbol_map": {}}
 
 # 概念板块展示上限：单只股票概念过多时截断（板块成员表全市场概念归属）
@@ -131,15 +138,33 @@ def _load_universe(asof: str | None = None) -> tuple[pd.DataFrame, str]:
     if cached is not None and now - _universe_cache["ts"] < _UNIVERSE_TTL and not asof:
         return cached, _universe_cache["trade_date"]
 
+    with _universe_lock:
+        # 双重检查：并发请求同时过期时只重建一次
+        now = time.time()
+        cached = _universe_cache["df"]
+        if cached is not None and now - _universe_cache["ts"] < _UNIVERSE_TTL and not asof:
+            return cached, _universe_cache["trade_date"]
+        df, trade_date = _rebuild_universe(asof)
+        if not asof:
+            _universe_cache.update({"df": df, "ts": now, "trade_date": trade_date})
+        return df, trade_date
+
+
+def _rebuild_universe(asof: str | None) -> tuple[pd.DataFrame, str]:
+    """universe 重建（读 instrument_detail + technical_indicators 两 parquet + merge）。"""
     d = _quantdb_dir()
-    detail_file = d / "2_base_sector" / "instrument_detail" / "instrument_detail.parquet"
+    # QuantDB SDK 新版落盘为 instrument_list.parquet，旧版为 instrument_detail.parquet
+    detail_dir = d / "2_base_sector" / "instrument_detail"
+    detail_file = detail_dir / "instrument_list.parquet"
+    if not detail_file.exists():
+        detail_file = detail_dir / "instrument_detail.parquet"
     if not detail_file.exists():
         raise HTTPException(status_code=503, detail="本地 instrument_detail 数据缺失")
 
     detail_cols = [
         "Symbol", "Name", "rs_hyname", "Zsz", "Ltsz", "DynaPE", "PB_MRQ",
         "StaffNum", "MainBusiness", "IPO_Price", "ZTPrice", "DTPrice",
-        "RZRQ", "HSGT", "STGP", "IsHKGP", "J_zgb", "FreeLtgb", "BetaValue",
+        "RZRQ", "HSGT", "STGP", "IsSTGP", "IsHKGP", "J_zgb", "FreeLtgb", "BetaValue",
         "BelongHS300",
     ]
     raw = pd.read_parquet(detail_file)
@@ -162,8 +187,6 @@ def _load_universe(asof: str | None = None) -> tuple[pd.DataFrame, str]:
     df["board"] = df["Symbol"].map(_classify_board)
     df["exchange"] = df["Symbol"].map(_exchange_of)
 
-    if not asof:
-        _universe_cache.update({"df": df, "ts": now, "trade_date": trade_date})
     return df, trade_date
 
 
@@ -245,6 +268,132 @@ def _flag(v: Any) -> bool:
         return float(v) > 0
     except (TypeError, ValueError):
         return False
+
+
+def _st_mask(df: pd.DataFrame) -> pd.Series:
+    """ST 布尔掩码：优先 IsSTGP（新列），兼容旧 STGP；列缺失时全 False。"""
+    col = "IsSTGP" if "IsSTGP" in df.columns else ("STGP" if "STGP" in df.columns else None)
+    if col is None:
+        return pd.Series(False, index=df.index)
+    return pd.to_numeric(df[col], errors="coerce").fillna(0) > 0
+
+
+# ── L2 微观结构因子（14 个推荐，来自 l2_recommended_factors.csv 去冗余）──
+# ICIR 越大 alpha 越强；全部为正向信号（值越高越强）。desc 供前端 hover 解释。
+L2_RECOMMENDED_FACTORS: list[dict[str, Any]] = [
+    {"name": "micro_vpin_vol_ratio", "category": "VPIN", "icir": 0.562, "label": "VPIN/量比",
+     "desc": "按成交量口径的知情交易概率。越高=知情资金越活跃、毒性流动性越强（报告最强因子）"},
+    {"name": "micro_vpin_amount_ratio", "category": "VPIN", "icir": 0.483, "label": "VPIN/额比",
+     "desc": "按成交额口径的知情交易概率。越高=大单主导、知情资金进场"},
+    {"name": "micro_pin", "category": "VPIN", "icir": 0.159, "label": "Pin 知情概率",
+     "desc": "订单流中携带信息成分的占比估计。越高=知情投资者参与度越高"},
+    {"name": "micro_zone_distribution", "category": "时段", "icir": 0.417, "label": "时段量分布",
+     "desc": "日内成交量在各时段分布的集中度。越高=成交越集中在某几个时段"},
+    {"name": "micro_zone_vol_ratio_T4", "category": "时段", "icir": 0.345, "label": "T4 时段量比",
+     "desc": "第4时段（约10:30-11:00）成交量与日均量的比值。>1=该时段放量"},
+    {"name": "micro_zone_vol_ratio_T6", "category": "时段", "icir": 0.338, "label": "T6 时段量比",
+     "desc": "第6时段（约13:30-14:00）成交量与日均量的比值"},
+    {"name": "micro_zone_vol_ratio_T5", "category": "时段", "icir": 0.316, "label": "T5 时段量比",
+     "desc": "第5时段（约11:00-11:30）成交量与日均量的比值"},
+    {"name": "micro_zone_vol_ratio_T3", "category": "时段", "icir": 0.198, "label": "T3 时段量比",
+     "desc": "第3时段（约10:00-10:30）成交量与日均量的比值"},
+    {"name": "micro_zone_rv_ratio_close", "category": "时段", "icir": 0.156, "label": "尾盘实现波动",
+     "desc": "收盘时段已实现波动相对日均的比值。越高=尾盘波动放大，多空博弈加剧"},
+    {"name": "vol_price_divergence", "category": "量价背离", "icir": 0.332, "label": "量价背离度",
+     "desc": "成交量与价格走势的背离程度。越高=放量不涨/缩量不跌，主力行为异常"},
+    {"name": "micro_open_gap", "category": "竞价", "icir": 0.273, "label": "跳空幅度",
+     "desc": "开盘价相对昨收的跳空幅度（集合竞价定价偏移）。正=高开"},
+    {"name": "micro_impact_decay_half_life", "category": "冲击", "icir": 0.271, "label": "冲击衰减半衰期",
+     "desc": "大单冲击后价格恢复到均衡一半所需时间。越高=价格越有韧性/恢复越慢"},
+    {"name": "micro_liquidity_daily_pattern", "category": "流动性", "icir": 0.237, "label": "流动性日模式",
+     "desc": "流动性在日内时段的规律性形态强度。越高=日内流动性结构越稳定"},
+    {"name": "flow_imbalance_revert_speed", "category": "资金流", "icir": 0.161, "label": "失衡回补速度",
+     "desc": "主动买卖失衡后资金回补的速度。越高=失衡修复越快、趋势越易延续"},
+]
+
+
+@lru_cache(maxsize=1)
+def _l2_partitions() -> tuple[str, ...]:
+    """L2 因子分区目录（dt=YYYYMMDD）升序。"""
+    d = _quantdb_dir() / "6_ml_datasets" / "l2_factors"
+    parts = sorted((p.name for p in d.glob("dt=*")))
+    return tuple(parts)
+
+
+def _l2_feature_date(signal_date: str | None) -> str | None:
+    """预测日的前一个交易日（L2 分区 dt 中 < signal_date 的最近一天）。"""
+    dt = (signal_date or "").replace("-", "")
+    for p in reversed(_l2_partitions()):
+        d = p.removeprefix("dt=")
+        if d < dt:
+            return d
+    return None
+
+
+def _l2_features_for(symbol: str, feature_date: str) -> dict[str, Any] | None:
+    """读某股在特征日（YYYYMMDD）的 14 个推荐 L2 因子 + 当日全市场截面百分位。
+
+    返回 {feature_date, factors: [{name, value, pct_rank, category, icir}]}；
+    分区缺失/股票缺失时返回 None。百分位用当日全市场排名，0~1，越高越强。
+    """
+    import duckdb
+
+    d = _quantdb_dir() / "6_ml_datasets" / "l2_factors" / f"dt={feature_date}" / "data.parquet"
+    if not d.exists():
+        return None
+    names = [f["name"] for f in L2_RECOMMENDED_FACTORS]
+    col_list = ", ".join(names)
+    try:
+        con = duckdb.connect()
+        df = con.execute(
+            f"SELECT symbol, {col_list} FROM read_parquet('{str(d)}')"
+        ).fetchdf()
+        con.close()
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("read l2 factors %s %s failed: %s", symbol, feature_date, exc)
+        return None
+    if df.empty or "symbol" not in df.columns:
+        return None
+    df = df.replace([float("inf"), float("-inf")], float("nan"))
+    row = df[df["symbol"] == symbol]
+    factors = []
+    for f in L2_RECOMMENDED_FACTORS:
+        name = f["name"]
+        if name not in df.columns:
+            continue
+        val = row[name].iloc[0] if not row.empty else None
+        if val is None or not np.isfinite(val):
+            factors.append({**f, "value": None, "pct_rank": None})
+            continue
+        val = float(val)
+        s = df[name].dropna()
+        pct_rank = None
+        if len(s) > 2:
+            pct_rank = round(float((s <= val).mean()), 4)  # 全市场低于该值的占比
+        factors.append({**f, "value": round(val, 6), "pct_rank": pct_rank})
+    return {"feature_date": f"{feature_date[:4]}-{feature_date[4:6]}-{feature_date[6:]}", "factors": factors}
+
+
+async def _latest_signal_date_for(symbol: str) -> str | None:
+    """该股最近的推理信号日（YYY-MM-DD），无则 None。"""
+    code = symbol.split(".")[0]
+    from sqlalchemy import text as _txt
+
+    try:
+        async with get_session() as s:
+            r = (
+                await s.execute(
+                    _txt(
+                        "SELECT MAX(trade_date) FROM engine_signal_scores "
+                        "WHERE tenant_id='default' AND symbol=:c"
+                    ),
+                    {"c": code},
+                )
+            ).scalar_one_or_none()
+            return str(r)[:10] if r else None
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("latest signal date for %s failed: %s", symbol, exc)
+        return None
 
 
 # ---------------------------------------------------------------------------
@@ -640,8 +789,11 @@ async def stock_news(
     code = sym.split(".")[0]
     name = ""
     try:
-        detail = pd.read_parquet(_quantdb_dir() / "2_base_sector" / "instrument_detail" / "instrument_detail.parquet",
-                                 columns=["Symbol", "Name"])
+        detail_dir = _quantdb_dir() / "2_base_sector" / "instrument_detail"
+        detail_file = detail_dir / "instrument_list.parquet"
+        if not detail_file.exists():
+            detail_file = detail_dir / "instrument_detail.parquet"
+        detail = pd.read_parquet(detail_file, columns=["Symbol", "Name"])
         hit = detail[detail["Symbol"] == sym]
         if not hit.empty:
             name = str(hit.iloc[0]["Name"] or "").strip()
@@ -715,6 +867,15 @@ async def stock_news(
                     it["tickers"] = e["tickers"]
         except Exception as exc:  # noqa: BLE001
             logger.warning("stock_news enrichment join %s failed: %s", sym, exc)
+
+    # 对照 新闻情绪深度报告（docs/news_sentiment_deep_report.md）打分级标记：
+    # 来源可信度 × 时段质量 × 事件标签，追加以便资讯列表直观判断
+    try:
+        from backend.services.api.news.report_match import annotate_news_item
+    except Exception:  # noqa: BLE001
+        annotate_news_item = None
+    if annotate_news_item:
+        items = [annotate_news_item(it) for it in items]
 
     return {"success": True, "data": {"items": items, "total": len(items), "available": True}}
 
@@ -1122,6 +1283,7 @@ async def list_stocks(
     industry: str | None = Query(None, description="行业名称（rs_hyname）"),
     q: str | None = Query(None, description="代码/名称模糊检索"),
     only_st: bool = Query(False, description="仅 ST 股"),
+    exclude_st: bool = Query(False, description="排除 ST 股"),
     date: str | None = Query(None, description="推理分数基准日 YYYY-MM-DD，缺省=最近有分数日"),
     model: str | None = Query(None, description="推理模型（qm_model_inference_runs.model_id），缺省=全部模型融合"),
     score_min: float | None = Query(None, description="推理分数下限（fusion_score）"),
@@ -1142,7 +1304,9 @@ async def list_stocks(
 ):
     _ = current_user
     # 日历点选历史日时 close/pct_change 也读该日快照（左右整页随日期联动）
-    df, trade_date = _load_universe(asof=date)
+    # _load_universe 同步读 parquet+merge，跑在 event loop 上会阻塞全部并发请求
+    # （单 worker uvicorn），挪到线程池执行，list 接口并发不再互相排队
+    df, trade_date = await asyncio.to_thread(_load_universe, asof=date)
 
     m = market.upper()
     if m in ("SH", "SZ", "BJ"):
@@ -1152,10 +1316,12 @@ async def list_stocks(
     if q and q.strip():
         kw = q.strip()
         df = df[df["Symbol"].str.contains(kw) | df["Name"].astype(str).str.contains(kw)]
-    if only_st and "STGP" in df.columns:
-        df = df[pd.to_numeric(df["STGP"], errors="coerce").fillna(0) > 0]
+    if only_st:
+        df = df[_st_mask(df)]
+    if exclude_st:
+        df = df[~_st_mask(df)]
     if concept:
-        members = _concept_members(concept)
+        members = await asyncio.to_thread(_concept_members, concept)
         if members:
             df = df[df["Symbol"].isin(members)]
     if index_code:
@@ -1168,7 +1334,12 @@ async def list_stocks(
         try:
             from backend.services.engine.data_platform.tag_rules import stocks_for_tag
 
-            tag_syms = {str(it.get("symbol") or it.get("code") or "") for it in stocks_for_tag(tag, limit=6000)}
+            # stocks_for_tag 内部 df.apply 全市场逐行 + 可能重建特征缓存（读多 parquet），
+            # 同步执行会阻塞 event loop，挪线程池；结果已带 TTL 缓存，重复筛选秒回
+            tag_syms = {
+                str(it.get("symbol") or it.get("code") or "")
+                for it in await asyncio.to_thread(stocks_for_tag, tag, 6000)
+            }
             tag_codes = {x.split(".")[0] for x in tag_syms if x}
             if tag_codes:
                 df = df[df["Symbol"].str.split(".").str[0].isin(tag_codes)]
@@ -1240,7 +1411,7 @@ async def list_stocks(
             if only_signaled:
                 where += " AND signal_side IN ('BUY','SELL')"
             sql = (
-                "SELECT symbol, fusion_score, signal_side, model_version "
+                "SELECT symbol, fusion_score, signal_side, model_version, quality "
                 f"FROM engine_signal_scores WHERE {where}"
             )
             async with get_session() as session:
@@ -1251,11 +1422,20 @@ async def list_stocks(
                 sym = str(r[0])
                 # engine_signal_scores.symbol 为纯数字 600519（不带市场后缀）
                 sfx = sym if "." in sym else sym
+                pos = None
+                if isinstance(r[4], dict):
+                    pos = r[4].get("position")
                 score_info[sfx] = {
                     "fusion": float(r[1]) if r[1] is not None else None,
                     "side": str(r[2] or "HOLD"),
                     "date": str(latest)[:10],
                     "model": str(r[3] or ""),
+                    "position_score": (float(pos.get("position_score")) if pos and pos.get("position_score") is not None else None),
+                    "industry_top10_avg": (float(pos.get("industry_top10_avg")) if pos and pos.get("industry_top10_avg") is not None else None),
+                    "board_top10_avg": (float(pos.get("board_top10_avg")) if pos and pos.get("board_top10_avg") is not None else None),
+                    "cap_top10_avg": (float(pos.get("cap_top10_avg")) if pos and pos.get("cap_top10_avg") is not None else None),
+                    "pct_industry": (float(pos.get("pct_industry")) if pos and pos.get("pct_industry") is not None else None),
+                    "market_empty": (bool(pos.get("market_empty")) if pos else None),
                 }
     except Exception as exc:  # noqa: BLE001
         logger.warning("signal scores for list failed: %s", exc)
@@ -1382,8 +1562,12 @@ async def list_stocks(
     # 推理模型选项（供筛选下拉）：最近 90 天内有信号的全部模型（真实 model_id + display_name）。
     # engine_signal_scores.model_version 恒为 'inference_script'（历史遗留无意义），
     # 真实模型标识在 qm_model_inference_runs.model_id（同 model_training history 逻辑）。
+    # JOIN+GROUP BY 全表 2.3s/次，结果按日频更新——缓存 _UNIVERSE_TTL 消除重复开销
     model_options: list[dict[str, Any]] = []
-    if not model:
+    _now = time.time()
+    if not model and _model_options_cache["v"] is not None and _now - _model_options_cache["ts"] < _UNIVERSE_TTL:
+        model_options = _model_options_cache["v"]
+    elif not model:
         try:
             async with get_session() as _s:
                 from sqlalchemy import text as _txt
@@ -1429,8 +1613,13 @@ async def list_stocks(
                             "model_id": str(_mid),
                             "display_name": _meta_map.get(str(_mid), ""),
                         })
+                _model_options_cache.update({"v": model_options, "ts": time.time()})
         except Exception as exc:  # noqa: BLE001
             logger.warning("model options for list failed: %s", exc)
+
+    # ST 掩码全市场一次性预计算：逐行 _st_mask(r.to_frame().T) 约 40ms/行，
+    # 100 行 items 要 4s+，且在 event loop 主线程执行——并发请求全部被拖慢
+    st_mask_series = _st_mask(df)
 
     def _item(r: pd.Series) -> dict[str, Any]:
         info = score_info.get(str(r.get("Symbol")).split(".")[0]) if score_info else {}
@@ -1445,12 +1634,17 @@ async def list_stocks(
             "float_mv": _safe_f(r.get("Ltsz")),     # 亿元
             "pe": _safe_f(r.get("DynaPE")),
             "pb": _safe_f(r.get("PB_MRQ")),
-            "is_st": bool(pd.to_numeric(r.get("STGP"), errors="coerce").fillna(0) > 0)
-            if "STGP" in r.index else False,
+            "is_st": bool(st_mask_series.loc[r.name]) if r.name in st_mask_series.index else False,
             "fusion": (info.get("fusion") if info else None),
             "side": (info.get("side") if info else None),
             "signal_date": (info.get("date") if info else None),
             "model": (info.get("model") if info else None),
+            "position_score": (info.get("position_score") if info else None),
+            "industry_top10_avg": (info.get("industry_top10_avg") if info else None),
+            "board_top10_avg": (info.get("board_top10_avg") if info else None),
+            "cap_top10_avg": (info.get("cap_top10_avg") if info else None),
+            "pct_industry": (info.get("pct_industry") if info else None),
+            "market_empty": (info.get("market_empty") if info else None),
             "cap_tier": _cap_tier_of(r.get("Zsz")),
             "trend": (
                 trend_map.get(str(r.get("Symbol")).split(".")[0], "-")
@@ -1475,6 +1669,133 @@ async def list_stocks(
     }
 
 
+# ---------------------------------------------------------------------------
+# 大盘 MA20 日历：左侧筛选栏日期选择（上证收盘 vs MA20 偏离度 + 当日推理概况）
+# ---------------------------------------------------------------------------
+
+# 日历聚合缓存：指数与推理分数均为日频，60s TTL 足够；推理完成后前端带 refresh 跳过
+_CAL_CACHE: dict[str, Any] = {"key": "", "ts": 0.0, "payload": None}
+_CAL_TTL = 60.0
+
+
+def _build_calendar_days(df: pd.DataFrame, cal_start: str) -> list[dict[str, Any]]:
+    """指数日线 -> 日历日列表（收盘 / MA20 / 偏离度%），跳过 cal_start 之前与 MA20 未成型的日子。"""
+    if df is None or df.empty:
+        return []
+    df = df.sort_values("trade_date").reset_index(drop=True)
+    closes = df["close"].astype(float)
+    ma20 = closes.rolling(20).mean()
+    days: list[dict[str, Any]] = []
+    for i, (dt, close) in enumerate(zip(df["trade_date"], closes)):
+        d = str(dt)[:10]
+        if d < cal_start:
+            continue
+        m = ma20.iloc[i]
+        if pd.isna(m):
+            continue
+        days.append(
+            {
+                "date": d,
+                "close": round(float(close), 2),
+                "ma20": round(float(m), 2),
+                "dev_pct": round((float(close) - float(m)) / float(m) * 100, 2),
+            }
+        )
+    return days
+
+
+def _merge_signal_stats(days: list[dict[str, Any]], rows: list[tuple]) -> None:
+    """把每日推理统计（(trade_date, 有分数行数, top10均分) 元组）就地合入日历日。"""
+    # asyncpg 返回 date 对象 -> 统一 YYYY-MM-DD 字符串
+    stats = {str(r[0])[:10]: (int(r[1]), float(r[2]) if r[2] is not None else None) for r in rows}
+    for day in days:
+        n_scored, top10 = stats.get(day["date"], (0, None))
+        day["signal_count"] = n_scored
+        day["top10_avg"] = round(top10, 4) if top10 is not None else None
+        day["has_inference"] = n_scored > 0
+
+
+@router.get("/market-calendar")
+async def market_calendar(
+    months: int = Query(12, ge=1, le=24, description="回看月数"),
+    model: str | None = Query(None, description="按模型过滤推理概况（缺省=全模型）"),
+    refresh: bool = Query(False, description="跳过缓存（推理完成后立即刷新）"),
+    current_user: dict = Depends(get_current_user),
+):
+    """大盘 MA20 日历：近 N 月每个交易日的上证收盘/MA20/偏离度，叠加当日推理概况。
+
+    前端日历格按偏离度着色（高于 MA20 红、越偏越深；低于 MA20 绿），
+    点击有推理的日期切列表基准信号日；无推理日期可触发补推理。
+    """
+    _ = current_user
+    import asyncio
+    from datetime import date as _date, timedelta as _td
+
+    from sqlalchemy import text as _txt
+
+    cache_key = f"{months}:{model or ''}"
+    now = time.time()
+    if (
+        not refresh
+        and _CAL_CACHE["payload"] is not None
+        and _CAL_CACHE["key"] == cache_key
+        and now - _CAL_CACHE["ts"] < _CAL_TTL
+    ):
+        return {"success": True, "data": _CAL_CACHE["payload"]}
+
+    end = _date.today()
+    cal_start = (end - _td(days=months * 31)).isoformat()
+    fetch_start = end - _td(days=months * 31 + 90)  # 多取 90 天作 MA20 预热
+
+    def _run() -> list[dict[str, Any]]:
+        from backend.services.engine.data_platform.quantdb_hub import QuantDBDataHub
+
+        df = QuantDBDataHub.get_instance().fetch_index_kline("000001.SH", fetch_start, end)
+        return _build_calendar_days(df, cal_start)
+
+    try:
+        days = await asyncio.to_thread(_run)
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("market calendar kline failed: %s", exc)
+        days = []
+
+    # 推理概况：每日有分数行数 + Top10 平均分（row_number 每日按分数降序取前10）
+    if days:
+        try:
+            # model_version 列恒为 'inference_script'（历史遗留），真实模型在
+            # qm_model_inference_runs.model_id，按 run_id 关联过滤（与 /list 同口径）
+            model_where = (
+                "AND run_id IN (SELECT run_id FROM qm_model_inference_runs WHERE model_id = :m)"
+                if model
+                else ""
+            )
+            sql = (
+                "SELECT trade_date, COUNT(fusion_score) AS n_scored, "
+                "AVG(fusion_score) FILTER (WHERE rn <= 10) AS top10_avg FROM ("
+                "SELECT trade_date, fusion_score, "
+                "ROW_NUMBER() OVER (PARTITION BY trade_date ORDER BY fusion_score DESC NULLS LAST) AS rn "
+                "FROM engine_signal_scores "
+                f"WHERE tenant_id='default' AND trade_date >= :start {model_where}"
+                ") t GROUP BY trade_date ORDER BY trade_date"
+            )
+            params: dict[str, Any] = {"start": _date.fromisoformat(cal_start)}
+            if model:
+                params["m"] = model
+            async with get_session() as session:
+                rows = (await session.execute(_txt(sql), params)).fetchall()
+            _merge_signal_stats(days, rows)
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("market calendar signals failed: %s", exc)
+            for day in days:
+                day["signal_count"] = 0
+                day["top10_avg"] = None
+                day["has_inference"] = False
+
+    payload = {"index_symbol": "000001.SH", "index_name": "上证指数", "days": days}
+    _CAL_CACHE.update(key=cache_key, ts=now, payload=payload)
+    return {"success": True, "data": payload}
+
+
 @router.get("/concepts")
 async def list_concepts(
     market: str = Query("ALL", description="按市场过滤 SH/SZ/BJ/ALL"),
@@ -1487,7 +1808,7 @@ async def list_concepts(
     if not f.exists():
         return {"success": True, "data": {"concepts": []}}
     try:
-        sm = pd.read_parquet(f)
+        sm = await asyncio.to_thread(pd.read_parquet, f)
         name_col = "SectorName" if "SectorName" in sm.columns else "sector_name"
         sym_col = "Symbol" if "Symbol" in sm.columns else "symbol"
         type_col = "SectorType" if "SectorType" in sm.columns else None
@@ -1537,7 +1858,7 @@ async def stock_profile(
 ):
     _ = current_user
     sym = symbol.upper().strip()
-    df, trade_date = _load_universe(asof=date)
+    df, trade_date = await asyncio.to_thread(_load_universe, asof=date)
     hits = df[df["Symbol"] == sym]
     if hits.empty:
         raise HTTPException(status_code=404, detail=f"未找到 {sym}")
@@ -1573,6 +1894,15 @@ async def stock_profile(
     _idx = _index_membership(sym)
     _concepts = _concepts_of(sym)
 
+    # L2 微观结构因子：预测日（信号日）前一个交易日的 14 个推荐因子
+    # date 参数=日历点选的预测日；缺省取该股最近的推理信号日
+    l2_features: dict[str, Any] | None = None
+    signal_date = date or await _latest_signal_date_for(sym)
+    if signal_date:
+        feat_date = _l2_feature_date(signal_date)
+        if feat_date:
+            l2_features = _l2_features_for(sym, feat_date)
+
     profile = {
         "symbol": sym,
         "name": _g("Name"),
@@ -1598,11 +1928,13 @@ async def stock_profile(
             "hs300": _flag(r.get("BelongHS300")),
             "marginable": _flag(r.get("RZRQ")),
             "sh_hk_connect": _flag(r.get("HSGT")),
-            "is_st": _flag(r.get("STGP")),
+            "is_st": _flag(r.get("IsSTGP" if "IsSTGP" in r.index else "STGP")),
             "is_hk_listed": _flag(r.get("IsHKGP")),
         },
         "valuation": valuation,
         "index_membership": _idx,
         "concepts": _concepts,
+        "l2_features": l2_features,
+        "signal_date": signal_date,
     }
     return {"success": True, "data": profile}

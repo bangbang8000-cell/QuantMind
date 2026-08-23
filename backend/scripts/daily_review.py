@@ -787,10 +787,14 @@ def main() -> None:
     prev_date = prev_dates[1] if len(prev_dates) > 1 else ""
     trade_dt_obj = pd.Timestamp(trade_date)
 
+    import os as _os
+    _inst_path = f"{data_dir}/2_base_sector/instrument_detail/instrument_list.parquet"
+    if not _os.path.exists(_inst_path):
+        _inst_path = f"{data_dir}/2_base_sector/instrument_detail/instrument_detail.parquet"
     names_df = q(
         db,
         f"SELECT Symbol, Name FROM read_parquet("
-        f"'{data_dir}/2_base_sector/instrument_detail/instrument_detail.parquet')",
+        f"'{_inst_path}')",
     )
     names = dict(zip(names_df["Symbol"], names_df["Name"]))
     st_set = {s for s, n in names.items() if "ST" in n}

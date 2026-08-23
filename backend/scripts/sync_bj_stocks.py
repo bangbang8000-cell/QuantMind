@@ -38,7 +38,9 @@ def _conn():
 def _find_instrument_detail() -> Path | None:
     """定位 instrument_detail.parquet（QuantDB 全量挂载优先，feature_snapshots 兜底）。"""
     candidates = [
+        Path(os.getenv("QUANTDB_DATA_DIR", "/tmp/quantdb_data")) / "2_base_sector" / "instrument_detail" / "instrument_list.parquet",
         Path(os.getenv("QUANTDB_DATA_DIR", "/tmp/quantdb_data")) / "2_base_sector" / "instrument_detail" / "instrument_detail.parquet",
+        Path("/app/db/feature_snapshots") / "2_base_sector" / "instrument_detail" / "instrument_list.parquet",
         Path("/app/db/feature_snapshots") / "2_base_sector" / "instrument_detail" / "instrument_detail.parquet",
     ]
     for p in candidates:

@@ -1356,6 +1356,17 @@ class QlibBacktestServiceRuntimeMixin(QlibBacktestServiceQueryMixin):
                     pred_path=pred_path,
                     error=str(exc),
                 )
+                # pkl 读取失败（如远程 AutoDL numpy2 打包）时，回退同目录 pred.parquet
+                if pred_path.endswith(".pkl"):
+                    parquet_path = pred_path[:-4] + ".parquet"
+                    if os.path.exists(parquet_path):
+                        task_logger.info(
+                            "load_pred_parquet_fallback",
+                            "pred.pkl 读取失败，回退同目录 pred.parquet",
+                            pkl=pred_path,
+                            parquet=parquet_path,
+                        )
+                        return self._load_pred_pkl(parquet_path, request)
                 return {
                     "class": "SimpleSignal",
                     "module_path": "backend.services.engine.qlib_app.utils.simple_signal",
@@ -1484,10 +1495,10 @@ class QlibBacktestServiceRuntimeMixin(QlibBacktestServiceQueryMixin):
                 model_id = str(m.get("model_id") or "")
                 if not storage_path:
                     continue
-                # 检查 pred.pkl
-                pred_path = Path(storage_path) / "pred.pkl"
+                # 检查 pred.parquet（优先，pyarrow 跨版本稳定），pred.pkl 兜底
+                pred_path = Path(storage_path) / "pred.parquet"
                 if not pred_path.exists():
-                    pred_path = Path(storage_path) / "pred.parquet"
+                    pred_path = Path(storage_path) / "pred.pkl"
                 if not pred_path.exists():
                     continue
                 # 快速读取 pred 最大日期（只读 index，不加载全量数据）
@@ -1496,11 +1507,11 @@ class QlibBacktestServiceRuntimeMixin(QlibBacktestServiceQueryMixin):
                         import pyarrow.parquet as pq
 
                         pf = pq.ParquetFile(str(pred_path))
-                        # 从 footer metadata 中读取 datetime 列统计
+                        # 从 footer metadata 中读取日期列统计（训练产物列名为 trade_date）
                         schema_names = list(pf.schema_arrow.names)
                         td_idx = -1
                         for i, n in enumerate(schema_names):
-                            if n == "datetime":
+                            if n == "trade_date" or n == "datetime":
                                 td_idx = i
                                 break
                         if td_idx < 0:
@@ -1621,13 +1632,14 @@ class QlibBacktestServiceRuntimeMixin(QlibBacktestServiceQueryMixin):
 
         candidate_paths: list[Path] = []
         storage = Path(storage_path)
-        # 优先检查 pred.pkl，再检查 pred.parquet（训练产物使用 parquet 格式）
-        for pred_filename in ("pred.pkl", "pred.parquet"):
+        # 优先 pred.parquet（pyarrow 格式跨 numpy 版本稳定），pred.pkl 仅当
+        # 无 parquet 时回退（pkl 由远程 AutoDL numpy2 打包时本容器读不了）。
+        for pred_filename in ("pred.parquet", "pred.pkl"):
             candidate_paths.append(storage / pred_filename)
         if not storage.is_absolute():
             resolved_storage = self._resolve_path(storage_path)
             if resolved_storage:
-                for pred_filename in ("pred.pkl", "pred.parquet"):
+                for pred_filename in ("pred.parquet", "pred.pkl"):
                     candidate_paths.append(Path(resolved_storage) / pred_filename)
 
         for candidate in candidate_paths:

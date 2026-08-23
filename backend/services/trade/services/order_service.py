@@ -320,7 +320,8 @@ class OrderService:
         return await self.transition_order_status(order, OrderStatus.CANCELLED, reason)
 
     async def get_order_statistics(self, tenant_id: str, user_id: int, portfolio_id: int | None = None) -> dict:
-        conditions = [Order.tenant_id == tenant_id, Order.user_id == user_id]
+        # orders.user_id 为 VARCHAR，避免 int 参数类型不匹配（should be str comparison）
+        conditions = [Order.tenant_id == tenant_id, Order.user_id == str(user_id)]
         if portfolio_id:
             conditions.append(Order.portfolio_id == portfolio_id)
 
