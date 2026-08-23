@@ -127,10 +127,10 @@ services:
       # AI-IDE 执行日志状态当前保存在 engine worker 进程内存中，
       # OSS 部署需保持单 worker，避免 /start 与 /execute/logs/{job_id}
       # 落到不同 worker 时出现 "Job not found"。
-      - API_WORKERS=1
+      - API_WORKERS=${API_WORKERS:-2}
       - ENGINE_WORKERS=${ENGINE_WORKERS:-1}
-      - TRADE_WORKERS=1
-      - STREAM_WORKERS=1
+      - TRADE_WORKERS=${TRADE_WORKERS:-2}
+      - STREAM_WORKERS=${STREAM_WORKERS:-1}
 
       # 服务间通信 (OSS单镜像模式使用localhost)
       - TRADE_SERVICE_URL=http://127.0.0.1:8002
@@ -265,9 +265,6 @@ services:
     volumes:
       # 运行时数据
       - ./data:/data
-      # QuantDB 数据源挂载 (宿主机 D:\quant_data / WSL: /mnt/d/quant_data)
-      - ${QM_QUANTDB_HOST_DIR:-/mnt/d/quant_data}:/data/quantdb
-      - ${QM_QUANTDB_HOST_DIR:-/mnt/d/quant_data}:/mnt/d/quant_data:ro
       # AI 模型文件 (按需下载)
       - ./models:/app/models
       # Qlib 历史数据 (按需下载)
@@ -425,9 +422,6 @@ services:
     volumes:
       # 运行时数据
       - ./data:/data
-      # QuantDB 数据源挂载 (宿主机 D:\quant_data / WSL: /mnt/d/quant_data)
-      - ${QM_QUANTDB_HOST_DIR:-/mnt/d/quant_data}:/data/quantdb
-      - ${QM_QUANTDB_HOST_DIR:-/mnt/d/quant_data}:/mnt/d/quant_data:ro
       # AI 模型文件
       - ./models:/app/models
       # Qlib 历史数据
@@ -499,8 +493,6 @@ services:
       - ./scripts:/app/scripts
       - ./logs:/app/logs
       - ./data:/data
-      - ${QM_QUANTDB_HOST_DIR:-/mnt/d/quant_data}:/data/quantdb
-      - ${QM_QUANTDB_HOST_DIR:-/mnt/d/quant_data}:/mnt/d/quant_data:ro
       - ./db:/app/db
     command: celery -A backend.services.engine.qlib_app.celery_config:celery_app beat --loglevel=info --schedule=/tmp/celerybeat-schedule
     healthcheck:
@@ -581,8 +573,6 @@ services:
       - HUNTLY_PASSWORD=${HUNTLY_PASSWORD:-changeme}
     volumes:
       - ./data:/data
-      - ${QM_QUANTDB_HOST_DIR:-/mnt/d/quant_data}:/data/quantdb
-      - ${QM_QUANTDB_HOST_DIR:-/mnt/d/quant_data}:/mnt/d/quant_data:ro
       - ./db:/app/db
       - ./dashboard:/app/dashboard
     healthcheck:

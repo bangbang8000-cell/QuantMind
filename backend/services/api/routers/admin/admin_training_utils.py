@@ -574,9 +574,10 @@ def _normalize_payload(payload: dict[str, Any], allowed_features: list[str]) -> 
         dt_test_end = _parse_date(test_end, "test_end")
 
         # 自动调整数据间隔(Gap)以防数据泄漏，提升用户体验
-        # 例如: 如果预测未来3天收益率(H=3)，Train 结束与 Val 开始之间必须至少有 3 天间隔。
+        # 信号在 T 日生成、T+1 执行；若预测未来 H 天收益，Train 结束与
+        # Val 开始之间至少应留下 H+1 天，避免执行价/未来价格跨入下一分段。
         # 不再阻断(422)，而是由后端自动向后平移日期。
-        gap_days = int(normalized.get("target_horizon_days") or 1)
+        gap_days = int(normalized.get("target_horizon_days") or 1) + 1
 
         # 记录修正通知
         adjustment_notices = []

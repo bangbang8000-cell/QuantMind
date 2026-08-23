@@ -140,8 +140,7 @@ class QuantDBDataHub:
             return
         try:
             conn = self._get_duck_conn()
-            # Execute a lightweight query to force view materialization
-            conn.execute("SELECT COUNT(*) FROM qdb_valuation WHERE dt = (SELECT MAX(dt) FROM qdb_valuation)")
+            conn.execute("SELECT 1")
             logger.info("QuantDB DuckDB warm-up complete")
         except Exception as exc:
             logger.warning("QuantDB warm-up failed (non-fatal): %s", exc)
@@ -196,8 +195,7 @@ class QuantDBDataHub:
             return
         try:
             conn = self._get_duck_conn()
-            # Execute a lightweight query to force view materialization
-            conn.execute("SELECT COUNT(*) FROM qdb_valuation WHERE dt = (SELECT MAX(dt) FROM qdb_valuation)")
+            conn.execute("SELECT 1")
             logger.info("QuantDB DuckDB warm-up complete")
         except Exception as exc:
             logger.warning("QuantDB warm-up failed (non-fatal): %s", exc)

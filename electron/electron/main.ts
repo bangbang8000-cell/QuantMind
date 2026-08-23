@@ -215,13 +215,24 @@ function createWindow() {
   Menu.setApplicationMenu(null);
   mainWindow.setMenuBarVisibility(false);
 
-  // 禁用所有影响用户体验的快捷键
+  // 生产版保持受控快捷键；开发版需要保留刷新与调试能力，方便 Vite HMR
+  // 失效时手动拉取最新渲染资源。
   mainWindow.webContents.on('before-input-event', (event, input) => {
     const isControlOrMeta = process.platform === 'darwin' ? input.meta : input.control;
     const isAlt = input.alt;
 
-    // 禁用刷新相关快捷键 (Cmd/Ctrl+R, Cmd/Ctrl+Shift+R, F5)
+    // 开发模式：Ctrl/Cmd+R 或 F5 普通刷新；加 Shift 时绕过 Chromium 缓存。
+    // 生产包仍拦截，以免用户在 file:// 页面触发不可恢复的刷新。
     if ((isControlOrMeta && input.key.toLowerCase() === 'r') || input.key === 'F5') {
+      if (isDev) {
+        event.preventDefault();
+        if (input.shift) {
+          mainWindow?.webContents.reloadIgnoringCache();
+        } else {
+          mainWindow?.webContents.reload();
+        }
+        return;
+      }
       event.preventDefault();
       return;
     }
@@ -238,8 +249,13 @@ function createWindow() {
       return;
     }
 
-    // 禁用开发者工具快捷键 (Cmd/Ctrl+Shift+I, Cmd/Ctrl+Shift+J, Cmd/Ctrl+Shift+C, F12)
+    // 开发版允许直接切换 DevTools；生产版继续禁用。
     if ((isControlOrMeta && input.shift && (input.key.toLowerCase() === 'i' || input.key.toLowerCase() === 'j' || input.key.toLowerCase() === 'c')) || input.key === 'F12') {
+      if (isDev) {
+        event.preventDefault();
+        mainWindow?.webContents.toggleDevTools();
+        return;
+      }
       event.preventDefault();
       return;
     }

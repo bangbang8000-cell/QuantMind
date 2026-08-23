@@ -123,7 +123,7 @@ async def get_tdx_overview(auth: AuthContext = Depends(get_auth_context)):
         import httpx
 
         headers = {"Authorization": f"Bearer {bridge_token}"}
-        async with httpx.AsyncClient(timeout=httpx.Timeout(5.0, connect=3.0)) as client:
+        async with httpx.AsyncClient(timeout=httpx.Timeout(2.0, connect=1.0)) as client:
             stats_task = client.get(f"{bridge_url}/api/v1/stats", headers=headers)
             account_task = client.post(
                 f"{bridge_url}/api/v1/account/query", json={}, headers=headers

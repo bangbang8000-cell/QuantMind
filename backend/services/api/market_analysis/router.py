@@ -341,3 +341,27 @@ async def get_money_flow_by_period(
         dimension=dimension,
         items=[],
     )
+
+
+@router.post("/analyze")
+@router.post("/refresh")
+async def trigger_market_analysis(
+    current_user: dict = Depends(get_current_user),
+) -> dict:
+    """手动触发从 QuantDB 读取最新数据并重新执行全市场分析与聚合。"""
+    _ = current_user
+    quantdb_feed.clear_cache()
+
+    latest_dt = quantdb_feed._latest_trade_date()
+    indices = quantdb_feed.get_indices_overview()
+    breadth = quantdb_feed.get_market_breadth()
+
+    return {
+        "status": "success",
+        "trade_date": latest_dt,
+        "indices_count": len(indices) if indices else 0,
+        "total_turnover_yi": breadth.get("total_turnover_yi", 0) if breadth else 0,
+        "message": "已从 QuantDB 读取最新数据并完成市场分析",
+        "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+    }
+

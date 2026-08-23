@@ -114,14 +114,14 @@ async def lifespan(app: FastAPI):
     else:
         logger.info("AI Strategy Warmup disabled by env")
 
-    # 预热 QuantDB DuckDB 连接（消除首次查询延迟，不依赖 AI_STRATEGY_WARMUP 开关）
+    # 预热 QuantDB DuckDB 连接（放入后台任务执行，不阻塞 lifespan 启动）
     try:
         from backend.services.engine.data_platform.quantdb_hub import QuantDBDataHub
 
         hub = QuantDBDataHub.get_instance()
         if hub.available:
-            await asyncio.to_thread(hub.warm_up)
-            logger.info("✅ QuantDB DuckDB warm-up completed")
+            asyncio.create_task(asyncio.to_thread(hub.warm_up))
+            logger.info("✅ QuantDB DuckDB warm-up scheduled in background")
         else:
             logger.info("QuantDB data not available, skipping warm-up")
     except Exception as e:

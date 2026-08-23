@@ -1,8 +1,8 @@
 import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react';
-import { LayoutDashboard, PieChart, FileText, Settings, User, ClipboardList, AlertTriangle, Clock } from 'lucide-react';
+import { LayoutDashboard, PieChart, FileText, Settings, User, ClipboardList, Clock } from 'lucide-react';
 import HelpCenterLink from '../../components/common/HelpCenterLink';
 import type { LucideIcon } from 'lucide-react';
-import { Button, Collapse, Modal, Popover, Spin, Tag, message } from 'antd';
+import { Button, Collapse, Modal, Spin, Tag, message } from 'antd';
 import TopBar from './components/TopBar';
 import StrategyManagement from './tabs/StrategyManagement';
 import ManualTaskPage from './tabs/ManualTaskPage';
@@ -14,8 +14,8 @@ import ReplayPage from './tabs/ReplayPage';
 import type { RealTradingStatus, AccountInfo, PreflightCheckResponse, PreflightCheckItem } from '../../services/realTradingService';
 import { authService } from '../../features/auth/services/authService';
 import type { StrategyFile } from '../../types/backtest/strategy';
-import { useAppSelector } from '../../store';
-import { selectCurrentMarket, selectTradingMode } from '../../store/slices/uiSlice';
+import { useAppDispatch, useAppSelector } from '../../store';
+import { selectCurrentMarket, selectTradingMode, setTradingMode } from '../../store/slices/uiSlice';
 import { getMarketConfig } from '../../config/marketConfig';
 import { useTradeWebSocket } from '../../hooks/useTradeWebSocket';
 import { buildTradingTopBarAccountInfo, resolveTradingAccountMode } from './utils/accountAdapter';
@@ -25,6 +25,7 @@ import type { DeployMode, ExecutionConfig, LiveTradeConfig } from '../../types/l
 type TradingMode = 'real' | 'simulation';  // 支持实盘(通达信桥)与模拟盘
 type ActiveTab = 'manage' | 'manual-task' | 'personal' | 'position' | 'history' | 'settings' | 'replay';
 type PreflightStage = 'trading-readiness' | 'preflight';
+const TRADING_MODE_PREF_KEY = 'qm:trading_mode_pref';
 type PendingDeploy = {
     strategyId: string;
     mode: DeployMode;
@@ -72,6 +73,7 @@ const getErrorHttpStatus = (err: unknown): number | undefined => {
 };
 
 const RealTradingPage: React.FC = () => {
+    const dispatch = useAppDispatch();
     const currentMarket = useAppSelector(selectCurrentMarket);
     const marketConfig = getMarketConfig(currentMarket);
     const [activeTab, setActiveTab] = useState<ActiveTab>('manage');
@@ -104,7 +106,7 @@ const RealTradingPage: React.FC = () => {
     const [tradingReadinessResult, setTradingReadinessResult] = useState<TradingReadinessResult | null>(null);
     const [wizardOpen, setWizardOpen] = useState(false);
     const [wizardStrategy, setWizardStrategy] = useState<StrategyFile | null>(null);
-    const [wizardMode, setWizardMode] = useState<DeployMode>('SIMULATION');
+    const [wizardMode, setWizardMode] = useState<DeployMode>('REAL');
     const [confirmStarting, setConfirmStarting] = useState(false);
     const [revealedItemCount, setRevealedItemCount] = useState(0);
     const [isRevealing, setIsRevealing] = useState(false);
@@ -293,6 +295,11 @@ const RealTradingPage: React.FC = () => {
         setWizardMode(mode);
         setWizardOpen(true);
     };
+
+    const handleModeSwitch = useCallback((mode: TradingMode) => {
+        localStorage.setItem(TRADING_MODE_PREF_KEY, mode);
+        dispatch(setTradingMode(mode));
+    }, [dispatch]);
 
     const handleWizardConfirm = useCallback(async (payload: {
         execution_config: ExecutionConfig;
@@ -511,34 +518,33 @@ const RealTradingPage: React.FC = () => {
                             ))}
                         </div>
 
-                        {/* Bottom Help Center + Trading Mode Disclaimer Popover */}
+                        {/* Bottom help, explicit mode selector, and trading disclaimer. */}
                         <div className="p-3 pb-6 border-t border-gray-200 shrink-0 bg-white space-y-1.5">
-                            <div className="flex items-center justify-between gap-1.5">
-                                <HelpCenterLink className="whitespace-nowrap flex-1 text-xs font-semibold tracking-wide" />
-                                <Popover
-                                    title={
-                                        <div className="font-bold text-xs text-slate-800 flex items-center gap-1.5">
-                                            <AlertTriangle size={14} className={tradingMode === 'real' ? 'text-emerald-500' : 'text-amber-500'} />
-                                            {tradingMode === 'real' ? '实盘(通达信) 规则说明' : '模拟盘撮合规则与免责声明'}
-                                        </div>
-                                    }
-                                    content={
-                                        <div className="max-w-[280px] text-xs leading-relaxed text-slate-600 space-y-1 py-0.5">
-                                            {tradingMode === 'real' ? (
-                                                <p>本页委托通过通达信交易桥下达到 Windows 通达信客户端，<span className="font-bold text-emerald-600">实盘下单需在通达信客户端手动确认</span>。请确保 Windows 桥已启动、通达信已登录交易账号。</p>
-                                            ) : (
-                                                <p>本页全部委托均为本地模拟撮合，基于 quantdb 历史行情与 A 股规则（T+1、涨跌停、停牌、整手、佣金印花税）计算，<span className="font-bold text-amber-600">不接入任何真实资金或券商通道</span>。模拟结果不代表真实收益，不构成投资建议。</p>
-                                            )}
-                                        </div>
-                                    }
-                                    placement="topRight"
+                            <div className="flex items-center justify-between gap-2 px-1 pb-1">
+                                <span className="text-[11px] font-semibold text-slate-400">交易模式</span>
+                                <button
+                                    type="button"
+                                    role="switch"
+                                    aria-checked={tradingMode === 'real'}
+                                    aria-label={`当前交易模式：${tradingMode === 'real' ? '实盘' : '模拟盘'}，点击切换`}
+                                    onClick={() => handleModeSwitch(tradingMode === 'real' ? 'simulation' : 'real')}
+                                    className={`relative flex h-8 w-[88px] items-center rounded-full border p-1 transition-all ${
+                                        tradingMode === 'real'
+                                            ? 'border-emerald-300 bg-emerald-50'
+                                            : 'border-amber-300 bg-amber-50'
+                                    }`}
+                                    title="切换实盘 / 模拟盘"
                                 >
-                                    <span className={`inline-flex items-center gap-1 px-2.5 py-1 rounded-lg text-xs font-bold tracking-wide border cursor-pointer hover:shadow-2xs transition-all ${tradingMode === 'real' ? 'bg-emerald-50 text-emerald-700 border-emerald-200' : 'bg-amber-50 text-amber-700 border-amber-200'}`}>
-                                        <AlertTriangle size={12} className={tradingMode === 'real' ? 'text-emerald-600' : 'text-amber-600'} />
-                                        {tradingMode === 'real' ? '实盘规则' : '模拟规则'}
+                                    <span className={`absolute top-1 bottom-1 w-[39px] rounded-full shadow-sm transition-transform ${
+                                        tradingMode === 'real' ? 'translate-x-[40px] bg-emerald-500' : 'translate-x-0 bg-amber-500'
+                                    }`} />
+                                    <span className="relative z-10 flex w-full justify-between px-1.5 text-[11px] font-bold">
+                                        <span className={tradingMode === 'real' ? 'text-slate-700' : 'text-white'}>模拟</span>
+                                        <span className={tradingMode === 'real' ? 'text-white' : 'text-slate-700'}>实盘</span>
                                     </span>
-                                </Popover>
+                                </button>
                             </div>
+                            <HelpCenterLink className="w-full text-xs font-semibold tracking-wide" />
                         </div>
                     </div>
 

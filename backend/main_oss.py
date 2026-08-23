@@ -75,9 +75,9 @@ def get_workers_config() -> dict:
     # 原因：AI-IDE 执行任务状态保存在进程内存中，多 worker 会导致
     # /start 与 /execute/logs/{job_id} 命中不同进程，返回 404 Job not found。
     default_workers = {
-        "api": 1,
+        "api": 2,
         "engine": 1,
-        "trade": 1,
+        "trade": 2,
         "stream": 1,
     }
     # 支持环境变量覆盖
@@ -241,10 +241,10 @@ def run_all_services():
     RESTART_WINDOW_SEC = 300  # 5 min sliding window
     HEALTH_CHECK_INTERVAL = 30  # seconds between health checks
     HEALTH_TIMEOUT = 10  # seconds to wait for health response
-    MAX_HEALTH_FAILURES = 2  # consecutive failures before restart
+    MAX_HEALTH_FAILURES = 3  # consecutive failures before restart
     SHUTTING_DOWN = False
     last_health_check = time.time()
-    startup_grace_sec = 60  # skip health checks during initial startup
+    startup_grace_sec = 180  # skip health checks during initial startup (allow DuckDB/Qlib initialization)
 
     def _check_service_health(name: str, port: int) -> bool:
         """Check if a service responds to /health. Returns True if healthy."""
@@ -462,14 +462,14 @@ def _ensure_database_schema_python():
         conn = psycopg2.connect(host=db_host, port=db_port, dbname=db_name,
                                 user=db_user, password=db_password)
         conn.autocommit = True
-        with open(init_sql, "r") as f:
+        with open(init_sql) as f:
             sql = f.read()
         with conn.cursor() as cur:
             cur.execute(sql)
             # 市场分析建表（qm_market_sectors 等，不在 db_init.sql 内）
             market_sql = "/app/backend/services/api/market_analysis/migrations/001_create_market_analysis.sql"
             if os.path.isfile(market_sql):
-                with open(market_sql, "r") as f:
+                with open(market_sql) as f:
                     cur.execute(f.read())
                 logger.info("市场分析表结构自检完成 (Python psycopg2)")
         conn.close()

@@ -39,12 +39,19 @@ PERIOD_DAYS = {"1d": 1, "3d": 3, "5d": 5, "10d": 10, "20d": 20}
 # 板块分类 -> sector_concept 中的 SectorType
 CATEGORY_TYPE = {"shenwan": "行业板块(一级)", "concept": "概念板块"}
 
-# 缓存 TTL（秒）
-_QUERY_TTL = 30  # 资金流聚合结果
+# 缓存 TTL（秒）：日级别分析数据设为 30 分钟，点击「市场分析」按钮时会主动清空
+_QUERY_TTL = 1800  # 资金流与市场指标聚合结果缓存 30 分钟
 
 _cache_lock = threading.Lock()
 _cache: dict[str, tuple[float, Any]] = {}
 _inflight: dict[str, threading.Lock] = {}
+
+
+def clear_cache() -> None:
+    """清空市场分析聚合数据缓存，强制从 QuantDB 重新读取与计算。"""
+    with _cache_lock:
+        _cache.clear()
+    logger.info("已清空市场分析 QuantDB 聚合缓存")
 
 
 def _cached(key: str, ttl: float, loader):
@@ -93,8 +100,29 @@ def _available() -> bool:
         return False
 
 
+def _get_partition_dates(rel_path: str) -> list[str]:
+    """快速从磁盘分区目录名提取日期列表（降序，避免 DuckDB 全表 scan）。"""
+    try:
+        dd = _hub().data_dir / rel_path
+        if not dd.exists():
+            return []
+        dates = []
+        for entry in dd.iterdir():
+            if entry.is_dir() and entry.name.startswith("dt="):
+                val = entry.name.split("=", 1)[1]
+                if val.isdigit():
+                    dates.append(val)
+        return sorted(dates, reverse=True)
+    except Exception as exc:
+        logger.warning("读取分区日期列表失败 %s: %s", rel_path, exc)
+        return []
+
+
 def _latest_trade_date() -> str | None:
     """最新交易日（YYYYMMDD）。（daily_unadjusted 中的最新日）"""
+    dates = _get_partition_dates("1_kline_data/daily_unadjusted")
+    if dates:
+        return dates[0]
     df = _q("SELECT max(dt) AS dt FROM qdb_daily_unadjusted")
     if df.empty or df.iloc[0]["dt"] is None:
         return None
@@ -103,6 +131,9 @@ def _latest_trade_date() -> str | None:
 
 def _latest_l2_date() -> str | None:
     """最新有 L2 资金流数据的交易日（YYYYMMDD）。"""
+    dates = _get_partition_dates("6_ml_datasets/l2_factors")
+    if dates:
+        return dates[0]
     df = _q("SELECT max(dt) AS dt FROM qdb_l2_factors")
     if df.empty or df.iloc[0]["dt"] is None:
         return None
@@ -154,6 +185,11 @@ def _market_pct_snapshot() -> tuple[str | None, pd.DataFrame]:
 
 def _trading_days(end: str | None, n: int) -> list[str]:
     """截至 end 的最近 n 个交易日（降序，[0] 为最新）。"""
+    dates = _get_partition_dates("1_kline_data/daily_unadjusted")
+    if dates:
+        if end:
+            dates = [d for d in dates if d <= end]
+        return dates[:n]
     cond = f"WHERE dt <= {end}" if end else ""
     df = _q(
         f"SELECT DISTINCT dt FROM qdb_daily_unadjusted {cond} "

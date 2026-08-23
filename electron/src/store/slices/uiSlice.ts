@@ -16,7 +16,7 @@ const MARKET_PREF_KEY = 'qm:current_market';
 
 const savedMode = localStorage.getItem(TRADING_MODE_PREF_KEY);
 const initialTradingMode: 'real' | 'simulation' =
-  (savedMode === 'real' || savedMode === 'simulation') ? savedMode : 'simulation';
+  (savedMode === 'real' || savedMode === 'simulation') ? savedMode : 'real';
 
 const savedMarket = localStorage.getItem(MARKET_PREF_KEY);
 const validMarkets: AppMarket[] = (['CN', 'US', 'HK', 'CRYPTO', 'FUTURES'] as AppMarket[]).filter((m) => isMarketEnabled(m));

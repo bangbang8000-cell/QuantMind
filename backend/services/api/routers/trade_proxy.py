@@ -24,6 +24,20 @@ router = APIRouter(tags=["Trade-Proxy"])
 _SKIP_HEADERS = {"host", "content-length", "transfer-encoding"}
 
 
+_client: httpx.AsyncClient | None = None
+
+
+def _get_proxy_client() -> httpx.AsyncClient:
+    global _client
+    if _client is None or _client.is_closed:
+        _client = httpx.AsyncClient(
+            timeout=httpx.Timeout(10.0, connect=3.0),
+            trust_env=False,
+            limits=httpx.Limits(max_keepalive_connections=50, max_connections=100),
+        )
+    return _client
+
+
 async def _do_proxy(request: Request, user: dict | None = None) -> Response:
     path = request.url.path
 
@@ -56,18 +70,17 @@ async def _do_proxy(request: Request, user: dict | None = None) -> Response:
 
     max_retries = 3
     last_exc = None
+    client = _get_proxy_client()
 
     for attempt in range(max_retries):
         try:
-            # 简化 client，不再强制本地地址或复杂的 transport 逻辑
-            async with httpx.AsyncClient(timeout=30.0, trust_env=False) as client:
-                resp = await client.request(
-                    method=request.method,
-                    url=url,
-                    headers=headers,
-                    content=body if body else None,
-                    follow_redirects=True,
-                )
+            resp = await client.request(
+                method=request.method,
+                url=url,
+                headers=headers,
+                content=body if body else None,
+                follow_redirects=True,
+            )
 
             resp_headers = {
                 k: v
@@ -84,7 +97,7 @@ async def _do_proxy(request: Request, user: dict | None = None) -> Response:
             last_exc = exc
             logger.warning(f"⚠️ Trade Proxy Attempt {attempt + 1} failed: {exc}")
             if attempt < max_retries - 1:
-                wait_time = (attempt + 1) * 1.5
+                wait_time = (attempt + 1) * 1.0
                 await asyncio.sleep(wait_time)
                 continue
             break

@@ -635,7 +635,12 @@ def main():
         dmat = xgb.DMatrix(X_values, feature_names=list(X_df.columns))
         scores = model.predict(dmat, iteration_range=(0, best_iter) if best_iter else None)
     elif model_type == "catboost":
-        scores = model.predict(X_values)
+        # 分类模型必须输出正类概率而非 predict() 的硬标签，保证线上排序与
+        # 训练期 AUC/选股信号口径一致。
+        if str(meta.get("target_mode") or "return").lower() == "classification":
+            scores = model.predict_proba(X_values)[:, 1]
+        else:
+            scores = model.predict(X_values)
     elif model_type == "sklearn":
         if hasattr(model, "predict_proba"):
             scores = model.predict_proba(X_values)[:, 1]

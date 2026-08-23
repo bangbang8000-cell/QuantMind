@@ -612,6 +612,8 @@ class BacktestService:
 
             # CatBoost
             if hasattr(model, "predict") and type(model).__name__ == "CatBoost":
+                if hasattr(model, "predict_proba"):
+                    return np.asarray(model.predict_proba(X_df.values.astype(np.float32)))[:, 1]
                 return model.predict(X_df.values.astype(np.float32))
 
             # Ensemble (multiple boosters)
@@ -621,6 +623,10 @@ class BacktestService:
 
             # Generic predict
             if hasattr(model, "predict"):
+                if hasattr(model, "predict_proba"):
+                    probabilities = np.asarray(model.predict_proba(X_df))
+                    if probabilities.ndim == 2 and probabilities.shape[1] >= 2:
+                        return probabilities[:, 1]
                 result = model.predict(X_df)
                 if isinstance(result, pd.Series):
                     return result.values

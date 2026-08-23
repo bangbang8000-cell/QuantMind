@@ -72,6 +72,9 @@ def detect_hardware() -> dict[str, Any]:
 # 树模型线程数：不限制，用满所有核心（速度最快）。
 # 跳过 OOF 全量预测的改动不影响速度且省内存，保留。
 _TRAIN_NTHREAD = -1
+# 训练信号在 T 日收盘后生成，最早在下一个交易日执行。训练、回测和线上
+# forward label 都应使用相同的 T+1 执行口径。
+_EXECUTION_LAG_DAYS = 1
 
 
 # ── 模型默认参数 ──────────────────────────────────────────────────────────────
@@ -922,20 +925,22 @@ def load_data(
     _mom_col = f"mom_ret_{_horizon}d"
     if direct_factor_source:
         # Raw factor sources carry close, so labels are always true forward returns.
-        _lag = 1  # A股信号 T 日生成、T+1 执行
+        _lag = _EXECUTION_LAG_DAYS
         execution_close = df.groupby("symbol")["close"].shift(-_lag)
         future_close = df.groupby("symbol")["close"].shift(-(_lag + _horizon))
         df["label"] = future_close / execution_close - 1.0
     elif _horizon == 1:
-        df["label"] = df.groupby("symbol")["mom_ret_1d"].shift(-1)
+        # mom_ret_1d[T+2] = close[T+2] / close[T+1] - 1，匹配 T+1 执行。
+        df["label"] = df.groupby("symbol")["mom_ret_1d"].shift(-(_horizon + _EXECUTION_LAG_DAYS))
     elif _mom_col in df.columns:
-        df["label"] = df.groupby("symbol")[_mom_col].shift(-_horizon)
+        # mom_ret_H[T+1+H] = close[T+1+H] / close[T+1] - 1。
+        df["label"] = df.groupby("symbol")[_mom_col].shift(-(_horizon + _EXECUTION_LAG_DAYS))
     else:
         # 回退：通过滚动累乘 1d 收益构造 N 日远期收益
         df["label"] = (
             df.groupby("symbol")["mom_ret_1d"]
             .transform(lambda s: (1 + s).rolling(_horizon).apply(np.prod, raw=True) - 1)
-            .shift(-_horizon)
+            .shift(-(_horizon + _EXECUTION_LAG_DAYS))
         )
     logger.info(
         "Label built with target_horizon_days=%s (%s)",
@@ -947,8 +952,8 @@ def load_data(
     df = df[df["label"].notna()].copy()
     logger.info(f"After label shift & dropna: {len(df)} rows (dropped {valid_count_before - len(df)} rows with missing labels)")
 
-    # 分类目标：基于原始远期收益二值化（label>0 → 1），再进入截面 rank 前的统一流程。
-    # 必须在 rank 之前做：rank 后是 -0.5~0.5 连续值，binary objective 无法拟合。
+    # 分类目标保留为 0/1，不能再做截面 rank；否则 binary objective 会收到
+    # 连续标签而退化成语义不明确的回归任务。
     _target_mode = str(target_mode or "return").lower()
     if _target_mode == "classification":
         from preprocessing import binarize_labels
@@ -979,8 +984,9 @@ def load_data(
     keep_cols = ["symbol", "trade_date", "label"] + features
     df = df[keep_cols].reset_index(drop=True)
 
-    # 截面 rank 标准化标签
-    df["label"] = df.groupby("trade_date")["label"].rank(pct=True) - 0.5
+    # 收益预测使用截面 rank 目标，强调同日选股排序；分类预测保持二元标签。
+    if _target_mode != "classification":
+        df["label"] = df.groupby("trade_date")["label"].rank(pct=True) - 0.5
 
     logger.info(
         f"Data ready: {len(df):,} rows, {len(features)} features, "
@@ -1079,22 +1085,23 @@ def _split_data(df: pd.DataFrame, cfg: dict) -> tuple:
     # ── Embargo：标签是未来 horizon 日收益，train 末尾样本的标签落在 val 区间内 ──
     # 不隔离会让 val/test 的价格信息经标签渗回 train。裁掉每段尾部 horizon 个交易日。
     _horizon = max(1, int((cfg.get("label", {}) or {}).get("target_horizon_days") or 1))
-    if _horizon > 1:
+    _embargo_days = _horizon + _EXECUTION_LAG_DAYS
+    if _embargo_days > 0:
         def _embargo(frame: pd.DataFrame, name: str) -> pd.DataFrame:
             if frame.empty:
                 return frame
             days = sorted(frame["trade_date"].unique())
-            if len(days) <= _horizon:
+            if len(days) <= _embargo_days:
                 logger.warning(
-                    "Embargo skipped for %s: only %d trading days <= horizon %d",
-                    name, len(days), _horizon,
+                    "Embargo skipped for %s: only %d trading days <= label span %d",
+                    name, len(days), _embargo_days,
                 )
                 return frame
-            cutoff = days[-_horizon]
+            cutoff = days[-_embargo_days]
             trimmed = frame[frame["trade_date"] < cutoff].copy()
             logger.info(
                 "Embargo %s: dropped last %d trading days (%d -> %d rows)",
-                name, _horizon, len(frame), len(trimmed),
+                name, _embargo_days, len(frame), len(trimmed),
             )
             return trimmed
 
@@ -1424,6 +1431,9 @@ def _train_lgb(cfg: dict, features: list[str], X_train: np.ndarray, y_train: np.
     """LightGBM 训练。"""
     model_cfg = cfg.get("model", {})
     params = {**DEFAULT_LGB_PARAMS, **model_cfg.get("params", {})}
+    if str((cfg.get("label", {}) or {}).get("target_mode") or "return").lower() == "classification":
+        params["objective"] = "binary"
+        params["metric"] = "binary_logloss"
     # 限制线程：n_jobs=-1 用满所有核心，多模型/OOF 训练时内存叠加易 OOM
     params["n_jobs"] = _TRAIN_NTHREAD
     # 可复现性：注入全局 seed（用户未显式覆盖时）
@@ -1462,6 +1472,9 @@ def _train_xgb(cfg: dict, features: list[str], X_train: np.ndarray, y_train: np.
     import xgboost as xgb
     model_cfg = cfg.get("model", {})
     params = {**DEFAULT_XGB_PARAMS, **model_cfg.get("xgb_params", {})}
+    if str((cfg.get("label", {}) or {}).get("target_mode") or "return").lower() == "classification":
+        params["objective"] = "binary:logistic"
+        params["eval_metric"] = "auc"
     # 限制线程：nthread=-1 用满所有核心，多模型/OOF 训练时内存叠加易 OOM
     params["nthread"] = _TRAIN_NTHREAD
     # 可复现性：注入全局 seed
@@ -1497,6 +1510,9 @@ def _train_catboost(cfg: dict, features: list[str], X_train: np.ndarray, y_train
     from catboost import CatBoost, Pool
     model_cfg = cfg.get("model", {})
     params = {**DEFAULT_CATBOOST_PARAMS, **model_cfg.get("catboost_params", {})}
+    if str((cfg.get("label", {}) or {}).get("target_mode") or "return").lower() == "classification":
+        params["loss_function"] = "Logloss"
+        params.setdefault("eval_metric", "AUC")
     # 限制线程：thread_count=-1 用满所有核心，多模型/OOF 训练时内存叠加易 OOM
     params["thread_count"] = _TRAIN_NTHREAD
     # 可复现性：注入全局 seed
@@ -1543,12 +1559,16 @@ def _train_catboost(cfg: dict, features: list[str], X_train: np.ndarray, y_train
 
 def _train_linear(cfg: dict, features: list[str], X_train: np.ndarray, y_train: np.ndarray,
                   X_val: np.ndarray, y_val: np.ndarray) -> Any:
-    """Linear 模型训练（Ridge 回归）。"""
-    from sklearn.linear_model import Ridge
+    """线性基线：收益任务用 Ridge，分类任务用 LogisticRegression。"""
+    from sklearn.linear_model import LogisticRegression, Ridge
     model_cfg = cfg.get("model", {})
     dl_params = model_cfg.get("dl_params", {})
     alpha = float(dl_params.get("alpha", 3.0))
-    model = Ridge(alpha=alpha, random_state=int((cfg.get("seed") or 42)))
+    if str((cfg.get("label", {}) or {}).get("target_mode") or "return").lower() == "classification":
+        model = LogisticRegression(C=1.0 / max(alpha, 1e-8), max_iter=1000,
+                                   random_state=int((cfg.get("seed") or 42)))
+    else:
+        model = Ridge(alpha=alpha, random_state=int((cfg.get("seed") or 42)))
     model.fit(X_train, y_train)
     return model
 
@@ -1560,14 +1580,15 @@ def _train_rf(cfg: dict, features: list[str], X_train: np.ndarray, y_train: np.n
     与 LightGBM/XGBoost 走同一 _prepare_arrays 数据流（含可选截面预处理）。
     参数：n_estimators（默认 300）、max_depth（默认 None=不限）、max_features（默认 sqrt）。
     """
-    from sklearn.ensemble import RandomForestRegressor
+    from sklearn.ensemble import RandomForestClassifier, RandomForestRegressor
     model_cfg = cfg.get("model", {})
     dl_params = model_cfg.get("dl_params", {})
     seed = int((cfg.get("seed") or 42))
     n_estimators = int(dl_params.get("n_estimators", 300))
     max_depth = dl_params.get("max_depth", None)
     max_features = str(dl_params.get("max_features", "sqrt"))
-    model = RandomForestRegressor(
+    model_class = RandomForestClassifier if str((cfg.get("label", {}) or {}).get("target_mode") or "return").lower() == "classification" else RandomForestRegressor
+    model = model_class(
         n_estimators=n_estimators,
         max_depth=int(max_depth) if max_depth else None,
         max_features=max_features,
@@ -1586,7 +1607,7 @@ def _train_mlp(cfg: dict, features: list[str], X_train: np.ndarray, y_train: np.
     参数：hidden_layer_sizes（默认 [64, 32]）、alpha（L2，默认 1e-3）、
     early_stopping（默认 True，用 val 集早停）。
     """
-    from sklearn.neural_network import MLPRegressor
+    from sklearn.neural_network import MLPClassifier, MLPRegressor
     model_cfg = cfg.get("model", {})
     dl_params = model_cfg.get("dl_params", {})
     seed = int((cfg.get("seed") or 42))
@@ -1596,7 +1617,8 @@ def _train_mlp(cfg: dict, features: list[str], X_train: np.ndarray, y_train: np.
     elif not isinstance(hidden, (list, tuple)):
         hidden = [64, 32]
     alpha = float(dl_params.get("alpha", 1e-3))
-    model = MLPRegressor(
+    model_class = MLPClassifier if str((cfg.get("label", {}) or {}).get("target_mode") or "return").lower() == "classification" else MLPRegressor
+    model = model_class(
         hidden_layer_sizes=[int(h) for h in hidden],
         alpha=alpha,
         learning_rate_init=float(dl_params.get("lr", 0.001)),
@@ -2563,11 +2585,16 @@ def _predict_with_model(model: Any, X: np.ndarray, model_type: str, features: li
         n_iter = model.best_iteration
         return model.predict(dmat, iteration_range=(0, (n_iter + 1) if n_iter is not None else 0))
     elif model_type == "catboost":
-        return model.predict(X)
-    elif model_type == "linear":
-        return model.predict(X)
+        pred = model.predict_proba(X) if hasattr(model, "predict_proba") else model.predict(X)
     else:
-        return model.predict(X)
+        pred = model.predict_proba(X) if hasattr(model, "predict_proba") else model.predict(X)
+
+    # sklearn/CatBoost 分类器默认 predict() 返回硬标签；选股排序与 AUC 均应使用
+    # 正类概率，避免把大量样本压成 0/1 并丢失排序信息。
+    pred_arr = np.asarray(pred)
+    if pred_arr.ndim == 2 and pred_arr.shape[1] >= 2:
+        return pred_arr[:, 1]
+    return pred_arr.reshape(-1)
 
 
 def _save_model(model: Any, model_type: str, out_dir: Path) -> str:
@@ -3655,12 +3682,18 @@ def main() -> int:
             icir_thresh = float(factor_selection_cfg.get("icir_threshold", 0.3))
             corr_thresh = float(factor_selection_cfg.get("correlation_threshold", 0.85))
             logger.info("=== Auto Factor Selection: top-%d ===", n_top)
+            # 特征选择属于拟合过程的一部分：只能看到训练段。此前直接把完整
+            # train/valid/test df 传入，会让 test 标签影响入选因子及最终样本外指标。
+            selection_train_df, _, _ = _split_data(df, cfg)
             valid_features, ic_results = select_top_factors(
-                df, valid_features, label_col="label",
+                selection_train_df, valid_features, label_col="label",
                 n_top=n_top, ic_threshold=ic_thresh,
                 icir_threshold=icir_thresh, correlation_threshold=corr_thresh,
             )
-            logger.info("Selected %d features from auto selection", len(valid_features))
+            logger.info(
+                "Selected %d features from training segment only (%d rows)",
+                len(valid_features), len(selection_train_df),
+            )
 
         # ── WFA 稳定性诊断（可选）：数据就绪后、正式训练前执行 ──
         wfa_result = train_wfa(df, valid_features, cfg)
@@ -3835,6 +3868,7 @@ def main() -> int:
                 "context": context_cfg,
                 "best_iteration": best_iteration,
                 "target_horizon_days": int((cfg.get("label", {}) or {}).get("target_horizon_days") or 1),
+                "execution_lag_days": _EXECUTION_LAG_DAYS,
                 "target_mode": str((cfg.get("label", {}) or {}).get("target_mode") or "return"),
                 "preprocessing": (cfg.get("preprocessing") or {}) if (cfg.get("preprocessing") or {}).get("enabled") else None,
                 "label_formula": str((cfg.get("label", {}) or {}).get("label_formula") or ""),
@@ -4023,6 +4057,7 @@ def main() -> int:
                 "context": context_cfg,
                 "best_iteration": best_iteration,
                 "target_horizon_days": int((cfg.get("label", {}) or {}).get("target_horizon_days") or 1),
+                "execution_lag_days": _EXECUTION_LAG_DAYS,
                 "target_mode": str((cfg.get("label", {}) or {}).get("target_mode") or "return"),
                 "preprocessing": (cfg.get("preprocessing") or {}) if (cfg.get("preprocessing") or {}).get("enabled") else None,
                 "label_formula": str((cfg.get("label", {}) or {}).get("label_formula") or ""),

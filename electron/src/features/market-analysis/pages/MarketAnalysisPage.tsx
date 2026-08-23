@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
-import { Sparkles, Search, Activity, Layers, Network, TrendingUp, BarChart3, Clock } from 'lucide-react';
-import { Input, Spin } from 'antd';
+import { Sparkles, Search, Activity, Layers, Network, TrendingUp, BarChart3, Clock, RefreshCw, Zap } from 'lucide-react';
+import { Input, Spin, message } from 'antd';
 import { BroadMarketHeader, IndexItem } from '../components/BroadMarketHeader';
 import { ShenwanHeatmapChart } from '../components/ShenwanHeatmapChart';
 import { CapitalFlowSankeyChart } from '../components/CapitalFlowSankeyChart';
@@ -24,6 +24,7 @@ interface MarketBreadthData {
 
 export const MarketAnalysisPage: React.FC = () => {
   const [loading, setLoading] = useState(false);
+  const [analyzing, setAnalyzing] = useState(false);
   const [activeTab, setActiveTab] = useState('panorama'); // 默认进入大盘全景看板
   const [searchQuery, setSearchQuery] = useState('');
   const [indices, setIndices] = useState<IndexItem[]>([]);
@@ -111,6 +112,36 @@ export const MarketAnalysisPage: React.FC = () => {
     }
   };
 
+  /** 手动触发读取 QuantDB 数据并重新执行全市场分析 */
+  const handleTriggerAnalysis = async () => {
+    setAnalyzing(true);
+    const token = localStorage.getItem('access_token') || '';
+    const headers = token ? { Authorization: `Bearer ${token}` } : {};
+
+    try {
+      const res = await fetch('/api/v1/market-analysis/analyze', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          ...headers,
+        },
+      });
+
+      if (res.ok) {
+        const result = await res.json();
+        message.success(result.message || '市场分析完成，已同步 QuantDB 最新数据');
+      } else {
+        message.info('已触发市场分析');
+      }
+      await fetchMarketData();
+    } catch (e) {
+      console.error('市场分析触发失败:', e);
+      message.error('触发市场分析失败，请检查后端服务状态');
+    } finally {
+      setAnalyzing(false);
+    }
+  };
+
   const navTabs = [
     { id: 'panorama', label: '大盘全景看板', icon: Activity },
     { id: 'flow-bar', label: '多周期资金流向', icon: BarChart3 },
@@ -158,7 +189,7 @@ export const MarketAnalysisPage: React.FC = () => {
                 <span className="text-purple-700">{dataDate}</span>
               </span>
             )}
-            <div className="w-64">
+            <div className="w-60">
               <Input
                 prefix={<Search className="w-3.5 h-3.5 text-purple-400 mr-1.5" />}
                 placeholder="全局搜索行业或股票..."
@@ -167,6 +198,25 @@ export const MarketAnalysisPage: React.FC = () => {
                 className="rounded-xl border border-purple-200/80 bg-white text-xs text-slate-800 placeholder-slate-400 py-1.5 px-3.5 shadow-2xs hover:border-purple-300 focus:bg-white focus:ring-2 focus:ring-purple-100 transition-all"
               />
             </div>
+
+            {/* 🎯 手动市场分析触发按钮 */}
+            <button
+              onClick={handleTriggerAnalysis}
+              disabled={analyzing}
+              className={`flex items-center gap-1.5 px-4 py-1.5 rounded-full text-xs font-extrabold shadow-md transition-all duration-200 whitespace-nowrap cursor-pointer ${
+                analyzing
+                  ? 'bg-purple-400 text-white cursor-wait opacity-80'
+                  : 'bg-gradient-to-r from-purple-600 via-indigo-600 to-purple-700 hover:from-purple-500 hover:to-indigo-500 active:scale-95 text-white shadow-purple-600/30'
+              }`}
+              title="从本地 QuantDB 读取最新数据并重新执行全市场多维分析"
+            >
+              {analyzing ? (
+                <RefreshCw className="w-3.5 h-3.5 animate-spin" />
+              ) : (
+                <Zap className="w-3.5 h-3.5 text-amber-300 fill-amber-300" />
+              )}
+              <span>{analyzing ? '正在分析…' : '市场分析'}</span>
+            </button>
           </div>
         </div>
 

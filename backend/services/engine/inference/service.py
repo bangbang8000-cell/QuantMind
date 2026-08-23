@@ -335,6 +335,13 @@ class InferenceService:
                 dmat = xgb.DMatrix(features)
             return model.predict(dmat)
 
+        # sklearn/CatBoost 分类器：线上选股需要连续概率分数，而非 predict()
+        # 返回的硬标签。回归器通常不具备 predict_proba，不受此分支影响。
+        if hasattr(model, "predict_proba"):
+            probabilities = np.asarray(model.predict_proba(features))
+            if probabilities.ndim == 2 and probabilities.shape[1] >= 2:
+                return probabilities[:, 1]
+
         # 常规路径
         if hasattr(model, "predict"):
             try:

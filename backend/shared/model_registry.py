@@ -1337,21 +1337,33 @@ class ModelRegistryService:
             sync_error = validation_error
             sync_status = "failed"
 
-        # 样本外验证软门禁：test 集 Rank ICIR 低于阈值时保持 candidate，
-        # 不自动设为默认，仅注入 quality_warnings 供用户手动评估后激活。
-        # 门禁只做提示，不阻断（用户可通过 activate 流程手动提升）。
+        # 样本外验证软门禁：自动进入默认池前必须有可解释的 test Rank IC
+        # 与 ICIR。门禁只阻止自动默认，用户仍可在模型页人工激活候选模型。
         gate_triggered = False
         _test_icir = self._extract_test_rank_icir(metadata, metrics)
+        _test_rank_ic = self._extract_test_rank_ic(metadata, metrics)
         _gate_threshold = 0.05
-        if sync_status == "ready" and _test_icir is not None and _test_icir < _gate_threshold:
+        gate_reasons: list[str] = []
+        if _test_icir is None:
+            gate_reasons.append("缺少 test_rank_icir")
+        elif _test_icir < _gate_threshold:
+            gate_reasons.append(
+                f"test_rank_icir={_test_icir:.4f} 低于软门禁阈值 {_gate_threshold}"
+            )
+        if _test_rank_ic is None:
+            gate_reasons.append("缺少 test_rank_ic")
+        elif _test_rank_ic <= 0:
+            gate_reasons.append(f"test_rank_ic={_test_rank_ic:.4f} 非正")
+
+        if sync_status == "ready" and gate_reasons:
             logger.warning(
-                "Model %s test_rank_icir=%.4f < %.2f, holding at candidate (soft gate)",
-                model_id, _test_icir, _gate_threshold,
+                "Model %s held at candidate by out-of-sample quality gate: %s",
+                model_id, "; ".join(gate_reasons),
             )
             sync_status = "candidate"
             gate_triggered = True
             metadata.setdefault("quality_warnings", []).append(
-                f"test_rank_icir={_test_icir:.4f} 低于软门禁阈值 {_gate_threshold}，"
+                f"样本外质量门禁：{'；'.join(gate_reasons)}，"
                 "未自动激活。请人工评估后在模型管理页手动激活。"
             )
 
@@ -1841,6 +1853,20 @@ class ModelRegistryService:
             if not isinstance(src, dict):
                 continue
             v = src.get("test_rank_icir")
+            if isinstance(v, (int, float)) and not isinstance(v, bool):
+                try:
+                    return float(v)
+                except (TypeError, ValueError):
+                    pass
+        return None
+
+    @staticmethod
+    def _extract_test_rank_ic(metadata: dict, metrics: dict) -> float | None:
+        """从训练 metadata/metrics 提取 test 集 Rank IC。"""
+        for src in (metrics, metadata.get("metrics"), metadata):
+            if not isinstance(src, dict):
+                continue
+            v = src.get("test_rank_ic")
             if isinstance(v, (int, float)) and not isinstance(v, bool):
                 try:
                     return float(v)

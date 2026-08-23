@@ -1,5 +1,5 @@
 import React from 'react';
-import { Wallet, Wifi, Activity, TrendingUp, DollarSign, PieChart, ShieldAlert } from 'lucide-react';
+import { Wallet, Wifi, Activity } from 'lucide-react';
 
 interface AccountInfo {
     total_asset: number;
@@ -66,6 +66,65 @@ const TopBar: React.FC<TopBarProps> = ({ accountInfo, isConnected, strategyStatu
     const strategyStatusLabel = strategyStatus === 'running' ? '策略运行中' : (strategyStatus === 'starting' ? '正在启动' : '策略已停止');
     const strategyStatusColor = strategyStatus === 'running' ? 'text-emerald-500' : (strategyStatus === 'starting' ? 'text-amber-500' : 'text-slate-400');
 
+    // 保留早期 4×2 信息密度：每张卡只消费已由 accountAdapter 归一化的账户字段，
+    // 不新增接口或改变现有账户/行情刷新链路。
+    const metrics = [
+        {
+            label: '总资产',
+            hint: '账户当前总权益，含现金与持仓市值。',
+            value: formatMoney(info?.total_asset),
+            subLabel: '账户权益',
+        },
+        {
+            label: '初始权益',
+            hint: '统一基线口径，对应账户初始权益。',
+            value: formatMoney(info?.initial_equity),
+            subLabel: '收益计算基线',
+        },
+        {
+            label: '可用资金',
+            hint: '可用现金口径，冻结资金单独展示。',
+            value: formatMoney(info?.cash),
+            subLabel: `冻结 ${formatMoney(info?.frozen)}`,
+        },
+        {
+            label: '持仓市值',
+            hint: '当前持仓证券的实时市值汇总。',
+            value: formatMoney(info?.market_value),
+            subLabel: `仓位 ${formatPercent(info?.position_ratio)}`,
+        },
+        {
+            label: '累计总盈亏',
+            hint: '累计盈亏金额；副标签展示总收益率。',
+            value: formatMoney(info?.total_pnl),
+            subLabel: `${(info?.total_pnl || 0) > 0 ? '+' : ''}${formatPercent(info?.total_pnl_percent)}`,
+            highlight: true,
+            pnl: info?.total_pnl || 0,
+        },
+        {
+            label: '今日盈亏',
+            hint: '交易日口径盈亏；副标签展示日收益率。',
+            value: formatMoney(info?.daily_pnl),
+            subLabel: `${(info?.daily_pnl || 0) > 0 ? '+' : ''}${formatPercent(info?.daily_pnl_percent)}`,
+            highlight: true,
+            pnl: info?.daily_pnl || 0,
+        },
+        {
+            label: '浮动盈亏',
+            hint: '当前持仓未实现盈亏；副标签展示相对持仓市值收益率。',
+            value: formatMoney(info?.floating_pnl),
+            subLabel: `${(info?.floating_pnl || 0) > 0 ? '+' : ''}${formatPercent(info?.floating_pnl_percent)}`,
+            highlight: true,
+            pnl: info?.floating_pnl || 0,
+        },
+        {
+            label: '持仓数量',
+            hint: '当前持仓标的数量；副标签展示仓位占比。',
+            value: `${info?.position_count || 0} 只`,
+            subLabel: `仓位 ${formatPercent(info?.position_ratio)}`,
+        },
+    ];
+
     return (
         <div className="flex flex-col gap-2.5 p-4 px-6 bg-white">
             {/* Header: Title, Tags, and Status Indicators */}
@@ -100,109 +159,33 @@ const TopBar: React.FC<TopBarProps> = ({ accountInfo, isConnected, strategyStatu
                 </div>
             </div>
 
-            {/* Metric Containers Grid: Compact & Refined Cards */}
-            <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-2.5">
-                {/* 1. 总资产 */}
-                <div className="relative flex flex-col items-center justify-between p-2.5 rounded-2xl bg-gradient-to-br from-blue-50/80 via-indigo-50/40 to-white border border-blue-100 hover:shadow-xs transition-all text-center">
-                    <div className="w-full relative flex items-center justify-center mb-0.5">
-                        <span className="text-[11px] font-bold text-slate-600 tracking-wide">总资产 (CNY)</span>
-                        <div className="absolute right-0 top-0 text-blue-500/70">
-                            <DollarSign size={14} />
-                        </div>
-                    </div>
-                    <div className="text-lg font-black text-slate-900 tracking-tight font-mono my-0.5">
-                        {formatMoney(info?.total_asset)}
-                    </div>
-                    <div className="text-[11px] font-medium text-slate-500">
-                        初始: {formatMoney(info?.initial_equity)}
-                    </div>
-                </div>
-
-                {/* 2. 可用资金 */}
-                <div className="relative flex flex-col items-center justify-between p-2.5 rounded-2xl bg-slate-50/80 border border-slate-200 hover:bg-white hover:shadow-xs transition-all text-center">
-                    <div className="w-full relative flex items-center justify-center mb-0.5">
-                        <span className="text-[11px] font-bold text-slate-600 tracking-wide">可用资金</span>
-                        <div className="absolute right-0 top-0 text-slate-400">
-                            <Wallet size={14} />
-                        </div>
-                    </div>
-                    <div className="text-lg font-black text-slate-900 tracking-tight font-mono my-0.5">
-                        {formatMoney(info?.cash)}
-                    </div>
-                    <div className="text-[11px] font-medium text-slate-500">
-                        冻结: {formatMoney(info?.frozen)}
-                    </div>
-                </div>
-
-                {/* 3. 今日盈亏 */}
-                <div className="relative flex flex-col items-center justify-between p-2.5 rounded-2xl bg-slate-50/80 border border-slate-200 hover:bg-white hover:shadow-xs transition-all text-center">
-                    <div className="w-full relative flex items-center justify-center mb-0.5">
-                        <span className="text-[11px] font-bold text-slate-600 tracking-wide">今日盈亏</span>
-                        <div className="absolute right-0 top-0">
-                            <TrendingUp size={14} className={getPnLColor(info?.daily_pnl || 0)} />
-                        </div>
-                    </div>
-                    <div className={`text-lg font-black font-mono my-0.5 ${getPnLColor(info?.daily_pnl || 0)}`}>
-                        {(info?.daily_pnl || 0) > 0 ? '+' : ''}{formatMoney(info?.daily_pnl)}
-                    </div>
-                    <div className="flex items-center justify-center">
-                        <span className={`px-1.5 py-0.5 rounded text-[11px] font-bold border ${getPnLTagClass(info?.daily_pnl || 0)}`}>
-                            {(info?.daily_pnl || 0) > 0 ? '+' : ''}{formatPercent(info?.daily_pnl_percent)}
-                        </span>
-                    </div>
-                </div>
-
-                {/* 4. 累计总盈亏 */}
-                <div className="relative flex flex-col items-center justify-between p-2.5 rounded-2xl bg-slate-50/80 border border-slate-200 hover:bg-white hover:shadow-xs transition-all text-center">
-                    <div className="w-full relative flex items-center justify-center mb-0.5">
-                        <span className="text-[11px] font-bold text-slate-600 tracking-wide">累计总盈亏</span>
-                        <div className="absolute right-0 top-0">
-                            <TrendingUp size={14} className={getPnLColor(info?.total_pnl || 0)} />
-                        </div>
-                    </div>
-                    <div className={`text-lg font-black font-mono my-0.5 ${getPnLColor(info?.total_pnl || 0)}`}>
-                        {(info?.total_pnl || 0) > 0 ? '+' : ''}{formatMoney(info?.total_pnl)}
-                    </div>
-                    <div className="flex items-center justify-center">
-                        <span className={`px-1.5 py-0.5 rounded text-[11px] font-bold border ${getPnLTagClass(info?.total_pnl || 0)}`}>
-                            {(info?.total_pnl || 0) > 0 ? '+' : ''}{formatPercent(info?.total_pnl_percent)}
-                        </span>
-                    </div>
-                </div>
-
-                {/* 5. 持仓市值 */}
-                <div className="relative flex flex-col items-center justify-between p-2.5 rounded-2xl bg-slate-50/80 border border-slate-200 hover:bg-white hover:shadow-xs transition-all text-center">
-                    <div className="w-full relative flex items-center justify-center mb-0.5">
-                        <span className="text-[11px] font-bold text-slate-600 tracking-wide">持仓市值</span>
-                        <div className="absolute right-0 top-0 text-slate-400">
-                            <PieChart size={14} />
-                        </div>
-                    </div>
-                    <div className="text-lg font-black text-slate-900 tracking-tight font-mono my-0.5">
-                        {formatMoney(info?.market_value)}
-                    </div>
-                    <div className="text-[11px] font-medium text-slate-500">
-                        仓位占比: <span className="font-semibold text-slate-700">{formatPercent(info?.position_ratio)}</span>
-                    </div>
-                </div>
-
-                {/* 6. 持仓标的数 */}
-                <div className="relative flex flex-col items-center justify-between p-2.5 rounded-2xl bg-slate-50/80 border border-slate-200 hover:bg-white hover:shadow-xs transition-all text-center">
-                    <div className="w-full relative flex items-center justify-center mb-0.5">
-                        <span className="text-[11px] font-bold text-slate-600 tracking-wide">持仓标的</span>
-                        <div className="absolute right-0 top-0">
-                            <span className="text-[10px] font-bold text-blue-700 bg-blue-50 border border-blue-200 px-1.5 py-0.5 rounded">
-                                {info?.position_count || 0} 只
+            {/* 早期 8 卡片模式：桌面端固定 4×2，较窄屏幕自然折行。 */}
+            <div className="grid grid-cols-2 sm:grid-cols-4 gap-2.5">
+                {metrics.map((metric) => {
+                    const pnl = metric.pnl || 0;
+                    const valueClass = metric.highlight ? getPnLColor(pnl) : 'text-slate-900';
+                    return (
+                        <div
+                            key={metric.label}
+                            title={metric.hint}
+                            className="flex min-h-[82px] flex-col items-center justify-center rounded-2xl border border-slate-200 bg-slate-50/80 p-2.5 text-center transition-all hover:bg-white hover:shadow-xs"
+                        >
+                            <span className="mb-1 text-[11px] font-bold tracking-wide text-slate-600">
+                                {metric.label}
+                            </span>
+                            <span className={`font-mono text-lg font-black tracking-tight ${valueClass}`}>
+                                {metric.highlight && pnl > 0 ? '+' : ''}{metric.value}
+                            </span>
+                            <span
+                                className={metric.highlight
+                                    ? `mt-1 rounded border px-1.5 py-0.5 text-[11px] font-bold ${getPnLTagClass(pnl)}`
+                                    : 'mt-1 text-[11px] font-medium text-slate-500'}
+                            >
+                                {metric.subLabel}
                             </span>
                         </div>
-                    </div>
-                    <div className="text-lg font-black text-slate-900 tracking-tight font-mono my-0.5">
-                        {info?.position_count || 0} <span className="text-xs font-semibold text-slate-500">只股票</span>
-                    </div>
-                    <div className="text-[11px] font-medium text-slate-500">
-                        浮动: <span className={`font-semibold ${(info?.floating_pnl || 0) > 0 ? 'text-red-600' : (info?.floating_pnl || 0) < 0 ? 'text-emerald-600' : 'text-slate-700'}`}>{(info?.floating_pnl || 0) > 0 ? '+' : ''}{formatMoney(info?.floating_pnl)}</span>
-                    </div>
-                </div>
+                    );
+                })}
             </div>
         </div>
     );

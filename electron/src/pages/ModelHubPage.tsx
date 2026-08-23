@@ -1,11 +1,9 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import {
-  Compass, Search, Filter, Sparkles, Upload, Download, RefreshCw,
-  TrendingUp, Layers, ShieldCheck, ArrowLeft, Brain, SlidersHorizontal
+  Award, BarChart3, Clock3, Compass, Download, Filter, RefreshCw,
+  Search, Sparkles, Target, ArrowLeft
 } from 'lucide-react';
-import {
-  Input, Button, Select, Tabs, Tag, Spin, Empty, Pagination, message, Tooltip
-} from 'antd';
+import { Input, Button, Select, Tag, Spin, Empty, Pagination, message } from 'antd';
 import { useNavigate } from 'react-router-dom';
 import { clsx } from 'clsx';
 import { modelHubService, HubModelItem } from '../services/modelHubService';
@@ -13,16 +11,11 @@ import { ModelHubCard } from './hub/ModelHubCard';
 import { ModelHubDetailDrawer } from './hub/ModelHubDetailDrawer';
 import { PublishModelModal } from './hub/PublishModelModal';
 import { modelTrainingService, UserModelRecord } from '../services/modelTrainingService';
-import { useAppSelector } from '../store';
-import { selectCurrentMarket } from '../store/slices/uiSlice';
-import { getMarketConfig } from '../config/marketConfig';
 
 export const ModelHubPage: React.FC = () => {
   const navigate = useNavigate();
-  const currentMarket = useAppSelector(selectCurrentMarket);
-  const marketConfig = getMarketConfig(currentMarket);
-
   const [loading, setLoading] = useState(true);
+  const [loadError, setLoadError] = useState<string | null>(null);
   const [models, setModels] = useState<HubModelItem[]>([]);
   const [total, setTotal] = useState(0);
   const [page, setPage] = useState(1);
@@ -45,6 +38,7 @@ export const ModelHubPage: React.FC = () => {
   const fetchHubModels = useCallback(async () => {
     try {
       setLoading(true);
+      setLoadError(null);
       const res = await modelHubService.listModels({
         market: selectedMarket,
         algorithm: selectedAlgo,
@@ -57,110 +51,9 @@ export const ModelHubPage: React.FC = () => {
       setTotal(res?.total || 0);
     } catch (err: any) {
       console.error('加载广场模型失败:', err);
-      // 如果远端未连接，注入示范数据以供用户立即体验
-      setModels([
-        {
-          id: 'mdl_catboost_20260821_a8f9',
-          author_username: 'quant_alpha',
-          name: 'L2-CatBoost-T5 增强突破策略',
-          description: '基于 600 维微观结构因子与高频订单流特征训练的 T+5 选股分类模型，在 2024-2026 震荡行情中表现出极佳的抗跌与进攻弹性。',
-          market: 'CN',
-          algorithm: 'CatBoost',
-          target_horizon: 'T+5',
-          target_mode: 'classification',
-          test_ic: 0.089,
-          rank_ic: 0.094,
-          sharpe_ratio: 2.85,
-          annual_return: 0.425,
-          max_drawdown: 0.082,
-          calmar_ratio: 5.18,
-          psi: 0.035,
-          equity_curve: [
-            { date: '2024-01-02', value: 1.0 },
-            { date: '2024-03-15', value: 1.08 },
-            { date: '2024-06-30', value: 1.16 },
-            { date: '2024-09-30', value: 1.25 },
-            { date: '2024-12-31', value: 1.34 },
-            { date: '2025-04-15', value: 1.42 },
-          ],
-          factors_summary: ['close', 'volume', 'order_imbalance', 'vwap_spread', 'ret_5d', 'turnover_bias'],
-          file_size_bytes: 1024 * 1024 * 14.2,
-          visibility: 'public',
-          status: 'active',
-          is_verified: true,
-          downloads_count: 382,
-          likes_count: 112,
-          created_at: new Date().toISOString(),
-          updated_at: new Date().toISOString(),
-        },
-        {
-          id: 'mdl_gru_timeseries_20260819_b2c4',
-          author_username: 'deep_quant',
-          name: 'GRU 时序多因子回归选股模型',
-          description: '采用双层 GRU 网络建模 30 个交易日量价时序依赖关系，精准捕捉中短期反转与动量拐点信号。',
-          market: 'CN',
-          algorithm: 'GRU',
-          target_horizon: 'T+3',
-          target_mode: 'regression',
-          test_ic: 0.068,
-          rank_ic: 0.075,
-          sharpe_ratio: 2.15,
-          annual_return: 0.318,
-          max_drawdown: 0.115,
-          calmar_ratio: 2.76,
-          psi: 0.042,
-          equity_curve: [
-            { date: '2024-01-02', value: 1.0 },
-            { date: '2024-04-01', value: 1.06 },
-            { date: '2024-08-01', value: 1.15 },
-            { date: '2024-11-01', value: 1.22 },
-            { date: '2025-02-01', value: 1.31 },
-          ],
-          factors_summary: ['open', 'high', 'low', 'close', 'macd_dif', 'rsi_14', 'vol_ratio'],
-          file_size_bytes: 1024 * 1024 * 48.5,
-          visibility: 'public',
-          status: 'active',
-          is_verified: true,
-          downloads_count: 216,
-          likes_count: 64,
-          created_at: new Date().toISOString(),
-          updated_at: new Date().toISOString(),
-        },
-        {
-          id: 'mdl_lightgbm_news_20260818_c7e1',
-          author_username: 'sentiment_lab',
-          name: '新闻情绪七维驱动 LightGBM 策略',
-          description: '融合 FinBERT 情绪特征与七维事件标签的超轻量 GBDT 模型，计算极快，专攻突发利好与舆情异动股票池。',
-          market: 'CN',
-          algorithm: 'LightGBM',
-          target_horizon: 'T+5',
-          target_mode: 'classification',
-          test_ic: 0.076,
-          rank_ic: 0.081,
-          sharpe_ratio: 2.38,
-          annual_return: 0.364,
-          max_drawdown: 0.098,
-          calmar_ratio: 3.71,
-          psi: 0.028,
-          equity_curve: [
-            { date: '2024-01-02', value: 1.0 },
-            { date: '2024-03-01', value: 1.09 },
-            { date: '2024-07-01', value: 1.19 },
-            { date: '2024-10-01', value: 1.28 },
-            { date: '2025-03-01', value: 1.36 },
-          ],
-          factors_summary: ['news_score', 'sentiment_polarity', 'source_weight', 'event_score', 'ret_3d'],
-          file_size_bytes: 1024 * 1024 * 8.6,
-          visibility: 'public',
-          status: 'active',
-          is_verified: false,
-          downloads_count: 149,
-          likes_count: 48,
-          created_at: new Date().toISOString(),
-          updated_at: new Date().toISOString(),
-        },
-      ]);
-      setTotal(3);
+      setLoadError(err?.message || '无法连接模型广场服务');
+      setModels([]);
+      setTotal(0);
     } finally {
       setLoading(false);
     }
@@ -184,11 +77,11 @@ export const ModelHubPage: React.FC = () => {
     loadLocalUserModels();
   }, [loadLocalUserModels]);
 
-  // 处理一键导入
+  // 获取后端签发的下载地址，不再伪造“已导入”结果。
   const handleImportModel = async (model: HubModelItem) => {
     try {
       setImportingId(model.id);
-      message.loading({ content: `正在获取下载通道并导入 "${model.name}"...`, key: 'hub_import' });
+      message.loading({ content: `正在获取 "${model.name}" 的下载地址...`, key: 'hub_import' });
 
       // 1. 请求下载直链
       const ticket = await modelHubService.getDownloadTicket(model.id);
@@ -196,11 +89,10 @@ export const ModelHubPage: React.FC = () => {
         throw new Error('未能获取到有效的下载直链');
       }
 
-      // 2. 模拟/触发本地下载注册流程
-      await new Promise((r) => setTimeout(r, 1200));
+      window.open(ticket.download_url, '_blank', 'noopener,noreferrer');
 
       message.success({
-        content: `模型 "${model.name}" 已成功导入本地模型库！可在模型管理或推理中心中立即选用。`,
+        content: `已开始下载 "${model.name}" 的模型包。`,
         key: 'hub_import',
         duration: 4,
       });
@@ -227,8 +119,8 @@ export const ModelHubPage: React.FC = () => {
 
   return (
     <div className="h-full flex flex-col bg-slate-50 overflow-y-auto custom-scrollbar">
-      {/* ═══ 顶部 Header ═══ */}
-      <div className="bg-white border-b border-slate-200/80 px-6 py-4 sticky top-0 z-10 shadow-sm">
+      {/* 顶部 Header */}
+      <div className="bg-white border-b border-slate-200/80 px-6 pt-7 pb-5 sticky top-0 z-10 shadow-sm">
         <div className="max-w-7xl mx-auto flex flex-col md:flex-row md:items-center justify-between gap-4">
           <div className="flex items-center gap-3">
             <Button
@@ -285,8 +177,8 @@ export const ModelHubPage: React.FC = () => {
         </div>
       </div>
 
-      {/* ═══ 过滤器与排序栏 ═══ */}
-      <div className="max-w-7xl mx-auto w-full px-6 pt-5 pb-2">
+      {/* 筛选与排序 */}
+      <div className="max-w-7xl mx-auto w-full px-6 pt-8 pb-3">
         <div className="bg-white rounded-2xl p-3.5 border border-slate-200/80 shadow-sm flex flex-wrap items-center justify-between gap-3">
           {/* 左侧维度选择 */}
           <div className="flex flex-wrap items-center gap-3 text-xs">
@@ -326,39 +218,56 @@ export const ModelHubPage: React.FC = () => {
             />
           </div>
 
-          {/* 右侧排序方式 Pills */}
+          {/* 右侧排序方式 */}
           <div className="flex items-center gap-1 bg-slate-100/80 p-1 rounded-xl text-xs">
             <span className="text-[11px] font-bold text-slate-400 px-2">排序:</span>
             {[
-              { key: 'sharpe', label: '⭐ 夏普比率' },
-              { key: 'ic', label: '🎯 测试集 IC' },
-              { key: 'return', label: '📈 年化收益' },
-              { key: 'downloads', label: '🚀 下载最多' },
-              { key: 'newest', label: '🕒 最新发布' },
-            ].map((sortItem) => (
-              <button
-                key={sortItem.key}
-                onClick={() => { setSortBy(sortItem.key); setPage(1); }}
-                className={clsx(
-                  'px-2.5 py-1 rounded-lg font-bold text-xs transition-all',
-                  sortBy === sortItem.key
-                    ? 'bg-white text-blue-600 shadow-xs'
-                    : 'text-slate-500 hover:text-slate-800'
-                )}
-              >
-                {sortItem.label}
-              </button>
-            ))}
+              { key: 'sharpe', label: '夏普比率', icon: Award },
+              { key: 'ic', label: '测试集 IC', icon: Target },
+              { key: 'return', label: '年化收益', icon: BarChart3 },
+              { key: 'downloads', label: '下载最多', icon: Download },
+              { key: 'newest', label: '最新发布', icon: Clock3 },
+            ].map((sortItem) => {
+              const SortIcon = sortItem.icon;
+              return (
+                <button
+                  key={sortItem.key}
+                  onClick={() => { setSortBy(sortItem.key); setPage(1); }}
+                  className={clsx(
+                    'inline-flex items-center gap-1 px-2.5 py-1 rounded-lg font-bold text-xs transition-all',
+                    sortBy === sortItem.key
+                      ? 'bg-white text-blue-600 shadow-xs'
+                      : 'text-slate-500 hover:text-slate-800'
+                  )}
+                >
+                  <SortIcon size={12} strokeWidth={1.8} />
+                  {sortItem.label}
+                </button>
+              );
+            })}
           </div>
         </div>
       </div>
 
-      {/* ═══ 模型卡片网格主区 ═══ */}
-      <div className="max-w-7xl mx-auto w-full px-6 py-4 flex-1">
+      {/* 模型卡片网格 */}
+      <div className="max-w-7xl mx-auto w-full px-6 py-5 flex-1">
         {loading ? (
           <div className="flex flex-col items-center justify-center py-28 gap-3">
             <Spin size="large" />
             <span className="text-xs text-slate-400 font-medium">正在连接 QuantDB 广场模型仓库...</span>
+          </div>
+        ) : loadError ? (
+          <div className="bg-white rounded-3xl p-16 text-center border border-slate-200/80 shadow-sm flex flex-col items-center justify-center gap-4">
+            <div className="w-16 h-16 rounded-3xl bg-amber-50 text-amber-600 flex items-center justify-center">
+              <RefreshCw size={28} />
+            </div>
+            <div>
+              <h3 className="text-base font-black text-slate-700 !mb-1">模型广场暂时不可用</h3>
+              <p className="text-xs text-slate-400 !mb-0">未展示示例数据。请检查 QuantDB 服务配置后重试。</p>
+            </div>
+            <Button icon={<RefreshCw size={14} />} className="rounded-xl font-bold mt-2" onClick={fetchHubModels}>
+              重新连接
+            </Button>
           </div>
         ) : models.length === 0 ? (
           <div className="bg-white rounded-3xl p-16 text-center border border-slate-200/80 shadow-sm flex flex-col items-center justify-center gap-4">

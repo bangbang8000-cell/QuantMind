@@ -214,7 +214,7 @@ export const ModelHubCard: React.FC<ModelHubCardProps> = ({
             className="flex-1 rounded-xl bg-blue-600 hover:bg-blue-500 font-bold text-xs h-8 border-none shadow-sm"
             onClick={() => onImport(model)}
           >
-            一键导入
+            下载模型包
           </Button>
         </div>
       </div>
