@@ -3,7 +3,7 @@
 # QuantMind (量化大脑) OSS
 
 <p align="center">
-  <strong>AI 原生 · 13 种模型工场 · 因子自主进化 · 通达信联动 · 工业级多市场量化投研平台</strong>
+  <strong>AI 原生 · 13 种模型工场 · 因子自主进化 · QMT/通达信实盘 · 工业级多市场量化投研平台</strong>
 </p>
 
 <p align="center">
@@ -34,7 +34,7 @@
 **QuantMind（量化大脑）** 是面向个人量化研究者、投研团队与专业机构的一体化 AI 原生量化交易平台。深度集成微软 **Qlib** 量化框架、**RD-Agent** 研发智能体与 **TradingAgents** 多 Agent 投研体系，全面打通量化全流程闭环：
 
 ```text
-数据底座 -> 因子挖掘 -> 模型训练 -> 批量推理 -> 组合回测 -> 通达信联动/实盘 -> 生产监控
+数据底座 -> 因子挖掘 -> 模型训练 -> 批量推理 -> 组合回测 -> QMT/通达信实盘 -> 生产监控
 ```
 
 支持 **A 股、港股、美股、期货与区块链** 五大市场，帮助研究者摆脱繁琐的数据清洗与代码拼装，让模型自动从 300+ 维特征中挖掘 Alpha 规律。
@@ -97,6 +97,14 @@
       </td>
     </tr>
     <tr>
+      <td align="center"><b>QMT 实盘通道</b></td>
+      <td>
+        • 原生对接券商 <b>MiniQMT (xtquant)</b>，配备 Windows 独立 QMT Agent 桌面客户端<br>
+        • 采用<b>加密 WebSocket Bridge</b> 双向通信，支持同步/异步买卖、保护限价单与撤单防饥饿队列<br>
+        • 账户资产与持仓秒级同步落库，完整支持柜台异步成交回报与断线看门狗自动重连
+      </td>
+    </tr>
+    <tr>
       <td align="center"><b>通达信深度联动</b></td>
       <td>
         • 模型截面选股结果<b>一键推入通达信自定义板块</b><br>
@@ -107,7 +115,7 @@
       <td align="center"><b>模拟实盘与风控</b></td>
       <td>
         • 本地 T+1 撮合机制、持仓与订单全生命周期管理<br>
-        • 内置涨跌停限制、停牌过滤与订单微观结构风险评分卡
+        • 内置涨跌停限制、停牌过滤与开盘前实盘准备度预检（Preflight Check）
       </td>
     </tr>
   </tbody>
@@ -248,6 +256,7 @@ quantmind/
 │   ├── shared/               # 跨服务共享模块 (DB/Redis/代码规范/日历)
 │   └── scripts/              # 数据同步与特征计算脚本
 ├── electron/                 # Electron + React + TypeScript 桌面/Web 前端
+├── tools/qmt_agent/          # Windows 独立 QMT Agent 桌面客户端与交易桥接
 ├── deploy/                   # 在线/离线部署与一键更新脚本
 ├── docs/                     # 部署、架构与外部集成说明
 ├── scripts/                  # 按用途归档的开发、校验、数据与历史脚本
