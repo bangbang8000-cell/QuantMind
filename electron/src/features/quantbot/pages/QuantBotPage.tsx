@@ -29,14 +29,20 @@ const QuantBotPage: React.FC = () => {
   const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const embedUrl = useMemo(() => {
-    // 优先使用直连 8088 端口（原生应用根路径，杜绝 Vite 动态 import 与静态图标 404）
+    // Electron 的页面宿主通常是 localhost，但 QwenPaw 部署在用户配置的
+    // 远端服务器。因此桌面端不能根据 window.location.hostname 回退到
+    // 127.0.0.1:8088；必须优先使用已配置的 API 网关代理。
+    const gateway = SERVICE_URLS.API_GATEWAY;
+    if (isElectronEnv() && gateway) {
+      return `${gateway}${QWENPAW_UI_PATH}`;
+    }
+
     if (typeof window !== 'undefined') {
       const hostname = window.location.hostname || '127.0.0.1';
       if (hostname === 'localhost' || hostname === '127.0.0.1') {
         return QWENPAW_LOCAL_FALLBACK_URL;
       }
       // 远程/局域网场景：若有自定义网关且非本地则走代理，否则走对应宿主机的 8088 端口
-      const gateway = SERVICE_URLS.API_GATEWAY;
       if (gateway && !gateway.includes('localhost') && !gateway.includes('127.0.0.1')) {
         return `${gateway}${QWENPAW_UI_PATH}`;
       }

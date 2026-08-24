@@ -6,8 +6,43 @@
 
 ```bash
 # 一键部署
-curl -fsSL https://gitee.com/qusong0627/QuantMind/raw/master/deploy/quick-deploy.sh | sudo bash -s -- --yes
+curl -fsSL https://gitee.com/qusong0627/QuantMind/raw/master/deploy/quick-deploy.sh | sudo bash
 ```
+
+## 完整离线包部署（CDN 镜像 + Qlib 数据）
+
+适用于无法稳定拉取 Docker Hub、或希望先下载完整镜像和 Qlib 数据再部署的 Ubuntu 22.04/24.04 服务器。
+脚本会依次更新系统、安装 Docker/Compose、下载并校验离线包、导入镜像、安装 Qlib 数据、拉取代码、重建本地服务镜像并启动服务。
+
+CDN 发布包：
+
+- `https://cdn.quantmind.cloud/quantmind-images.tar.zst`
+- `https://cdn.quantmind.cloud/qlib-cn_data.tar.zst`
+
+在项目根目录执行：
+
+```bash
+sudo bash deploy/offline-deploy.sh
+```
+
+也可以不预先克隆代码，直接执行：
+
+```bash
+curl -fsSL https://gitee.com/qusong0627/QuantMind/raw/master/deploy/offline-deploy.sh | sudo bash
+```
+
+默认安装目录为 `/opt/quantmind`，下载包缓存目录为 `/opt/quantmind-downloads`，Qlib 数据最终位于 `/opt/quantmind/db/qlib_data`。
+
+若需切换 CDN 或指定版本，可覆盖默认值：
+
+```bash
+sudo QUANTMIND_IMAGES_URL='https://example.com/quantmind-images.tar.zst' \
+  QUANTMIND_QLIB_URL='https://example.com/qlib-cn_data.tar.zst' \
+  QUANTMIND_REF='v1.9.0-beta' \
+  bash deploy/offline-deploy.sh
+```
+
+脚本不会覆盖已有的 Qlib 数据；确认更新数据包时，额外设置 `QUANTMIND_REPLACE_QLIB=true`。
 
 ## 指定服务器IP
 

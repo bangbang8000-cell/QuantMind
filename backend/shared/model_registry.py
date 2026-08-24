@@ -300,6 +300,10 @@ class ModelRegistryService:
         return model
 
     async def _ensure_system_default_record(self, *, tenant_id: str, user_id: str) -> None:
+        # OSS 部署未配置内置生产模型时 PRIMARY_MODEL_ID 为空；不能将空
+        # 字符串注册为模型，否则用户每次登录都会看到一条无名称的“模型”。
+        if not self.primary_model_id.strip():
+            return
         tenant, user = self._normalize_owner(tenant_id=tenant_id, user_id=user_id)
         now = datetime.now(timezone.utc)
         async with get_session() as session:
@@ -401,6 +405,8 @@ class ModelRegistryService:
 
     async def _ensure_fallback_model_record(self, *, tenant_id: str, user_id: str) -> None:
         """确保 fallback 模型（如 alpha158）也被注册到用户模型列表。"""
+        if not self.fallback_model_id.strip():
+            return
         tenant, user = self._normalize_owner(tenant_id=tenant_id, user_id=user_id)
         now = datetime.now(timezone.utc)
         async with get_session() as session:
@@ -481,7 +487,8 @@ class ModelRegistryService:
                         SELECT tenant_id, user_id, model_id, source_run_id, status, storage_path, model_file,
                                metadata_json, metrics_json, is_default, created_at, updated_at, activated_at
                         FROM qm_user_models
-                        WHERE tenant_id = :tenant_id AND user_id = :user_id {where_extra}
+                        WHERE tenant_id = :tenant_id AND user_id = :user_id
+                          AND BTRIM(COALESCE(model_id, '')) <> '' {where_extra}
                         ORDER BY is_default DESC, updated_at DESC, created_at DESC
                         """
                     ),

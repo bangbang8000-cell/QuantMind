@@ -524,7 +524,7 @@ export const QlibQuickBacktest: React.FC = () => {
           >
             <button
               type="button"
-              onClick={() => setSignalModelOpen((o) => !o)}
+              onClick={() => setSignalModelOpen(!signalModelOpen)}
               className="w-full flex items-center justify-between gap-2 px-5 py-4 text-left"
             >
               <div className="flex items-center gap-2 text-lg font-bold text-slate-800 tracking-tight">

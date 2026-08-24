@@ -6,6 +6,8 @@ name: quantmind
 services:
   # 1. 数据库 (PostgreSQL)
   db:
+    # 使用官方标签；部署脚本配置的 Docker registry mirror 负责国内加速。
+    # 离线镜像包也以此标签导入，避免 Compose 再次联网拉取。
     image: postgres:15-alpine
     container_name: quantmind-db
     shm_size: 256mb
@@ -134,9 +136,11 @@ services:
       # AI-IDE 执行日志状态当前保存在 engine worker 进程内存中，
       # OSS 部署需保持单 worker，避免 /start 与 /execute/logs/{job_id}
       # 落到不同 worker 时出现 "Job not found"。
-      - API_WORKERS=${API_WORKERS:-2}
+      # all 模式会先由 main_oss 创建服务进程；这里再启用 Uvicorn
+      # 多 worker 会形成嵌套 spawn，导致 API/交易进程反复退出。
+      - API_WORKERS=${API_WORKERS:-1}
       - ENGINE_WORKERS=${ENGINE_WORKERS:-1}
-      - TRADE_WORKERS=${TRADE_WORKERS:-2}
+      - TRADE_WORKERS=${TRADE_WORKERS:-1}
       - STREAM_WORKERS=${STREAM_WORKERS:-1}
 
       # 服务间通信 (OSS单镜像模式使用localhost)
@@ -301,10 +305,10 @@ services:
       - /var/run/docker.sock:/var/run/docker.sock
       # QwenPaw 共享文件目录
       - qwenpaw-shared:/qwenpaw-shared
-    # 启动时自动安装 TradingAgents（editable install，依赖保留在容器内）
+    # TradingAgents 源码已随镜像提供；将其加入模块路径，避免每次启动
+    # 都访问 PyPI 安装依赖（离线/受限网络会一直卡在此步骤）。
     command: >
-      sh -c "pip install -e /app/TradingAgents-astock --quiet 2>/dev/null; pip install 'starlette<1.0.0' --quiet 2>/dev/null;
-             python backend/main_oss.py"
+      sh -c "PYTHONPATH=/app/TradingAgents-astock:$$PYTHONPATH python backend/main_oss.py"
     # deploy:
     #   resources:
     #     reservations:
@@ -534,6 +538,7 @@ services:
 
   # 5a. Data Gateway (多数据源金融数据网关: akshare/eastmoney)
   data-gateway:
+    image: quantmind-data-gateway:latest
     build:
       context: .
       dockerfile: docker/Dockerfile.data-gateway
@@ -555,6 +560,7 @@ services:
 
   # 5c. Dashboard (OpenBB + Streamlit 数据看板)
   dashboard:
+    image: quantmind-dashboard:latest
     build:
       context: .
       dockerfile: docker/Dockerfile.dashboard
@@ -653,7 +659,7 @@ services:
 
   # 7. QwenPaw (QuantBot 聊天机器人)
   qwenpaw:
-    # 使用国内镜像加速源直接拉取，避免 Docker Hub CloudFront IPv6 链路被重置失败
+    # Docker registry mirror 由部署脚本统一配置。
     image: agentscope/qwenpaw:latest
     container_name: qwenpaw
     ports:

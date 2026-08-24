@@ -21,9 +21,11 @@ import sqlite3
 import time
 from datetime import datetime, timezone
 from typing import Any
+from urllib.parse import quote, urlsplit
 
 import httpx
-from fastapi import APIRouter, HTTPException, Query
+from fastapi import APIRouter, HTTPException, Query, Request
+from fastapi.responses import Response
 
 try:
     from zoneinfo import ZoneInfo
@@ -39,9 +41,23 @@ HUNTLY_BASE_URL = os.getenv("HUNTLY_BASE_URL", "http://quantmind-huntly").rstrip
 HUNTLY_USERNAME = os.getenv("HUNTLY_USERNAME", "")
 HUNTLY_PASSWORD = os.getenv("HUNTLY_PASSWORD", "")
 HUNTLY_TIMEOUT = float(os.getenv("HUNTLY_TIMEOUT_SECONDS", "20"))
+RSSHUB_BASE_URL = os.getenv("RSSHUB_BASE_URL", "http://quantmind-rsshub:1200").rstrip("/")
 # Huntly 把全部 page 写入此 SQLite (Asia/Shanghai 本地时间字符串).
 # REST /api/page/list 上限 500, 拿不到几万条历史 — 我们直接读 SQLite 做真分页.
 HUNTLY_SQLITE_PATH = os.getenv("HUNTLY_SQLITE_PATH", "/data/huntly/db.sqlite")
+
+
+def _public_connector_icon_url(icon_url: Any, request: Request) -> Any:
+    """将 Docker 内部 RSSHub 图标地址转换为浏览器可访问的 API 代理地址。"""
+    if not isinstance(icon_url, str) or not icon_url:
+        return icon_url
+    parsed = urlsplit(icon_url)
+    if parsed.hostname not in {"quantmind-rsshub", "rsshub"}:
+        return icon_url
+    path = quote(parsed.path.lstrip("/"), safe="/%")
+    if parsed.query:
+        path = f"{path}?{parsed.query}"
+    return f"{str(request.base_url).rstrip('/')}/api/v1/news/rsshub/{path}"
 
 
 # ---------- enrichment ----------
@@ -733,8 +749,26 @@ async def news_health():
         }
 
 
+@router.get("/rsshub/{path:path}", include_in_schema=False)
+async def proxy_rsshub_asset(path: str, request: Request):
+    """代理 RSSHub 静态资源，避免把 Docker 服务名暴露给浏览器。"""
+    target = f"{RSSHUB_BASE_URL}/{path.lstrip('/')}"
+    try:
+        async with httpx.AsyncClient(timeout=10.0, follow_redirects=True) as client:
+            upstream = await client.get(target, params=request.query_params)
+    except httpx.HTTPError as exc:
+        raise HTTPException(status_code=502, detail=f"RSSHub 资源不可用: {exc}") from exc
+
+    return Response(
+        content=upstream.content,
+        status_code=upstream.status_code,
+        media_type=upstream.headers.get("content-type"),
+        headers={"Cache-Control": "public, max-age=3600"},
+    )
+
+
 @router.get("/sources")
-async def list_sources():
+async def list_sources(request: Request):
     """列出所有订阅源 (Huntly Folder + Connector)
 
     Huntly 真实端点是 GET /api/connector/folder-connectors，
@@ -773,7 +807,9 @@ async def list_sources():
                 "type": conn.get("type"),
                 "folder_id": folder_id if folder_id is not None else 0,
                 "folder_name": folder_name,
-                "site_avatar_url": conn.get("iconUrl"),
+                "site_avatar_url": _public_connector_icon_url(
+                    conn.get("iconUrl"), request
+                ),
                 "unread_count": int(conn.get("inboxCount") or 0),
             })
 
@@ -807,7 +843,7 @@ def _huntly_error(r: httpx.Response, action: str) -> HTTPException:
 
 
 @router.get("/admin/folders")
-async def admin_list_folders():
+async def admin_list_folders(request: Request):
     """列出所有文件夹（含其下的 connector 概览）
 
     Huntly 的 /setting/folder/all 只返回文件夹元信息，connector 列表是空的。
@@ -833,7 +869,13 @@ async def admin_list_folders():
     seen_folder_ids: set[int | None] = set()
     for f in ffc:
         fid = f.get("id")  # None = 未分组
-        conn_by_folder[fid] = list(f.get("connectorItems") or [])
+        conn_by_folder[fid] = [
+            {
+                **item,
+                "iconUrl": _public_connector_icon_url(item.get("iconUrl"), request),
+            }
+            for item in (f.get("connectorItems") or [])
+        ]
         seen_folder_ids.add(fid)
 
     merged: list[dict] = []
@@ -936,6 +978,21 @@ async def admin_create_source(payload: dict):
     if not subscribe_url:
         raise HTTPException(status_code=400, detail="subscribe_url 不能为空")
 
+    # Huntly v0.6.6 的 follow 响应有时不返回 connector id。先记录已有
+    # connector，随后从同一 SQLite 快照中找出新建项，以便完整写回设置。
+    # 否则 updateSetting 不会执行，subscribe_url/is_enabled 会是 NULL，源就
+    # 无法出现在 folder-connectors 列表中。
+    existing_connector_ids: set[int] = set()
+    if _huntly_sqlite_available():
+        try:
+            with _huntly_sqlite() as conn:
+                existing_connector_ids = {
+                    int(row["id"])
+                    for row in conn.execute("SELECT id FROM connector")
+                }
+        except Exception as exc:
+            logger.warning("RSS follow 前读取 connector 快照失败: %s", exc)
+
     r = await _huntly_request(
         "POST", "/api/setting/feeds/follow", params={"subscribeUrl": subscribe_url}
     )
@@ -944,9 +1001,29 @@ async def admin_create_source(payload: dict):
     follow_data = _unwrap(r.json()) or {}
     connector_id = follow_data.get("id") or follow_data.get("connectorId")
 
+    if not connector_id and _huntly_sqlite_available():
+        try:
+            with _huntly_sqlite() as conn:
+                # 已存在的源优先按 URL 找到；新建源则取本次请求后新增的 id。
+                row = conn.execute(
+                    "SELECT id FROM connector WHERE subscribe_url = ? ORDER BY id DESC LIMIT 1",
+                    (subscribe_url,),
+                ).fetchone()
+                if row is None:
+                    candidates = [
+                        int(item["id"])
+                        for item in conn.execute("SELECT id FROM connector")
+                        if int(item["id"]) not in existing_connector_ids
+                    ]
+                    connector_id = max(candidates) if candidates else None
+                else:
+                    connector_id = int(row["id"])
+        except Exception as exc:
+            logger.warning("RSS follow 后解析 connector id 失败: %s", exc)
+
     folder_id = (payload or {}).get("folder_id")
     custom_name = (payload or {}).get("name")
-    if connector_id and (folder_id is not None or custom_name):
+    if connector_id:
         update_body: dict[str, Any] = {
             "connectorId": connector_id,
             "subscribeUrl": subscribe_url,
@@ -960,10 +1037,9 @@ async def admin_create_source(payload: dict):
             "POST", "/api/setting/feeds/updateSetting", json=update_body
         )
         if u.status_code != 200:
-            logger.warning(
-                "feeds/updateSetting failed after follow: %s %s",
-                u.status_code, u.text[:200],
-            )
+            raise _huntly_error(u, "feeds/updateSetting")
+    else:
+        logger.warning("RSS follow 未返回且未解析到 connector id: %s", follow_data)
 
     return {"ok": True, "connector_id": connector_id, "follow": follow_data}
 

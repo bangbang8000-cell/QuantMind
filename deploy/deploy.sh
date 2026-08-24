@@ -622,7 +622,9 @@ step9_start_database() {
     # 预拉取基础镜像（避免 docker compose 拉取失败）
     log_info "预拉取基础镜像..."
 
-    local base_images=("docker.1ms.run/library/postgres:15-alpine" "docker.1ms.run/library/redis:7-alpine")
+    # 使用与 docker-compose.yml 和离线镜像包一致的官方标签。Docker daemon
+    # 已在 Step 2 配置 registry mirror，仍会享受国内镜像加速。
+    local base_images=("postgres:15-alpine" "redis:7-alpine")
     local pull_success=true
 
     for image in "${base_images[@]}"; do
@@ -660,15 +662,15 @@ step9_start_database() {
     if ! $pull_success; then
         log_error "基础镜像拉取失败，请检查网络连接"
         log_info "可以尝试手动拉取："
-        log_info "  docker pull docker.1ms.run/library/postgres:15-alpine"
-        log_info "  docker pull docker.1ms.run/library/redis:7-alpine"
+        log_info "  docker pull postgres:15-alpine"
+        log_info "  docker pull redis:7-alpine"
         log_info "然后重新运行: sudo bash deploy/deploy.sh --resume"
         exit 1
     fi
 
     # 预拉取可选外部镜像（失败仅警告，不中断部署）
     log_info "预拉取可选外部镜像 (huntly / rsshub / qwenpaw)..."
-    for img in "docker.1ms.run/lcomplete/huntly:latest" "docker.1ms.run/diygod/rsshub:latest" "docker.1ms.run/agentscope/qwenpaw:latest"; do
+    for img in "lcomplete/huntly:latest" "diygod/rsshub:latest" "agentscope/qwenpaw:latest"; do
         if docker pull "$img" 2>&1; then
             log_info "可选镜像拉取成功: $img"
         else

@@ -86,6 +86,32 @@ _API_REWRITE_SCRIPT = r"""<script>
   }
   function rwAll(u){ return rwAsset(rwApi(rwWs(u))); }
 
+  // Vite's code-split chunks create <link href="/assets/..."> and
+  // <script src="/assets/..."> dynamically.  fetch/XHR interception does
+  // not see these browser-managed requests, so rewrite them before the
+  // browser starts loading the resource.  This is required when QwenPaw is
+  // embedded below the gateway prefix instead of at the site root.
+  function patchUrlProperty(proto, property){
+    var descriptor=Object.getOwnPropertyDescriptor(proto, property);
+    if(!descriptor || !descriptor.set || !descriptor.get) return;
+    Object.defineProperty(proto, property, {
+      configurable:true,
+      enumerable:descriptor.enumerable,
+      get:descriptor.get,
+      set:function(value){ return descriptor.set.call(this,rwAsset(value)); }
+    });
+  }
+  patchUrlProperty(HTMLLinkElement.prototype,'href');
+  patchUrlProperty(HTMLScriptElement.prototype,'src');
+  var _setAttr=Element.prototype.setAttribute;
+  Element.prototype.setAttribute=function(name,value){
+    if((name==='href' || name==='src') &&
+       (this instanceof HTMLLinkElement || this instanceof HTMLScriptElement)){
+      value=rwAsset(value);
+    }
+    return _setAttr.call(this,name,value);
+  };
+
   // Intercept fetch
   var _f=window.fetch;
   window.fetch=function(u,o){

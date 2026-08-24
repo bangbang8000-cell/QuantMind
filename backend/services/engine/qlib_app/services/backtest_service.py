@@ -9,7 +9,7 @@ import time
 import traceback
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Dict, Optional, Tuple
+from typing import Any
 from uuid import uuid4
 
 import numpy as np
@@ -219,6 +219,40 @@ class QlibBacktestService(QlibBacktestServiceRuntimeMixin):
         支持按市场切换 provider_uri / region：如果传入值与当前不同，
         会重置 _initialized 并重新初始化 qlib。
         """
+        # 客户端可能保留了旧的 QuantDB 缓存路径。该目录在数据尚未迁移、
+        # 或仅导入独立 Qlib 数据包时会存在但并不包含完整 day 数据；此时
+        # 回退到当前市场可用的 provider，而不是把无效路径交给 Qlib 并在
+        # Exchange 初始化阶段才报出难以定位的错误。
+        if provider_uri:
+            from backend.shared.qlib_paths import (
+                is_qlib_provider_ready,
+                resolve_qlib_provider_uri,
+            )
+
+            requested_uri = provider_uri
+            if not is_qlib_provider_ready(requested_uri):
+                requested_lower = requested_uri.lower()
+                market = "CN"
+                if "hk_data" in requested_lower or str(region).lower() == "hk":
+                    market = "HK"
+                elif "us_data" in requested_lower or str(region).lower() == "us":
+                    market = "US"
+                elif "bc_data" in requested_lower or str(region).lower() == "crypto":
+                    market = "CRYPTO"
+                elif "futures_data" in requested_lower:
+                    market = "FUTURES"
+
+                fallback_uri = resolve_qlib_provider_uri(market)
+                if is_qlib_provider_ready(fallback_uri):
+                    provider_uri = fallback_uri
+                    task_logger.warning(
+                        "invalid_provider_uri_fallback",
+                        "Requested Qlib provider is incomplete; using ready provider",
+                        requested_uri=requested_uri,
+                        fallback_uri=fallback_uri,
+                        market=market,
+                    )
+
         # 如果请求的 provider_uri/region 与当前不同，需要重新初始化
         if provider_uri and provider_uri != self.provider_uri:
             self.provider_uri = provider_uri
@@ -229,6 +263,17 @@ class QlibBacktestService(QlibBacktestServiceRuntimeMixin):
 
         if not self._initialized:
             try:
+                from backend.shared.qlib_paths import is_qlib_provider_ready
+
+                if not is_qlib_provider_ready(self.provider_uri):
+                    required_paths = (
+                        "calendars/day.txt, instruments/all.txt, and features/"
+                    )
+                    raise RuntimeError(
+                        "Qlib day-frequency data is not ready at "
+                        f"{self.provider_uri!r}; required: {required_paths}. "
+                        "Rebuild the Qlib cache before running a backtest."
+                    )
                 qlib.init(
                     provider_uri=self.provider_uri,
                     region=self.region,

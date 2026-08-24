@@ -26,6 +26,23 @@ _MARKET_DATA_DIR: dict[str, str] = {
 }
 
 
+def is_qlib_provider_ready(provider_uri: str | Path) -> bool:
+    """Return whether *provider_uri* contains the minimum day-frequency Qlib layout.
+
+    A cache directory can be created before its calendar/instruments are written.
+    Treating that directory as a valid provider makes Qlib fail much later while
+    constructing an Exchange, with the misleading ``does not contain data for
+    day`` error.
+    """
+    provider = Path(provider_uri).expanduser()
+    return (
+        provider.is_dir()
+        and (provider / "calendars" / "day.txt").is_file()
+        and (provider / "instruments" / "all.txt").is_file()
+        and (provider / "features").is_dir()
+    )
+
+
 def resolve_qlib_provider_uri(market: str = "CN") -> str:
     """返回 Qlib provider_uri 绝对路径。
 
@@ -56,20 +73,20 @@ def resolve_qlib_provider_uri(market: str = "CN") -> str:
         subdir = _MARKET_SUBDIR[market_upper]
         # 统一固定目录优先（/data/qlib/{subdir}），其次各市场 .qlib_cache（历史遗留）
         fixed = Path(f"/data/qlib/{subdir}")
-        if fixed.exists():
+        if is_qlib_provider_ready(fixed):
             return str(fixed)
         market_data_dir = _MARKET_DATA_DIR.get(market_upper)
         if market_data_dir:
             cache_sub = _CACHE_SUBDIR.get(market_upper, subdir)
             cache_candidate = Path(market_data_dir) / ".qlib_cache" / cache_sub
-            if cache_candidate.exists():
+            if is_qlib_provider_ready(cache_candidate):
                 return str(cache_candidate)
         for candidate in (
             Path(f"/data/qlib_data/{subdir}"),
             Path(f"/app/db/qlib_data/{subdir}"),
             _PROJECT_ROOT / "db" / "qlib_data" / subdir,
         ):
-            if candidate.exists():
+            if is_qlib_provider_ready(candidate):
                 return str(candidate)
         return str(_PROJECT_ROOT / "db" / "qlib_data" / subdir)
 
@@ -81,7 +98,7 @@ def resolve_qlib_provider_uri(market: str = "CN") -> str:
         Path("/app/db/qlib_data"),
         _PROJECT_ROOT / "db" / "qlib_data",
     ):
-        if candidate.exists():
+        if is_qlib_provider_ready(candidate):
             return str(candidate)
 
     return str(_PROJECT_ROOT / "db" / "qlib_data")

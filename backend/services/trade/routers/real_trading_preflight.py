@@ -838,10 +838,37 @@ async def get_account(
             user_id=resolved_user_id,
         )
         if latest_snapshot is None:
-            raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND,
-                detail="账户信息尚未持久化，请先等待柜台侧代理上报 PostgreSQL 快照",
-            )
+            # 未绑定/尚未上报是真实交易页面的正常初始状态，而不是接口错误。
+            # 返回与前端 AccountInfo 兼容的空账户，避免轮询时持续产生 404。
+            return {
+                "account_id": None,
+                "total_asset": 0.0,
+                "cash": 0.0,
+                "available_cash": 0.0,
+                "frozen_cash": 0.0,
+                "frozen": 0.0,
+                "market_value": 0.0,
+                "today_pnl": 0.0,
+                "daily_pnl": 0.0,
+                "monthly_pnl": 0.0,
+                "total_pnl": 0.0,
+                "total_return": 0.0,
+                "total_return_pct": 0.0,
+                "daily_return_pct": 0.0,
+                "daily_return_ratio": 0.0,
+                "total_return_ratio": 0.0,
+                "floating_pnl": 0.0,
+                "is_online": False,
+                "positions": [],
+                "position_count": 0,
+                "message": "账户信息尚未持久化，请等待柜台侧代理上报 PostgreSQL 快照",
+                "account_unavailable_reason": "not_reported",
+                "baseline": {
+                    "initial_equity": 0.0,
+                    "day_open_equity": 0.0,
+                    "month_open_equity": 0.0,
+                },
+            }
 
         account_info = dict(latest_snapshot)
         snapshot_ts = _parse_snapshot_timestamp(account_info.get("snapshot_at"))

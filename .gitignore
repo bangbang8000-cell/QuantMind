@@ -198,6 +198,9 @@ db/db.zip
 *.h5
 *.hdf5
 
+# 本地/CDN 发布用离线镜像与 Qlib 数据包（体积较大，不纳入源码仓库）
+/images/
+
 docker/torch_wheels/
 
 # Graphify output

@@ -75,9 +75,11 @@ def get_workers_config() -> dict:
     # 原因：AI-IDE 执行任务状态保存在进程内存中，多 worker 会导致
     # /start 与 /execute/logs/{job_id} 命中不同进程，返回 404 Job not found。
     default_workers = {
-        "api": 2,
+        # all 模式已经在独立的 multiprocessing 子进程内运行服务；
+        # Uvicorn 再创建多 worker 会形成嵌套 spawn，导致 worker 反复退出。
+        "api": 1,
         "engine": 1,
-        "trade": 2,
+        "trade": 1,
         "stream": 1,
     }
     # 支持环境变量覆盖

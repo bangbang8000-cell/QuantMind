@@ -97,7 +97,8 @@ RUN chmod +x /tmp/install_rdagent.sh && /tmp/install_rdagent.sh && rm /tmp/insta
 
 # 预下载 FinBERT 中文金融情绪模型权重（~100MB，news.sentiment 惰性加载用；
 # 构建时下载到 /root/.cache/huggingface，运行时离线可用，不依赖 HF 网络）
-RUN HF_HUB_OFFLINE=0 python - <<'PY'
+# 离线部署默认跳过该可选模型；运行时可在网络可用时按需下载。
+RUN HF_HUB_OFFLINE=1 python - <<'PY'
 import os, sys
 try:
     from huggingface_hub import snapshot_download
