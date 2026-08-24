@@ -162,7 +162,7 @@ data/ai_ide/config.json
 db/diagram/postgresql_schema.dot
 db/backups/*.gz
 !db/feature_snapshots/*.json
-website/download-config.json
+website/
 
 # Ignore db subdirectories
 /db/backups/
@@ -173,7 +173,6 @@ website/download-config.json
 data/user_10000001
 db/csmar
 db20260528.tar.gz
-website/
 db/db.zip
 
 # Large data / model / experiment directories — too big for git

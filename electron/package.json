@@ -1,7 +1,7 @@
 {
   "name": "QuantMind",
   "private": true,
-  "version": "1.0.0",
+  "version": "2.0.0",
   "description": "QuantMind 智能控制中心桌面端 (Electron + React + Vite)",
   "main": "dist-electron/electron/main.js",
   "type": "commonjs",
@@ -128,9 +128,7 @@
       "displayLanguageSelector": false,
       "installerIcon": "logo.ico",
       "uninstallerIcon": "logo.ico",
-      "differentialPackage": true,
-      "compression": "lzma",
-      "compressionLevel": 9
+      "differentialPackage": true
     },
     "portable": {
       "artifactName": "${productName} ${version} Portable.${ext}",
@@ -230,7 +228,7 @@
     "@vitest/coverage-v8": "^4.0.14",
     "@vitest/ui": "^4.0.14",
     "baseline-browser-mapping": "^2.10.10",
-    "electron": "40.8.0",
+    "electron": "^43.4.1",
     "electron-builder": "^24.13.3",
     "electron-vite": "^4.0.1",
     "eslint-plugin-react-hooks": "^4.6.2",

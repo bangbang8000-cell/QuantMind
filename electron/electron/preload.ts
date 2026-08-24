@@ -19,7 +19,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
    * 获取应用版本号
    * @returns {string} 应用版本号
    */
-  getAppVersion: () => process.env.npm_package_version || '1.0.0',
+  getAppVersion: () => process.env.npm_package_version || '2.0.0',
 
   /**
    * 最小化窗口
