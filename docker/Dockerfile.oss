@@ -113,6 +113,8 @@ PY
 
 # 复制训练脚本（确保容器内 /app/train.py 存在，避免卷挂载失败时 Docker 创建目录）
 COPY docker/training/train.py /app/train.py
+COPY docker/training/preprocessing.py /app/preprocessing.py
+COPY docker/training/parallel_utils.py /app/parallel_utils.py
 
 # 复制源代码
 COPY backend backend

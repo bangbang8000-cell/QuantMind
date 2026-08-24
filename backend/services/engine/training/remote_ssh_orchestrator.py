@@ -392,6 +392,11 @@ class RemoteSSHOrchestrator(TrainingOrchestrator):
                 await self._rsync_push(prep_script, f"{self.work_dir}/preprocessing.py")
                 self._log(run_id, "[SYNC] preprocessing.py 已同步")
 
+            # parallel_utils.py（多核因子筛选）与 train.py 同目录顶层 import，需一并推送
+            par_script = self._resolve_parallel_utils_script()
+            if par_script:
+                await self._rsync_push(par_script, f"{self.work_dir}/parallel_utils.py")
+                self._log(run_id, "[SYNC] parallel_utils.py 已同步")
             if direct_source:
                 for module in (self._resolve_quantdb_factor_reader(), self._resolve_quantdb_hub()):
                     if module:
@@ -727,6 +732,7 @@ class RemoteSSHOrchestrator(TrainingOrchestrator):
             f"{data_mount}"
             f"-v {self.work_dir}/train.py:/app/train.py:ro "
             f"-v {self.work_dir}/preprocessing.py:/app/preprocessing.py:ro "
+            f"-v {self.work_dir}/parallel_utils.py:/app/parallel_utils.py:ro "
             f"-v {self.work_dir}/templates:/app/backend/services/engine/inference/templates:ro "
             + (f"-v {self.work_dir}/modules/quantdb_factor_reader.py:/app/backend/services/engine/data_platform/quantdb_factor_reader.py:ro " if direct_source else "")
             + (f"-v {self.work_dir}/modules/quantdb_hub.py:/app/backend/services/engine/data_platform/quantdb_hub.py:ro " if direct_source else "")
@@ -770,6 +776,18 @@ class RemoteSSHOrchestrator(TrainingOrchestrator):
             "/app/backend/services/engine/data_platform/quantdb_hub.py",
         ]
         return next((path for path in candidates if Path(path).is_file()), None)
+
+    def _resolve_parallel_utils_script(self) -> str | None:
+        """定位本地 parallel_utils.py（多核因子筛选，train.py 顶层 import）。"""
+        candidates = [
+            str(Path(__file__).resolve().parents[3] / "docker" / "training" / "parallel_utils.py"),
+            "/app/docker/training/parallel_utils.py",
+            "/app/parallel_utils.py",
+        ]
+        for p in candidates:
+            if Path(p).exists():
+                return p
+        return None
 
     def _resolve_inference_template(self) -> str | None:
         """定位本地统一推理模板 inference_parquet.py。"""
