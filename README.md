@@ -121,15 +121,41 @@ docker exec quantmind python backend/scripts/quantdb_daily_sync.py
 提供全市场行情大屏、资金流向、大盘指数热度与自选股盯盘。
 
 <p align="center">
-  <img src="docs/images/Dashboard.png" alt="市场看板" width="90%">
+  <img src="docs/images/Dashboard.png" alt="市场看板与监控中心" width="90%">
 </p>
 
 ---
 
 <!-- ========================================== -->
-<!-- 模块 2: AI 模型训练工场 -->
+<!-- 模块 2: AI-IDE 策略工作区 -->
 <!-- ========================================== -->
-### 2. AI 模型训练工场 (Model Training)
+### 2. AI-IDE 策略工作区与智能助手
+
+内置代码编辑器与量化 AI Copilot，支持策略编写、语法检查、一键回测与云端发布。
+
+<p align="center">
+  <img src="docs/images/AI-IDE.png" alt="AI-IDE 策略工作区与智能助手" width="90%">
+</p>
+
+---
+
+<!-- ========================================== -->
+<!-- 模块 3: QuantaAlpha 因子挖掘演化平台 -->
+<!-- ========================================== -->
+### 3. QuantaAlpha 智能因子挖掘演化平台
+
+基于 LLM 驱动自主量化因子演化平台（AutoAlpha 2.0），用自然语言描述量化假设，AI 自动生成表达式、因子特征、样本内挖掘与进化回测。
+
+<p align="center">
+  <img src="docs/images/FactorMining.png" alt="QuantaAlpha 智能因子挖掘平台" width="90%">
+</p>
+
+---
+
+<!-- ========================================== -->
+<!-- 模块 4: AI 模型训练工场 -->
+<!-- ========================================== -->
+### 4. AI 模型训练工场 (Model Training)
 
 可视化配置训练参数，支持 13 种机器学习与深度学习算法，内置 Optuna 自动调参、WFA 滚动切分与 Stacking 集成。
 
@@ -144,26 +170,9 @@ docker exec quantmind python backend/scripts/quantdb_daily_sync.py
 ---
 
 <!-- ========================================== -->
-<!-- 模块 3: 模型管理与生产监控 -->
+<!-- 模块 5: 批量推理与选股信号中心 -->
 <!-- ========================================== -->
-### 3. 模型管理与生产监控 (Model Registry)
-
-统一管理模型全生命周期，实现持续监控与版本对比。
-
-<p align="center">
-  <img src="docs/images/ModelManagement.png" alt="模型注册与监控" width="90%">
-</p>
-
-- **生产质量跟踪**：每日自动回填真实 Rank IC、ICIR 表现。
-- **漂移预警与软门禁**：特征重要性 SHAP 分析，性能衰减自动告警。
-- **多模型 A/B 对比**：多维度指标雷达对比，辅助生产模型切换。
-
----
-
-<!-- ========================================== -->
-<!-- 模块 4: 批量推理与信号中心 -->
-<!-- ========================================== -->
-### 4. 批量推理与选股信号 (Inference Hub)
+### 5. 批量推理与选股信号中心 (Inference Hub)
 
 支持全市场批量截面排序、Top N 标的推荐、信号动态融合与历史回溯。
 
@@ -174,40 +183,27 @@ docker exec quantmind python backend/scripts/quantdb_daily_sync.py
 ---
 
 <!-- ========================================== -->
-<!-- 模块 5: 微软 Qlib 回测中心 -->
+<!-- 模块 6: 微软 Qlib 回测中心 -->
 <!-- ========================================== -->
-### 5. 微软 Qlib 回测中心 (Backtest Center)
+### 6. 微软 Qlib 回测中心 (Backtest Center)
 
 基于微软 Qlib 引擎的高性能事件驱动回测，全面评估策略收益与风险。
 
 <p align="center">
-  <img src="docs/images/QuickBacktest.png" alt="回测中心" width="90%">
+  <img src="docs/images/QuickBacktest.png" alt="Qlib 回测中心" width="90%">
 </p>
 
 ---
 
 <!-- ========================================== -->
-<!-- 模块 6: Multi-Agent 智能投研平台 -->
+<!-- 模块 7: 实时舆情与 RSS 资讯信息流 -->
 <!-- ========================================== -->
-### 6. Multi-Agent 智能投研平台 (TradingAgents)
+### 7. 实时舆情与 RSS 资讯监控 (News & RSS Stream)
 
-7 位 AI 分析师角色协同（基本面、量价技术、资金流、宏观策略、估值、情绪、风控），多轮辩论博弈输出结构化研报。
+汇聚主流财经媒体 7x24 实时快讯、事件标签识别、利好/利空情绪分类与正文实体关联分析。
 
 <p align="center">
-  <img src="docs/images/research.png" alt="智能投研平台" width="90%">
-</p>
-
----
-
-<!-- ========================================== -->
-<!-- 模块 7: 实盘模拟交易与风控系统 -->
-<!-- ========================================== -->
-### 7. 实盘模拟交易与风控评分卡 (Live Trading)
-
-全链路模拟交易撮合、持仓监控与多维风险评分卡。
-
-<p align="center">
-  <img src="docs/images/LiveTrading.png" alt="模拟实盘交易" width="90%">
+  <img src="docs/images/RSS.png" alt="实时舆情与 RSS 资讯监控" width="90%">
 </p>
 
 ---
