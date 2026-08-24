@@ -12,12 +12,12 @@ QuantDB 全量数据同步工具
   └── 6_ml_datasets/         # ML数据集
 
 用法:
-  python3 sync_quantdb.py                    # 同步所有数据集
-  python3 sync_quantdb.py --only v2          # 仅同步 V2 数据集
-  python3 sync_quantdb.py --only v1          # 仅同步 V1 数据集
-  python3 sync_quantdb.py --dataset valuation # 同步指定数据集
-  python3 sync_quantdb.py --dry-run          # 仅检查，不下载
-  python3 sync_quantdb.py --status           # 查看同步状态
+  python3 scripts/data/sync_quantdb.py                    # 同步所有数据集
+  python3 scripts/data/sync_quantdb.py --only v2          # 仅同步 V2 数据集
+  python3 scripts/data/sync_quantdb.py --only v1          # 仅同步 V1 数据集
+  python3 scripts/data/sync_quantdb.py --dataset valuation # 同步指定数据集
+  python3 scripts/data/sync_quantdb.py --dry-run          # 仅检查，不下载
+  python3 scripts/data/sync_quantdb.py --status           # 查看同步状态
 """
 
 import argparse
@@ -33,11 +33,8 @@ from quantdb_sdk import QuantDBClient
 
 # ─── 配置 ────────────────────────────────────────────────────────────────
 
-SAVE_DIR = "/media/zbox/nas-NSF/QUANTDB"
-API_KEY = os.environ.get(
-    "QUANTDB_API_KEY",
-    "qdb_4069c32fd97f023e05298647691ced9d82d549a3200727c4",
-)
+SAVE_DIR = os.environ.get("QUANTDB_SAVE_DIR", "/media/zbox/nas-NSF/QUANTDB")
+API_KEY = os.environ.get("QUANTDB_API_KEY", "").strip()
 MAX_RETRIES = 3
 RETRY_DELAY = 10  # seconds
 
@@ -117,6 +114,8 @@ def format_size(gb: float) -> str:
 
 def make_client() -> QuantDBClient:
     """创建配置了更长超时和更多重试的 SDK 客户端"""
+    if not API_KEY:
+        raise RuntimeError("未设置 QUANTDB_API_KEY 环境变量")
     return QuantDBClient(
         api_key=API_KEY,
         timeout=(15, 300),  # 连接超时15s，读取超时300s

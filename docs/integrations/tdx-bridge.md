@@ -1,5 +1,7 @@
 # 通达信实盘交易桥接指南
 
+> 本文说明 QuantMind 与通达信交易桥的专项集成配置。
+
 > 把 QuantMind 的信号送到 Windows 通达信客户端下单，支持**模拟盘 + 实盘**双模式。
 > 与系统现有模拟盘 (PaperTradingBroker) 并行，互不影响。
 

@@ -24,7 +24,7 @@ QuantMind is a quantitative trading platform with Python backend (FastAPI) and E
 ### Backend
 ```bash
 # Start all services (Docker)
-docker-compose up -d
+docker compose up -d
 
 # Run single service locally
 SERVICE_MODE=api python backend/main_oss.py
@@ -80,12 +80,11 @@ npm run dashboard:build  # Production build
 
 ## Stock Code Standardization
 
-- **Internal Format**: Prefix-based (e.g., `SH600036`) for database storage
-- **API Format**: Suffix-based (e.g., `600036.SH`) for kline API and Qlib
+- **Canonical Format**: Prefix-based (e.g., `SH600036`) for internal storage, Redis keys and API parameters
+- **Do not introduce** suffix-based identifiers such as `600036.SH`
 - **Normalization Utilities**:
-  - **Backend**: `backend/shared/stock_utils.py` -> `StockCodeUtil.to_suffix(code)` (canonical format: `600036.SH`)
+  - **Backend**: `backend/shared/stock_utils.py` -> `StockCodeUtil.to_prefix(code)`
   - **Frontend**: `electron/src/utils/portfolioUtils.ts` -> `normalizeStockCode(code)`
-  - **Dashboard**: `electron/src/features/dashboard/pages/DashboardPage.tsx` -> `normalizeSymbol(raw)` converts `SZ300258` → `300258.SZ`
 - **Market Auto-Identification**:
   - `SH`: 6xxxxx, 9xxxxx
   - `SZ`: 0xxxxx, 3xxxxx, 2xxxxx
@@ -117,20 +116,19 @@ Required `.env` keys (defaults in `docker-compose.yml`):
 
 After making code changes, always:
 1. **Commit to git**: Create a commit with descriptive message
-2. **Deploy to server**: SSH to `quant-server` and pull/deploy updates
+2. **Deploy to server**: Use the controlled update script on the target server
 
 ```bash
 # Local: commit changes
-git add .
+git add <changed-files>
 git commit -m "descriptive message"
+git push gitee master
 
 # Deploy to quant-server
-ssh quant-server "cd /opt/quantmind && git pull && docker-compose restart"
-
-# Deploy frontend (if changed)
-cd electron && npm run build
-docker cp dist-react/. quantmind-web:/usr/share/nginx/html/
+ssh quant-server "cd /opt/quantmind && sudo bash deploy/update.sh"
 ```
+
+Electron 前端在本地开发时使用 Vite HMR；修改 `electron/src` 后运行 `npm run typecheck`，不需要复制构建产物到服务器的 `web` 容器。
 
 ## Key Files
 

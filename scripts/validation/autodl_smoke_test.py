@@ -4,12 +4,12 @@
 验证 Git 仓库代码（docker/training/preprocessing.py 真实训练预处理链路）
 可在本镜像的 Python 环境中正常执行，并以退出码 0 表示通过。
 
-运行：python3 /root/QuantMind/quick_test.py
+运行：python3 /root/QuantMind/scripts/validation/autodl_smoke_test.py
 """
 import sys
 from pathlib import Path
 
-REPO = Path(__file__).resolve().parent
+REPO = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(REPO / "docker" / "training"))
 
 import numpy as np  # noqa: E402
