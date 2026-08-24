@@ -114,6 +114,8 @@ else:
 _TRAINING_SCRIPT_HOST_PATH = str(_HOST_PROJECT_PATH / "docker" / "training" / "train.py")
 # 预处理纯函数集：train.py 顶层 `from preprocessing import ...`，需与 train.py 一并挂载
 _PREPROCESSING_HOST_PATH = str(_HOST_PROJECT_PATH / "docker" / "training" / "preprocessing.py")
+# 多核因子筛选：train.py 顶层 `from parallel_utils import ...`，需与 train.py 一并挂载
+_PARALLEL_UTILS_HOST_PATH = str(_HOST_PROJECT_PATH / "docker" / "training" / "parallel_utils.py")
 
 
 class LocalDockerOrchestrator(TrainingOrchestrator):
@@ -665,6 +667,12 @@ class LocalDockerOrchestrator(TrainingOrchestrator):
         # 条件判断会导致宿主机文件存在但容器内看不到 → 挂载被跳过 → ImportError。
         volumes[str(_PREPROCESSING_HOST_PATH)] = {
             "bind": "/app/preprocessing.py",
+            "mode": "ro",
+        }
+        # parallel_utils.py 与 train.py 同目录导入（`from parallel_utils import ...`），
+        # 多核因子筛选；与 train.py 一样无条件挂载（路径可见性限制同上）。
+        volumes[str(_PARALLEL_UTILS_HOST_PATH)] = {
+            "bind": "/app/parallel_utils.py",
             "mode": "ro",
         }
         logger.info(

@@ -69,9 +69,20 @@ def detect_hardware() -> dict[str, Any]:
     return info
 
 
-# 树模型线程数：不限制，用满所有核心（速度最快）。
-# 跳过 OOF 全量预测的改动不影响速度且省内存，保留。
-_TRAIN_NTHREAD = -1
+# 树模型线程数：默认 -1 = 用满所有核心（速度最快）。
+# 可通过环境变量 TRAIN_NTHREADS 覆盖（如 TRAIN_NTHREADS=4 限制为 4 线程）。
+# 多模型/OOF 同时训练时内存叠加易 OOM，可据此限流。
+def _default_train_threads() -> int:
+    raw = (os.getenv("TRAIN_NTHREADS") or "").strip()
+    if raw:
+        try:
+            return int(raw)
+        except ValueError:
+            logger.warning("Invalid TRAIN_NTHREADS=%r, fallback to -1", raw)
+    return -1
+
+
+_TRAIN_NTHREAD = _default_train_threads()
 # 训练信号在 T 日收盘后生成，最早在下一个交易日执行。训练、回测和线上
 # forward label 都应使用相同的 T+1 执行口径。
 _EXECUTION_LAG_DAYS = 1
@@ -92,7 +103,9 @@ DEFAULT_LGB_PARAMS: dict[str, Any] = {
     "lambda_l1":         0.5,
     "lambda_l2":         1.0,
     "max_depth":         -1,
-    "n_jobs":            -1,
+    # LightGBM 原生 API 的线程参数名是 num_threads（n_jobs 是 sklearn 层的别名，
+    # 直接传 n_jobs 给 lgb.train() 会被忽略并回退到默认线程数，导致多核不生效）
+    "num_threads":       _TRAIN_NTHREAD,
     "verbosity":         -1,
 }
 
@@ -1441,8 +1454,9 @@ def _train_lgb(cfg: dict, features: list[str], X_train: np.ndarray, y_train: np.
     if str((cfg.get("label", {}) or {}).get("target_mode") or "return").lower() == "classification":
         params["objective"] = "binary"
         params["metric"] = "binary_logloss"
-    # 限制线程：n_jobs=-1 用满所有核心，多模型/OOF 训练时内存叠加易 OOM
-    params["n_jobs"] = _TRAIN_NTHREAD
+    # 线程数：num_threads=-1 用满所有核心；多模型/OOF 训练时内存叠加易 OOM，
+    # 可用 TRAIN_NTHREADS 环境变量限流
+    params["num_threads"] = _TRAIN_NTHREAD
     # 可复现性：注入全局 seed（用户未显式覆盖时）
     params.setdefault("seed", int((cfg.get("seed") or 42)))
     params.setdefault("bagging_seed", int((cfg.get("seed") or 42)))
@@ -3013,35 +3027,47 @@ def select_top_factors(
     logger.info("Input: %d features, target top-%d", len(features), n_top)
 
     # Step 1: 日频 Rank IC 计算（原始 spearmanr 算法，数值 100% 正确）
-    # 质量优先：不使用降采样或向量化近似，逐特征逐交易日算 Spearman IC。
-    # 虽然较慢（约 18 分钟），但 IC/ICIR 估计精确，因子选择可靠。
-    from scipy.stats import spearmanr
-
+    # 多进程并行：按特征分片给多个进程同时算（fork，DataFrame 零拷贝共享），
+    # 默认 min(CPU 核数, 特征数) 个 worker，TRAIN_IC_WORKERS 环境变量可覆盖。
+    # 算法、逐日循环、dropna 规则与旧串行实现完全一致——只加速不近似。
     t0_sel = time.time()
     ic_results: dict[str, dict] = {}
-    for feat in features:
-        if feat not in df.columns:
-            continue
-        daily_ics = []
-        for _, g in df.groupby("trade_date", sort=False):
-            valid = g[[feat, label_col]].dropna()
-            if len(valid) < 30:
+    try:
+        from parallel_utils import compute_daily_ics
+
+        ic_results = compute_daily_ics(df, features, label_col=label_col)
+        logger.info(
+            "IC/ICIR screening done in %.1fs (%d features)",
+            time.time() - t0_sel, len(ic_results),
+        )
+    except ImportError:
+        # parallel_utils 未随 train.py 同步（旧镜像/旧编排器）：回退串行，不中断训练
+        logger.warning("parallel_utils not found, falling back to serial IC computation")
+        from scipy.stats import spearmanr
+
+        for feat in features:
+            if feat not in df.columns:
                 continue
-            ic, _ = spearmanr(valid[feat], valid[label_col])
-            if np.isfinite(ic):
-                daily_ics.append(ic)
-        if len(daily_ics) < 20:
-            ic_results[feat] = {"ic_mean": 0.0, "icir": 0.0, "ic_positive_rate": 0.0, "n_days": len(daily_ics)}
-            continue
-        arr = np.array(daily_ics)
-        ic_results[feat] = {
-            "ic_mean": float(np.mean(arr)),
-            "icir": float(np.mean(arr) / (np.std(arr) + 1e-9)),
-            "ic_positive_rate": float(np.mean(arr > 0)),
-            "n_days": len(arr),
-            "daily_ics": daily_ics,  # 供 Step 4 稳定性检验复用，避免二次计算
-        }
-    logger.info("IC/ICIR screening done in %.1fs (%d features)", time.time() - t0_sel, len(ic_results))
+            daily_ics = []
+            for _, g in df.groupby("trade_date", sort=False):
+                valid = g[[feat, label_col]].dropna()
+                if len(valid) < 30:
+                    continue
+                ic, _ = spearmanr(valid[feat], valid[label_col])
+                if np.isfinite(ic):
+                    daily_ics.append(ic)
+            if len(daily_ics) < 20:
+                ic_results[feat] = {"ic_mean": 0.0, "icir": 0.0, "ic_positive_rate": 0.0, "n_days": len(daily_ics)}
+                continue
+            arr = np.array(daily_ics)
+            ic_results[feat] = {
+                "ic_mean": float(np.mean(arr)),
+                "icir": float(np.mean(arr) / (np.std(arr) + 1e-9)),
+                "ic_positive_rate": float(np.mean(arr > 0)),
+                "n_days": len(arr),
+                "daily_ics": daily_ics,  # 供 Step 4 稳定性检验复用，避免二次计算
+            }
+        logger.info("IC/ICIR screening done in %.1fs (%d features)", time.time() - t0_sel, len(ic_results))
 
     # Step 2: IC阈值初筛
     candidates = {
