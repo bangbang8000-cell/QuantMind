@@ -3,17 +3,17 @@
 # QuantMind (量化大脑) OSS
 
 <p align="center">
-  <strong>🚀 AI 原生 · 13 种模型工场 · 因子自主进化 · 通达信联动 · 工业级多市场量化投研平台</strong>
+  <strong>AI 原生 · 13 种模型工场 · 因子自主进化 · 通达信联动 · 工业级多市场量化投研平台</strong>
 </p>
 
 <p align="center">
-  <a href="#-项目简介">项目简介</a> •
-  <a href="#-系统架构">系统架构</a> •
-  <a href="#-核心特性">核心特性</a> •
-  <a href="#-快速部署">快速部署</a> •
-  <a href="#-产品预览">产品预览</a> •
-  <a href="#-本地开发">本地开发</a> •
-  <a href="#-交流社区">交流社区</a>
+  <a href="#项目简介">项目简介</a> •
+  <a href="#系统架构">系统架构</a> •
+  <a href="#核心特性">核心特性</a> •
+  <a href="#快速部署">快速部署</a> •
+  <a href="#产品预览">产品预览</a> •
+  <a href="#本地开发">本地开发</a> •
+  <a href="#交流社区">交流社区</a>
 </p>
 
 <p align="center">
@@ -29,19 +29,19 @@
 
 ---
 
-## 📖 项目简介
+## 项目简介
 
 **QuantMind（量化大脑）** 是面向个人量化研究者、投研团队与专业机构的一体化 AI 原生量化交易平台。深度集成微软 **Qlib** 量化框架、**RD-Agent** 研发智能体与 **TradingAgents** 多 Agent 投研体系，全面打通量化全流程闭环：
 
 ```text
-📊 数据底座 ➔ 🔬 因子挖掘 ➔ 🧠 模型训练 ➔ ⚡ 批量推理 ➔ 📈 组合回测 ➔ 🚀 通达信联动/实盘 ➔ 🛡️ 生产监控
+数据底座 -> 因子挖掘 -> 模型训练 -> 批量推理 -> 组合回测 -> 通达信联动/实盘 -> 生产监控
 ```
 
 支持 **A 股、港股、美股、期货与区块链** 五大市场，帮助研究者摆脱繁琐的数据清洗与代码拼装，让模型自动从 300+ 维特征中挖掘 Alpha 规律。
 
 ---
 
-## 🏗️ 系统架构
+## 系统架构
 
 <p align="center">
   <img src="docs/images/architecture.svg" alt="QuantMind 系统架构图" width="100%">
@@ -49,7 +49,7 @@
 
 ---
 
-## ✨ 核心特性
+## 核心特性
 
 <table>
   <thead>
@@ -60,7 +60,7 @@
   </thead>
   <tbody>
     <tr>
-      <td align="center"><b>📊 市场与数据</b></td>
+      <td align="center"><b>市场与数据</b></td>
       <td>
         • 接入 QuantDB 数据中枢，内置 <b>300+ 维预计算特征</b>（L1/L2 微观结构与资金流）<br>
         • 基于 <b>Parquet + DuckDB</b> 秒级列式存算，千万级行情秒级载入<br>
@@ -68,14 +68,14 @@
       </td>
     </tr>
     <tr>
-      <td align="center"><b>🔬 因子自主进化</b></td>
+      <td align="center"><b>因子自主进化</b></td>
       <td>
         • 集成微软 <b>RD-Agent (AutoAlpha 2.0)</b> 自动化因子进化体系<br>
         • <b>LLM 自主演化流水线</b>：自然语言假设 ➔ 因子公式合成 ➔ 遗传演化回测 ➔ 优选入库
       </td>
     </tr>
     <tr>
-      <td align="center"><b>🧠 13 种模型工场</b></td>
+      <td align="center"><b>13 种模型工场</b></td>
       <td>
         • 覆盖经典树模型与深度学习：<b>LightGBM、XGBoost、CatBoost、GRU、LSTM、ALSTM、Transformer、TabNet、TCN、NativeTFT</b> 等<br>
         • 内置 <b>Optuna 自动化超参寻优</b> 与 <b>Stacking 多模型集成</b><br>
@@ -83,28 +83,28 @@
       </td>
     </tr>
     <tr>
-      <td align="center"><b>⚡ 批量推理与信号</b></td>
+      <td align="center"><b>批量推理与信号</b></td>
       <td>
         • 全市场每日批量截面打分、Top-N 潜力标的智能推荐与多信号动态融合<br>
         • <b>生产质量闭环</b>：每日真实 Rank IC/ICIR 自动回填、SHAP 特征重要性与数据漂移告警
       </td>
     </tr>
     <tr>
-      <td align="center"><b>📈 微软 Qlib 回测</b></td>
+      <td align="center"><b>微软 Qlib 回测</b></td>
       <td>
         • 高性能事件驱动回测引擎，支持 TopkDropout 等经典多因子选股策略<br>
         • 细粒度交易费率、滑点与涨跌停模拟，支持多维收益归因与风险指标全景展示
       </td>
     </tr>
     <tr>
-      <td align="center"><b>🚀 通达信深度联动</b></td>
+      <td align="center"><b>通达信深度联动</b></td>
       <td>
         • 模型截面选股结果<b>一键推入通达信自定义板块</b><br>
-        • 盘中实时预警雷达弹窗 + <b>双击闪电下单 ⚡</b>（支持模拟盘与实盘双模式）
+        • 盘中实时预警雷达弹窗 + <b>双击闪电下单</b>（支持模拟盘与实盘双模式）
       </td>
     </tr>
     <tr>
-      <td align="center"><b>🛡️ 模拟实盘与风控</b></td>
+      <td align="center"><b>模拟实盘与风控</b></td>
       <td>
         • 本地 T+1 撮合机制、持仓与订单全生命周期管理<br>
         • 内置涨跌停限制、停牌过滤与订单微观结构风险评分卡
@@ -115,7 +115,7 @@
 
 ---
 
-## 🚀 快速部署
+## 快速部署
 
 系统基于 Docker 容器化编排，推荐使用 **Ubuntu 22.04 / 24.04** 运行环境。
 
@@ -150,7 +150,7 @@ curl -fsSL https://gitee.com/qusong0627/QuantMind/raw/master/deploy/deploy.sh | 
 sudo bash deploy/update.sh
 ```
 
-### 3. 📦 数据准备与 QuantDB 同步
+### 3. 数据准备与 QuantDB 同步
 
 系统正常运行（行情查询、模型训练、因子挖掘、回测）需要底层量化历史数据支持。安装后请选择以下任一方式准备数据：
 
@@ -163,12 +163,12 @@ sudo bash deploy/update.sh
 
 > **方式二：百度网盘离线数据包（备选 · 全量离线导入）**
 > - 包含完整的 A 股量化历史行情、Qlib 二进制特征与预计算因子数据；
-> - 🔗 **下载链接**：[https://pan.baidu.com/s/5IT4p5nFlglZ7zu_0H_fA8Q](https://pan.baidu.com/s/5IT4p5nFlglZ7zu_0H_fA8Q)
+> - 下载链接：[https://pan.baidu.com/s/5IT4p5nFlglZ7zu_0H_fA8Q](https://pan.baidu.com/s/5IT4p5nFlglZ7zu_0H_fA8Q)
 > - 下载后解压覆盖到项目根目录的 `data/` 与 `db/qlib_data/` 目录即可。
 
 ---
 
-## 🖥️ 产品预览
+## 产品预览
 
 QuantMind 将日常量化研究工作流整合在同一套现代化、响应灵敏的交互界面中：
 
@@ -216,7 +216,7 @@ QuantMind 将日常量化研究工作流整合在同一套现代化、响应灵�
 
 ---
 
-## 💻 本地开发
+## 本地开发
 
 ```bash
 # 1. 后端单元测试
@@ -238,7 +238,7 @@ npm run typecheck    # TypeScript 类型检查
 
 ---
 
-## 📁 项目结构
+## 项目结构
 
 ```text
 quantmind/
@@ -260,7 +260,7 @@ quantmind/
 
 ---
 
-## 🤝 规范与贡献
+## 规范与贡献
 
 - **代码规范**：Python 遵循 PEP8（使用 ruff 检查与格式化）；前端提交前请执行 `npm run typecheck`。
 - **股票代码标准化**：所有内部 Redis 键、数据库字段及 API 参数**强制采用前缀格式**（如 `SH600036`、`SZ000001`、`BJ832000`）。
@@ -269,7 +269,7 @@ quantmind/
 
 ---
 
-## ⚠️ 免责声明
+## 免责声明
 
 > **本项目仅供学习研究与技术演示，不构成任何投资建议。**
 >
@@ -280,7 +280,7 @@ quantmind/
 
 ---
 
-## 🙏 致谢
+## 致谢
 
 - [Microsoft Qlib](https://github.com/microsoft/qlib) — 微软开源 AI 量化投资平台
 - [Microsoft RD-Agent](https://github.com/microsoft/RD-Agent) — 微软研发智能体框架
@@ -290,7 +290,7 @@ quantmind/
 
 ---
 
-## 💬 交流社区
+## 交流社区
 
 <p align="center">
   <img src="docs/images/1097406397.png" alt="QuantMind 交流群二维码" width="220">
