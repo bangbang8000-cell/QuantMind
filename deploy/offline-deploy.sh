@@ -314,6 +314,23 @@ main() {
     restore_qwenpaw_volumes
     build_and_start
     log "完成：代码=$PROJECT_DIR，Qlib 数据=$PROJECT_DIR/db/qlib_data"
+    echo ""
+    echo "========================================================================="
+    echo " 🎉 QuantMind 离线部署成功！"
+    echo " -------------------------------------------------------------------------"
+    echo " 🌐 Web 控制台  : http://<服务器 IP>:3000"
+    echo " 📖 API 文档    : http://<服务器 IP>:8000/docs"
+    echo " 👤 默认账号    : admin / admin123"
+    echo " -------------------------------------------------------------------------"
+    echo " 💡 【数据更新与扩展提示】"
+    echo " 1. QuantDB 在线下载及日常增量更新（推荐）："
+    echo "    在 Web 端【个人中心】->【数据平台】配置 API Key，"
+    echo "    或在终端执行: docker exec quantmind python backend/scripts/quantdb_daily_sync.py"
+    echo " 2. 百度网盘完整历史数据包（备选）："
+    echo "    链接: https://pan.baidu.com/s/5IT4p5nFlglZ7zu_0H_fA8Q"
+    echo "========================================================================="
+    echo ""
 }
 
 main "$@"
+

@@ -38,6 +38,14 @@ $$\text{数据底座} \longrightarrow \text{因子挖掘} \longrightarrow \text{
 
 ---
 
+## 🏗️ 系统架构
+
+<p align="center">
+  <img src="docs/images/architecture.svg" alt="QuantMind 系统架构图" width="100%">
+</p>
+
+---
+
 ## 🚀 快速部署
 
 系统基于 Docker 容器化编排，推荐使用 Ubuntu 22.04 / 24.04 运行环境。
@@ -72,6 +80,22 @@ curl -fsSL https://gitee.com/qusong0627/QuantMind/raw/master/deploy/deploy.sh | 
 # 已部署服务器的一键平滑更新（不清除数据库与模型资产）
 sudo bash deploy/update.sh
 ```
+
+### 📦 数据准备与 QuantDB 同步
+
+系统正常运行（行情查询、模型训练、因子挖掘、回测）需要底层量化历史数据支持。安装后请选择以下任一方式准备数据：
+
+1. **QuantDB 在线下载及日常增量更新（推荐 · 最便捷）**：
+   - 登录系统后，在【个人中心】->【数据平台】填入 QuantDB API Key 即可一键绑定与在线同步；
+   - 或在服务器终端执行增量同步指令：
+     ```bash
+     docker exec quantmind python backend/scripts/quantdb_daily_sync.py
+     ```
+
+2. **百度网盘离线数据包（备选 · 全量离线导入）**：
+   - 包含完整的 A 股量化历史行情、Qlib 二进制特征与预计算因子数据；
+   - 🔗 **下载链接**：[https://pan.baidu.com/s/5IT4p5nFlglZ7zu_0H_fA8Q](https://pan.baidu.com/s/5IT4p5nFlglZ7zu_0H_fA8Q)
+   - 下载后解压覆盖到项目根目录的 `data/` 与 `db/qlib_data/` 目录即可。
 
 > 详细部署配置与环境变量说明请参阅 [deploy/README.md](deploy/README.md)。
 
@@ -108,14 +132,6 @@ QuantMind 将日常量化研究工作流整合在同一套高颜值、现代化�
 ### 7. 实时舆情与 RSS 资讯监控 (News & RSS Stream)
 汇聚主流财经媒体 7x24 实时快讯、事件标签识别、利好/利空情绪分类与正文实体关联分析。
 ![RSS 资讯流](docs/images/RSS.png)
-
-<details>
-  <summary><b>📐 点击展开查看系统架构图</b></summary>
-  <br>
-  <p align="center">
-    <img src="docs/images/architecture.svg" alt="QuantMind 系统架构" width="95%">
-  </p>
-</details>
 
 ---
 

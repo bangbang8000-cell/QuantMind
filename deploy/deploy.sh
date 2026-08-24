@@ -129,6 +129,27 @@ health_check() {
     die '服务未在 60 秒内通过健康检查，请查看 docker compose logs quantmind'
 }
 
+show_completion_tips() {
+    echo ""
+    echo "========================================================================="
+    echo " 🎉 QuantMind 服务部署完成！"
+    echo " -------------------------------------------------------------------------"
+    echo " 🌐 Web 控制台  : http://<服务器 IP>:3000"
+    echo " 📖 API 文档    : http://<服务器 IP>:8000/docs"
+    echo " 👤 默认账号    : admin / admin123"
+    echo " -------------------------------------------------------------------------"
+    echo " 💡 【重要：数据准备与更新提示】"
+    echo " 系统正常运行需基础量化数据，请选择以下任一方式准备数据："
+    echo " 1. QuantDB 在线下载及更新（推荐）："
+    echo "    在 Web 端【个人中心】->【数据平台】中填入 API Key 即可在线同步，"
+    echo "    或在终端执行: docker exec quantmind python backend/scripts/quantdb_daily_sync.py"
+    echo " 2. 百度网盘离线数据包（备选）："
+    echo "    链接: https://pan.baidu.com/s/5IT4p5nFlglZ7zu_0H_fA8Q"
+    echo "    下载后解压覆盖到 $PROJECT_DIR/data 与 $PROJECT_DIR/db/qlib_data"
+    echo "========================================================================="
+    echo ""
+}
+
 main() {
     require_root
     require_ubuntu
@@ -137,6 +158,8 @@ main() {
     ensure_env
     start_services
     health_check
+    show_completion_tips
 }
 
 main
+
